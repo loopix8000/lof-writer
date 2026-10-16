@@ -230,8 +230,21 @@ struct FtpAdapter {
     stream: RustlsFtpStream,
 }
 
+pub fn validate_ftp_config(config: &Value) -> Result<(), LofError> {
+    for key in ["host", "username", "password", "remotePath"] {
+        if let Some(value) = config.get(key).filter(|v| !v.is_null()) {
+            let text = value.as_str().ok_or_else(|| fail_invalid("FTP 연결 정보는 문자열이어야 합니다."))?;
+            if text.contains(['\r', '\n', '\0']) {
+                return Err(fail_invalid("FTP 연결 정보에는 줄바꿈이나 NUL 문자를 사용할 수 없습니다."));
+            }
+        }
+    }
+    Ok(())
+}
+
 impl FtpAdapter {
     fn new(config: &Value) -> Result<Self, LofError> {
+        validate_ftp_config(config)?;
         let host = config.get("host").and_then(|v| v.as_str()).unwrap_or("");
         if host.is_empty() {
             return Err(fail_invalid("FTP 호스트가 필요합니다."));
@@ -305,6 +318,9 @@ impl RemoteAdapter for FtpAdapter {
     }
 
     fn read(&mut self, name: &str) -> Result<String, LofError> {
+        if !name_ok(name) {
+            return Err(fail_invalid("잘못된 FTP 동기화 파일 이름입니다."));
+        }
         if let Ok(sz) = self.stream.size(name) {
             if sz > MAX_SYNC_BYTES {
                 return Err(fail_invalid("동기화 파일이 너무 큽니다."));
@@ -322,6 +338,9 @@ impl RemoteAdapter for FtpAdapter {
     }
 
     fn write(&mut self, name: &str, content: &str) -> Result<(), LofError> {
+        if !name_ok(name) {
+            return Err(fail_invalid("잘못된 FTP 동기화 파일 이름입니다."));
+        }
         let temp = format!(".{}.upload", name);
         let mut reader = Cursor::new(content.as_bytes());
         self.stream
@@ -336,6 +355,14 @@ impl RemoteAdapter for FtpAdapter {
 
     fn close(&mut self) {
         let _ = self.stream.quit();
+    }
+}
+
+pub fn prepare_connection(config: &Value) -> Result<Value, LofError> {
+    if config.get("type").and_then(Value::as_str) == Some("google-drive") {
+        google_drive::prepare_connection(config)
+    } else {
+        Ok(config.clone())
     }
 }
 

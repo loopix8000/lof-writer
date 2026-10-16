@@ -16,12 +16,14 @@ struct DriveFile {
     id: String,
     name: String,
     size: Option<String>,
+    #[serde(rename = "ownedByMe", default)]
+    owned_by_me: bool,
 }
 
 pub(super) struct GoogleDriveAdapter {
     client: Client,
     token: String,
-    roots: Vec<String>,
+    root: String,
     files: HashMap<String, DriveFile>,
 }
 
@@ -32,18 +34,33 @@ impl GoogleDriveAdapter {
         let mut adapter = Self {
             client,
             token,
-            roots: Vec::new(),
+            root: String::new(),
             files: HashMap::new(),
         };
-        let folders = adapter.list_files(
-            "trashed = false and mimeType = 'application/vnd.google-apps.folder' and appProperties has { key = 'lofWriterSync' and value = 'v1' }",
-            "createdTime",
-        )?;
-        adapter.roots = folders.into_iter().map(|f| f.id).collect();
-        if adapter.roots.len() > 10 {
-            return Err(fail_invalid("Google Drive 동기화 폴더가 너무 많습니다."));
+        if let Some(id) = config.get("folderId") {
+            let id = id
+                .as_str()
+                .filter(|id| valid_id(id))
+                .ok_or_else(|| fail_invalid("저장된 Google Drive 폴더 ID가 올바르지 않습니다."))?;
+            adapter.root = id.to_string();
+        } else {
+            let folders = adapter.list_files(
+                "trashed = false and 'me' in owners and mimeType = 'application/vnd.google-apps.folder' and appProperties has { key = 'lofWriterSync' and value = 'v1' }",
+                "createdTime",
+            )?;
+            if folders.len() > 1 {
+                return Err(fail_invalid("내 Google Drive에 동기화 폴더가 여러 개 있습니다. Lof Writer 폴더를 하나로 정리한 뒤 다시 연결해 주세요."));
+            }
+            if let Some(folder) = folders.into_iter().next() {
+                if !folder.owned_by_me {
+                    return Err(fail_invalid(
+                        "내 소유의 Google Drive 폴더만 동기화할 수 있습니다.",
+                    ));
+                }
+                adapter.root = folder.id;
+            }
         }
-        if adapter.roots.is_empty() {
+        if adapter.root.is_empty() {
             let folder: Value = check_response(adapter.client.post(FILES_URL)
                 .bearer_auth(&adapter.token).query(&[("fields", "id")])
                 .json(&json!({ "name": "Lof Writer", "mimeType": "application/vnd.google-apps.folder",
@@ -55,9 +72,36 @@ impl GoogleDriveAdapter {
                 .and_then(Value::as_str)
                 .filter(|id| valid_id(id))
                 .ok_or_else(|| fail_invalid("Google Drive 폴더 ID를 확인하지 못했습니다."))?;
-            adapter.roots.push(id.to_string());
+            adapter.root = id.to_string();
         }
+        adapter.validate_root()?;
         Ok(adapter)
+    }
+
+    fn validate_root(&self) -> Result<(), LofError> {
+        let folder: Value = check_response(
+            self.client
+                .get(format!("{FILES_URL}/{}", self.root))
+                .bearer_auth(&self.token)
+                .query(&[("fields", "id,mimeType,ownedByMe,trashed,appProperties")])
+                .send()
+                .map_err(network_error)?,
+        )?
+        .json()
+        .map_err(|_| fail_invalid("Google Drive 폴더 정보를 읽지 못했습니다."))?;
+        if folder.get("id").and_then(Value::as_str) != Some(self.root.as_str())
+            || folder.get("ownedByMe").and_then(Value::as_bool) != Some(true)
+            || folder.get("trashed").and_then(Value::as_bool) != Some(false)
+            || folder.get("mimeType").and_then(Value::as_str)
+                != Some("application/vnd.google-apps.folder")
+            || folder
+                .pointer("/appProperties/lofWriterSync")
+                .and_then(Value::as_str)
+                != Some("v1")
+        {
+            return Err(fail_invalid("연결한 Google Drive 폴더의 소유자 또는 상태가 변경되었습니다. 폴더를 확인해 주세요."));
+        }
+        Ok(())
     }
 
     fn list_files(&self, query: &str, order: &str) -> Result<Vec<DriveFile>, LofError> {
@@ -71,7 +115,7 @@ impl GoogleDriveAdapter {
                     .query(&[
                         ("q", query),
                         ("spaces", "drive"),
-                        ("fields", "nextPageToken,files(id,name,size)"),
+                        ("fields", "nextPageToken,files(id,name,size,ownedByMe)"),
                         ("pageSize", "100"),
                         ("orderBy", order),
                         ("pageToken", &page),
@@ -106,19 +150,25 @@ impl GoogleDriveAdapter {
     }
 }
 
+pub(super) fn prepare_connection(config: &Value) -> Result<Value, LofError> {
+    if config.get("folderId").is_some() {
+        return Ok(config.clone());
+    }
+    let adapter = GoogleDriveAdapter::new(config)?;
+    let mut pinned = config.clone();
+    pinned["folderId"] = json!(adapter.root);
+    Ok(pinned)
+}
+
 impl RemoteAdapter for GoogleDriveAdapter {
     fn list(&mut self) -> Result<Vec<String>, LofError> {
-        // 여러 PC가 최초 폴더를 동시에 만들었더라도 모든 폴더의 장치 데이터를 읽는다.
-        let parents = self
-            .roots
-            .iter()
-            .map(|id| format!("'{id}' in parents"))
-            .collect::<Vec<_>>()
-            .join(" or ");
-        let query = format!("trashed = false and ({parents})");
+        let query = format!(
+            "trashed = false and 'me' in owners and '{}' in parents",
+            self.root
+        );
         self.files.clear();
         for file in self.list_files(&query, "modifiedTime desc")? {
-            if name_ok(&file.name) {
+            if file.owned_by_me && name_ok(&file.name) {
                 self.files.entry(file.name.clone()).or_insert(file);
             }
         }
@@ -175,7 +225,7 @@ impl RemoteAdapter for GoogleDriveAdapter {
                 Method::POST,
                 UPLOAD_URL.to_string(),
                 json!({
-                    "name": name, "mimeType": "application/json", "parents": [&self.roots[0]],
+                    "name": name, "mimeType": "application/json", "parents": [&self.root],
                 }),
             ),
         };

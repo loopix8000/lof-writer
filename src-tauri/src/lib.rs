@@ -248,9 +248,13 @@ fn connect_google_drive(args: &Value, state: &AppState, auth: &google_drive::Aut
     let name: String = old.as_ref().and_then(|c| c.get("name"))
         .or_else(|| args.get("name")).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty())
         .unwrap_or("Google Drive").chars().take(100).collect();
-    let conn = json!({ "id": id, "name": name, "type": "google-drive",
+    let mut conn = json!({ "id": id, "name": name, "type": "google-drive",
         "email": account.email, "accountId": account.account_id,
         "clientId": google_drive::CLIENT_ID, "refreshToken": account.refresh_token });
+    if let Some(folder) = old.as_ref().and_then(|c| c.get("folderId")) {
+        conn["folderId"] = folder.clone();
+    }
+    let conn = sync::prepare_connection(&conn)?;
     let encrypted = encrypt_connection(&conn)?;
     auth.check_cancelled()?;
     let mut settings = state.settings.lock().unwrap();
@@ -1153,6 +1157,9 @@ fn handle_method(
             if !matches!(ctype, "folder" | "ftp" | "webdav") {
                 return Err(fail_invalid("지원하지 않는 연결"));
             }
+            if ctype == "ftp" {
+                sync::validate_ftp_config(&args)?;
+            }
             let raw_name = args
                 .get("name")
                 .and_then(|v| v.as_str())
@@ -1277,11 +1284,23 @@ fn handle_method(
                         .to_string();
                     (decrypt_connection(&found)?, dev)
                 };
+                let prepared = sync::prepare_connection(&conn)?;
+                if prepared.get("folderId") != conn.get("folderId") {
+                    let mut settings = state.settings.lock().unwrap();
+                    let mut next = settings.clone();
+                    let saved = next.get_mut("connections").and_then(Value::as_array_mut)
+                        .and_then(|conns| conns.iter_mut().find(|c| {
+                            c.get("id") == conn.get("id") && c.get("accountId") == conn.get("accountId")
+                        })).ok_or_else(|| fail_invalid("동기화 연결이 변경되었습니다. 다시 시도해 주세요."))?;
+                    saved["folderId"] = prepared["folderId"].clone();
+                    persist_settings(&state.config_file, &next)?;
+                    *settings = next;
+                }
                 let mut guard = state.store.lock().unwrap();
                 let st = guard
                     .as_mut()
                     .ok_or_else(|| fail_invalid("Store not initialized"))?;
-                sync_once(st, &conn, &device_id)
+                sync_once(st, &prepared, &device_id)
             })();
             state.syncing.store(false, Ordering::SeqCst);
             schedule_notify(app, &state.notify_seq);

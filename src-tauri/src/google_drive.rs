@@ -4,7 +4,7 @@ use rand::RngCore;
 use reqwest::blocking::{Client, Response};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
@@ -168,6 +168,46 @@ fn browser_reply(stream: &mut TcpStream, status: &str, text: &str) {
     let _ = write!(stream, "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nContent-Security-Policy: default-src 'none'; frame-ancestors 'none'\r\nReferrer-Policy: no-referrer\r\nConnection: close\r\n\r\n{body}", body.len());
 }
 
+fn read_callback_request(
+    stream: &mut TcpStream,
+    auth: &AuthState,
+    auth_deadline: Instant,
+) -> Result<Option<String>, LofError> {
+    let deadline = auth_deadline.min(Instant::now() + Duration::from_secs(2));
+    stream.set_nonblocking(false)?;
+    stream.set_read_timeout(Some(Duration::from_millis(100)))?;
+    stream.set_write_timeout(Some(Duration::from_millis(100)))?;
+    let mut request = Vec::new();
+    let mut chunk = [0u8; 1024];
+    loop {
+        auth.check_cancelled()?;
+        if Instant::now() >= deadline || request.len() >= 8192 {
+            return Ok(None);
+        }
+        match stream.read(&mut chunk) {
+            Ok(0) => return Ok(None),
+            Ok(count) => {
+                request.extend_from_slice(&chunk[..count]);
+                if request.len() > 8192 {
+                    return Ok(None);
+                }
+                if request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                    return Ok(std::str::from_utf8(&request)
+                        .ok()
+                        .and_then(|text| text.split("\r\n").next())
+                        .map(str::to_string));
+                }
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) => {}
+            Err(_) => return Ok(None),
+        }
+    }
+}
+
 fn wait_for_code(
     listener: &TcpListener,
     state: &str,
@@ -178,23 +218,9 @@ fn wait_for_code(
         auth.check_cancelled()?;
         match listener.accept() {
             Ok((mut stream, _)) => {
-                stream.set_read_timeout(Some(Duration::from_secs(1)))?;
-                stream.set_write_timeout(Some(Duration::from_secs(1)))?;
-                let mut line = String::new();
-                let mut reader = BufReader::new((&stream).take(8192));
-                if reader.read_line(&mut line).is_err() || !line.ends_with("\r\n") {
+                let Some(line) = read_callback_request(&mut stream, auth, deadline)? else {
                     continue;
-                }
-                let mut header = String::new();
-                loop {
-                    header.clear();
-                    match reader.read_line(&mut header) {
-                        Ok(0) | Err(_) => break,
-                        Ok(_) if header == "\r\n" => break,
-                        _ => {}
-                    }
-                }
-                drop(reader);
+                };
                 let mut parts = line.split_whitespace();
                 let method = parts.next();
                 let target = parts.next().unwrap_or("");
