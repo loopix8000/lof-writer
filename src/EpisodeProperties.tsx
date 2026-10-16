@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   AlignLeft,
   Asterisk,
@@ -22,7 +22,8 @@ import {
 } from "lucide-react";
 import type { MenuItem } from "./ContextMenu";
 import EpisodeTags from "./EpisodeTags";
-import CustomProperties from "./CustomProperties";
+import CustomProperties, { GrowingText } from "./CustomProperties";
+import type { PropertyPreset } from "./custom-properties";
 import type { Doc } from "./types";
 import {
   STATUSES,
@@ -122,47 +123,12 @@ const PROPS: Prop[] = [
     description: "검색과 분류에 사용할 태그를 설정합니다.",
     order: 100,
     optional: true,
+    fullWidth: true,
     icon: <Tags size={14} />,
     present: (d) => !!d.tags?.length,
     clear: clearField("tags", []),
   },
 ];
-
-// 내용에 맞춰 높이가 늘어나는 글 상자(뮤블의 요약·작가의 말 입력).
-function GrowingText({
-  value,
-  onChange,
-  disabled,
-  label,
-  dim,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  disabled: boolean;
-  label: string;
-  dim?: boolean;
-}) {
-  const ref = useRef<HTMLTextAreaElement>(null);
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${el.scrollHeight}px`;
-  }, [value]);
-  return (
-    <textarea
-      ref={ref}
-      className={`property-text${dim ? " dim" : ""}`}
-      aria-label={label}
-      rows={1}
-      value={value}
-      disabled={disabled}
-      spellCheck={false}
-      placeholder="비어 있음"
-      onChange={(e) => onChange(e.target.value)}
-    />
-  );
-}
 
 export default function EpisodeProperties({
   doc,
@@ -178,6 +144,7 @@ export default function EpisodeProperties({
   onUnbind,
   onOpenBound,
   propertyPresets,
+  onSavePresets,
   favoriteTags,
 }: {
   doc: Doc;
@@ -188,6 +155,7 @@ export default function EpisodeProperties({
   onUnbind?: () => void;
   onOpenBound?: () => void;
   propertyPresets?: unknown;
+  onSavePresets?: (presets: PropertyPreset[]) => Promise<void>;
   favoriteTags?: unknown;
   readOnly?: boolean;
   open: boolean;
@@ -356,7 +324,7 @@ export default function EpisodeProperties({
               {control(p)}
             </PropertyRow>
           ))}
-          <CustomProperties key={doc.id} properties={doc.properties} presets={propertyPresets} readOnly={!edit}
+          <CustomProperties key={doc.id} properties={doc.properties} presets={propertyPresets} onSavePresets={onSavePresets} readOnly={!edit}
             onChange={(properties) => onEdit({ properties })} onMenu={onMenu} onNotice={onNotice}
             builtinItems={addable.map((p) => ({
               label: p.label,

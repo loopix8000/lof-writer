@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { ArrowUp, ArrowDown, Pencil, Plus, Trash2 } from "lucide-react";
-import { PropertyForm, PropertyIcon } from "./CustomProperties";
+import { PropertyForm, PropertyIcon, presetType } from "./CustomProperties";
 import TagInput from "./TagInput";
-import { favoriteTags, propertyPresets, valueYaml, type PropertyPreset } from "./custom-properties";
+import { PROPERTY_TYPES, favoriteTags, propertyPresets, type PropertyPreset } from "./custom-properties";
 
 export default function PropertyPresetSettings({ presets: rawPresets, tags: rawTags, onChange }: {
   presets: unknown; tags: unknown; onChange: (patch: Record<string, unknown>) => Promise<void>;
@@ -33,11 +33,12 @@ export default function PropertyPresetSettings({ presets: rawPresets, tags: rawT
   return <>
     <div className="settings-subsection">
       <h3>사용자 속성 프리셋</h3>
-      <p className="settings-description">아이콘·속성명·기본값을 미리 만들어 두세요. 문서의 ‘속성 추가하기’에서 골라 사용할 수 있습니다.</p>
+      <p className="settings-description">아이콘·속성명·값 형식·폭을 미리 만들어 두세요. 문서의 ‘속성 추가하기’에서 골라 기본 속성처럼 값을 바로 입력할 수 있습니다.</p>
       <div className="property-presets">
         {presets.map((field, index) => <div className="property-preset" key={field.id}>
           <PropertyIcon name={field.icon} />
-          <div className="property-preset-description"><b>{field.name}</b><span>{typeof field.value === "string" ? field.value || "비어 있음" : valueYaml(field.value)}</span></div>
+          <div className="property-preset-description"><b>{field.name}</b>
+            <span>{PROPERTY_TYPES[field.type]}{field.options.length ? ` (${field.options.join(", ")})` : ""} · {field.fullWidth ? "한 줄" : "반 칸"}</span></div>
           <div className="row gap">
             <button type="button" disabled={busy || index === 0} aria-label={`${field.name} 프리셋 위로`} onClick={() => move(index, -1)}><ArrowUp size={14} /></button>
             <button type="button" disabled={busy || index === presets.length - 1} aria-label={`${field.name} 프리셋 아래로`} onClick={() => move(index, 1)}><ArrowDown size={14} /></button>
@@ -50,10 +51,11 @@ export default function PropertyPresetSettings({ presets: rawPresets, tags: rawT
         </div>)}
         {!presets.length && <p className="settings-description">아직 만든 속성 프리셋이 없습니다.</p>}
       </div>
-      {editing !== null ? <PropertyForm key={editing} initial={initial} original={initial?.name}
+      {editing !== null ? <PropertyForm key={editing} initial={initial} original={initial?.name} layout
         existing={presets.map((field) => field.name)} saveLabel="프리셋 저장" onCancel={() => setEditing(null)}
         onSave={async (field) => {
-          await save(initial ? presets.map((item) => item.id === initial.id ? field : item) : [...presets, field]);
+          const preset = { id: initial?.id ?? crypto.randomUUID(), ...field, type: presetType(field.type) };
+          await save(initial ? presets.map((item) => item.id === initial.id ? preset : item) : [...presets, preset]);
           setEditing(null);
         }} /> : <button type="button" onClick={() => setEditing("")}><Plus size={15} />속성 프리셋 만들기</button>}
     </div>

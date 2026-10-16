@@ -17,7 +17,14 @@ import {
   Pilcrow,
   Sparkles,
   Table2,
+  BetweenHorizontalStart,
+  BetweenHorizontalEnd,
+  BetweenVerticalStart,
+  BetweenVerticalEnd,
+  Trash2,
 } from "lucide-react";
+import { BubbleMenu } from "@tiptap/react/menus";
+import type { Editor } from "@tiptap/core";
 import { requiresSource } from "../core/text.mjs";
 import {
   typingPlan,
@@ -56,6 +63,13 @@ function clipboardTextParser(manual: boolean): NonNullable<EditorProps["clipboar
     );
     return new Slice(Fragment.fromArray(paragraphs), 1, 1);
   };
+}
+
+// 표 툴바는 커서 위치가 아니라 표 자체에 붙여서 셀 이동 중에도 자리가 흔들리지 않게 한다.
+function selectedTableElement(editor: Editor): HTMLElement | null {
+  const { node } = editor.view.domAtPos(editor.state.selection.from);
+  const el = node instanceof Element ? node : node.parentElement;
+  return el?.closest<HTMLElement>(".tableWrapper") ?? el?.closest<HTMLElement>("table") ?? null;
 }
 
 const parseManualClipboardText = clipboardTextParser(true);
@@ -497,23 +511,52 @@ export default function Writer({
         )}
         <span>본문</span>
       </div>
-      {tables && inTable && !readOnly && (
-        <div className="table-tools" role="toolbar" aria-label="표 편집">
+      {tables && !readOnly && (
+        <BubbleMenu
+          editor={editor}
+          pluginKey="tableToolbar"
+          className="table-tools"
+          role="toolbar"
+          aria-label="표 편집 (Tab: 다음 셀 · Shift+Tab: 이전 셀)"
+          updateDelay={0}
+          shouldShow={({ editor }) => editor.isEditable && editor.isActive("table")}
+          getReferencedVirtualElement={() => {
+            const table = selectedTableElement(editor);
+            return table && { getBoundingClientRect: () => table.getBoundingClientRect() };
+          }}
+          options={{ placement: "top-start", offset: 6, flip: true, shift: { padding: 8 } }}
+        >
           {[
-            { label: "위에 행 추가", action: () => editor.chain().focus().addRowBefore().run() },
-            { label: "아래에 행 추가", action: () => editor.chain().focus().addRowAfter().run() },
-            { label: "왼쪽에 열 추가", action: () => editor.chain().focus().addColumnBefore().run() },
-            { label: "오른쪽에 열 추가", action: () => editor.chain().focus().addColumnAfter().run() },
-            { label: "행 삭제", action: () => editor.chain().focus().deleteRow().run() },
-            { label: "열 삭제", action: () => editor.chain().focus().deleteColumn().run() },
-            { label: "표 삭제", action: () => editor.chain().focus().deleteTable().run() },
-          ].map((tool) => (
-            <button key={tool.label} onMouseDown={(e) => e.preventDefault()} onClick={tool.action}>
-              {tool.label}
-            </button>
+            [
+              { label: "위에 행 추가", icon: BetweenHorizontalStart, action: () => editor.chain().focus().addRowBefore().run() },
+              { label: "아래에 행 추가", icon: BetweenHorizontalEnd, action: () => editor.chain().focus().addRowAfter().run() },
+            ],
+            [
+              { label: "왼쪽에 열 추가", icon: BetweenVerticalStart, action: () => editor.chain().focus().addColumnBefore().run() },
+              { label: "오른쪽에 열 추가", icon: BetweenVerticalEnd, action: () => editor.chain().focus().addColumnAfter().run() },
+            ],
+            [
+              { label: "행 삭제", text: "행", action: () => editor.chain().focus().deleteRow().run() },
+              { label: "열 삭제", text: "열", action: () => editor.chain().focus().deleteColumn().run() },
+              { label: "표 삭제", text: "표", action: () => editor.chain().focus().deleteTable().run() },
+            ],
+          ].map((group, i) => (
+            <div key={i} className={`table-tools-group${i === 2 ? " danger" : ""}`}>
+              {group.map((tool) => (
+                <button
+                  key={tool.label}
+                  aria-label={tool.label}
+                  title={tool.label}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={tool.action}
+                >
+                  {"icon" in tool && tool.icon ? <tool.icon size={16} /> : <Trash2 size={14} />}
+                  {"text" in tool && <span>{tool.text}</span>}
+                </button>
+              ))}
+            </div>
           ))}
-          <span>Tab: 다음 셀 · Shift+Tab: 이전 셀</span>
-        </div>
+        </BubbleMenu>
       )}
       <EditorContent
         className={`editor-content${manualLineBreak ? " manual-break" : ""}${style.pageViewEnabled ? " page-view" : ""}`}

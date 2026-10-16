@@ -1,7 +1,18 @@
 import { parseDocument, stringify } from "yaml";
 
 export type PropertyValue = null | string | number | boolean | PropertyValue[] | { [key: string]: PropertyValue };
-export type PropertyPreset = { id: string; name: string; icon: string; value: PropertyValue };
+export type PropertyType = "text" | "number" | "boolean" | "list";
+// 앱에서 만들 수 없는 값(목록·객체 등)은 YAML로 보여 준다. 새로 고를 수 있는 형식은 아니다.
+export type FieldType = PropertyType | "yaml";
+// 프리셋은 속성의 모양(이름·아이콘·값 형식·폭)만 정한다. 값은 문서마다 직접 입력한다.
+// 목록 프리셋은 options 중 하나를 셀렉트 박스로 고른다. 값은 고른 항목의 문자열이다.
+export type PropertyPreset = {
+  id: string; name: string; icon: string; type: PropertyType; fullWidth: boolean; options: string[];
+};
+export type PropertyField = { name: string; icon: string; value: PropertyValue };
+export const PROPERTY_TYPES: Record<PropertyType, string> = {
+  text: "텍스트", number: "숫자", boolean: "체크", list: "목록",
+};
 export const ICONS_KEY = "_lofPropertyIcons";
 export const PROPERTY_ICONS = [
   "text", "bookmark", "user", "users", "calendar", "clock", "location", "flag",
@@ -25,7 +36,22 @@ export function propertyIcons(properties: Record<string, unknown>): Record<strin
   const icons = properties[ICONS_KEY];
   return icons && typeof icons === "object" && !Array.isArray(icons) ? icons as Record<string, unknown> : {};
 }
-export function putProperty(properties: Record<string, unknown>, field: PropertyPreset, original?: string) {
+export const isListValue = (value: unknown): value is (string | number | boolean)[] =>
+  Array.isArray(value) && value.every((item) => ["string", "number", "boolean"].includes(typeof item));
+export const valueType = (value: unknown): FieldType =>
+  typeof value === "string" ? "text" : typeof value === "number" ? "number" : typeof value === "boolean" ? "boolean" : "yaml";
+export const listItems = (items: unknown[]) =>
+  [...new Set(items.filter((item) => ["string", "number", "boolean"].includes(typeof item)).map((item) => String(item).trim()).filter(Boolean))];
+// 숫자는 비워 둘 수 있게 null로 시작한다. 프리셋이 없으면 형식을 알 수 없으니 호출하는 쪽에서 0을 쓴다.
+export const emptyValue = (type: FieldType): PropertyValue =>
+  type === "number" ? null : type === "boolean" ? false : "";
+// 값이 프리셋 형식과 맞으면(또는 비어 있으면) 프리셋 형식을, 아니면 값의 실제 형식을 쓴다.
+export function fieldType(value: unknown, preset?: PropertyType): FieldType {
+  if (preset === "list" && (value === null || typeof value === "string")) return "list";
+  if (preset && (value === null || valueType(value) === preset)) return preset;
+  return value === null ? "text" : valueType(value);
+}
+export function putProperty(properties: Record<string, unknown>, field: PropertyField, original?: string) {
   const entries = Object.entries(properties).filter(([key]) => key !== ICONS_KEY);
   const next = Object.fromEntries(entries.map(([key, value]) => key === original ? [field.name, field.value] : [key, value]));
   const icons = Object.fromEntries(Object.entries(propertyIcons(properties)).filter(([key]) => key !== original));
@@ -74,8 +100,13 @@ export function propertyPresets(raw: unknown): PropertyPreset[] {
     if (!entry || typeof entry !== "object" || typeof entry.name !== "string" ||
       propertyNameError(entry.name, names)) return [];
     names.push(entry.name);
-    return [{ id: typeof entry.id === "string" ? entry.id : entry.name,
-      name: entry.name, icon: propertyIcon(entry.icon), value: Object.hasOwn(entry, "value") ? entry.value : "" }];
+    // 이전 프리셋은 기본값만 저장했으므로 그 값의 형식을 이어받는다.
+    const legacy: FieldType = Object.hasOwn(PROPERTY_TYPES, entry.type) || entry.type === "yaml" ? entry.type
+      : Object.hasOwn(entry, "value") ? valueType(entry.value) : "text";
+    const type: PropertyType = legacy === "yaml" ? "list" : legacy;
+    const options = Array.isArray(entry.options) ? entry.options : isListValue(entry.value) ? entry.value : [];
+    return [{ id: typeof entry.id === "string" ? entry.id : entry.name, name: entry.name, icon: propertyIcon(entry.icon), type,
+      fullWidth: entry.fullWidth !== false, options: type === "list" ? listItems(options) : [] }];
   });
 }
 export function favoriteTags(raw: unknown): string[] {

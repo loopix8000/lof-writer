@@ -2899,7 +2899,7 @@ export default function App() {
             </>
           )}
           {view === "project" && project && (
-            <>
+            <div className="project-page">
               <button
                 className="back-link"
                 onClick={attempt(() => goView("library"))}
@@ -3074,7 +3074,7 @@ export default function App() {
                   </div>
                 )}
               </div>
-            </>
+            </div>
           )}
           {isWorkspace && (
             <>
@@ -3292,6 +3292,7 @@ export default function App() {
                   />
                     <EpisodeProperties
                       propertyPresets={prefs.propertyPresets}
+                      onSavePresets={(propertyPresets) => savePrefs({ propertyPresets })}
                       favoriteTags={prefs.favoriteTags}
                       key={active.id}
                       doc={active}
