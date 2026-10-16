@@ -1302,6 +1302,56 @@ body.sidebar-resizing * {
   padding: 16px;
   white-space: pre-wrap;
 }
+.table-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: -18px 0 20px;
+}
+.table-tools button,
+.table-tools > span {
+  font-size: 12px;
+}
+.table-tools > span {
+  color: var(--muted);
+}
+.tiptap .tableWrapper {
+  overflow-x: auto;
+  margin: 1em 0;
+}
+.tiptap table {
+  border-collapse: collapse;
+  table-layout: fixed;
+  width: 100%;
+  margin: 0;
+}
+.tiptap td,
+.tiptap th {
+  position: relative;
+  border: 1px solid var(--border-hover);
+  padding: 0.45em 0.65em;
+  min-width: 5em;
+  vertical-align: top;
+  text-align: left;
+}
+.tiptap th {
+  background: var(--soft);
+  font-weight: 600;
+}
+.editor-content .tiptap :is(td, th) > p {
+  margin: 0;
+  text-indent: 0;
+  text-align: inherit;
+}
+.tiptap .selectedCell::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--soft);
+  opacity: 0.65;
+  pointer-events: none;
+}
 .end-marker {
   flex: none;
   text-align: center;
@@ -3379,6 +3429,139 @@ body.sash-dragging {
   color: var(--muted);
   white-space: nowrap;
 }
+.custom-property-row .property-label {
+  width: 110px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.custom-property-value {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+button.custom-property-value {
+  width: 100%;
+}
+button.custom-property-value:hover {
+  background: var(--soft);
+}
+.custom-property-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  grid-column: 1 / -1;
+  width: 100%;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+}
+.custom-property-form > label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.custom-property-form input:not([type="checkbox"]),
+.custom-property-form textarea,
+.custom-property-form select {
+  width: 100%;
+  min-width: 0;
+}
+.custom-property-form textarea {
+  resize: vertical;
+}
+.custom-property-form .custom-property-check {
+  flex-direction: row;
+  align-items: center;
+}
+.yaml-value {
+  font-family: Consolas, "Malgun Gothic", monospace;
+}
+.property-icon-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.property-icon-picker button {
+  padding: 6px;
+}
+.property-icon-picker button[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--soft);
+  color: var(--accent);
+}
+.property-presets {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 12px 0;
+}
+.property-preset {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.property-preset-description {
+  display: flex;
+  flex: 1 1 150px;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.property-preset-description > span {
+  color: var(--muted);
+  white-space: pre-wrap;
+  max-height: 6em;
+  overflow: auto;
+}
+.property-preset .row {
+  gap: 4px;
+}
+.property-preset button {
+  padding: 5px;
+}
+.settings-subsection > .custom-property-form {
+  margin-top: 12px;
+}
+.episode-tag-field {
+  width: 100%;
+  min-width: 0;
+}
+.tag-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 7px;
+}
+.tag-suggestions > span {
+  color: var(--muted);
+  font-size: 11px;
+  margin-right: 4px;
+}
+.tag-suggestions > button {
+  max-width: 100%;
+  padding: 2px 5px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
 .property-label svg {
   flex-shrink: 0;
 }
@@ -3409,6 +3592,31 @@ body.sash-dragging {
   width: 100%;
   min-width: 0;
 }
+.episode-tags.is-editable {
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+}
+.episode-tags.is-editable:focus-within {
+  border-color: var(--border-hover);
+}
+.episode-tags .episode-tag-input {
+  flex: 1 1 130px;
+  min-width: 0;
+  width: 0;
+  max-width: 100%;
+  padding: 2px 4px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  font-size: 12px;
+  line-height: 18px;
+}
+.episode-tags .episode-tag-input:focus {
+  box-shadow: none;
+}
 .episode-tag {
   display: inline-flex;
   align-items: center;
@@ -3434,38 +3642,6 @@ button.episode-tag[draggable] {
 button.episode-tag[draggable]:active {
   cursor: grabbing;
 }
-.episode-tag-add {
-  position: relative;
-  flex-shrink: 0;
-}
-.episode-tag-add > button {
-  color: var(--muted);
-}
-.episode-tag-popover {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
-  z-index: 25;
-  width: 200px;
-  padding: 0;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--surface);
-  box-shadow: 0 4px 14px #00000016;
-}
-.episode-tag-popover input {
-  display: block;
-  width: 100%;
-  padding: 8px 10px;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  font-size: 12px;
-  line-height: 18px;
-}
-.episode-tag-popover input:focus {
-  box-shadow: none;
-}
 .episode-tag-edit {
   min-width: 4ch;
   max-width: 100%;
@@ -3483,9 +3659,6 @@ button.episode-tag[draggable]:active {
   color: var(--danger-text);
   font-size: 11px;
   line-height: 1.6;
-}
-.episode-tag-popover .episode-tag-error {
-  padding: 0 10px 8px;
 }
 .property-value {
   color: var(--text);
@@ -3640,7 +3813,7 @@ button.episode-tag[draggable]:active {
   letter-spacing: 0;
   color: var(--accent);
 }
-/* 메뉴 항목의 아이콘과 배지(상태·유형·수위·시점 메뉴). */
+/* 메뉴 항목의 아이콘과 배지. */
 .context-menu button:has(.menu-icon) {
   gap: 8px;
 }

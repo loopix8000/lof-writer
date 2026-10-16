@@ -83,6 +83,7 @@ import { normalizeWriting, writingName } from "../core/platforms.mjs";
 import PlatformCount from "./PlatformCount";
 import PlatformPicker from "./PlatformPicker";
 import TagInput from "./TagInput";
+import PropertyPresetSettings from "./PropertyPresetSettings";
 import ContextMenu, { type MenuItem } from "./ContextMenu";
 import EpisodeProperties, { statusItems } from "./EpisodeProperties";
 import EpisodeBindingPicker from "./EpisodeBindingPicker";
@@ -861,8 +862,6 @@ export default function App() {
             episodeType: source.episodeType,
             description: source.description,
             authorComment: source.authorComment,
-            contentRestrictionLevel: source.contentRestrictionLevel,
-            pointOfView: source.pointOfView,
           }
         : {}),
     });
@@ -1759,6 +1758,7 @@ export default function App() {
                   id={doc.id}
                   revision={doc.revision}
                   body={doc.body}
+                  tables={doc.kind === "memo" || doc.kind === "plot"}
                   readOnly
                   onChange={() => {}}
                   fontSize={sideBox.norm.fontSize}
@@ -3291,6 +3291,8 @@ export default function App() {
                     }}
                   />
                     <EpisodeProperties
+                      propertyPresets={prefs.propertyPresets}
+                      favoriteTags={prefs.favoriteTags}
                       key={active.id}
                       doc={active}
                       open={!!prefs.episodeInfoOpen}
@@ -3315,6 +3317,7 @@ export default function App() {
                     id={active.id}
                     revision={active.revision}
                     body={active.body}
+                    tables={active.kind === "memo" || active.kind === "plot"}
                     reveal={reveal?.docId === active.id ? reveal : null}
                     onChange={(body) => edit({ body })}
                     fontSize={activeBox.norm.fontSize}
@@ -3613,6 +3616,7 @@ export default function App() {
                 <div className="form-field">
                   <span>태그</span>
                   <TagInput
+                    favorites={prefs.favoriteTags}
                     tags={dialog.tags || []}
                     onChange={(tags) => setDialog({ ...dialog, tags })}
                   />
@@ -4012,6 +4016,7 @@ export default function App() {
                         onChange={(checked) => savePrefs({ autoChangeStatusOnContentEdit: checked }).catch(report)} />
                     </div>
                   </div>
+                  <PropertyPresetSettings presets={prefs.propertyPresets} tags={prefs.favoriteTags} onChange={savePrefs} />
                 </section>
                 <section id="settings-typesetting" className="settings-section" hidden={settingsPage !== "typesetting"}>
                   {(() => {

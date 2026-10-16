@@ -52,6 +52,12 @@ jobs:
           uploadUpdaterSignatures: true
           updaterJsonPreferNsis: false
           args: --bundles msi --config src-tauri/tauri.updater.generated.json
+      - name: Set release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ steps.updater.outputs.version }}
+        shell: pwsh
+        run: gh release edit "v$env:RELEASE_VERSION" --repo "$env:GITHUB_REPOSITORY" --notes-file RELEASE_NOTES.md
       - name: Publish release and update channel
         if: inputs.publish
         env:

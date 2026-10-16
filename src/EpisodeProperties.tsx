@@ -1,35 +1,18 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import {
-  Activity,
   AlignLeft,
-  Angry,
   Asterisk,
-  Ban,
   BookOpen,
   Bookmark,
   Check,
   ChevronDown,
   CircleArrowLeft,
   CircleArrowRight,
-  CircleHelp,
   Clock,
-  Eye,
-  Frown,
-  Globe,
-  Laugh,
-  Lock,
-  Meh,
   MessageSquareQuote,
   Pencil,
-  Plus,
-  Pointer,
-  Shuffle,
-  Smile,
   SquarePen,
   Tags,
-  User,
-  UserSearch,
-  Users,
   X,
   WrapText,
   Info,
@@ -39,6 +22,7 @@ import {
 } from "lucide-react";
 import type { MenuItem } from "./ContextMenu";
 import EpisodeTags from "./EpisodeTags";
+import CustomProperties from "./CustomProperties";
 import type { Doc } from "./types";
 import {
   STATUSES,
@@ -46,17 +30,12 @@ import {
   TYPE_CHOICES,
   TYPE_LABELS,
   TYPE_ACTIONS,
-  RESTRICTION_LEVELS,
-  RESTRICTIONS,
-  POINTS_OF_VIEW,
-  POV,
   normalizeStatus,
   normalizeType,
   lineBreakLabel,
 } from "../core/episode.mjs";
 
-// 뮤블(Muvel) 집필 화면의 '상세 정보'를 그대로 옮긴 회차 속성 패널.
-// 유형·상태는 늘 보이고, 요약·작가의 말·태그·수위·시점은 '속성 추가하기'로 넣고 X로 뺀다.
+// 문서의 기본 속성과 사용자 속성을 함께 편집한다.
 
 export const STATUS_ICONS: Record<string, ReactNode> = {
   planned: <Clock size={15} />,
@@ -71,26 +50,6 @@ const TYPE_ICONS: Record<number, ReactNode> = {
   4: <Asterisk size={15} />,
   6: <Bookmark size={15} />,
 };
-const RESTRICTION_ICONS: Record<string, ReactNode> = {
-  ALL_AGES: <Smile size={15} />,
-  AGE_12_PLUS: <Laugh size={15} />,
-  AGE_15_PLUS: <Meh size={15} />,
-  AGE_19_PLUS: <Angry size={15} />,
-  RESTRICTED: <Frown size={15} />,
-  PROHIBITED: <Ban size={15} />,
-};
-const POV_ICONS: Record<string, ReactNode> = {
-  FIRST_PERSON_PROTAGONIST: <User size={15} />,
-  FIRST_PERSON_OBSERVER: <UserSearch size={15} />,
-  SECOND_PERSON_OBSERVER: <Pointer size={15} />,
-  THIRD_PERSON_OBJECTIVE: <Eye size={15} />,
-  OMNISCIENT_NARRATOR: <Globe size={15} />,
-  SELECTIVE_NARRATION: <Shuffle size={15} />,
-  MULTIPLE_POV: <Users size={15} />,
-  STREAM_OF_CONSCIOUSNESS: <Activity size={15} />,
-  INDETERMINATE: <CircleHelp size={15} />,
-};
-
 // 상태별 메뉴 항목. 파일 트리 우클릭 메뉴에서도 쓴다.
 export function statusItems(current: string, pick: (status: string) => void): MenuItem[] {
   return STATUSES.map((s) => ({
@@ -167,26 +126,6 @@ const PROPS: Prop[] = [
     present: (d) => !!d.tags?.length,
     clear: clearField("tags", []),
   },
-  {
-    id: "restriction-level",
-    label: "수위",
-    description: "에피소드의 이용 등급을 설정합니다.",
-    order: 110,
-    optional: true,
-    icon: <Lock size={14} />,
-    present: (d) => d.contentRestrictionLevel != null,
-    clear: clearField("contentRestrictionLevel", null),
-  },
-  {
-    id: "point-of-view",
-    label: "시점",
-    description: "에피소드의 서술 시점을 설정합니다.",
-    order: 120,
-    optional: true,
-    icon: <Eye size={14} />,
-    present: (d) => d.pointOfView != null,
-    clear: clearField("pointOfView", null),
-  },
 ];
 
 // 내용에 맞춰 높이가 늘어나는 글 상자(뮤블의 요약·작가의 말 입력).
@@ -238,6 +177,8 @@ export default function EpisodeProperties({
   onBind,
   onUnbind,
   onOpenBound,
+  propertyPresets,
+  favoriteTags,
 }: {
   doc: Doc;
   // 이 작품의 새 에피소드 줄바꿈 기본값(작품 설정, 없으면 공통 설정).
@@ -246,6 +187,8 @@ export default function EpisodeProperties({
   onBind?: () => void;
   onUnbind?: () => void;
   onOpenBound?: () => void;
+  propertyPresets?: unknown;
+  favoriteTags?: unknown;
   readOnly?: boolean;
   open: boolean;
   onToggle: () => void;
@@ -326,7 +269,7 @@ export default function EpisodeProperties({
           />
         );
       case "tags":
-        return <EpisodeTags key={doc.id} tags={doc.tags || []} editable={edit}
+        return <EpisodeTags key={doc.id} tags={doc.tags || []} editable={edit} favorites={favoriteTags}
           onChange={(tags) => onEdit({ tags })} onMenu={onMenu} />;
       case "line-break":
         return (
@@ -395,64 +338,6 @@ export default function EpisodeProperties({
             {edit && <ChevronDown size={14} />}
           </button>
         );
-      case "restriction-level": {
-        const level = doc.contentRestrictionLevel,
-          info = level ? RESTRICTIONS[level] : null;
-        return (
-          <button
-            type="button"
-            className="property-select"
-            aria-label={`수위: ${info?.label ?? "수위 선택"}`}
-            title={info?.description}
-            disabled={!edit}
-            onClick={(e) =>
-              menuAt(
-                e,
-                RESTRICTION_LEVELS.map((l) => ({
-                  label: RESTRICTIONS[l].label,
-                  icon: <span className={`tone-${RESTRICTIONS[l].color}`}>{RESTRICTION_ICONS[l]}</span>,
-                  hint: RESTRICTIONS[l].description,
-                  disabled: level === l,
-                  action: () => onEdit({ contentRestrictionLevel: l }),
-                })),
-              )
-            }
-          >
-            {level && <span className="accent-icon">{RESTRICTION_ICONS[level]}</span>}
-            <span>{info?.label ?? "수위 선택"}</span>
-            {edit && <ChevronDown size={14} />}
-          </button>
-        );
-      }
-      case "point-of-view": {
-        const pov = doc.pointOfView,
-          info = pov ? POV[pov] : null;
-        return (
-          <button
-            type="button"
-            className="property-select"
-            aria-label={`시점: ${info?.label ?? "미지정"}`}
-            title={info?.description}
-            disabled={!edit}
-            onClick={(e) =>
-              menuAt(
-                e,
-                POINTS_OF_VIEW.map((v) => ({
-                  label: POV[v].label,
-                  icon: POV_ICONS[v],
-                  hint: POV[v].description,
-                  disabled: pov === v,
-                  action: () => onEdit({ pointOfView: v }),
-                })),
-              )
-            }
-          >
-            {pov && POV_ICONS[pov]}
-            <span>{info?.label ?? "미지정"}</span>
-            {edit && <ChevronDown size={14} />}
-          </button>
-        );
-      }
     }
     return null;
   };
@@ -471,29 +356,17 @@ export default function EpisodeProperties({
               {control(p)}
             </PropertyRow>
           ))}
-          {edit && addable.length > 0 && (
-            <button
-              type="button"
-              className="property-add"
-              onClick={(e) =>
-                menuAt(
-                  e,
-                  addable.map((p) => ({
-                    label: p.label,
-                    icon: <span className="faded-icon">{p.icon}</span>,
-                    hint: p.description,
-                    action: () => {
-                      setShown((s) => new Set(s).add(p.id));
-                      setFocusId(p.id);
-                    },
-                  })),
-                )
-              }
-            >
-              <Plus size={15} />
-              속성 추가하기
-            </button>
-          )}
+          <CustomProperties key={doc.id} properties={doc.properties} presets={propertyPresets} readOnly={!edit}
+            onChange={(properties) => onEdit({ properties })} onMenu={onMenu} onNotice={onNotice}
+            builtinItems={addable.map((p) => ({
+              label: p.label,
+              icon: <span className="faded-icon">{p.icon}</span>,
+              hint: p.description,
+              action: () => {
+                setShown((s) => new Set(s).add(p.id));
+                setFocusId(p.id);
+              },
+            }))} />
         </div>
       )}
       <button

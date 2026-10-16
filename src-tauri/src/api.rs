@@ -74,7 +74,8 @@ pub fn tool_definitions() -> Value {
                     "tags": { "type": "array", "items": { "type": "string" }, "description": "문서 태그" },
                     "manualLineBreak": { "type": "boolean", "description": "true 수동 줄바꿈 관리, false 자동 관리" },
                     "episodeId": { "type": "string" },
-                    "folder": { "type": "string" }
+                    "folder": { "type": "string" },
+                    "properties": { "type": "object", "description": "사용자 정의 YAML 속성" }
                 },
                 "required": ["projectId", "title"],
                 "additionalProperties": false
@@ -96,25 +97,7 @@ pub fn tool_definitions() -> Value {
                     "authorComment": { "type": "string", "description": "작가의 말" },
                     "manualLineBreak": { "type": "boolean", "description": "true 수동 줄바꿈 관리, false 자동 줄바꿈 관리" },
                     "tags": { "type": "array", "items": { "type": "string" } },
-                    "contentRestrictionLevel": {
-                        "type": ["string", "null"],
-                        "enum": ["ALL_AGES", "AGE_12_PLUS", "AGE_15_PLUS", "AGE_19_PLUS", "RESTRICTED", "PROHIBITED", null]
-                    },
-                    "pointOfView": {
-                        "type": ["string", "null"],
-                        "enum": [
-                            "FIRST_PERSON_PROTAGONIST",
-                            "FIRST_PERSON_OBSERVER",
-                            "SECOND_PERSON_OBSERVER",
-                            "THIRD_PERSON_OBJECTIVE",
-                            "OMNISCIENT_NARRATOR",
-                            "SELECTIVE_NARRATION",
-                            "MULTIPLE_POV",
-                            "STREAM_OF_CONSCIOUSNESS",
-                            "INDETERMINATE",
-                            null
-                        ]
-                    },
+                    "properties": { "type": "object", "description": "사용자 정의 YAML 속성" },
                     "order": { "type": "number" },
                     "archived": { "type": "boolean" },
                     "episodeId": { "type": ["string", "null"] },

@@ -1,6 +1,6 @@
 use crate::assets::{normalize_tags, valid_cover, validate_cover};
 use crate::episode::{
-    check_meta_patch, line_break_default, normalize_document_meta, normalize_meta,
+    check_meta_patch, custom_properties, line_break_default, normalize_document_meta, normalize_meta,
     normalize_status, normalize_status_val, status_token, stored_document_meta, stored_meta,
     DOCUMENT_META_FIELDS, META_FIELDS, STATUSES,
 };
@@ -3176,11 +3176,7 @@ impl Store {
             }
             let folder = input.get("folder").and_then(|v| v.as_str());
             let mut attrs = stored_document_meta(Some(input));
-            let props = input
-                .get("properties")
-                .and_then(|v| v.as_object())
-                .cloned()
-                .unwrap_or_default();
+            let props = custom_properties(input);
             attrs.insert("properties".to_string(), Value::Object(props));
             if let Some(co) = fixed
                 .get("conflictOf")
@@ -3240,12 +3236,7 @@ impl Store {
         }
         entry.insert(
             "properties".to_string(),
-            input
-                .get("properties")
-                .and_then(|v| v.as_object())
-                .cloned()
-                .map(Value::Object)
-                .unwrap_or_else(|| json!({})),
+            Value::Object(custom_properties(input)),
         );
         entry.insert("order".to_string(), json!(order));
         entry.insert(
@@ -4652,12 +4643,7 @@ impl Store {
         }
         fields.insert(
             "properties".to_string(),
-            remote
-                .get("properties")
-                .and_then(|v| v.as_object())
-                .cloned()
-                .map(Value::Object)
-                .unwrap_or_else(|| json!({})),
+            Value::Object(custom_properties(remote)),
         );
         let order = remote.get("order").and_then(|v| v.as_i64()).unwrap_or(0);
         fields.insert("order".to_string(), json!(order));
@@ -5140,10 +5126,7 @@ impl Store {
                             }
                             create_in.insert(
                                 "properties".to_string(),
-                                remote
-                                    .get("properties")
-                                    .cloned()
-                                    .unwrap_or_else(|| json!({})),
+                                Value::Object(custom_properties(remote)),
                             );
                             if let Some(rep_id) =
                                 remote.get("episodeId").and_then(|v| v.as_str())

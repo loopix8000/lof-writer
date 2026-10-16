@@ -1,30 +1,38 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { X, Plus } from "lucide-react";
+import TagSuggestions from "./TagSuggestions";
 export default function TagInput({
   tags,
   onChange,
+  favorites,
+  maxTags = 30,
 }: {
   tags: string[];
   onChange: (tags: string[]) => void;
+  favorites?: unknown;
+  maxTags?: number | null;
 }) {
   const [value, setValue] = useState(""),
     [error, setError] = useState("");
-  function add() {
+  const composing = useRef(false);
+  function add(raw = value, complete = true) {
+    const parts = raw.split(/[,，\r\n]+/);
+    const remainder = complete ? "" : parts.pop()!;
     const next = [
       ...new Set([
         ...tags,
-        ...value
-          .split(/[,，\n]/)
+        ...parts
           .map((t) => t.trim().replace(/^#+/, ""))
           .filter(Boolean),
       ]),
     ];
-    if (next.length > 30 || next.some((t) => t.length > 40)) {
-      setError("태그는 30개까지, 각 40자까지 입력할 수 있습니다.");
+    if ((maxTags !== null && next.length > maxTags) || next.some((t) => t.length > 40)) {
+      setValue(raw);
+      setError(maxTags === null ? "태그는 각 40자까지 입력할 수 있습니다." : `태그는 ${maxTags}개까지, 각 40자까지 입력할 수 있습니다.`);
       return;
     }
-    onChange(next);
-    setValue("");
+    if (next.length !== tags.length) onChange(next);
+    setValue(remainder);
     setError("");
   }
   return (
@@ -36,6 +44,7 @@ export default function TagInput({
             <button
               type="button"
               aria-label={`${t} 태그 제거`}
+              onMouseDown={(e) => e.preventDefault()}
               onClick={() => onChange(tags.filter((x) => x !== t))}
             >
               <X size={12} />
@@ -49,23 +58,29 @@ export default function TagInput({
           placeholder="태그 입력 후 Enter 또는 쉼표"
           value={value}
           maxLength={500}
-          onChange={(e) => setValue(e.target.value)}
+          onChange={(e) => {
+            if (composing.current) { setValue(e.target.value); setError(""); }
+            else add(e.target.value, false);
+          }}
+          onCompositionStart={() => { composing.current = true; }}
+          onCompositionEnd={(e) => { composing.current = false; add(e.currentTarget.value, false); }}
           onBlur={() => {
-            if (value.trim()) add();
+            if (!composing.current && value.trim()) add();
           }}
           onKeyDown={(e) => {
-            if (e.nativeEvent.isComposing) return;
-            if (e.key === "Enter" || e.key === ",") {
+            if (e.nativeEvent.isComposing || composing.current || e.keyCode === 229) return;
+            if (e.key === "Enter" || e.key === "," || e.key === "，") {
               e.preventDefault();
               add();
             }
             if (e.key === "Backspace" && !value) onChange(tags.slice(0, -1));
           }}
         />
-        <button type="button" aria-label="태그 추가" onClick={add}>
+        <button type="button" aria-label="태그 추가" onMouseDown={(e) => e.preventDefault()} onClick={() => add()}>
           <Plus size={15} />
         </button>
       </div>
+      <TagSuggestions tags={tags} favorites={favorites} query={value} onSelect={(tag) => add(tag)} />
       {error && <p className="input-error">{error}</p>}
     </div>
   );

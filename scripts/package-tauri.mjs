@@ -8,7 +8,8 @@ const pkg = JSON.parse(fs.readFileSync(path.join(rootDir, "package.json"), "utf8
 const version = pkg.version;
 const mode = process.argv[2] || "dir";
 
-const releaseDir = path.join(rootDir, "release", version);
+// 앱 버전이 바뀌어도 기존 폴더 배포본의 위치를 유지한다.
+const releaseDir = path.join(rootDir, "release", "1.0.0-beta.1");
 const unpackedDir = path.join(releaseDir, "win-unpacked");
 const builtExe = path.join(
   rootDir,
@@ -19,6 +20,15 @@ const builtExe = path.join(
 );
 const iconPath = path.join(rootDir, "assets", "icon.ico");
 
+function assertChildPath(parent, target) {
+  const base = fs.realpathSync(parent);
+  const resolved = fs.realpathSync(target);
+  const relative = path.relative(base, resolved);
+  if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error(`Refusing to remove a path outside ${base}: ${resolved}`);
+  }
+}
+
 // Only force Cargo to re-run build.rs when icon.ico changed since the last build
 const cargoBuildDir = path.join(rootDir, "src-tauri", "target", "release", "build");
 const iconChanged =
@@ -28,6 +38,7 @@ const iconChanged =
 if (iconChanged && fs.existsSync(cargoBuildDir)) {
   for (const entry of fs.readdirSync(cargoBuildDir)) {
     if (entry.startsWith("lof-writer-")) {
+      assertChildPath(cargoBuildDir, path.join(cargoBuildDir, entry));
       fs.rmSync(path.join(cargoBuildDir, entry), { recursive: true, force: true });
     }
   }
@@ -58,6 +69,10 @@ if (process.platform === "win32") {
 }
 
 fs.mkdirSync(unpackedDir, { recursive: true });
+assertChildPath(rootDir, unpackedDir);
+for (const entry of fs.readdirSync(unpackedDir)) {
+  assertChildPath(unpackedDir, path.join(unpackedDir, entry));
+}
 for (const entry of fs.readdirSync(unpackedDir)) {
   fs.rmSync(path.join(unpackedDir, entry), {
     recursive: true,

@@ -952,6 +952,7 @@ export default function MemoSession({
                     id={"memo-side-" + sideKey}
                     revision={shown.revision}
                     body={shown.body}
+                    tables={kindOf(shown) !== "episode"}
                     manualLineBreak={!!shown.manualLineBreak}
                     readOnly
                     onChange={() => {}}
@@ -1379,6 +1380,7 @@ export default function MemoSession({
                       id={`memo-${opened}`}
                       revision={memo.revision}
                       body={memo.body}
+                      tables={kindOf(memo) !== "episode"}
                       manualLineBreak={!!memo.manualLineBreak}
                       onChange={edit}
                       fontSize={mainBox.norm.fontSize}

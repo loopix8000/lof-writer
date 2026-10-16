@@ -5,34 +5,11 @@ pub const STATUSES: &[&str] = &["planned", "in_progress", "revision", "completed
 
 pub const EPISODE_TYPES: &[i64] = &[0, 1, 2, 3, 4, 5, 6];
 
-pub const RESTRICTION_LEVELS: &[&str] = &[
-    "ALL_AGES",
-    "AGE_12_PLUS",
-    "AGE_15_PLUS",
-    "AGE_19_PLUS",
-    "RESTRICTED",
-    "PROHIBITED",
-];
-
-pub const POINTS_OF_VIEW: &[&str] = &[
-    "FIRST_PERSON_PROTAGONIST",
-    "FIRST_PERSON_OBSERVER",
-    "SECOND_PERSON_OBSERVER",
-    "THIRD_PERSON_OBJECTIVE",
-    "OMNISCIENT_NARRATOR",
-    "SELECTIVE_NARRATION",
-    "MULTIPLE_POV",
-    "STREAM_OF_CONSCIOUSNESS",
-    "INDETERMINATE",
-];
-
 pub const META_FIELDS: &[&str] = &[
     "episodeType",
     "description",
     "authorComment",
     "tags",
-    "contentRestrictionLevel",
-    "pointOfView",
     "manualLineBreak",
 ];
 
@@ -98,18 +75,6 @@ pub fn normalize_meta(e: Option<&Value>) -> Map<String, Value> {
     let episode_type = normalize_type(obj.and_then(|o| o.get("episodeType")));
     let description = text_field(obj.and_then(|o| o.get("description")), 2000);
     let author_comment = text_field(obj.and_then(|o| o.get("authorComment")), 10000);
-    let restriction = obj
-        .and_then(|o| o.get("contentRestrictionLevel"))
-        .and_then(|v| v.as_str())
-        .filter(|s| RESTRICTION_LEVELS.contains(s))
-        .map(|s| Value::String(s.to_string()))
-        .unwrap_or(Value::Null);
-    let pov = obj
-        .and_then(|o| o.get("pointOfView"))
-        .and_then(|v| v.as_str())
-        .filter(|s| POINTS_OF_VIEW.contains(s))
-        .map(|s| Value::String(s.to_string()))
-        .unwrap_or(Value::Null);
     let manual_line_break = obj
         .and_then(|o| o.get("manualLineBreak"))
         .and_then(|v| v.as_bool())
@@ -120,8 +85,6 @@ pub fn normalize_meta(e: Option<&Value>) -> Map<String, Value> {
     out.insert("description".to_string(), json!(description));
     out.insert("authorComment".to_string(), json!(author_comment));
     out.insert("tags".to_string(), json!(tags));
-    out.insert("contentRestrictionLevel".to_string(), restriction);
-    out.insert("pointOfView".to_string(), pov);
     out.insert("manualLineBreak".to_string(), json!(manual_line_break));
     out
 }
@@ -146,6 +109,19 @@ pub fn stored_meta(e: Option<&Value>) -> Map<String, Value> {
                 out.insert(k.to_string(), v.clone());
             }
         }
+    }
+    out
+}
+
+pub fn custom_properties(e: &Value) -> Map<String, Value> {
+    let mut out = Map::new();
+    for key in ["contentRestrictionLevel", "pointOfView"] {
+        if let Some(value) = e.get(key).filter(|v| !v.is_null()) {
+            out.insert(key.to_string(), value.clone());
+        }
+    }
+    if let Some(properties) = e.get("properties").and_then(|v| v.as_object()) {
+        out.extend(properties.clone());
     }
     out
 }
@@ -198,23 +174,6 @@ pub fn check_meta_patch(k: &str, v: &Value) -> Option<&'static str> {
                 }
             }
             Some("태그는 문자열 목록이어야 합니다.")
-        }
-        "contentRestrictionLevel" => {
-            if v.is_null()
-                || v.as_str()
-                    .is_some_and(|s| RESTRICTION_LEVELS.contains(&s))
-            {
-                None
-            } else {
-                Some("잘못된 수위")
-            }
-        }
-        "pointOfView" => {
-            if v.is_null() || v.as_str().is_some_and(|s| POINTS_OF_VIEW.contains(&s)) {
-                None
-            } else {
-                Some("잘못된 시점")
-            }
         }
         "manualLineBreak" => {
             if v.is_boolean() {

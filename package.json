@@ -1,7 +1,7 @@
 {
   "name": "lof-writer",
   "productName": "Lof Writer",
-  "version": "1.0.0-beta.4",
+  "version": "1.0.1-beta.1",
   "private": true,
   "description": "Local First Writing Tool",
   "author": "Lof Writer",
@@ -30,6 +30,7 @@
     "@tauri-apps/plugin-updater": "^2.14.0",
     "@tiptap/core": "^3.32.0",
     "@tiptap/extension-placeholder": "^3.0.0",
+    "@tiptap/extension-table": "3.32.0",
     "@tiptap/markdown": "^3.0.0",
     "@tiptap/pm": "^3.32.0",
     "@tiptap/react": "^3.0.0",

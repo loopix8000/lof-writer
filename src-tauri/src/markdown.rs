@@ -388,10 +388,19 @@ pub fn markdown_entry(raw: &str, fallback: &Value) -> Result<Value, LofError> {
         out.insert("updatedAt".to_string(), json!(ua));
     }
 
-    out.insert(
-        "properties".to_string(),
-        Value::Object(extras_of(&parsed.properties, if episode { "episode" } else { "memo" })),
-    );
+    let mut properties = extras_of(&parsed.properties, if episode { "episode" } else { "memo" });
+    for key in ["contentRestrictionLevel", "pointOfView"] {
+        if let Some(value) = source.get(key).filter(|v| !v.is_null()) {
+            properties.entry(key.to_string()).or_insert_with(|| value.clone());
+        }
+        let custom_icon = properties.get("_lofPropertyIcons")
+            .and_then(|v| v.as_object()).is_some_and(|icons| icons.contains_key(key));
+        if properties.get(key).is_some_and(|v| v.is_null()) && !custom_icon {
+            properties.remove(key);
+        }
+        out.remove(key);
+    }
+    out.insert("properties".to_string(), Value::Object(properties));
 
     Ok(Value::Object(out))
 }
@@ -492,14 +501,7 @@ pub fn write_markdown(body: &str, doc: &Value, previous_raw: &str) -> Result<Str
 }
 
 fn format_yaml_key(k: &str) -> String {
-    if !k.is_empty()
-        && k.chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-    {
-        k.to_string()
-    } else {
-        serde_json::to_string(k).unwrap_or_else(|_| format!("\"{}\"", k))
-    }
+    serde_json::to_string(k).unwrap_or_else(|_| format!("\"{}\"", k))
 }
 
 fn format_yaml_value(v: &Value, indent: usize, eol: &str) -> String {

@@ -38,8 +38,6 @@ export type Doc = {
   description?: string;
   authorComment?: string;
   tags?: string[];
-  contentRestrictionLevel?: string | null;
-  pointOfView?: string | null;
   // 줄바꿈 관리 방식. true 수동 관리, false 자동 관리.
   manualLineBreak?: boolean;
   order: number;
@@ -56,7 +54,7 @@ export type Doc = {
   // 플롯·메모 문서가 연결된 회차. 저장할 때 null이면 연결을 푼다.
   episodeId?: string | null;
   fingerprint?: string;
-  // 앱에서 별도 UI를 제공하지 않는 사용자 정의 YAML 속성도 보존한다.
+  // Markdown YAML에 기록하는 사용자 속성.
   properties?: Record<string, unknown>;
 };
 export type Library = {

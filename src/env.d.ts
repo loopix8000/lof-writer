@@ -1,7 +1,7 @@
 declare module "*.mjs" {
   export function plainText(text: string): string;
   export function characterCount(text: string, spaces?: boolean): number;
-  export function requiresSource(text: string): boolean;
+  export function requiresSource(text: string, options?: { tables?: boolean }): boolean;
   export const DEFAULT_TEXT_REPLACEMENTS: {
     id: string;
     from: string;
@@ -52,10 +52,6 @@ declare module "*.mjs" {
   export const TYPE_LABELS: Record<number, string>;
   export const TYPE_ACTIONS: Record<number, string>;
   export function normalizeType(type?: number | string): number;
-  export const RESTRICTION_LEVELS: string[];
-  export const RESTRICTIONS: Record<string, { label: string; color: string; description: string }>;
-  export const POINTS_OF_VIEW: string[];
-  export const POV: Record<string, { label: string; description: string }>;
   export function lineBreakLabel(manual?: boolean): string;
   export function lineBreakDefault(project: { manualLineBreak?: boolean } | undefined, common?: boolean): boolean;
   export function episodeNumbers(episodes: { id: string; episodeType?: number }[]): Map<string, string>;

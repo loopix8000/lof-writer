@@ -1,5 +1,5 @@
 import { useEffect, useRef, type CSSProperties } from "react";
-import { useEditor, EditorContent } from "@tiptap/react";
+import { useEditor, useEditorState, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { Markdown } from "@tiptap/markdown";
 import Placeholder from "@tiptap/extension-placeholder";
@@ -16,6 +16,7 @@ import {
   Minus,
   Pilcrow,
   Sparkles,
+  Table2,
 } from "lucide-react";
 import { requiresSource } from "../core/text.mjs";
 import {
@@ -25,6 +26,7 @@ import {
 } from "../core/typing.mjs";
 import { normalizeEditorStyle } from "../core/typesetting.mjs";
 import { TypingAssist, typesettingPluginKey } from "./typing-extension";
+import { MarkdownTables } from "./table-extension";
 import { Fragment, Slice, type Node as PMNode } from "@tiptap/pm/model";
 import type { EditorProps } from "@tiptap/pm/view";
 
@@ -115,6 +117,7 @@ export default function Writer({
   editorStyle,
   onToggleTypographicMarks,
   onReplaceSymbols,
+  tables = false,
 }: {
   id: string;
   body: string;
@@ -134,6 +137,7 @@ export default function Writer({
   editorStyle?: Record<string, any>;
   onToggleTypographicMarks?: () => void;
   onReplaceSymbols?: () => void;
+  tables?: boolean;
 }) {
   const style = normalizeEditorStyle({
     ...typingOptions,
@@ -151,12 +155,13 @@ export default function Writer({
   optionsRef.current = mergedOptions;
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const pendingSelection = useRef<number | null>(null);
-  const protectedSource = requiresSource(body);
+  const protectedSource = requiresSource(body, { tables });
   const editor = useEditor(
     {
       extensions: [
         StarterKit.configure({ link: false, underline: false }),
         Markdown,
+        ...(tables ? [MarkdownTables] : []),
         TypingAssist.configure({ getOptions: () => optionsRef.current }),
         Placeholder.configure({
           placeholder: "이곳에서 이야기를 시작해 보세요.",
@@ -186,8 +191,12 @@ export default function Writer({
       },
       onUpdate: ({ editor }) => onChange(editor.getMarkdown()),
     },
-    [id],
+    [id, tables],
   );
+  const inTable = useEditorState({
+    editor,
+    selector: ({ editor }) => !!editor?.isActive("table"),
+  });
   useEffect(() => {
     if (editor && !editor.isDestroyed) {
       editor.setOptions({
@@ -475,8 +484,37 @@ export default function Writer({
             <t.icon size={16} />
           </button>
         ))}
+        {tables && !readOnly && (
+          <button
+            aria-label="표 삽입"
+            title="표 삽입 (3행 × 3열)"
+            disabled={inTable}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()}
+          >
+            <Table2 size={16} />
+          </button>
+        )}
         <span>본문</span>
       </div>
+      {tables && inTable && !readOnly && (
+        <div className="table-tools" role="toolbar" aria-label="표 편집">
+          {[
+            { label: "위에 행 추가", action: () => editor.chain().focus().addRowBefore().run() },
+            { label: "아래에 행 추가", action: () => editor.chain().focus().addRowAfter().run() },
+            { label: "왼쪽에 열 추가", action: () => editor.chain().focus().addColumnBefore().run() },
+            { label: "오른쪽에 열 추가", action: () => editor.chain().focus().addColumnAfter().run() },
+            { label: "행 삭제", action: () => editor.chain().focus().deleteRow().run() },
+            { label: "열 삭제", action: () => editor.chain().focus().deleteColumn().run() },
+            { label: "표 삭제", action: () => editor.chain().focus().deleteTable().run() },
+          ].map((tool) => (
+            <button key={tool.label} onMouseDown={(e) => e.preventDefault()} onClick={tool.action}>
+              {tool.label}
+            </button>
+          ))}
+          <span>Tab: 다음 셀 · Shift+Tab: 이전 셀</span>
+        </div>
+      )}
       <EditorContent
         className={`editor-content${manualLineBreak ? " manual-break" : ""}${style.pageViewEnabled ? " page-view" : ""}`}
         data-divider-style={style.dividerStyle}

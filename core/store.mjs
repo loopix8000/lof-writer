@@ -13,6 +13,7 @@ import {
   statusToken,
   normalizeMeta,
   storedMeta,
+  customProperties,
   checkMetaPatch,
   META_FIELDS,
   lineBreakDefault,
@@ -1173,7 +1174,7 @@ export class Store extends EventEmitter {
         if (problem) throw fail(problem);
       }
       return this._createDocFile(p, kind, title, body, input.folder, input.episodeId,
-        { ...storedDocumentMeta(input), properties: input.properties || {} });
+        { ...storedDocumentMeta(input), properties: customProperties(input) });
     }
     const same = p.project.documents.filter((d) => d.kind === kind);
     const now = new Date().toISOString();
@@ -1191,7 +1192,7 @@ export class Store extends EventEmitter {
             ? input.manualLineBreak
             : lineBreakDefault(p.project, this.lineBreakDefault()),
       }),
-      properties: input.properties || {},
+      properties: customProperties(input),
       order: fixed.order ?? (same.length ? Math.max(...same.map((d) => d.order || 0)) + 1 : 0),
       archived: fixed.archived ?? false,
       createdAt: fixed.createdAt || now,
@@ -1770,7 +1771,7 @@ export class Store extends EventEmitter {
       title: remote.title,
       status: normalizeStatus(remote.status),
       ...storedMeta(remote),
-      properties: remote.properties || {},
+      properties: customProperties(remote),
       order: Number.isFinite(remote.order) ? remote.order : 0,
       archived: !!remote.archived,
       createdAt: String(remote.createdAt || new Date().toISOString()),
@@ -1978,7 +1979,7 @@ export class Store extends EventEmitter {
                   title: `${remote.title} (동기화 충돌 사본)`,
                   body: remote.body,
                   ...(remote.kind !== "episode" ? storedDocumentMeta(remote) : {}),
-                  properties: remote.properties || {},
+                  properties: customProperties(remote),
                   episodeId: local.documents.some((d) => d.id === remote.episodeId)
                     ? remote.episodeId
                     : undefined,

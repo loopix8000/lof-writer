@@ -74,7 +74,13 @@ export function markdownEntry(raw, fallback) {
     conflictOf: typeof source.conflictOf === "string" ? source.conflictOf : undefined,
     createdAt: typeof source.createdAt === "string" ? source.createdAt : fallback.createdAt,
     updatedAt: typeof source.updatedAt === "string" ? source.updatedAt : fallback.updatedAt,
-    properties: extrasOf(parsed.properties, episode ? "episode" : "memo"),
+    properties: {
+      ...Object.fromEntries(["contentRestrictionLevel", "pointOfView"]
+        .filter((key) => source[key] != null).map((key) => [key, source[key]])),
+      ...Object.fromEntries(Object.entries(extrasOf(parsed.properties, episode ? "episode" : "memo"))
+        .filter(([key, value]) => !["contentRestrictionLevel", "pointOfView"].includes(key) || value != null ||
+          Object.hasOwn(parsed.properties._lofPropertyIcons || {}, key))),
+    },
   };
 }
 export function documentProperties(doc) {
