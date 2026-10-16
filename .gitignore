@@ -7,7 +7,6 @@ src-tauri/gen/
 test-results/
 playwright-report/
 *.log
-# 조사 자료와 작업 기록은 로컬에만 둔다.
 docs/
 .private/
 src-tauri/tauri.updater.generated.json
