@@ -2,20 +2,24 @@
 // 1) 에디터 시각 조판 스타일 및 용지·기기·플랫폼 프리셋
 // 2) 원고 기호 일괄 대치(직선 따옴표 → 곡선 따옴표, 마침표 연속 → 말줄임표)
 
-export const DEFAULT_EDITOR_STYLE = {
+const DEFAULT_DESKTOP_EDITOR_STYLE = {
   fontFamily: "",
   fontSize: 18,
   fontWeight: 400,
   letterSpacing: 0,
-  lineHeight: 1.8,
-  blockGap: 0.9,
-  indent: 0,
+  lineHeight: 2,
+  blockGap: 1.05,
+  indent: 1,
   hardBreakIndent: false,
   textAlign: "left",
   editorMaxWidth: 760,
   editorPaddingX: 5,
   textareaBgColor: "",
   editorTextColor: "",
+};
+
+export const DEFAULT_EDITOR_STYLE = {
+  ...DEFAULT_DESKTOP_EDITOR_STYLE,
   showTypographicMarks: false,
   serifSymbols: true,
   dividerStyle: "solid",
@@ -100,19 +104,7 @@ export const PLATFORM_STYLE_PRESETS = [
     environment: "데스크톱",
     description: "기본 집필 조판 (폭 760px · 줄간격 2.0 · 들여쓰기 1em)",
     style: {
-      fontFamily: "",
-      fontSize: 18,
-      fontWeight: 400,
-      letterSpacing: 0,
-      lineHeight: 2,
-      blockGap: 1.05,
-      indent: 1,
-      hardBreakIndent: false,
-      textAlign: "left",
-      editorMaxWidth: 760,
-      editorPaddingX: 5,
-      textareaBgColor: "",
-      editorTextColor: "",
+      ...DEFAULT_DESKTOP_EDITOR_STYLE,
     },
   },
   {

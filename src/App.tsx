@@ -242,8 +242,7 @@ export default function App() {
     [history, setHistory] = useState<{ name: string }[]>([]),
     [preview, setPreview] = useState<any>(null),
     [prefs, setPrefs] = useState<Record<string, any>>({
-      fontSize: 18,
-      lineHeight: 2,
+      ...DEFAULT_EDITOR_STYLE,
       goal: 3000,
       theme: "light",
       colorTheme: "modern",
@@ -1352,6 +1351,26 @@ export default function App() {
     setCommonMemoPath(s.commonMemoPath || "");
     if (active?.kind) setTypesettingKind(active.kind === "episode" ? "episode" : "document");
     setDialog({ type: "settings" });
+  }
+  async function chooseVault() {
+    setBusy(true);
+    try {
+      await flush();
+      if (!await call("chooseVault")) return;
+      draft.current = null;
+      activeId.current = "";
+      setActive(null);
+      updateTabs(() => []);
+      updateSplit(() => null);
+      setMemoOpen(false);
+      projectRef.current = "";
+      setProjectId("");
+      setView("library");
+      resetNavigation();
+      await refresh();
+    } finally {
+      setBusy(false);
+    }
   }
   async function doSync(id: string) {
     setBusy(true);
@@ -2862,17 +2881,8 @@ export default function App() {
               )}
               <div className="library-footer">
                 <button
-                  onClick={attempt(async () => {
-                    await flush();
-                    if (await call("chooseVault")) {
-                      draft.current = null;
-                      setActive(null);
-                      projectRef.current = "";
-                      setProjectId("");
-                      resetNavigation();
-                      await refresh();
-                    }
-                  })}
+                  disabled={busy}
+                  onClick={attempt(chooseVault)}
                 >
                   <FolderOpen size={15} />
                   다른 서재 열기
@@ -3496,6 +3506,16 @@ export default function App() {
             </div>
             {dialog.type === "setup" && (
               <div className="setup-content">
+                <section className="setup-vault" aria-labelledby="setup-vault-title">
+                  <h3 id="setup-vault-title">서재 위치</h3>
+                  <p className="muted">작품과 원고를 저장할 폴더입니다. 기본 위치를 그대로 사용하거나 다른 폴더를 선택하세요.</p>
+                  <div className="setup-vault-picker">
+                    <output aria-label="서재 위치" title={lib.root}>{lib.root}</output>
+                    <button type="button" disabled={busy} onClick={attempt(chooseVault)}>
+                      <FolderOpen size={15} />폴더 선택
+                    </button>
+                  </div>
+                </section>
                 <p>
                   주로 연재할 플랫폼을 선택해 주세요. 사용자 규칙으로 직접 계산
                   방식을 정할 수도 있습니다.
@@ -3509,12 +3529,18 @@ export default function App() {
                 </p>
                 <button
                   className="primary"
+                  disabled={busy || !lib.root}
                   onClick={attempt(async () => {
-                    await savePrefs({
-                      setupComplete: true,
-                      defaultWriting: dialog.writing || normalizeWriting(),
-                    });
-                    setDialog(null);
+                    setBusy(true);
+                    try {
+                      await savePrefs({
+                        setupComplete: true,
+                        defaultWriting: dialog.writing || normalizeWriting(),
+                      });
+                      setDialog(null);
+                    } finally {
+                      setBusy(false);
+                    }
                   })}
                 >
                   이 설정으로 시작

@@ -25,7 +25,44 @@ import {
 } from "../core/typing.mjs";
 import { normalizeEditorStyle } from "../core/typesetting.mjs";
 import { TypingAssist, typesettingPluginKey } from "./typing-extension";
-import type { Node as PMNode } from "@tiptap/pm/model";
+import { Fragment, Slice, type Node as PMNode } from "@tiptap/pm/model";
+import type { EditorProps } from "@tiptap/pm/view";
+
+function clipboardTextParser(manual: boolean): NonNullable<EditorProps["clipboardTextParser"]> {
+  return (text, $context, _plainText, view) => {
+    const { schema } = view.state;
+    const marks = $context.marks();
+    const lines = text.split(/\r\n?|\n/);
+    // 수동은 원문을 보존하고, 자동은 연속된 빈 줄을 한 줄만 남긴다.
+    const keptLines = manual ? lines : lines.filter((line, index) =>
+      line.trim() !== "" || index === 0 || lines[index - 1].trim() !== "",
+    );
+    const paragraphs = keptLines.map((line) =>
+      schema.nodes.paragraph.create(null, line ? schema.text(line, marks) : undefined),
+    );
+    return new Slice(Fragment.fromArray(paragraphs), 1, 1);
+  };
+}
+
+const parseManualClipboardText = clipboardTextParser(true);
+const parseAutomaticClipboardText = clipboardTextParser(false);
+
+// HTML 붙여넣기도 서식은 유지하면서 연속된 빈 문단만 한 문단으로 합친다.
+const normalizeAutomaticPaste: NonNullable<EditorProps["transformPasted"]> = (slice) => {
+  const normalize = (content: Fragment): Fragment => {
+    const nodes: PMNode[] = [];
+    let previousBlank = false;
+    content.forEach((node) => {
+      const blank = node.type.name === "paragraph" &&
+        node.content.content.every((child) => child.isText && child.text!.trim() === "");
+      if (blank && previousBlank) return;
+      previousBlank = blank;
+      nodes.push(!node.isLeaf && !node.type.spec.code ? node.copy(normalize(node.content)) : node);
+    });
+    return Fragment.fromArray(nodes);
+  };
+  return new Slice(normalize(slice.content), slice.openStart, slice.openEnd);
+};
 
 // 문단(textblock) 안의 글자 위치를 편집기 위치로 바꾼다. 글자가 아닌 요소는 건너뛴다.
 function offsetToPos(node: PMNode, pos: number, offset: number) {
@@ -107,6 +144,8 @@ export default function Writer({
       contentType: "markdown",
       editable: !readOnly,
       editorProps: {
+        clipboardTextParser: manualLineBreak ? parseManualClipboardText : parseAutomaticClipboardText,
+        transformPasted: manualLineBreak ? undefined : normalizeAutomaticPaste,
         attributes: {
           "aria-label": readOnly ? "다른 그룹 원고 본문" : "원고 본문",
           "data-testid": readOnly ? "manuscript-readonly" : "manuscript",
@@ -127,6 +166,17 @@ export default function Writer({
     },
     [id],
   );
+  useEffect(() => {
+    if (editor && !editor.isDestroyed) {
+      editor.setOptions({
+        editorProps: {
+          ...editor.options.editorProps,
+          clipboardTextParser: manualLineBreak ? parseManualClipboardText : parseAutomaticClipboardText,
+          transformPasted: manualLineBreak ? undefined : normalizeAutomaticPaste,
+        },
+      });
+    }
+  }, [editor, manualLineBreak]);
   useEffect(() => {
     if (
       editor &&

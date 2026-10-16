@@ -2234,6 +2234,35 @@ h1 small {
   width: 100%;
   margin-top: 12px;
 }
+.setup-vault {
+  margin-bottom: 24px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--border);
+}
+.setup-vault h3 {
+  font-size: 14px;
+  margin: 0 0 8px;
+}
+.setup-vault p {
+  margin: 0 0 12px;
+}
+.setup-vault-picker {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.setup-vault-picker output {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.setup-vault-picker button {
+  flex-shrink: 0;
+}
 .search-results {
   max-height: 440px;
   overflow: auto;
