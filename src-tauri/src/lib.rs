@@ -30,6 +30,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 use uuid::Uuid;
 
@@ -47,6 +49,7 @@ pub struct AppState {
     pub compact_window: AtomicBool,
     pub compact_applied: AtomicBool,
     pub closing: Arc<AtomicBool>,
+    pub quit_requested: AtomicBool,
     pub close_pending: Arc<AtomicBool>,
     pub close_seq: Arc<AtomicU64>,
     pub notify_seq: Arc<AtomicU64>,
@@ -1345,20 +1348,34 @@ fn lof_flushed(ok: bool, state: State<'_, AppState>, window: WebviewWindow) {
     }
     state.close_seq.fetch_add(1, Ordering::SeqCst);
     if !ok {
+        state.quit_requested.store(false, Ordering::SeqCst);
+        restore_main_window(window.app_handle());
         thread::spawn(move || {
             MessageDialog::new()
                 .set_level(MessageLevel::Warning)
                 .set_title("Lof Writer")
                 .set_description(
-                    "저장하지 못한 원고가 있습니다.\n\n편집 화면에서 충돌을 해결한 뒤 다시 닫아 주세요. 임시 원고는 로컬에 보관됩니다.",
+                    "저장하지 못한 원고가 있습니다.\n\n편집 화면에서 저장 상태와 충돌을 확인한 뒤 다시 시도해 주세요. 임시 원고는 로컬에 보관됩니다.",
                 )
                 .set_buttons(MessageButtons::Ok)
                 .show();
         });
         return;
     }
-    state.closing.store(true, Ordering::SeqCst);
-    let _ = window.close();
+    if state.quit_requested.swap(false, Ordering::SeqCst) {
+        state.closing.store(true, Ordering::SeqCst);
+        let _ = window.close();
+    } else {
+        let _ = window.hide();
+    }
+}
+
+fn restore_main_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
 }
 
 /// 집중 모드의 작은 창 허용 여부에 맞춰 창 최소 크기를 적용한다.
@@ -1641,6 +1658,7 @@ pub fn run() {
         compact_window: AtomicBool::new(false),
         compact_applied: AtomicBool::new(false),
         closing: Arc::clone(&closing),
+        quit_requested: AtomicBool::new(false),
         close_pending: Arc::clone(&close_pending),
         close_seq: Arc::clone(&close_seq),
         notify_seq: Arc::clone(&notify_seq),
@@ -1663,6 +1681,41 @@ pub fn run() {
             updater_status,
         ])
         .setup(move |app| {
+            let open = MenuItem::with_id(app, "tray-open", "Lof Writer 열기", true, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "tray-quit", "종료", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&open, &quit])?;
+            let icon = image::load_from_memory(include_bytes!("../icons/icon.png"))?.to_rgba8();
+            let (width, height) = icon.dimensions();
+            TrayIconBuilder::with_id("main-tray")
+                .icon(tauri::image::Image::new_owned(icon.into_raw(), width, height))
+                .tooltip("Lof Writer")
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "tray-open" => restore_main_window(app),
+                    "tray-quit" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let state: State<AppState> = app.state();
+                            state.quit_requested.store(true, Ordering::SeqCst);
+                            if window.close().is_err() {
+                                state.quit_requested.store(false, Ordering::SeqCst);
+                                restore_main_window(app);
+                            }
+                        }
+                    }
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        restore_main_window(tray.app_handle());
+                    }
+                })
+                .build(app)?;
             let handle = app.handle().clone();
             {
                 let mut h_guard = app_handle_holder.lock().unwrap();
@@ -1815,6 +1868,9 @@ pub fn run() {
                 return;
             }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() != "main" {
+                    return;
+                }
                 let app = window.app_handle();
                 let st: State<AppState> = app.state();
                 if st.closing.load(Ordering::SeqCst) {
@@ -1843,6 +1899,14 @@ pub fn run() {
                     {
                         return;
                     }
+                    let state: State<AppState> = win_clone.state();
+                    if !state.quit_requested.load(Ordering::SeqCst) {
+                        close_pending_clone.store(false, Ordering::SeqCst);
+                        close_seq_clone.fetch_add(1, Ordering::SeqCst);
+                        let _ = win_clone.hide();
+                        return;
+                    }
+                    restore_main_window(win_clone.app_handle());
                     let res = MessageDialog::new()
                         .set_level(MessageLevel::Warning)
                         .set_title("Lof Writer")
@@ -1858,6 +1922,7 @@ pub fn run() {
                         return;
                     }
                     close_pending_clone.store(false, Ordering::SeqCst);
+                    state.quit_requested.store(false, Ordering::SeqCst);
                     if matches!(
                         res,
                         MessageDialogResult::Ok | MessageDialogResult::Custom(_)
