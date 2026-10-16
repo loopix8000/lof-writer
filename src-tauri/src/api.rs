@@ -181,6 +181,9 @@ pub fn dispatch(
     args: &Value,
     on_mutate: &dyn Fn(),
 ) -> Result<Value, LofError> {
+    if !matches!(name,"library_list"|"document_read"|"document_search"|"history_list"|"history_read"){
+        store.require_database()?;
+    }
     match name {
         "library_list" => store.list(),
         "document_read" => {
@@ -399,7 +402,7 @@ fn handle_client(
         send_json(
             &mut stream,
             200,
-            Some(&json!({ "name": "Lof Writer", "version": "1.0.0-beta.1" })),
+            Some(&json!({ "name": "Lof Writer", "version": env!("CARGO_PKG_VERSION") })),
         );
         return;
     }
@@ -519,7 +522,7 @@ fn handle_client(
                     "result": {
                         "protocolVersion": proto_ver,
                         "capabilities": { "tools": { "listChanged": false } },
-                        "serverInfo": { "name": "lof-writer", "version": "1.0.0-beta.1" }
+                        "serverInfo": { "name": "lof-writer", "version": env!("CARGO_PKG_VERSION") }
                     }
                 })),
             );

@@ -768,6 +768,21 @@ pub struct Store {
 }
 
 impl Store {
+    pub fn database(&self) -> Result<&crate::database::LibraryDb, LofError> {
+        self.index.database.as_ref().ok_or_else(||fail(
+            if self.index.database_error.is_empty(){"관리 DB가 준비되지 않았습니다.".to_string()}else{self.index.database_error.clone()},"DATABASE_NOT_READY"))
+    }
+
+    pub fn require_database(&self) -> Result<(),LofError> { self.database().map(|_|()) }
+
+    fn save_deleted(&self, deleted:&Map<String,Value>)->Result<(),LofError>{
+        self.database()?.set("deleted",&Value::Object(deleted.clone()))
+    }
+
+    pub fn storage_status(&self)->Value{
+        self.database().map(|db|db.status()).unwrap_or_else(|e|json!({"ready":false,"message":e.message}))
+    }
+
     pub fn new(
         root: impl AsRef<Path>,
         history_policy: HistoryPolicy,
@@ -820,13 +835,22 @@ impl Store {
             .unwrap_or("")
             .to_string();
 
+        self.index.open_database(&vault_id);
+        if !self.index.database_error.is_empty() {
+            self.migration_warning = self.index.database_error.clone();
+            return Ok(());
+        }
+
         let init_res: Result<(), LofError> = (|| {
             if let Some(cat) = self.index.load(&vault_id) {
                 self.catalog = Some(cat);
                 self.index_enabled = true;
                 self.refresh_index(true)?;
             } else {
-                self.repair()?;
+                let cat=self.scan_disk()?;
+                self.index.save(&vault_id,&cat)?;
+                self.catalog=Some(cat);
+                self.index_enabled=true;
             }
             Ok(())
         })();
@@ -884,6 +908,7 @@ impl Store {
         let project_id = project.get("id").and_then(|v| v.as_str()).unwrap_or("");
         let entry_id = entry.get("id").and_then(|v| v.as_str()).unwrap_or("");
         let mut full_doc = doc_of(dir, project_id, entry, raw)?;
+        if let Some(db) = &self.index.database { db.observe(&full_doc)?; }
         let body = full_doc
             .get("body")
             .and_then(|v| v.as_str())
@@ -1034,30 +1059,12 @@ impl Store {
                 }
             }
 
-            let parsed = read_markdown(&raw)?;
-            let is_ep = entry.get("kind").and_then(|v| v.as_str()) == Some("episode");
-            let missing_id = !parsed.properties.contains_key("id");
-            let missing_order = is_ep && !parsed.properties.contains_key("order");
-
-            if missing_id || missing_order {
-                let next = write_markdown(&parsed.body, &entry, &raw)?;
-                if fs::read_to_string(&file)? != raw {
-                    return Err(fail("색인 갱신 중 파일이 변경됐습니다.", "CONFLICT"));
-                }
-                atomic_write_str(&file, &next)?;
-                if let Some(eobj) = entry.as_object_mut() {
-                    eobj.insert("_markdown".to_string(), json!(true));
-                }
-                let next_stat = fs::metadata(&file)?;
-                let rec = self.index_record(&p.dir, &p.project, &entry, &next, &next_stat)?;
-                p.files.insert(rel.to_string(), rec);
-            } else {
-                if let Some(eobj) = entry.as_object_mut() {
-                    eobj.insert("_markdown".to_string(), json!(true));
-                }
-                let rec = self.index_record(&p.dir, &p.project, &entry, &raw, &stat)?;
-                p.files.insert(rel.to_string(), rec);
+            // Missing attributes are kept in the index until an explicit document save.
+            if let Some(eobj) = entry.as_object_mut() {
+                eobj.insert("_markdown".to_string(), json!(true));
             }
+            let rec = self.index_record(&p.dir, &p.project, &entry, &raw, &stat)?;
+            p.files.insert(rel.to_string(), rec);
             p.errors.remove(rel);
             Ok(())
         })();
@@ -1081,6 +1088,11 @@ impl Store {
     fn refresh_project_files(&mut self, p: &mut CatalogProject, inventory: bool) {
         let mut present = HashSet::new();
         for folder in ["episodes", "doc"] {
+            match fs::read_dir(p.dir.join(folder)){
+                Ok(_)=>{p.errors.remove(folder);}
+                Err(e) if e.kind()==std::io::ErrorKind::NotFound=>{},
+                Err(e)=>{p.errors.insert(folder.to_string(),format!("폴더를 읽지 못했습니다: {folder}: {e}"));return;}
+            }
             for rel in walk_rel(&p.dir, folder) {
                 if !rel.to_ascii_lowercase().ends_with(".md") {
                     continue;
@@ -1101,25 +1113,12 @@ impl Store {
         if !self.index_enabled || self.catalog.is_none() {
             return Ok(());
         }
+        // A disconnected or unreadable vault must never become a deletion snapshot.
+        let _=fs::read_dir(&self.root)?;
         let mut cat = self.catalog.take().unwrap();
+        let before_projects:Vec<(String,PathBuf)>=cat.projects.iter().filter_map(|p|
+            p.project["id"].as_str().map(|id|(id.to_string(),p.dir.clone()))).collect();
         let res = (|| -> Result<(), LofError> {
-            let mut before: HashMap<String, String> = HashMap::new();
-            let mut before_projects: HashSet<String> = HashSet::new();
-            for p in &cat.projects {
-                let pid = p
-                    .project
-                    .get("id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                before_projects.insert(pid.clone());
-                for f in p.files.values() {
-                    if let Some(id) = f.entry.get("id").and_then(|v| v.as_str()) {
-                        before.insert(id.to_string(), pid.clone());
-                    }
-                }
-            }
-
             let cur_seq = CHANGE_SEQUENCE.load(Ordering::SeqCst);
             if let Ok(map) = changed_paths_map().lock() {
                 for (file, &seq) in map.iter() {
@@ -1194,6 +1193,7 @@ impl Store {
                         Ok(None) => {
                             if let Some(idx) = p_idx {
                                 cat.projects.remove(idx);
+                                cat.warnings.push(format!("{}: 작품 정보 파일이 없어 변경을 확인하지 못했습니다.",folder));
                             }
                             continue;
                         }
@@ -1361,32 +1361,7 @@ impl Store {
                 Self::reconcile_index_project(p);
             }
 
-            let present_ids: HashSet<String> = cat
-                .projects
-                .iter()
-                .flat_map(|p| {
-                    p.files.values().filter_map(|f| {
-                        f.entry
-                            .get("id")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string())
-                    })
-                })
-                .collect();
-            for (id, project_id) in before {
-                if !present_ids.contains(&id) {
-                    self.tombstone(&id, &project_id, &now_iso())?;
-                }
-            }
-            for id in before_projects {
-                if !cat
-                    .projects
-                    .iter()
-                    .any(|p| p.project.get("id").and_then(|v| v.as_str()) == Some(&id))
-                {
-                    self.tombstone(&project_tombstone(&id), &id, &now_iso())?;
-                }
-            }
+            self.reconcile_missing(&mut cat,&before_projects)?;
 
             let vault_id = self
                 .vault
@@ -1395,11 +1370,53 @@ impl Store {
                 .unwrap_or("")
                 .to_string();
             self.index.save(&vault_id, &cat)?;
+            self.database()?.retain_history()?;
             Ok(())
         })();
 
         self.catalog = Some(cat);
         res
+    }
+
+    fn reconcile_missing(&self,cat:&mut Catalog,before_projects:&[(String,PathBuf)])->Result<(),LofError>{
+        let db=self.database()?;
+        if !cat.warnings.is_empty() || cat.projects.iter().any(|p|!p.errors.is_empty()){return Ok(());}
+        let present:HashSet<String>=cat.projects.iter().flat_map(|p|p.files.values())
+            .filter_map(|f|f.doc["id"].as_str().map(str::to_string)).collect();
+        let projects:HashSet<String>=cat.projects.iter().filter_map(|p|p.project["id"].as_str().map(str::to_string)).collect();
+        let deleted=self.deleted()?;
+        let mut pending=db.get("missingFiles")?.and_then(|v|v.as_object().cloned()).unwrap_or_default();
+        let now=chrono::Utc::now().timestamp_millis();
+        for doc in db.observations()?{
+            let (Some(id),Some(pid),Some(path))=(doc["id"].as_str(),doc["projectId"].as_str(),doc["path"].as_str()) else{continue};
+            if present.contains(id)||deleted.contains_key(id){pending.remove(id);continue;}
+            if !Path::new(path).starts_with(&self.root){continue;}
+            pending.entry(id.to_string()).or_insert_with(||json!({"projectId":pid,"path":path,"since":now,"project":false}));
+        }
+        for (pid,path) in before_projects {
+            let key=project_tombstone(pid);
+            if !projects.contains(pid)&&!deleted.contains_key(&key) {
+                pending.entry(key).or_insert_with(||json!({"projectId":pid,"path":path.to_string_lossy(),"since":now,"project":true}));
+            }
+        }
+        for (id,info) in pending.clone(){
+            let pid=info["projectId"].as_str().unwrap_or("");
+            if present.contains(&id)||(info["project"].as_bool()==Some(true)&&projects.contains(pid))||deleted.contains_key(&id){
+                pending.remove(&id);continue;
+            }
+            let path=Path::new(info["path"].as_str().unwrap_or(""));
+            if !path.starts_with(&self.root){pending.remove(&id);continue;}
+            match fs::metadata(path){
+                Ok(_)=>{pending.remove(&id);}
+                Err(e) if e.kind()==std::io::ErrorKind::NotFound=>{
+                    if now-info["since"].as_i64().unwrap_or(now)>=5_000{
+                        self.tombstone(&id,pid,&now_iso())?;pending.remove(&id);
+                    }
+                }
+                Err(e)=>cat.warnings.push(format!("삭제 여부를 확인하지 못했습니다: {}: {e}",path.to_string_lossy())),
+            }
+        }
+        db.set("missingFiles",&Value::Object(pending))
     }
 
     pub fn cached_body(&mut self, project_id: &str, id: &str) -> Result<String, LofError> {
@@ -1951,7 +1968,9 @@ impl Store {
         let (p, entry, file) = self.find_doc(id)?;
         let raw = fs::read_to_string(&file)?;
         let proj_id = p.project.get("id").and_then(|v| v.as_str()).unwrap_or("");
-        doc_of(&p.dir, proj_id, &entry, &raw)
+        let doc = doc_of(&p.dir, proj_id, &entry, &raw)?;
+        if let Some(db) = &self.index.database { db.observe(&doc)?; }
+        Ok(doc)
     }
 
     pub fn markdown(&mut self, id: &str) -> Result<String, LofError> {
@@ -2879,6 +2898,7 @@ impl Store {
     }
 
     pub fn create_project(&mut self, input: &Value) -> Result<Value, LofError> {
+        self.require_database()?;
         let p = self.new_project(input, &Value::Null)?;
         Ok(public_project(&p))
     }
@@ -3122,6 +3142,7 @@ impl Store {
     }
 
     pub fn create_inner(&mut self, input: &Value, fixed: &Value) -> Result<Value, LofError> {
+        self.require_database()?;
         let kind = input
             .get("kind")
             .and_then(|v| v.as_str())
@@ -3355,6 +3376,19 @@ impl Store {
     }
 
     pub fn save(&mut self, input: &Value) -> Result<Value, LofError> {
+        self.require_database()?;
+        let id=input.get("id").and_then(Value::as_str).unwrap_or("");
+        let current=self.read(id)?;
+        if input.get("expectedRevision") != current.get("revision") {
+            return Err(fail("다른 곳에서 수정된 문서입니다. 현재 내용을 다시 확인해 주세요.","CONFLICT"));
+        }
+        self.database()?.begin_write(&current)?;
+        let saved=self.save_inner(input)?;
+        self.database()?.finish_write(&saved)?;
+        Ok(saved)
+    }
+
+    fn save_inner(&mut self, input: &Value) -> Result<Value, LofError> {
         let id = input.get("id").and_then(|v| v.as_str()).unwrap_or("");
         let (mut f_proj, mut f_entry, f_file) = self.find_doc(id)?;
         let raw = fs::read_to_string(&f_file)?;
@@ -3739,6 +3773,12 @@ impl Store {
     fn write_history(&mut self, id: &str, doc: &Value, previous_raw: &str) -> Result<(), LofError> {
         let at = Self::now_ms();
         let body = doc.get("body").and_then(|v| v.as_str()).unwrap_or("");
+        if let Some(db) = &self.index.database {
+            let name=format!("{}-{}.md",at,Uuid::new_v4());
+            db.insert_history(id,&name,&crate::database::history_value(doc,&now_iso()))?;
+            self.last_snapshot.insert(id.to_string(),Some(SnapshotEntry{at,body:body.to_string()}));
+            return Ok(());
+        }
         let hfile = self
             .root
             .join(".lof")
@@ -3760,6 +3800,11 @@ impl Store {
     fn latest_snapshot(&mut self, id: &str) -> Option<SnapshotEntry> {
         if let Some(cached) = self.last_snapshot.get(id) {
             return cached.clone();
+        }
+        if let Some(db)=&self.index.database {
+            let latest=db.latest_history(id).ok().flatten().map(|(at,body)|SnapshotEntry{at,body});
+            self.last_snapshot.insert(id.to_string(),latest.clone());
+            return latest;
         }
         let dir = self.root.join(".lof").join("history").join(id);
         static HIST_RE: OnceLock<Regex> = OnceLock::new();
@@ -3824,6 +3869,7 @@ impl Store {
         if !valid_id(id) {
             return Err(fail_invalid("잘못된 ID"));
         }
+        if let Some(db)=&self.index.database {return db.history(id);}
         let dir = self.root.join(".lof").join("history").join(id);
         let mut names: Vec<String> = fs::read_dir(&dir)
             .map(|rd| {
@@ -3846,6 +3892,7 @@ impl Store {
         if !valid_id(id) || !re.is_match(name) {
             return Err(fail_invalid("잘못된 이력"));
         }
+        if let Some(db)=&self.index.database {return db.history_read(id,name)?.ok_or_else(||fail("이력을 찾을 수 없습니다.","NOT_FOUND"));}
         let raw = fs::read_to_string(self.root.join(".lof").join("history").join(id).join(name))?;
         if name.ends_with(".md") {
             let parsed = read_markdown(&raw)?;
@@ -4296,6 +4343,7 @@ impl Store {
     }
 
     pub fn deleted(&self) -> Result<Map<String, Value>, LofError> {
+        if let Some(db)=&self.index.database {return Ok(db.get("deleted")?.and_then(|v|v.as_object().cloned()).unwrap_or_default());}
         match fs::read_to_string(self.deleted_file()) {
             Ok(raw) => serde_json::from_str(&raw).map_err(|e| fail(e.to_string(), "FORMAT")),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Map::new()),
@@ -4304,6 +4352,7 @@ impl Store {
     }
 
     pub fn tombstone(&self, id: &str, project_id: &str, deleted_at: &str) -> Result<(), LofError> {
+        self.require_database()?;
         let mut deleted = self.deleted()?;
         let is_proj = id == project_tombstone(project_id);
         let mut info = Map::new();
@@ -4313,8 +4362,9 @@ impl Store {
             info.insert("project".to_string(), json!(true));
         }
         deleted.insert(id.to_string(), Value::Object(info));
-        let pretty = serde_json::to_string_pretty(&deleted).unwrap_or_default();
-        atomic_write_str(&self.deleted_file(), &pretty)
+        self.save_deleted(&deleted)?;
+        if !is_proj {self.database()?.forget_current(id)?;}
+        Ok(())
     }
 
     pub fn remove(&mut self, id: &str) -> Result<bool, LofError> {
@@ -4322,6 +4372,8 @@ impl Store {
     }
 
     pub fn remove_inner(&mut self, id: &str, deleted_at: &str) -> Result<bool, LofError> {
+        self.require_database()?;
+        if let Ok(current)=self.read(id){self.database()?.begin_write(&current)?;}
         let (mut f_proj, f_entry, f_file) = self.find_doc(id)?;
         if f_file.exists() {
             self.trash_path(&f_file)?;
@@ -4375,7 +4427,6 @@ impl Store {
             self.write_project(&f_proj)?;
         }
 
-        let _ = fs::remove_dir_all(self.root.join(".lof").join("history").join(id));
         self.last_snapshot.remove(id);
         let _ = self.clear_draft(id);
         self.tombstone(id, &proj_id, deleted_at)?;
@@ -4387,6 +4438,11 @@ impl Store {
     }
 
     pub fn remove_project_inner(&mut self, id: &str, deleted_at: &str) -> Result<bool, LofError> {
+        self.require_database()?;
+        let previous=self.list()?;
+        let ids:Vec<String>=previous["documents"].as_array().into_iter().flatten()
+            .filter(|doc|doc["projectId"].as_str()==Some(id)).filter_map(|doc|doc["id"].as_str().map(str::to_string)).collect();
+        for did in ids {let doc=self.read(&did)?;self.database()?.begin_write(&doc)?;}
         let p = self.get_project(id)?;
         let mut ids: Vec<String> = p
             .project
@@ -4407,16 +4463,16 @@ impl Store {
         record_change(&p.dir);
         let mut deleted = self.deleted()?;
         for doc_id in ids {
-            let _ = fs::remove_dir_all(self.root.join(".lof").join("history").join(&doc_id));
             self.last_snapshot.remove(&doc_id);
             let _ = self.clear_draft(&doc_id);
             deleted.insert(
-                doc_id,
+                doc_id.clone(),
                 json!({
                     "projectId": id,
                     "deletedAt": deleted_at,
                 }),
             );
+            self.database()?.forget_current(&doc_id)?;
         }
         deleted.insert(
             project_tombstone(id),
@@ -4426,12 +4482,12 @@ impl Store {
                 "project": true,
             }),
         );
-        let pretty = serde_json::to_string_pretty(&deleted).unwrap_or_default();
-        atomic_write_str(&self.deleted_file(), &pretty)?;
+        self.save_deleted(&deleted)?;
         Ok(true)
     }
 
     pub fn snapshot(&mut self) -> Result<Value, LofError> {
+        self.require_database()?;
         let list = self.list()?;
         if let Some(warnings) = list.get("warnings").and_then(|v| v.as_array()) {
             if !warnings.is_empty() {
@@ -4816,6 +4872,9 @@ impl Store {
         };
 
         let mut local = self.list()?;
+        if local.get("warnings").and_then(Value::as_array).is_some_and(|warnings| !warnings.is_empty()) {
+            return Err(fail("읽을 수 없는 문서가 있어 원격 변경을 적용하지 않았습니다. 서재의 경고를 확인해 주세요.", "SYNC_LOCAL_ERROR"));
+        }
         let mut tombstones = self.deleted()?;
         let mut removed = Vec::new();
 
@@ -4876,8 +4935,7 @@ impl Store {
                         "project": true,
                     }),
                 );
-                let pretty = serde_json::to_string_pretty(&tombstones).unwrap_or_default();
-                atomic_write_str(&self.deleted_file(), &pretty)?;
+                self.save_deleted(&tombstones)?;
             }
         }
 
@@ -4930,8 +4988,7 @@ impl Store {
                         "deletedAt": del_at,
                     }),
                 );
-                let pretty = serde_json::to_string_pretty(&tombstones).unwrap_or_default();
-                atomic_write_str(&self.deleted_file(), &pretty)?;
+                self.save_deleted(&tombstones)?;
             }
         }
 
@@ -5084,8 +5141,11 @@ impl Store {
                         }
                         let (_, _, f_file) = self.find_doc(rid)?;
                         let prev_raw = fs::read_to_string(&f_file).unwrap_or_default();
+                        self.database()?.begin_write(&current)?;
                         self.write_history(rid, &current, &prev_raw)?;
                         self.put_remote_doc(remote)?;
+                        let received = self.read(rid)?;
+                        self.database()?.finish_write(&received)?;
                         imported.push(rid.to_string());
                     } else if base.get(rid).map(|s| s.as_str()) != Some(rrev) {
                         let key = format!("{}:{}", rid, rrev);

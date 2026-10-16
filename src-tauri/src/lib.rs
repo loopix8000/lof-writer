@@ -1,6 +1,7 @@
 pub mod api;
 pub mod assets;
 mod auto_sync;
+pub mod database;
 pub mod episode;
 pub mod error;
 pub mod file_index;
@@ -329,17 +330,29 @@ fn schedule_notify(app: &AppHandle, seq: &Arc<AtomicU64>) {
     });
 }
 
-fn schedule_index_refresh(store: &Arc<Mutex<Option<Store>>>, seq: &Arc<AtomicU64>) {
+fn schedule_index_refresh(store: &Arc<Mutex<Option<Store>>>, seq: &Arc<AtomicU64>, app: &AppHandle) {
     let my_seq = seq.fetch_add(1, Ordering::SeqCst) + 1;
     let seq_clone = Arc::clone(seq);
     let store_clone = Arc::clone(store);
+    let app=app.clone();
+    let root=store.lock().unwrap().as_ref().map(|store|store.root.clone());
     thread::spawn(move || {
-        thread::sleep(Duration::from_millis(1000));
-        if seq_clone.load(Ordering::SeqCst) == my_seq {
-            if let Ok(mut guard) = store_clone.lock() {
-                if let Some(ref mut st) = *guard {
-                    let _ = st.refresh_index(false);
-                }
+        // A second observation confirms deletions after external editors finish replacing files.
+        for delay in [1000,5500] {
+            thread::sleep(Duration::from_millis(delay));
+            if seq_clone.load(Ordering::SeqCst)!=my_seq{return;}
+            let changed=(||->Result<bool,LofError>{
+                let mut guard=store_clone.lock().unwrap();
+                let Some(st)=guard.as_mut() else{return Ok(false)};
+                if Some(&st.root)!=root.as_ref(){return Ok(false);}
+                let before=(st.database()?.get("catalog")?,st.deleted()?);
+                st.refresh_index(true)?;
+                let after=(st.database()?.get("catalog")?,st.deleted()?);
+                Ok(before!=after)
+            })();
+            if changed.unwrap_or(false) {
+                if let Some(state)=app.try_state::<AppState>(){schedule_notify(&app,&state.notify_seq);}
+                auto_sync::request(&app);
             }
         }
     });
@@ -388,7 +401,7 @@ fn setup_vault_watcher(
             }
             if relevant {
                 schedule_notify(&app_clone, &n_seq);
-                schedule_index_refresh(&store_clone, &r_seq);
+                schedule_index_refresh(&store_clone, &r_seq, &app_clone);
             }
         },
         NotifyConfig::default(),
@@ -435,6 +448,8 @@ fn setup_common_watcher(
 }
 
 fn bind_vault(state: &AppState, app: &AppHandle, root: &Path) -> Result<(), LofError> {
+    let resolved=strip_verbatim_prefix(&fs::canonicalize(root).unwrap_or_else(|_|root.to_path_buf()));
+    if state.store.lock().unwrap().as_ref().is_some_and(|store|store.root==resolved) {return Ok(());}
     {
         let mut vw = state.vault_watcher.lock().unwrap();
         *vw = None;
@@ -478,7 +493,7 @@ fn bind_vault(state: &AppState, app: &AppHandle, root: &Path) -> Result<(), LofE
         *cw = setup_common_watcher(&clean_root, &common_root, app, &state.notify_seq);
     }
     schedule_notify(app, &state.notify_seq);
-    schedule_index_refresh(&state.store, &state.refresh_seq);
+    schedule_index_refresh(&state.store, &state.refresh_seq, app);
     Ok(())
 }
 
@@ -574,6 +589,15 @@ fn handle_method(
     app: &AppHandle,
     window: &WebviewWindow,
 ) -> Result<Value, LofError> {
+    if matches!(method,
+        "createProject" | "updateProject" | "chooseCover" | "removeCover" | "createDocument" |
+        "saveDocument" | "reorderDocuments" | "deleteProject" | "repair" | "relinkDocument" |
+        "adoptFile" | "forgetDocument" | "memoSave" | "memoCreate" | "memoCreateFolder" |
+        "memoRename" | "memoMove" | "memoRemove" | "restore" | "deleteDocument" | "importFiles")
+    {
+        let store=state.store.lock().unwrap();
+        store.as_ref().ok_or_else(||fail_invalid("서재가 열려 있지 않습니다."))?.require_database()?;
+    }
     let result = dispatch_method(method, args, state, app, window);
     if result.as_ref().is_ok_and(|value| !value.is_null()) && matches!(method,
         "createProject" | "updateProject" | "chooseCover" | "removeCover" | "createDocument" |
@@ -609,6 +633,14 @@ fn dispatch_method(
 
     match method {
         "autoSyncStatus" => Ok(app.state::<auto_sync::AutoSyncState>().status()),
+        "backupStorage" => {
+            let guard=state.store.lock().unwrap();
+            let store=guard.as_ref().ok_or_else(||fail_invalid("서재가 열려 있지 않습니다."))?;
+            let name=format!("library-{}-{}.sqlite",chrono::Utc::now().format("%Y%m%d-%H%M%S"),Uuid::new_v4());
+            let destination=store.root.join(".lof").join("backups").join(name);
+            store.database()?.backup(&destination)?;
+            Ok(json!({"path":destination.to_string_lossy()}))
+        }
         "pinStatus" => Ok(pin_status(app)),
         "pinReady" => {
             let generation = args.get("generation").and_then(Value::as_u64).unwrap_or(0);
@@ -1206,6 +1238,7 @@ fn dispatch_method(
         }
         "settings" => {
             let (store_root, common_root) = get_store_and_common()?;
+            let storage=state.store.lock().unwrap().as_ref().map(Store::storage_status);
             let s_guard = state.settings.lock().unwrap();
             let conns: Vec<Value> = s_guard
                 .get("connections")
@@ -1224,6 +1257,7 @@ fn dispatch_method(
                 "preferences": prefs,
                 "syncing": state.syncing.load(Ordering::SeqCst),
                 "autoSync": app.state::<auto_sync::AutoSyncState>().status(),
+                "storage": storage,
             }))
         }
         "saveConnection" => {
@@ -1434,7 +1468,7 @@ async fn lof_invoke(
     window: WebviewWindow,
 ) -> Result<Value, String> {
     let args_val = args.unwrap_or_else(|| json!({}));
-    let result = if matches!(method.as_str(), "connectGoogleDrive" | "sync" | "pinUnlock" | "pinSave") {
+    let result = if matches!(method.as_str(), "connectGoogleDrive" | "sync" | "pinUnlock" | "pinSave" | "backupStorage") {
         tauri::async_runtime::spawn_blocking(move || {
             let state = app.state::<AppState>();
             if method == "pinUnlock" || method == "pinSave" {

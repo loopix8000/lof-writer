@@ -134,7 +134,7 @@ impl GoogleDriveAdapter {
                 }
                 files.push(file);
             }
-            if files.len() > 1000 {
+            if files.len() > 100_000 {
                 return Err(fail_invalid("Google Drive 동기화 파일이 너무 많습니다."));
             }
             page = body
@@ -263,6 +263,16 @@ impl RemoteAdapter for GoogleDriveAdapter {
                 .send()
                 .map_err(network_error)?,
         )?;
+        Ok(())
+    }
+
+    fn remove(&mut self, name: &str) -> Result<(), LofError> {
+        if !name_ok(name) { return Err(fail_invalid("잘못된 동기화 파일 이름")); }
+        let Some(file)=self.files.get(name) else {return Ok(())};
+        let response=self.client.delete(format!("{FILES_URL}/{}",file.id)).bearer_auth(&self.token)
+            .send().map_err(network_error)?;
+        if response.status().as_u16()!=404 {check_response(response)?;}
+        self.files.remove(name);
         Ok(())
     }
 }

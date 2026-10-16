@@ -157,7 +157,7 @@ fn worker(app: AppHandle) {
             }
             match sync_connection(&state, &id, &root) {
                 Ok(result) => {
-                    received_changes |= ["downloaded", "conflicts", "removed"]
+                    received_changes |= ["downloaded", "downloadedFiles", "conflicts", "projectConflicts", "removed"]
                         .iter()
                         .any(|key| result.get(*key).and_then(Value::as_u64).unwrap_or(0) > 0);
                 }

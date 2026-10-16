@@ -816,7 +816,7 @@ export default function App() {
     message(archived ? "문서를 보관함으로 옮겼습니다." : "문서를 보관함에서 꺼냈습니다.");
   }
   // 영구 삭제: 편집 중인 내용을 먼저 저장하고 탭을 닫은 뒤 지운다.
-  // 문서 파일은 Windows 휴지통으로 가고, 변경 이력과 임시 원고는 지워진다.
+  // 문서 파일은 Windows 휴지통으로 가고, 로컬 변경 이력은 보존 정책에 따라 남긴다.
   async function deleteDoc(doc: Doc) {
     await flush();
     await closeTab(doc.id);
@@ -3846,7 +3846,7 @@ export default function App() {
                       <b>{target.title || "제목 없음"}</b> 문서를 영구 삭제할까요?
                     </p>
                     <p className="muted">
-                      앱에서 완전히 사라지고 변경 이력과 임시 원고도 지워집니다.
+                      문서 목록과 임시 원고에서 제거됩니다. 이 PC의 변경 이력은 보존 정책에 따라 남습니다.
                       문서 파일은 Windows 휴지통으로 옮겨집니다. 동기화를 쓰면
                       다른 장치에서도 삭제됩니다.
                     </p>
@@ -3903,7 +3903,7 @@ export default function App() {
                     </p>
                     <p className="muted">
                       작품 폴더 전체(회차 {count}편, 플롯, 작품 메모, 표지)를 Windows
-                      휴지통으로 옮깁니다. 휴지통에서 폴더를 되살릴 수 있지만, 변경 이력과
+                      휴지통으로 옮깁니다. 이 PC의 변경 이력은 보존 정책에 따라 남고,
                       임시 원고는 지워집니다. 동기화를 쓰면 다른 장치에서도 삭제됩니다.
                     </p>
                     <label className="confirm-title">
@@ -4787,6 +4787,23 @@ export default function App() {
                     마지막 이력 이후 두 조건을 모두 넘게 고쳤을 때만 저장 직전 원고를
                     이력으로 남깁니다. 둘 다 0이면 저장할 때마다 남깁니다.
                   </p>
+                  <p className="muted">
+                    수정 이력은 이 PC에만 보관하며 동기화하지 않습니다. 외부에서 수정되거나
+                    동기화로 교체되는 원고도 이전 내용을 남깁니다. 오래된 이력은 하루 한 번 정리하며
+                    문서당 최근 100개·30일을 기준으로 최소 10개를 보존합니다.
+                  </p>
+                  <button disabled={busy} onClick={attempt(async () => {
+                    setBusy(true);
+                    try {
+                      await flush();
+                      const result = await call<{ path: string }>("backupStorage");
+                      message("로컬 이력 백업을 저장했습니다: " + result.path);
+                    } finally {
+                      setBusy(false);
+                    }
+                  })}>
+                    <HardDrive size={16} /> 로컬 이력 백업
+                  </button>
                 </section>
                 <section id="settings-defaults" className="settings-section" hidden={settingsPage !== "defaults"}>
                   <h3>새 작품의 기본 설정</h3>
@@ -4826,6 +4843,12 @@ export default function App() {
                     외부 저장소
                   </h3>
                   <p className="settings-description">자동 저장과 수동 저장이 끝나면 2초 뒤 등록된 저장소에 자동으로 동기화합니다. 연속 수정은 모아서 처리하며, 트레이에서도 계속됩니다.</p>
+                  <aside className="sync-notice" aria-label="동기화 이용 안내">
+                    <strong>동기화는 아직 불안정할 수 있습니다.</strong>
+                    <p>중요한 원고는 별도로 백업해 주세요.</p>
+                    <p>동기화하려면 사용하는 모든 기기의 Lof Writer를 최신 버전으로 업데이트해야 합니다. 구버전 앱은 새 동기화 데이터를 받을 수 없습니다.</p>
+                    <p>최신 문서만 동기화하며, 수정 이력은 각 기기에 별도로 보관합니다.</p>
+                  </aside>
                   {connections.length > 0 && <p role="status" className={autoSync.phase === "error" ? "pin-error" : "muted"}>
                     {autoSyncLabels[autoSync.phase]}{autoSync.message && ` · ${autoSync.message}`}
                   </p>}

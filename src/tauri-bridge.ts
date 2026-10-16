@@ -4,6 +4,7 @@ import type { AutoSyncStatus } from "./types";
 
 const methods = [
   "autoSyncStatus",
+  "backupStorage",
   "pinStatus",
   "pinUnlock",
   "pinSave",

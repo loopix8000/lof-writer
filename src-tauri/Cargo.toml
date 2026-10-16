@@ -1,6 +1,6 @@
 [package]
 name = "lof-writer"
-version = "1.0.1-beta.2"
+version = "1.0.2-beta.1"
 description = "Local First Writing Tool"
 authors = ["Lof Writer"]
 license = "MIT"
@@ -37,6 +37,9 @@ suppaftp = { version = "6", default-features = false, features = ["rustls"] }
 unicode-normalization = "0.1"
 regex = "1"
 rand = "0.8"
+rusqlite = { version = "0.40", features = ["bundled", "backup"] }
+flate2 = "1"
+fs2 = "0.4"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [

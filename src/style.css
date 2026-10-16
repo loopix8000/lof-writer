@@ -2495,6 +2495,19 @@ body.sidebar-resizing * {
   border-radius: 7px;
   padding: 15px;
 }
+.sync-notice {
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--warning-border);
+  border-radius: 8px;
+  background: var(--warning-bg);
+  color: var(--warning-text);
+  line-height: 1.6;
+}
+.sync-notice p {
+  margin: 6px 0 0;
+}
+
 .recovery-strip,
 .warning-strip {
   padding: 7px 20px;
