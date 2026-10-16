@@ -1,0 +1,5192 @@
+use crate::assets::{normalize_tags, valid_cover, validate_cover};
+use crate::episode::{
+    check_meta_patch, line_break_default, normalize_document_meta, normalize_meta,
+    normalize_status, normalize_status_val, status_token, stored_document_meta, stored_meta,
+    DOCUMENT_META_FIELDS, META_FIELDS, STATUSES,
+};
+use crate::error::{
+    fail, fail_invalid, hash_str, now_iso, slice_utf16, sys_time_to_iso, utf16_len, valid_id,
+    LofError,
+};
+use crate::file_index::{Catalog, CatalogProject, FileIndex, IndexedFileRecord};
+use crate::markdown::{
+    document_properties, markdown_entry, read_markdown, write_markdown, write_properties,
+};
+use crate::platforms::normalize_writing;
+use crate::text::{character_count, count_for_writing, manuscript_stats};
+use base64::Engine;
+use regex::Regex;
+use serde_json::{json, Map, Value};
+use std::collections::{HashMap, HashSet};
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
+use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use unicode_normalization::UnicodeNormalization;
+use uuid::Uuid;
+
+pub const FORMAT: i64 = 2;
+pub const FOLDERS: &[&str] = &["assets", "doc", "episodes"];
+pub const KINDS: &[&str] = &["episode", "plot", "memo"];
+
+static CHANGE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+static CHANGED_PATHS: OnceLock<Mutex<HashMap<PathBuf, u64>>> = OnceLock::new();
+
+fn changed_paths_map() -> &'static Mutex<HashMap<PathBuf, u64>> {
+    CHANGED_PATHS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+pub fn record_change(file: &Path) {
+    let s = file.to_string_lossy();
+    let lower = s.to_ascii_lowercase();
+    if lower.ends_with(".tmp") || lower.ends_with(".lofmv") || lower.ends_with(".lofnew") {
+        return;
+    }
+    if file
+        .components()
+        .any(|c| c.as_os_str().to_string_lossy() == ".lof")
+    {
+        return;
+    }
+    let seq = CHANGE_SEQUENCE.fetch_add(1, Ordering::SeqCst) + 1;
+    if let Ok(mut map) = changed_paths_map().lock() {
+        map.insert(file.to_path_buf(), seq);
+    }
+}
+
+pub fn atomic_write_bytes(file: &Path, data: &[u8]) -> Result<(), LofError> {
+    if let Some(parent) = file.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let temp_name = format!(
+        "{}.{}.tmp",
+        file.file_name().and_then(|n| n.to_str()).unwrap_or("file"),
+        Uuid::new_v4()
+    );
+    let temp = file.with_file_name(temp_name);
+    let res = (|| -> Result<(), LofError> {
+        {
+            let mut handle = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temp)?;
+            handle.write_all(data)?;
+            handle.sync_all()?;
+        }
+        rename_with_retry(&temp, file)?;
+        record_change(file);
+        Ok(())
+    })();
+    if res.is_err() {
+        let _ = fs::remove_file(&temp);
+    }
+    res
+}
+
+pub fn atomic_write_str(file: &Path, data: &str) -> Result<(), LofError> {
+    atomic_write_bytes(file, data.as_bytes())
+}
+
+pub fn changed_chars(a: &str, b: &str) -> usize {
+    let au: Vec<u16> = a.encode_utf16().collect();
+    let bu: Vec<u16> = b.encode_utf16().collect();
+    let max = au.len().min(bu.len());
+    let mut start = 0;
+    while start < max && au[start] == bu[start] {
+        start += 1;
+    }
+    let mut end = 0;
+    while end < max - start && au[au.len() - 1 - end] == bu[bu.len() - 1 - end] {
+        end += 1;
+    }
+    au.len().max(bu.len()) - start - end
+}
+
+pub fn rename_with_retry(from: &Path, to: &Path) -> Result<(), LofError> {
+    let mut i = 0;
+    loop {
+        match fs::rename(from, to) {
+            Ok(()) => {
+                record_change(from);
+                record_change(to);
+                return Ok(());
+            }
+            Err(e) => {
+                let retryable = matches!(
+                    e.kind(),
+                    std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::Other
+                );
+                if i >= 4 || !retryable {
+                    return Err(LofError::from(e));
+                }
+                i += 1;
+                thread::sleep(Duration::from_millis(80 * i));
+            }
+        }
+    }
+}
+
+pub fn pad(n: i64) -> String {
+    format!("{:03}", n)
+}
+
+pub fn abs(dir: &Path, rel: &str) -> PathBuf {
+    let mut p = dir.to_path_buf();
+    for part in rel.split('/') {
+        if !part.is_empty() {
+            p.push(part);
+        }
+    }
+    p
+}
+
+pub fn folder_of(rel: &str) -> &str {
+    match rel.rfind('/') {
+        Some(idx) => &rel[..idx],
+        None => "",
+    }
+}
+
+pub fn base_name(rel: &str) -> String {
+    let name = match rel.rfind('/') {
+        Some(idx) => &rel[idx + 1..],
+        None => rel,
+    };
+    if name.len() >= 3 && name[name.len() - 3..].eq_ignore_ascii_case(".md") {
+        name[..name.len() - 3].to_string()
+    } else {
+        name.to_string()
+    }
+}
+
+pub fn valid_rel(rel: &str) -> bool {
+    let ulen = utf16_len(rel);
+    if ulen == 0 || ulen >= 1000 || rel.contains('\\') || Path::new(rel).is_absolute() {
+        return false;
+    }
+    rel.split('/').all(|s| {
+        !s.is_empty()
+            && s != "."
+            && s != ".."
+            && !s.chars().any(|c| {
+                matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*') || (c as u32) <= 0x1f
+            })
+    })
+}
+
+pub fn safe_name(title: &str, fallback: &str) -> String {
+    let nfc: String = title.nfc().collect();
+    let replaced: String = nfc
+        .chars()
+        .map(|c| {
+            if matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*')
+                || (c as u32) <= 0x1f
+            {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let mut collapsed = String::new();
+    let mut prev_ws = false;
+    for c in replaced.trim().chars() {
+        if c.is_whitespace() {
+            if !prev_ws {
+                collapsed.push(' ');
+                prev_ws = true;
+            }
+        } else {
+            collapsed.push(c);
+            prev_ws = false;
+        }
+    }
+    let mut name: String = collapsed.chars().take(80).collect();
+    name = name.trim_end_matches(|c| c == '.' || c == ' ').trim().to_string();
+    if name.is_empty() {
+        name = fallback.to_string();
+    }
+    static RESERVED_RE: OnceLock<Regex> = OnceLock::new();
+    let re = RESERVED_RE
+        .get_or_init(|| Regex::new(r"(?i)^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$").unwrap());
+    if re.is_match(&name) {
+        name = format!("_{}", name);
+    }
+    name
+}
+
+pub fn unique_name(want: &str, ext: &str, taken: &mut HashSet<String>) -> String {
+    let base = &want[..want.len().saturating_sub(ext.len())];
+    let mut candidate = want.to_string();
+    let mut n = 2;
+    while taken.contains(&candidate.to_lowercase()) {
+        candidate = format!("{} ({}){}", base, n, ext);
+        n += 1;
+    }
+    taken.insert(candidate.to_lowercase());
+    candidate
+}
+
+pub fn is_variant(cur: &str, want: &str, ext: &str) -> bool {
+    if cur == want {
+        return true;
+    }
+    let base = &want[..want.len().saturating_sub(ext.len())];
+    if !cur.starts_with(base) || !cur.ends_with(ext) || cur.len() <= base.len() + ext.len() {
+        return false;
+    }
+    let mid = &cur[base.len()..cur.len() - ext.len()];
+    mid.starts_with(" (")
+        && mid.ends_with(')')
+        && mid[2..mid.len() - 1].chars().all(|c| c.is_ascii_digit())
+}
+
+pub fn skipped_name(name: &str) -> bool {
+    let low = name.to_ascii_lowercase();
+    name.starts_with('.') || low.ends_with(".tmp") || low.ends_with(".lofmv") || low.ends_with(".lofnew")
+}
+
+pub fn walk_rel(dir: &Path, rel: &str) -> Vec<String> {
+    let mut files = Vec::new();
+    let target = abs(dir, rel);
+    let Ok(rd) = fs::read_dir(target) else {
+        return files;
+    };
+    let mut entries: Vec<_> = rd.filter_map(|e| e.ok()).collect();
+    entries.sort_by_key(|e| e.file_name());
+    for e in entries {
+        let name = e.file_name().to_string_lossy().to_string();
+        if skipped_name(&name) {
+            continue;
+        }
+        let r = format!("{}/{}", rel, name);
+        let Ok(ft) = e.file_type() else { continue };
+        if ft.is_dir() {
+            files.extend(walk_rel(dir, &r));
+        } else if ft.is_file() {
+            files.push(r);
+        }
+    }
+    files
+}
+
+pub fn by_order_cmp(a: &Value, b: &Value) -> std::cmp::Ordering {
+    let oa = a.get("order").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let ob = b.get("order").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    oa.partial_cmp(&ob)
+        .unwrap_or(std::cmp::Ordering::Equal)
+        .then_with(|| {
+            let ca = a.get("createdAt").and_then(|v| v.as_str()).unwrap_or("");
+            let cb = b.get("createdAt").and_then(|v| v.as_str()).unwrap_or("");
+            ca.cmp(cb)
+        })
+        .then_with(|| {
+            let ia = a.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            let ib = b.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            ia.cmp(ib)
+        })
+}
+
+pub fn memo_id(project_id: &str, rel: &str) -> String {
+    let nfc: String = rel.nfc().collect();
+    let h = hash_str(&format!("{}\n{}", project_id, nfc.to_lowercase()));
+    format!("m{}", &h[..40])
+}
+
+pub fn fingerprint(d: &Value, body: &str) -> String {
+    let kind = d.get("kind").and_then(|v| v.as_str()).unwrap_or("episode");
+    let meta = if kind == "episode" {
+        stored_meta(Some(d))
+    } else {
+        stored_document_meta(Some(d))
+    };
+    let title = d.get("title").and_then(|v| v.as_str()).unwrap_or("");
+    let status = status_token(d.get("status").and_then(|v| v.as_str()));
+    let order = d.get("order").cloned().unwrap_or(json!(0));
+    let archived = d.get("archived").and_then(|v| v.as_bool()).unwrap_or(false);
+    let ep_id = d
+        .get("episodeId")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| Value::String(s.to_string()))
+        .unwrap_or(Value::Null);
+    let path_val = if kind != "episode" {
+        let p = d
+            .get("path")
+            .or_else(|| d.get("relPath"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        Value::String(p.to_lowercase())
+    } else {
+        Value::Null
+    };
+
+    let mut arr = vec![
+        json!(kind),
+        json!(title),
+        json!(status),
+        order,
+        json!(archived),
+        ep_id,
+        path_val,
+    ];
+    if !meta.is_empty() {
+        arr.push(Value::Object(meta));
+    }
+    if let Some(props) = d.get("properties").and_then(|v| v.as_object()) {
+        if !props.is_empty() {
+            arr.push(Value::Object(props.clone()));
+        }
+    }
+    let json_arr = serde_json::to_string(&Value::Array(arr)).unwrap_or_default();
+    hash_str(&format!("{}\n{}", json_arr, body))
+}
+
+pub fn match_lines(
+    body: &str,
+    query: &str,
+    case_sensitive: bool,
+    max: usize,
+) -> (Vec<Value>, bool) {
+    let norm = |t: &str| -> String {
+        if case_sensitive {
+            t.to_string()
+        } else {
+            t.to_lowercase()
+        }
+    };
+    let needle = norm(query);
+    if needle.is_empty() {
+        return (Vec::new(), false);
+    }
+    let hay = norm(body);
+    let body_u16: Vec<u16> = body.encode_utf16().collect();
+    let hay_u16: Vec<u16> = hay.encode_utf16().collect();
+    let needle_u16: Vec<u16> = needle.encode_utf16().collect();
+    if needle_u16.is_empty() || hay_u16.len() < needle_u16.len() {
+        return (Vec::new(), false);
+    }
+
+    let mut matches = Vec::new();
+    let mut line: usize = 1;
+    let mut scanned: usize = 0;
+    let mut index: usize = 0;
+    let mut pos: usize = 0;
+
+    while pos + needle_u16.len() <= hay_u16.len() {
+        let Some(rel_at) = hay_u16[pos..]
+            .windows(needle_u16.len())
+            .position(|w| w == needle_u16.as_slice())
+        else {
+            break;
+        };
+        let at = pos + rel_at;
+        if matches.len() >= max {
+            return (matches, true);
+        }
+        for &ch in &body_u16[scanned..at.min(body_u16.len())] {
+            if ch == b'\n' as u16 {
+                line += 1;
+            }
+        }
+        scanned = at;
+        let line_start = body_u16[..at.min(body_u16.len())]
+            .iter()
+            .rposition(|&c| c == b'\n' as u16)
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        let line_end = body_u16[at.min(body_u16.len())..]
+            .iter()
+            .position(|&c| c == b'\n' as u16)
+            .map(|i| at + i)
+            .unwrap_or(body_u16.len());
+
+        let from = line_start.max(at.saturating_sub(40));
+        let to = line_end.min(at + needle_u16.len() + 100);
+        let cut = if from > line_start { "…" } else { "" };
+        let cut_len = if from > line_start { 1 } else { 0 };
+        let slice_str = String::from_utf16_lossy(&body_u16[from..to.min(body_u16.len())]);
+        matches.push(json!({
+            "index": index,
+            "line": line,
+            "text": format!("{}{}", cut, slice_str),
+            "start": cut_len + at - from,
+            "length": needle_u16.len(),
+        }));
+        index += 1;
+        pos = at + needle_u16.len();
+    }
+
+    (matches, false)
+}
+
+pub fn project_tombstone(id: &str) -> String {
+    format!("p-{}", id)
+}
+
+const PROJECT_FIELDS: &[&str] = &[
+    "id",
+    "index",
+    "title",
+    "description",
+    "tags",
+    "writing",
+    "manualLineBreak",
+    "cover",
+    "createdAt",
+    "updatedAt",
+];
+
+pub fn project_fields(p: &Value) -> Value {
+    let mut out = Map::new();
+    if let Some(obj) = p.as_object() {
+        for &k in PROJECT_FIELDS {
+            if let Some(v) = obj.get(k) {
+                if !v.is_null() || k == "cover" {
+                    out.insert(k.to_string(), v.clone());
+                }
+            }
+        }
+    }
+    Value::Object(out)
+}
+
+fn public_project(p: &CatalogProject) -> Value {
+    let mut pf = project_fields(&p.project);
+    let folder = p
+        .dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_string();
+    if let Some(obj) = pf.as_object_mut() {
+        obj.insert("folder".to_string(), json!(folder));
+    }
+    pf
+}
+
+fn parse_project(raw: &str) -> Result<Value, LofError> {
+    let mut p: Value = serde_json::from_str(raw)
+        .map_err(|_| fail("작품 정보 형식이 올바르지 않습니다.", "FORMAT"))?;
+    let Some(obj) = p.as_object_mut() else {
+        return Err(fail("작품 정보 형식이 올바르지 않습니다.", "FORMAT"));
+    };
+    if obj.get("format").and_then(|v| v.as_i64()) != Some(FORMAT)
+        || !obj.get("id").and_then(|v| v.as_str()).is_some_and(valid_id)
+        || !obj.get("documents").is_some_and(|v| v.is_array())
+    {
+        return Err(fail("작품 정보 형식이 올바르지 않습니다.", "FORMAT"));
+    }
+
+    static NUM_PREFIX_RE: OnceLock<Regex> = OnceLock::new();
+    let num_re = NUM_PREFIX_RE.get_or_init(|| Regex::new(r"^\d+\s+").unwrap());
+
+    let mut ids = HashSet::new();
+    if let Some(docs) = obj.get_mut("documents").and_then(|v| v.as_array_mut()) {
+        for d in docs {
+            let Some(dobj) = d.as_object_mut() else {
+                return Err(fail("작품 정보의 문서 목록이 올바르지 않습니다.", "FORMAT"));
+            };
+            let id_ok = dobj.get("id").and_then(|v| v.as_str()).is_some_and(valid_id);
+            let id_str = dobj
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let kind_ok = dobj
+                .get("kind")
+                .and_then(|v| v.as_str())
+                .is_some_and(|k| k == "episode" || k == "plot");
+            let path_str = dobj
+                .get("path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let title_ok = dobj.get("title").is_none_or(|v| v.is_string() || v.is_null());
+            if !id_ok || !ids.insert(id_str) || !kind_ok || !valid_rel(&path_str) || !title_ok {
+                return Err(fail("작품 정보의 문서 목록이 올바르지 않습니다.", "FORMAT"));
+            }
+            if dobj.get("title").is_none() || dobj.get("title").unwrap().is_null() {
+                let bn = base_name(&path_str);
+                let stripped = num_re.replace(&bn, "").to_string();
+                let t = if stripped.is_empty() {
+                    "제목 없음".to_string()
+                } else {
+                    stripped
+                };
+                dobj.insert("title".to_string(), json!(t));
+            }
+        }
+    }
+
+    if let Some(dm) = obj.get("docMeta") {
+        let Some(dm_obj) = dm.as_object() else {
+            return Err(fail("작품 정보의 문서 속성이 올바르지 않습니다.", "FORMAT"));
+        };
+        if dm_obj.iter().any(|(k, v)| !valid_rel(k) || !v.is_object()) {
+            return Err(fail("작품 정보의 문서 속성이 올바르지 않습니다.", "FORMAT"));
+        }
+    }
+
+    if let Some(am) = obj.get("archivedMemos") {
+        let Some(arr) = am.as_array() else {
+            return Err(fail(
+                "작품 정보의 보관한 메모 목록이 올바르지 않습니다.",
+                "FORMAT",
+            ));
+        };
+        if !arr.iter().all(|v| v.as_str().is_some_and(valid_rel)) {
+            return Err(fail(
+                "작품 정보의 보관한 메모 목록이 올바르지 않습니다.",
+                "FORMAT",
+            ));
+        }
+    }
+
+    if let Some(w) = obj.get("writing").cloned() {
+        obj.insert("writing".to_string(), normalize_writing(Some(&w)));
+    }
+
+    Ok(p)
+}
+
+fn read_project_from_dir(dir: &Path) -> Result<Option<(Value, bool)>, LofError> {
+    let mut errors = Vec::new();
+    for name in ["project.json", "project.backup.json"] {
+        let path = dir.join(name);
+        match fs::read_to_string(&path) {
+            Ok(raw) => match parse_project(&raw) {
+                Ok(project) => return Ok(Some((project, name != "project.json"))),
+                Err(e) => errors.push(e),
+            },
+            Err(e) => errors.push(LofError::from(e)),
+        }
+    }
+    if let Some(real) = errors.into_iter().find(|e| e.code != "ENOENT") {
+        return Err(real);
+    }
+    Ok(None)
+}
+
+fn doc_of(dir: &Path, project_id: &str, entry: &Value, raw: &str) -> Result<Value, LofError> {
+    let entry = markdown_entry(raw, entry)?;
+    let parsed = read_markdown(raw)?;
+    let body = parsed.body;
+    let eobj = entry.as_object().cloned().unwrap_or_default();
+    let kind = eobj
+        .get("kind")
+        .and_then(|v| v.as_str())
+        .unwrap_or("episode");
+    let rel_path = eobj.get("path").and_then(|v| v.as_str()).unwrap_or("");
+    let full_path = abs(dir, rel_path).to_string_lossy().to_string();
+    let rev = hash_str(raw);
+    let fp = fingerprint(&entry, &body);
+
+    let mut out = Map::new();
+    out.insert(
+        "id".to_string(),
+        eobj.get("id").cloned().unwrap_or(json!("")),
+    );
+    out.insert("projectId".to_string(), json!(project_id));
+    out.insert("kind".to_string(), json!(kind));
+    out.insert(
+        "title".to_string(),
+        eobj.get("title").cloned().unwrap_or(json!("")),
+    );
+    out.insert(
+        "status".to_string(),
+        json!(normalize_status_val(eobj.get("status"))),
+    );
+    let meta_map = if kind == "episode" {
+        normalize_meta(Some(&entry))
+    } else {
+        normalize_document_meta(Some(&entry))
+    };
+    for (k, v) in meta_map {
+        out.insert(k, v);
+    }
+    out.insert(
+        "order".to_string(),
+        eobj.get("order").cloned().unwrap_or(json!(0)),
+    );
+    out.insert(
+        "archived".to_string(),
+        json!(eobj.get("archived").and_then(|v| v.as_bool()).unwrap_or(false)),
+    );
+    if let Some(ca) = eobj.get("createdAt") {
+        out.insert("createdAt".to_string(), ca.clone());
+    }
+    if let Some(ua) = eobj.get("updatedAt") {
+        out.insert("updatedAt".to_string(), ua.clone());
+    }
+    if let Some(ep_id) = eobj
+        .get("episodeId")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    {
+        out.insert("episodeId".to_string(), json!(ep_id));
+    }
+    if let Some(co) = eobj
+        .get("conflictOf")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    {
+        out.insert("conflictOf".to_string(), json!(co));
+    }
+    if let Some(props) = eobj.get("properties").and_then(|v| v.as_object()) {
+        if !props.is_empty() {
+            out.insert("properties".to_string(), Value::Object(props.clone()));
+        }
+    }
+    out.insert("relPath".to_string(), json!(rel_path));
+    out.insert("path".to_string(), json!(full_path));
+    out.insert("revision".to_string(), json!(rev));
+    out.insert("fingerprint".to_string(), json!(fp));
+    out.insert("body".to_string(), json!(body));
+    Ok(Value::Object(out))
+}
+
+pub fn meta_of(project: &Value, rel: &str) -> Map<String, Value> {
+    let low = rel.to_lowercase();
+    if let Some(dm) = project.get("docMeta").and_then(|v| v.as_object()) {
+        for (k, v) in dm {
+            if k.to_lowercase() == low {
+                if let Some(obj) = v.as_object() {
+                    return obj.clone();
+                }
+            }
+        }
+    }
+    Map::new()
+}
+
+fn doc_entry(
+    project: &Value,
+    rel: &str,
+    meta_stat: &fs::Metadata,
+    raw: &str,
+) -> Result<Value, LofError> {
+    let proj_id = project.get("id").and_then(|v| v.as_str()).unwrap_or("");
+    let m = meta_of(project, rel);
+    let m_val = Value::Object(m.clone());
+    let ep_id = m
+        .get("episodeId")
+        .and_then(|v| v.as_str())
+        .filter(|eid| {
+            project
+                .get("documents")
+                .and_then(|v| v.as_array())
+                .is_some_and(|docs| {
+                    docs.iter().any(|d| {
+                        d.get("id").and_then(|x| x.as_str()) == Some(*eid)
+                            && d.get("kind").and_then(|x| x.as_str()) == Some("episode")
+                    })
+                })
+        })
+        .map(|s| s.to_string());
+
+    let created_at = meta_stat
+        .created()
+        .or_else(|_| meta_stat.modified())
+        .map(sys_time_to_iso)
+        .unwrap_or_else(|_| now_iso());
+    let updated_at = meta_stat
+        .modified()
+        .map(sys_time_to_iso)
+        .unwrap_or_else(|_| now_iso());
+
+    let mut fb = Map::new();
+    fb.insert("id".to_string(), json!(memo_id(proj_id, rel)));
+    fb.insert(
+        "kind".to_string(),
+        json!(if m.get("type").and_then(|v| v.as_str()) == Some("plot") {
+            "plot"
+        } else {
+            "memo"
+        }),
+    );
+    fb.insert("title".to_string(), json!(base_name(rel)));
+    fb.insert("status".to_string(), json!("초안"));
+    fb.insert("order".to_string(), json!(0));
+    fb.insert(
+        "archived".to_string(),
+        json!(m.get("archived").and_then(|v| v.as_bool()).unwrap_or(false)),
+    );
+    for (k, v) in normalize_document_meta(Some(&m_val)) {
+        fb.insert(k, v);
+    }
+    if let Some(eid) = ep_id {
+        fb.insert("episodeId".to_string(), json!(eid));
+    }
+    fb.insert("createdAt".to_string(), json!(created_at));
+    fb.insert("updatedAt".to_string(), json!(updated_at));
+    fb.insert("path".to_string(), json!(rel));
+
+    markdown_entry(raw, &Value::Object(fb))
+}
+
+fn prune_empty(dir: &Path) {
+    if let Ok(rd) = fs::read_dir(dir) {
+        for e in rd.flatten() {
+            if e.file_type().is_ok_and(|t| t.is_dir()) {
+                prune_empty(&e.path());
+            }
+        }
+    }
+    let _ = fs::remove_dir(dir);
+}
+
+const RENAME_FAILED: &str =
+    "파일 이름을 바꾸지 못했습니다. 다른 프로그램에서 작품 폴더의 파일을 열고 있는지 확인해 주세요.";
+
+#[derive(Clone, Copy)]
+pub struct HistoryPolicy {
+    pub min_minutes: f64,
+    pub min_chars: usize,
+}
+
+#[derive(Clone)]
+struct SnapshotEntry {
+    at: u64,
+    body: String,
+}
+
+pub struct Store {
+    pub root: PathBuf,
+    pub vault: Value,
+    pub index: FileIndex,
+    pub catalog: Option<Catalog>,
+    pub index_enabled: bool,
+    pub index_sequence: u64,
+    pub migration_warning: String,
+    last_snapshot: HashMap<String, Option<SnapshotEntry>>,
+    pub history_policy: HistoryPolicy,
+    pub default_manual_line_break: bool,
+}
+
+impl Store {
+    pub fn new(
+        root: impl AsRef<Path>,
+        history_policy: HistoryPolicy,
+        default_manual_line_break: bool,
+    ) -> Result<Self, LofError> {
+        let root_path = fs::canonicalize(root.as_ref()).unwrap_or_else(|_| root.as_ref().to_path_buf());
+        // Strip Windows \\?\ extended path prefix so paths display cleanly in UI
+        let clean_root = strip_verbatim_prefix(&root_path);
+        let mut s = Self {
+            index: FileIndex::new(&clean_root),
+            root: clean_root,
+            vault: Value::Null,
+            catalog: None,
+            index_enabled: false,
+            index_sequence: CHANGE_SEQUENCE.load(Ordering::SeqCst),
+            migration_warning: String::new(),
+            last_snapshot: HashMap::new(),
+            history_policy,
+            default_manual_line_break,
+        };
+        s.init()?;
+        Ok(s)
+    }
+
+    pub fn init(&mut self) -> Result<(), LofError> {
+        let lof_dir = self.root.join(".lof");
+        fs::create_dir_all(&lof_dir)?;
+        let vault_file = lof_dir.join("vault.json");
+        match fs::read_to_string(&vault_file) {
+            Ok(raw) => {
+                self.vault = serde_json::from_str(&raw)
+                    .map_err(|e| fail(e.to_string(), "FORMAT"))?;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                self.vault = json!({
+                    "format": FORMAT,
+                    "id": Uuid::new_v4().to_string(),
+                    "createdAt": now_iso(),
+                });
+                let pretty = serde_json::to_string_pretty(&self.vault).unwrap_or_default();
+                atomic_write_str(&vault_file, &pretty)?;
+            }
+            Err(e) => return Err(LofError::from(e)),
+        }
+
+        let vault_id = self
+            .vault
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        let init_res: Result<(), LofError> = (|| {
+            if let Some(cat) = self.index.load(&vault_id) {
+                self.catalog = Some(cat);
+                self.index_enabled = true;
+                self.refresh_index(true)?;
+            } else {
+                self.repair()?;
+            }
+            Ok(())
+        })();
+
+        if let Err(e) = init_res {
+            self.migration_warning = format!("문서 속성 이관을 완료하지 못했습니다: {}", e.message);
+        }
+        Ok(())
+    }
+
+    pub fn trash_path(&self, file: &Path) -> Result<(), LofError> {
+        if !file.exists() {
+            return Ok(());
+        }
+        if trash::delete(file).is_err() {
+            if file.is_dir() {
+                fs::remove_dir_all(file)?;
+            } else {
+                fs::remove_file(file)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn stamp(&self, file: &Path) -> Result<Option<String>, LofError> {
+        match fs::metadata(file) {
+            Ok(m) => {
+                let mtime = m
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs_f64() * 1000.0)
+                    .unwrap_or(0.0);
+                let ctime = m
+                    .created()
+                    .ok()
+                    .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs_f64() * 1000.0)
+                    .unwrap_or(mtime);
+                Ok(Some(format!("{:.0}:{:.0}:{}", mtime, ctime, m.len())))
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(LofError::from(e)),
+        }
+    }
+
+    fn index_record(
+        &mut self,
+        dir: &Path,
+        project: &Value,
+        entry: &Value,
+        raw: &str,
+        meta_stat: &fs::Metadata,
+    ) -> Result<IndexedFileRecord, LofError> {
+        let project_id = project.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        let entry_id = entry.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        let mut full_doc = doc_of(dir, project_id, entry, raw)?;
+        let body = full_doc
+            .get("body")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        if let Some(obj) = full_doc.as_object_mut() {
+            obj.remove("body");
+            let chars = character_count(&body, false);
+            let writing = normalize_writing(project.get("writing"));
+            let pchars = count_for_writing(&manuscript_stats(&body), &writing);
+            obj.insert("characters".to_string(), json!(chars));
+            obj.insert("platformCharacters".to_string(), json!(pchars));
+        }
+        self.index.cache_body(project_id, entry_id, &body)?;
+        let mut entry_with_hash = entry.clone();
+        if let Some(eobj) = entry_with_hash.as_object_mut() {
+            eobj.insert("hash".to_string(), json!(hash_str(&body)));
+        }
+        let mtime = meta_stat
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_secs_f64() * 1000.0)
+            .unwrap_or(0.0);
+        let ctime = meta_stat
+            .created()
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_secs_f64() * 1000.0)
+            .unwrap_or(mtime);
+        let stamp = format!("{:.0}:{:.0}:{}", mtime, ctime, meta_stat.len());
+        Ok(IndexedFileRecord {
+            entry: entry_with_hash,
+            doc: full_doc,
+            stamp,
+        })
+    }
+
+    pub fn invalidate_path(&mut self, relative: &str) {
+        if !relative.is_empty()
+            && !relative.split(['/', '\\']).any(|s| s == ".lof")
+        {
+            self.index.dirty.insert(relative.replace('\\', "/"));
+        }
+    }
+
+    fn reconcile_index_project(p: &mut CatalogProject) {
+        let mut docs: Vec<Value> = p
+            .files
+            .values()
+            .filter(|f| f.entry.get("kind").and_then(|v| v.as_str()) == Some("episode"))
+            .map(|f| f.entry.clone())
+            .collect();
+        docs.sort_by(by_order_cmp);
+        if let Some(obj) = p.project.as_object_mut() {
+            obj.insert("documents".to_string(), Value::Array(docs));
+        }
+    }
+
+    fn refresh_indexed_file(&mut self, p: &mut CatalogProject, rel: &str) {
+        let low = rel.to_ascii_lowercase();
+        if !(low.starts_with("episodes/") || low.starts_with("doc/")) || !low.ends_with(".md") {
+            return;
+        }
+        let file = abs(&p.dir, rel);
+        let res: Result<(), LofError> = (|| {
+            let stamp = self.stamp(&file)?;
+            if let Some(ref st) = stamp {
+                if p.files.get(rel).is_some_and(|f| &f.stamp == st)
+                    && !p.errors.contains_key(rel)
+                {
+                    return Ok(());
+                }
+            }
+            let raw = fs::read_to_string(&file)?;
+            let stat = fs::metadata(&file)?;
+            let proj_id = p
+                .project
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+
+            static EP_NUM_RE: OnceLock<Regex> = OnceLock::new();
+            let ep_re = EP_NUM_RE.get_or_init(|| Regex::new(r"^episodes/(\d+)").unwrap());
+            static NUM_PREFIX_RE: OnceLock<Regex> = OnceLock::new();
+            let num_re = NUM_PREFIX_RE.get_or_init(|| Regex::new(r"^\d+\s+").unwrap());
+
+            let fallback = if rel.starts_with("episodes/") {
+                let order_num = ep_re
+                    .captures(rel)
+                    .and_then(|c| c.get(1))
+                    .and_then(|m| m.as_str().parse::<i64>().ok())
+                    .unwrap_or(1);
+                let created_at = stat
+                    .created()
+                    .or_else(|_| stat.modified())
+                    .map(sys_time_to_iso)
+                    .unwrap_or_else(|_| now_iso());
+                let updated_at = stat
+                    .modified()
+                    .map(sys_time_to_iso)
+                    .unwrap_or_else(|_| now_iso());
+                let bn = base_name(rel);
+                json!({
+                    "id": memo_id(&proj_id, rel),
+                    "kind": "episode",
+                    "path": rel,
+                    "title": num_re.replace(&bn, "").to_string(),
+                    "order": (order_num - 1).max(0),
+                    "createdAt": created_at,
+                    "updatedAt": updated_at,
+                })
+            } else {
+                doc_entry(&p.project, rel, &stat, &raw)?
+            };
+
+            let mut merged_fb = fallback.as_object().cloned().unwrap_or_default();
+            if let Some(prev_entry) = p.files.get(rel).and_then(|f| f.entry.as_object()) {
+                for (k, v) in prev_entry {
+                    merged_fb.insert(k.clone(), v.clone());
+                }
+            }
+            merged_fb.insert("path".to_string(), json!(rel));
+
+            let mut entry = markdown_entry(&raw, &Value::Object(merged_fb))?;
+            let entry_id = entry
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+
+            let duplicate = p
+                .files
+                .iter()
+                .find(|(other, f)| {
+                    *other != rel
+                        && f.entry.get("id").and_then(|v| v.as_str()) == Some(entry_id.as_str())
+                })
+                .map(|(other, _)| other.clone());
+            if let Some(dup_rel) = duplicate {
+                if abs(&p.dir, &dup_rel).exists() {
+                    p.files.remove(rel);
+                    return Err(fail(
+                        "같은 문서 ID를 가진 파일이 여러 개 있습니다. 사본에는 새 ID를 지정해 주세요.",
+                        "DUPLICATE",
+                    ));
+                }
+            }
+
+            let parsed = read_markdown(&raw)?;
+            let is_ep = entry.get("kind").and_then(|v| v.as_str()) == Some("episode");
+            let missing_id = !parsed.properties.contains_key("id");
+            let missing_order = is_ep && !parsed.properties.contains_key("order");
+
+            if missing_id || missing_order {
+                let next = write_markdown(&parsed.body, &entry, &raw)?;
+                if fs::read_to_string(&file)? != raw {
+                    return Err(fail("색인 갱신 중 파일이 변경됐습니다.", "CONFLICT"));
+                }
+                atomic_write_str(&file, &next)?;
+                if let Some(eobj) = entry.as_object_mut() {
+                    eobj.insert("_markdown".to_string(), json!(true));
+                }
+                let next_stat = fs::metadata(&file)?;
+                let rec = self.index_record(&p.dir, &p.project, &entry, &next, &next_stat)?;
+                p.files.insert(rel.to_string(), rec);
+            } else {
+                if let Some(eobj) = entry.as_object_mut() {
+                    eobj.insert("_markdown".to_string(), json!(true));
+                }
+                let rec = self.index_record(&p.dir, &p.project, &entry, &raw, &stat)?;
+                p.files.insert(rel.to_string(), rec);
+            }
+            p.errors.remove(rel);
+            Ok(())
+        })();
+
+        if let Err(e) = res {
+            if e.code == "ENOENT" {
+                p.files.remove(rel);
+                p.errors.remove(rel);
+            } else {
+                let title = p
+                    .project
+                    .get("title")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                p.errors
+                    .insert(rel.to_string(), format!("{} · {}: {}", title, rel, e.message));
+            }
+        }
+    }
+
+    fn refresh_project_files(&mut self, p: &mut CatalogProject, inventory: bool) {
+        let mut present = HashSet::new();
+        for folder in ["episodes", "doc"] {
+            for rel in walk_rel(&p.dir, folder) {
+                if !rel.to_ascii_lowercase().ends_with(".md") {
+                    continue;
+                }
+                present.insert(rel.clone());
+                let stamp = self.stamp(&abs(&p.dir, &rel)).ok().flatten();
+                let current_stamp = p.files.get(&rel).map(|f| f.stamp.clone());
+                if !inventory || current_stamp != stamp {
+                    self.refresh_indexed_file(p, &rel);
+                }
+            }
+        }
+        p.files.retain(|rel, _| present.contains(rel));
+        Self::reconcile_index_project(p);
+    }
+
+    pub fn refresh_index(&mut self, inventory: bool) -> Result<(), LofError> {
+        if !self.index_enabled || self.catalog.is_none() {
+            return Ok(());
+        }
+        let mut cat = self.catalog.take().unwrap();
+        let res = (|| -> Result<(), LofError> {
+            let mut before: HashMap<String, String> = HashMap::new();
+            let mut before_projects: HashSet<String> = HashSet::new();
+            for p in &cat.projects {
+                let pid = p
+                    .project
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                before_projects.insert(pid.clone());
+                for f in p.files.values() {
+                    if let Some(id) = f.entry.get("id").and_then(|v| v.as_str()) {
+                        before.insert(id.to_string(), pid.clone());
+                    }
+                }
+            }
+
+            let cur_seq = CHANGE_SEQUENCE.load(Ordering::SeqCst);
+            if let Ok(map) = changed_paths_map().lock() {
+                for (file, &seq) in map.iter() {
+                    if seq > self.index_sequence {
+                        if let Ok(rel) = file.strip_prefix(&self.root) {
+                            let rel_str = rel.to_string_lossy().replace('\\', "/");
+                            if !rel_str.starts_with("..") {
+                                self.invalidate_path(&rel_str);
+                            }
+                        }
+                    }
+                }
+            }
+            self.index_sequence = cur_seq;
+
+            if inventory {
+                for p in &cat.projects {
+                    if let Some(name) = p.dir.file_name().and_then(|n| n.to_str()) {
+                        self.index.dirty.insert(name.to_string());
+                    }
+                }
+                if let Ok(rd) = fs::read_dir(&self.root) {
+                    for e in rd.flatten() {
+                        if e.file_type().is_ok_and(|t| t.is_dir()) {
+                            let name = e.file_name().to_string_lossy().to_string();
+                            if !name.starts_with('.') {
+                                self.index.dirty.insert(name);
+                            }
+                        }
+                    }
+                }
+            }
+
+            let dirty: Vec<String> = self.index.dirty.drain().collect();
+            if dirty.is_empty() {
+                return Ok(());
+            }
+
+            let mut folders: HashMap<String, HashSet<String>> = HashMap::new();
+            for rel in dirty {
+                let mut parts = rel.split('/');
+                let Some(folder) = parts.next() else { continue };
+                let rest: Vec<&str> = parts.collect();
+                let joined = rest.join("/");
+                let low = rel.to_ascii_lowercase();
+                if folder.starts_with('.')
+                    || low.ends_with(".tmp")
+                    || low.ends_with(".lofmv")
+                    || low.ends_with(".lofnew")
+                    || joined == "project.backup.json"
+                {
+                    continue;
+                }
+                folders
+                    .entry(folder.to_string())
+                    .or_default()
+                    .insert(joined);
+            }
+
+            for (folder, paths) in folders {
+                let dir = self.root.join(&folder);
+                if !dir.exists() {
+                    cat.projects.retain(|x| x.dir != dir);
+                    let prefix = format!("{}:", folder);
+                    cat.warnings.retain(|m| !m.starts_with(&prefix));
+                    continue;
+                }
+
+                let mut p_idx = cat.projects.iter().position(|x| x.dir == dir);
+                if p_idx.is_none() || paths.contains("") || paths.contains("project.json") {
+                    match read_project_from_dir(&dir) {
+                        Ok(None) => {
+                            if let Some(idx) = p_idx {
+                                cat.projects.remove(idx);
+                            }
+                            continue;
+                        }
+                        Ok(Some((mut proj_val, from_backup))) => {
+                            let proj_id = proj_val
+                                .get("id")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let dup = p_idx.is_none()
+                                && cat.projects.iter().any(|x| {
+                                    x.project.get("id").and_then(|v| v.as_str()) == Some(&proj_id)
+                                        && x.dir != dir
+                                        && x.dir.exists()
+                                });
+                            if dup {
+                                let msg = format!("{}: 다른 작품 폴더와 ID가 겹칩니다.", folder);
+                                let prefix = format!("{}:", folder);
+                                cat.warnings.retain(|m| !m.starts_with(&prefix));
+                                cat.warnings.push(msg);
+                                continue;
+                            }
+
+                            if proj_val.get("fileCentric").and_then(|v| v.as_bool()) != Some(true)
+                            {
+                                let mut migration = CatalogProject {
+                                    dir: dir.clone(),
+                                    project: proj_val,
+                                    from_backup,
+                                    files: HashMap::new(),
+                                    errors: HashMap::new(),
+                                    project_stamp: None,
+                                };
+                                self.migrate_legacy(&mut migration)?;
+                                self.migrate_properties(&mut migration)?;
+                                proj_val = migration.project;
+                            }
+
+                            let prev_writing = p_idx.and_then(|idx| {
+                                serde_json::to_string(&cat.projects[idx].project.get("writing"))
+                                    .ok()
+                            });
+                            let changed_identity = p_idx.is_some_and(|idx| {
+                                cat.projects[idx].project.get("id").and_then(|v| v.as_str())
+                                    != Some(&proj_id)
+                            });
+
+                            let idx = match p_idx {
+                                Some(i) => {
+                                    let existing_docs = cat.projects[i]
+                                        .project
+                                        .get("documents")
+                                        .cloned()
+                                        .unwrap_or(json!([]));
+                                    cat.projects[i].project = proj_val;
+                                    if let Some(o) = cat.projects[i].project.as_object_mut() {
+                                        o.insert("documents".to_string(), existing_docs);
+                                    }
+                                    i
+                                }
+                                None => {
+                                    cat.projects.push(CatalogProject {
+                                        dir: dir.clone(),
+                                        project: proj_val,
+                                        from_backup,
+                                        files: HashMap::new(),
+                                        errors: HashMap::new(),
+                                        project_stamp: None,
+                                    });
+                                    cat.projects.len() - 1
+                                }
+                            };
+                            p_idx = Some(idx);
+
+                            let p = &mut cat.projects[idx];
+                            if changed_identity {
+                                p.files.clear();
+                            }
+                            p.project_stamp = self.stamp(&dir.join("project.json"))?;
+                            if paths.contains("") || p.files.is_empty() {
+                                self.refresh_project_files(p, true);
+                            }
+                            let cur_writing =
+                                serde_json::to_string(&p.project.get("writing")).ok();
+                            if prev_writing != cur_writing {
+                                let writing = normalize_writing(p.project.get("writing"));
+                                let pid = p
+                                    .project
+                                    .get("id")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string();
+                                let file_keys: Vec<String> = p.files.keys().cloned().collect();
+                                for fk in file_keys {
+                                    let eid = p.files[&fk]
+                                        .entry
+                                        .get("id")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("")
+                                        .to_string();
+                                    let fpath = abs(&p.dir, &fk);
+                                    let body = self.index.body(&pid, &eid).unwrap_or_else(|_| {
+                                        fs::read_to_string(&fpath)
+                                            .ok()
+                                            .and_then(|r| read_markdown(&r).ok())
+                                            .map(|m| m.body)
+                                            .unwrap_or_default()
+                                    });
+                                    let pchars =
+                                        count_for_writing(&manuscript_stats(&body), &writing);
+                                    if let Some(rec) = p.files.get_mut(&fk) {
+                                        if let Some(dobj) = rec.doc.as_object_mut() {
+                                            dobj.insert(
+                                                "platformCharacters".to_string(),
+                                                json!(pchars),
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            p.from_backup = from_backup;
+                            if from_backup {
+                                p.errors.insert(
+                                    "project".to_string(),
+                                    format!("{}: 복구용 작품 정보 사본으로 열었습니다.", folder),
+                                );
+                            } else {
+                                p.errors.remove("project");
+                            }
+                            let prefix = format!("{}:", folder);
+                            cat.warnings.retain(|m| !m.starts_with(&prefix));
+                        }
+                        Err(e) => {
+                            if let Some(idx) = p_idx {
+                                cat.projects[idx]
+                                    .errors
+                                    .insert("project".to_string(), format!("{}: {}", folder, e.message));
+                            } else {
+                                let prefix = format!("{}:", folder);
+                                cat.warnings.retain(|m| !m.starts_with(&prefix));
+                                cat.warnings.push(format!("{}: {}", folder, e.message));
+                            }
+                        }
+                    }
+                }
+
+                let Some(idx) = p_idx else { continue };
+                let p = &mut cat.projects[idx];
+                for rel in paths {
+                    let low = rel.to_ascii_lowercase();
+                    if (low.starts_with("episodes/") || low.starts_with("doc/"))
+                        && low.ends_with(".md")
+                    {
+                        self.refresh_indexed_file(p, &rel);
+                    } else if !rel.is_empty()
+                        && rel != "project.json"
+                        && rel != "project.backup.json"
+                        && !low.ends_with(".tmp")
+                        && !low.ends_with(".lofmv")
+                        && !low.ends_with(".lofnew")
+                    {
+                        self.refresh_project_files(p, true);
+                    }
+                }
+                Self::reconcile_index_project(p);
+            }
+
+            let present_ids: HashSet<String> = cat
+                .projects
+                .iter()
+                .flat_map(|p| {
+                    p.files.values().filter_map(|f| {
+                        f.entry
+                            .get("id")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string())
+                    })
+                })
+                .collect();
+            for (id, project_id) in before {
+                if !present_ids.contains(&id) {
+                    self.tombstone(&id, &project_id, &now_iso())?;
+                }
+            }
+            for id in before_projects {
+                if !cat
+                    .projects
+                    .iter()
+                    .any(|p| p.project.get("id").and_then(|v| v.as_str()) == Some(&id))
+                {
+                    self.tombstone(&project_tombstone(&id), &id, &now_iso())?;
+                }
+            }
+
+            let vault_id = self
+                .vault
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            self.index.save(&vault_id, &cat)?;
+            Ok(())
+        })();
+
+        self.catalog = Some(cat);
+        res
+    }
+
+    pub fn cached_body(&mut self, project_id: &str, id: &str) -> Result<String, LofError> {
+        if let Ok(b) = self.index.body(project_id, id) {
+            return Ok(b);
+        }
+        let fpath = self
+            .catalog
+            .as_ref()
+            .and_then(|cat| {
+                cat.projects
+                    .iter()
+                    .find(|p| p.project.get("id").and_then(|v| v.as_str()) == Some(project_id))
+            })
+            .and_then(|p| {
+                p.files
+                    .values()
+                    .find(|f| f.entry.get("id").and_then(|v| v.as_str()) == Some(id))
+                    .and_then(|f| f.entry.get("path").and_then(|v| v.as_str()))
+                    .map(|rel| abs(&p.dir, rel))
+            })
+            .ok_or_else(|| fail("문서를 찾을 수 없습니다.", "NOT_FOUND"))?;
+        let raw = fs::read_to_string(&fpath)?;
+        let body = read_markdown(&raw)?.body;
+        self.index.cache_body(project_id, id, &body)?;
+        Ok(body)
+    }
+
+    pub fn scan(&mut self) -> Result<Catalog, LofError> {
+        if !self.index_enabled || self.catalog.is_none() {
+            return self.scan_disk();
+        }
+        self.refresh_index(false)?;
+        let cat = self.catalog.as_ref().unwrap();
+        let mut warnings = cat.warnings.clone();
+        for p in &cat.projects {
+            for err in p.errors.values() {
+                warnings.push(err.clone());
+            }
+        }
+        Ok(Catalog {
+            projects: cat.projects.clone(),
+            warnings,
+        })
+    }
+
+    pub fn scan_disk(&mut self) -> Result<Catalog, LofError> {
+        let mut projects = Vec::new();
+        let mut warnings = Vec::new();
+        let mut seen = HashSet::new();
+
+        static EP_NUM_RE: OnceLock<Regex> = OnceLock::new();
+        let ep_re = EP_NUM_RE.get_or_init(|| Regex::new(r"^episodes/(\d+)").unwrap());
+        static NUM_PREFIX_RE: OnceLock<Regex> = OnceLock::new();
+        let num_re = NUM_PREFIX_RE.get_or_init(|| Regex::new(r"^\d+\s+").unwrap());
+
+        let mut dir_entries: Vec<_> = fs::read_dir(&self.root)
+            .map(|rd| rd.filter_map(|e| e.ok()).collect())
+            .unwrap_or_default();
+        dir_entries.sort_by_key(|e| e.file_name());
+
+        for e in dir_entries {
+            if !e.file_type().is_ok_and(|t| t.is_dir()) {
+                continue;
+            }
+            let folder_name = e.file_name().to_string_lossy().to_string();
+            if folder_name.starts_with('.') {
+                continue;
+            }
+            let dir = self.root.join(&folder_name);
+            let res: Result<(), LofError> = (|| {
+                let Some((mut proj, from_backup)) = read_project_from_dir(&dir)? else {
+                    return Ok(());
+                };
+                let proj_id = proj
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if !seen.insert(proj_id.clone()) {
+                    warnings.push(format!(
+                        "{}: 다른 작품 폴더와 ID가 겹쳐 건너뜁니다.",
+                        folder_name
+                    ));
+                    return Ok(());
+                }
+                if from_backup {
+                    warnings.push(format!("{}: 복구용 작품 정보 사본으로 열었습니다.", folder_name));
+                }
+                let cached: Vec<Value> = proj
+                    .get("documents")
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                let mut discovered: Vec<Value> = Vec::new();
+                let mut files: HashMap<String, IndexedFileRecord> = HashMap::new();
+                let mut errors: HashMap<String, String> = HashMap::new();
+
+                for rel in walk_rel(&dir, "episodes") {
+                    if !rel.to_ascii_lowercase().ends_with(".md") {
+                        continue;
+                    }
+                    let fpath = abs(&dir, &rel);
+                    let ep_res: Result<(), LofError> = (|| {
+                        let raw = fs::read_to_string(&fpath)?;
+                        let stat = fs::metadata(&fpath)?;
+                        let old = cached.iter().find(|d| {
+                            d.get("path")
+                                .and_then(|v| v.as_str())
+                                .is_some_and(|p| p.eq_ignore_ascii_case(&rel))
+                        });
+                        let fallback = match old {
+                            Some(o) => o.clone(),
+                            None => {
+                                let order_num = ep_re
+                                    .captures(&rel)
+                                    .and_then(|c| c.get(1))
+                                    .and_then(|m| m.as_str().parse::<i64>().ok())
+                                    .unwrap_or(1);
+                                let bn = base_name(&rel);
+                                json!({
+                                    "id": memo_id(&proj_id, &rel),
+                                    "kind": "episode",
+                                    "path": rel,
+                                    "title": num_re.replace(&bn, "").to_string(),
+                                    "order": (order_num - 1).max(0),
+                                    "createdAt": stat.created().or_else(|_| stat.modified()).map(sys_time_to_iso).unwrap_or_else(|_| now_iso()),
+                                    "updatedAt": stat.modified().map(sys_time_to_iso).unwrap_or_else(|_| now_iso()),
+                                })
+                            }
+                        };
+                        let mut entry = markdown_entry(&raw, &fallback)?;
+                        let eid = entry
+                            .get("id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        if discovered
+                            .iter()
+                            .any(|d| d.get("id").and_then(|v| v.as_str()) == Some(&eid))
+                        {
+                            return Err(fail(
+                                "같은 문서 ID를 가진 파일이 여러 개 있습니다.",
+                                "DUPLICATE",
+                            ));
+                        }
+                        let parsed = read_markdown(&raw)?;
+                        if let Some(eobj) = entry.as_object_mut() {
+                            if parsed.properties.get("lof").and_then(|v| v.as_i64()) == Some(1) {
+                                eobj.insert("_markdown".to_string(), json!(true));
+                            }
+                            eobj.insert("hash".to_string(), json!(hash_str(&parsed.body)));
+                        }
+                        discovered.push(entry.clone());
+                        let rec = self.index_record(&dir, &proj, &entry, &raw, &stat)?;
+                        files.insert(rel.clone(), rec);
+                        Ok(())
+                    })();
+                    if let Err(err) = ep_res {
+                        if err.code != "ENOENT" {
+                            errors.insert(
+                                rel.clone(),
+                                format!("{} · {}: {}", folder_name, rel, err.message),
+                            );
+                        }
+                    }
+                }
+
+                if proj.get("fileCentric").and_then(|v| v.as_bool()) != Some(true) {
+                    for d in cached {
+                        let did = d.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                        if !discovered
+                            .iter()
+                            .any(|x| x.get("id").and_then(|v| v.as_str()) == Some(did))
+                        {
+                            discovered.push(d);
+                        }
+                    }
+                }
+
+                if let Some(pobj) = proj.as_object_mut() {
+                    pobj.insert("documents".to_string(), Value::Array(discovered));
+                }
+
+                let mut doc_warnings = Vec::new();
+                let doc_entries = self.scan_doc_files_disk(&dir, &proj, &mut doc_warnings);
+                for entry in doc_entries {
+                    let rel = entry
+                        .get("path")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let fpath = abs(&dir, &rel);
+                    let Ok(raw) = fs::read_to_string(&fpath) else { continue };
+                    let Ok(stat) = fs::metadata(&fpath) else { continue };
+                    let eid = entry.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                    if files
+                        .values()
+                        .any(|f| f.entry.get("id").and_then(|v| v.as_str()) == Some(eid))
+                    {
+                        errors.insert(
+                            rel.clone(),
+                            format!(
+                                "{} · {}: 같은 문서 ID를 가진 파일이 여러 개 있습니다.",
+                                folder_name, rel
+                            ),
+                        );
+                        continue;
+                    }
+                    if let Ok(rec) = self.index_record(&dir, &proj, &entry, &raw, &stat) {
+                        files.insert(rel, rec);
+                    }
+                }
+                for w in doc_warnings {
+                    errors.insert(w.clone(), w);
+                }
+
+                let project_stamp = self.stamp(&dir.join("project.json"))?;
+                projects.push(CatalogProject {
+                    dir,
+                    project: proj,
+                    from_backup,
+                    files,
+                    errors,
+                    project_stamp,
+                });
+                Ok(())
+            })();
+            if let Err(err) = res {
+                warnings.push(format!("{}: {}", folder_name, err.message));
+            }
+        }
+
+        Ok(Catalog { projects, warnings })
+    }
+
+    fn scan_doc_files_disk(
+        &self,
+        dir: &Path,
+        project: &Value,
+        warnings: &mut Vec<String>,
+    ) -> Vec<Value> {
+        let mut out = Vec::new();
+        let title = project.get("title").and_then(|v| v.as_str()).unwrap_or("");
+        for rel in walk_rel(dir, "doc") {
+            if !rel.to_ascii_lowercase().ends_with(".md") {
+                continue;
+            }
+            let fpath = abs(dir, &rel);
+            let res: Result<Value, LofError> = (|| {
+                let stat = fs::metadata(&fpath)?;
+                let raw = fs::read_to_string(&fpath)?;
+                doc_entry(project, &rel, &stat, &raw)
+            })();
+            match res {
+                Ok(entry) => out.push(entry),
+                Err(e) => {
+                    if e.code != "ENOENT" {
+                        warnings.push(format!("{} · {}: {}", title, rel, e.message));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    pub fn doc_files(&self, p: &CatalogProject) -> Vec<Value> {
+        if self.index_enabled && !p.files.is_empty() {
+            return p
+                .files
+                .iter()
+                .filter(|(rel, _)| rel.starts_with("doc/"))
+                .map(|(_, f)| f.entry.clone())
+                .collect();
+        }
+        let mut dummy = Vec::new();
+        self.scan_doc_files_disk(&p.dir, &p.project, &mut dummy)
+    }
+
+    pub fn get_project(&mut self, id: &str) -> Result<CatalogProject, LofError> {
+        if !valid_id(id) {
+            return Err(fail_invalid("잘못된 작품 ID"));
+        }
+        let cat = self.scan()?;
+        cat.projects
+            .into_iter()
+            .find(|x| x.project.get("id").and_then(|v| v.as_str()) == Some(id))
+            .ok_or_else(|| fail("작품을 찾을 수 없습니다.", "NOT_FOUND"))
+    }
+
+    pub fn find_doc(&mut self, id: &str) -> Result<(CatalogProject, Value, PathBuf), LofError> {
+        if !valid_id(id) {
+            return Err(fail_invalid("잘못된 문서 ID"));
+        }
+        let cat = self.scan()?;
+        let mut matches = Vec::new();
+        for p in cat.projects {
+            let mut entries: Vec<Value> = p
+                .project
+                .get("documents")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            entries.extend(self.doc_files(&p));
+            for entry in entries {
+                if entry.get("id").and_then(|v| v.as_str()) == Some(id) {
+                    let rel = entry.get("path").and_then(|v| v.as_str()).unwrap_or("");
+                    let file = abs(&p.dir, rel);
+                    matches.push((p.clone(), entry, file));
+                }
+            }
+        }
+        if matches.len() > 1 {
+            return Err(fail(
+                "같은 문서 ID를 가진 파일이 여러 개 있습니다. 사본에는 새 ID를 지정해 주세요.",
+                "DUPLICATE",
+            ));
+        }
+        matches
+            .into_iter()
+            .next()
+            .ok_or_else(|| fail("문서를 찾을 수 없습니다.", "NOT_FOUND"))
+    }
+
+    pub fn write_project(&self, p: &CatalogProject) -> Result<(), LofError> {
+        let mut project = p.project.clone();
+        if let Some(pobj) = project.as_object_mut() {
+            let file_centric = pobj
+                .get("fileCentric")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if file_centric {
+                pobj.insert("documents".to_string(), json!([]));
+            } else if let Some(docs) = pobj.get("documents").and_then(|v| v.as_array()).cloned() {
+                let mapped: Vec<Value> = docs
+                    .into_iter()
+                    .map(|mut d| {
+                        let is_md = d
+                            .get("_markdown")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
+                        if is_md {
+                            json!({
+                                "id": d.get("id"),
+                                "kind": d.get("kind"),
+                                "path": d.get("path"),
+                                "order": d.get("order"),
+                                "hash": d.get("hash"),
+                            })
+                        } else {
+                            if let Some(dobj) = d.as_object_mut() {
+                                dobj.remove("_markdown");
+                                dobj.remove("properties");
+                            }
+                            d
+                        }
+                    })
+                    .collect();
+                pobj.insert("documents".to_string(), Value::Array(mapped));
+            }
+            if pobj
+                .get("docMeta")
+                .and_then(|v| v.as_object())
+                .is_some_and(|m| m.is_empty())
+            {
+                pobj.remove("docMeta");
+            }
+        }
+        let data = serde_json::to_string_pretty(&project).unwrap_or_default();
+        atomic_write_str(&p.dir.join("project.json"), &data)?;
+        atomic_write_str(&p.dir.join("project.backup.json"), &data)?;
+        Ok(())
+    }
+
+    pub fn list(&mut self) -> Result<Value, LofError> {
+        let cat = self.scan()?;
+        let mut documents = Vec::new();
+        let mut unlinked = Vec::new();
+        let mut missing_files = Vec::new();
+        let mut warnings = cat.warnings.clone();
+        if !self.migration_warning.is_empty() {
+            warnings.push(self.migration_warning.clone());
+        }
+
+        if self.index_enabled {
+            let mut ids = HashSet::new();
+            for p in &cat.projects {
+                for file in p.files.values() {
+                    let doc_id = file
+                        .doc
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    if !ids.insert(doc_id.clone()) {
+                        warnings.push(format!("중복 문서 ID: {}", doc_id));
+                        continue;
+                    }
+                    documents.push(file.doc.clone());
+                }
+            }
+            documents.sort_by(|a, b| {
+                let oa = a.get("order").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let ob = b.get("order").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                oa.partial_cmp(&ob)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| {
+                        let ta = a.get("title").and_then(|v| v.as_str()).unwrap_or("");
+                        let tb = b.get("title").and_then(|v| v.as_str()).unwrap_or("");
+                        ta.cmp(tb)
+                    })
+                    .then_with(|| {
+                        let ia = a.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                        let ib = b.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                        ia.cmp(ib)
+                    })
+            });
+            let projects_out: Vec<Value> = cat.projects.iter().map(public_project).collect();
+            return Ok(json!({
+                "root": self.root.to_string_lossy().to_string(),
+                "vault": self.vault,
+                "projects": projects_out,
+                "documents": documents,
+                "unlinked": unlinked,
+                "missing": missing_files,
+                "warnings": warnings,
+            }));
+        }
+
+        for p in &cat.projects {
+            let proj_id = p.project.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            let proj_title = p
+                .project
+                .get("title")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let writing = normalize_writing(p.project.get("writing"));
+            let mut add = |entry: &Value, raw: &str| -> Result<(), LofError> {
+                let mut d = doc_of(&p.dir, proj_id, entry, raw)?;
+                let body = d
+                    .get("body")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if let Some(dobj) = d.as_object_mut() {
+                    dobj.remove("body");
+                    dobj.insert("characters".to_string(), json!(character_count(&body, false)));
+                    dobj.insert(
+                        "platformCharacters".to_string(),
+                        json!(count_for_writing(&manuscript_stats(&body), &writing)),
+                    );
+                }
+                documents.push(d);
+                Ok(())
+            };
+
+            let docs_arr = p
+                .project
+                .get("documents")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            for entry in &docs_arr {
+                let rel = entry.get("path").and_then(|v| v.as_str()).unwrap_or("");
+                match fs::read_to_string(abs(&p.dir, rel)) {
+                    Ok(raw) => {
+                        if let Err(e) = add(entry, &raw) {
+                            warnings.push(format!("{} · {}: {}", proj_title, rel, e.message));
+                        }
+                    }
+                    Err(e) => {
+                        if e.kind() == std::io::ErrorKind::NotFound {
+                            missing_files.push(json!({
+                                "projectId": proj_id,
+                                "id": entry.get("id"),
+                                "kind": entry.get("kind"),
+                                "title": entry.get("title"),
+                                "path": rel,
+                            }));
+                            warnings.push(format!(
+                                "{} · {}: 파일을 찾을 수 없습니다.",
+                                proj_title, rel
+                            ));
+                        } else {
+                            warnings.push(format!("{} · {}: {}", proj_title, rel, e));
+                        }
+                    }
+                }
+            }
+            for entry in self.doc_files(p) {
+                let rel = entry.get("path").and_then(|v| v.as_str()).unwrap_or("");
+                if let Ok(raw) = fs::read_to_string(abs(&p.dir, rel)) {
+                    if let Err(e) = add(&entry, &raw) {
+                        warnings.push(format!("{} · {}: {}", proj_title, rel, e.message));
+                    }
+                }
+            }
+
+            let tracked: HashSet<String> = docs_arr
+                .iter()
+                .filter_map(|d| d.get("path").and_then(|v| v.as_str()))
+                .map(|s| s.to_lowercase())
+                .collect();
+            for rel in walk_rel(&p.dir, "episodes") {
+                if rel.to_ascii_lowercase().ends_with(".md") && !tracked.contains(&rel.to_lowercase())
+                {
+                    unlinked.push(json!({
+                        "projectId": proj_id,
+                        "path": rel,
+                    }));
+                }
+            }
+        }
+
+        documents.sort_by(|a, b| {
+            let oa = a.get("order").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let ob = b.get("order").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            oa.partial_cmp(&ob)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| {
+                    let ta = a.get("title").and_then(|v| v.as_str()).unwrap_or("");
+                    let tb = b.get("title").and_then(|v| v.as_str()).unwrap_or("");
+                    ta.cmp(tb)
+                })
+                .then_with(|| {
+                    let ia = a.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                    let ib = b.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                    ia.cmp(ib)
+                })
+        });
+
+        let projects_out: Vec<Value> = cat.projects.iter().map(public_project).collect();
+        Ok(json!({
+            "root": self.root.to_string_lossy().to_string(),
+            "vault": self.vault,
+            "projects": projects_out,
+            "documents": documents,
+            "unlinked": unlinked,
+            "missing": missing_files,
+            "warnings": warnings,
+        }))
+    }
+
+    pub fn locate(&mut self, id: &str) -> Result<PathBuf, LofError> {
+        Ok(self.find_doc(id)?.2)
+    }
+
+    pub fn read(&mut self, id: &str) -> Result<Value, LofError> {
+        let (p, entry, file) = self.find_doc(id)?;
+        let raw = fs::read_to_string(&file)?;
+        let proj_id = p.project.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        doc_of(&p.dir, proj_id, &entry, &raw)
+    }
+
+    pub fn markdown(&mut self, id: &str) -> Result<String, LofError> {
+        let (_, _, file) = self.find_doc(id)?;
+        Ok(fs::read_to_string(&file)?)
+    }
+
+    pub fn move_files(&self, dir: &Path, moves: &[(String, String)]) -> Result<(), LofError> {
+        let mut done: Vec<(String, String)> = Vec::new();
+        let mut temps: Vec<(String, String, String)> = Vec::new();
+        let res: Result<(), LofError> = (|| {
+            for (from, to) in moves {
+                let temp = format!("{}.{}.lofmv", from, &Uuid::new_v4().to_string()[..8]);
+                rename_with_retry(&abs(dir, from), &abs(dir, &temp))?;
+                done.push((from.clone(), temp.clone()));
+                temps.push((from.clone(), temp, to.clone()));
+            }
+            for (_from, temp, to) in &temps {
+                let target = abs(dir, to);
+                if target.exists() {
+                    return Err(fail("같은 이름의 파일이 이미 있습니다.", "EXISTS"));
+                }
+                if let Some(parent) = target.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                rename_with_retry(&abs(dir, temp), &target)?;
+                done.push((temp.clone(), to.clone()));
+            }
+            Ok(())
+        })();
+        if let Err(e) = res {
+            for (from, to) in done.into_iter().rev() {
+                let _ = rename_with_retry(&abs(dir, &to), &abs(dir, &from));
+            }
+            return Err(fail(format!("{} ({})", RENAME_FAILED, e.message), "RENAME"));
+        }
+        Ok(())
+    }
+
+    fn layout(&self, p: &mut CatalogProject) -> Result<(), LofError> {
+        let docs = p
+            .project
+            .get("documents")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let mut episodes: Vec<Value> = docs
+            .iter()
+            .filter(|d| d.get("kind").and_then(|v| v.as_str()) == Some("episode"))
+            .cloned()
+            .collect();
+        episodes.sort_by(by_order_cmp);
+
+        let mut number = HashMap::new();
+        for (i, d) in episodes.iter().enumerate() {
+            if let Some(id) = d.get("id").and_then(|v| v.as_str()) {
+                number.insert(id.to_string(), (i + 1) as i64);
+            }
+        }
+
+        let tracked: HashSet<String> = episodes
+            .iter()
+            .filter_map(|d| d.get("path").and_then(|v| v.as_str()))
+            .map(|s| s.to_lowercase())
+            .collect();
+        let mut taken = HashSet::new();
+        for rel in walk_rel(&p.dir, "episodes") {
+            if !tracked.contains(&rel.to_lowercase()) {
+                taken.insert(rel.to_lowercase());
+            }
+        }
+
+        let mut present_indices = Vec::new();
+        for (idx, d) in episodes.iter().enumerate() {
+            let path = d.get("path").and_then(|v| v.as_str()).unwrap_or("");
+            if abs(&p.dir, path).exists() {
+                present_indices.push(idx);
+            } else {
+                taken.insert(path.to_lowercase());
+            }
+        }
+
+        let mut targets: HashMap<String, String> = HashMap::new();
+        for &idx in &present_indices {
+            let d = &episodes[idx];
+            let id = d.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            let cur = d.get("path").and_then(|v| v.as_str()).unwrap_or("");
+            let title = d.get("title").and_then(|v| v.as_str()).unwrap_or("");
+            let want = format!(
+                "episodes/{} {}.md",
+                pad(*number.get(id).unwrap_or(&1)),
+                safe_name(title, "제목 없음")
+            );
+            if !cur.is_empty()
+                && is_variant(cur, &want, ".md")
+                && !taken.contains(&cur.to_lowercase())
+            {
+                taken.insert(cur.to_lowercase());
+                targets.insert(id.to_string(), cur.to_string());
+            }
+        }
+        for &idx in &present_indices {
+            let d = &episodes[idx];
+            let id = d.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            if !targets.contains_key(id) {
+                let title = d.get("title").and_then(|v| v.as_str()).unwrap_or("");
+                let want = format!(
+                    "episodes/{} {}.md",
+                    pad(*number.get(id).unwrap_or(&1)),
+                    safe_name(title, "제목 없음")
+                );
+                let assigned = unique_name(&want, ".md", &mut taken);
+                targets.insert(id.to_string(), assigned);
+            }
+        }
+
+        let mut moves = Vec::new();
+        for &idx in &present_indices {
+            let d = &episodes[idx];
+            let id = d.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            let cur = d.get("path").and_then(|v| v.as_str()).unwrap_or("");
+            if let Some(t) = targets.get(id) {
+                if t != cur {
+                    moves.push((cur.to_string(), t.clone()));
+                }
+            }
+        }
+
+        self.move_files(&p.dir, &moves)?;
+
+        if let Some(arr) = p
+            .project
+            .get_mut("documents")
+            .and_then(|v| v.as_array_mut())
+        {
+            for d in arr {
+                let id = d
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if let Some(t) = targets.get(&id) {
+                    if let Some(dobj) = d.as_object_mut() {
+                        dobj.insert("path".to_string(), json!(t));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn backup_project(&self, p: &CatalogProject, reason: &[String]) -> Result<PathBuf, LofError> {
+        let stamp = now_iso().replace([':', '.'], "-");
+        let proj_id = p.project.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        let dir = self
+            .root
+            .join(".lof")
+            .join("recovery")
+            .join(format!("{}-{}", stamp, proj_id));
+        fs::create_dir_all(&dir)?;
+        for name in ["project.json", "project.backup.json"] {
+            let _ = fs::copy(p.dir.join(name), dir.join(name));
+        }
+        let folder = p
+            .dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
+        let reason_json = serde_json::to_string_pretty(&json!({
+            "at": now_iso(),
+            "folder": folder,
+            "reason": reason,
+        }))
+        .unwrap_or_default();
+        atomic_write_str(&dir.join("reason.json"), &reason_json)?;
+        Ok(dir)
+    }
+
+    fn migrate_legacy(&self, p: &mut CatalogProject) -> Result<bool, LofError> {
+        let docs = p
+            .project
+            .get("documents")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let legacy: Vec<Value> = docs
+            .iter()
+            .filter(|d| d.get("kind").and_then(|v| v.as_str()) != Some("episode"))
+            .cloned()
+            .collect();
+        let mut dirs = Vec::new();
+        for root in ["memo", "plot"] {
+            if abs(&p.dir, root).exists() {
+                dirs.push(root);
+            }
+        }
+        let has_archived_memos = p.project.get("archivedMemos").is_some();
+        if legacy.is_empty() && dirs.is_empty() && !has_archived_memos {
+            return Ok(false);
+        }
+
+        self.backup_project(p, &["plot/·memo/의 문서를 doc/으로 옮김".to_string()])?;
+        fs::create_dir_all(abs(&p.dir, "doc"))?;
+
+        let mut taken: HashSet<String> = walk_rel(&p.dir, "doc")
+            .into_iter()
+            .map(|r| r.to_lowercase())
+            .collect();
+        let mut moved: HashMap<String, String> = HashMap::new();
+        let proj_id = p
+            .project
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        for root in &dirs {
+            for rel in walk_rel(&p.dir, root) {
+                let ext = Path::new(&rel)
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(|e| format!(".{}", e))
+                    .unwrap_or_default();
+                let want = format!("doc/{}", &rel[root.len() + 1..]);
+                let to = unique_name(&want, &ext, &mut taken);
+                let target = abs(&p.dir, &to);
+                if let Some(parent) = target.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                rename_with_retry(&abs(&p.dir, &rel), &target)?;
+                moved.insert(rel.to_lowercase(), to.clone());
+                if *root == "memo" && rel.to_ascii_lowercase().ends_with(".md") {
+                    let _ = rename_with_retry(
+                        &self
+                            .root
+                            .join(".lof")
+                            .join("history")
+                            .join(memo_id(&proj_id, &rel)),
+                        &self
+                            .root
+                            .join(".lof")
+                            .join("history")
+                            .join(memo_id(&proj_id, &to)),
+                    );
+                }
+            }
+        }
+
+        for d in &legacy {
+            let dpath = d.get("path").and_then(|v| v.as_str()).unwrap_or("");
+            let Some(to) = moved.get(&dpath.to_lowercase()) else {
+                continue;
+            };
+            let role = d.get("role").and_then(|v| v.as_str());
+            let title = d.get("title").and_then(|v| v.as_str()).unwrap_or("");
+            let is_memo = role == Some("memo") || (role.is_none() && title.contains("메모"));
+            let mut patch = Map::new();
+            patch.insert(
+                "type".to_string(),
+                json!(if is_memo { "memo" } else { "plot" }),
+            );
+            patch.insert(
+                "episodeId".to_string(),
+                d.get("episodeId").cloned().unwrap_or(Value::Null),
+            );
+            patch.insert(
+                "archived".to_string(),
+                json!(d.get("archived").and_then(|v| v.as_bool()).unwrap_or(false)),
+            );
+            for (k, v) in stored_document_meta(Some(d)) {
+                patch.insert(k, v);
+            }
+            Self::set_doc_meta(p, to, &patch, false);
+            if let Some(did) = d.get("id").and_then(|v| v.as_str()) {
+                let _ = rename_with_retry(
+                    &self.root.join(".lof").join("history").join(did),
+                    &self
+                        .root
+                        .join(".lof")
+                        .join("history")
+                        .join(memo_id(&proj_id, to)),
+                );
+            }
+        }
+
+        if let Some(archived_memos) = p
+            .project
+            .get("archivedMemos")
+            .and_then(|v| v.as_array())
+            .cloned()
+        {
+            for r in archived_memos {
+                if let Some(r_str) = r.as_str() {
+                    if let Some(to) = moved.get(&r_str.to_lowercase()) {
+                        let mut patch = Map::new();
+                        patch.insert("archived".to_string(), json!(true));
+                        Self::set_doc_meta(p, to, &patch, false);
+                    }
+                }
+            }
+        }
+
+        if let Some(pobj) = p.project.as_object_mut() {
+            pobj.remove("archivedMemos");
+            let ep_only: Vec<Value> = docs
+                .into_iter()
+                .filter(|d| d.get("kind").and_then(|v| v.as_str()) == Some("episode"))
+                .collect();
+            pobj.insert("documents".to_string(), Value::Array(ep_only));
+        }
+
+        for root in dirs {
+            prune_empty(&abs(&p.dir, root));
+        }
+        Ok(true)
+    }
+
+    fn migrate_properties(&self, p: &mut CatalogProject) -> Result<(), LofError> {
+        let mut entries: Vec<Value> = p
+            .project
+            .get("documents")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        entries.extend(self.doc_files(p));
+
+        let mut changes: Vec<(Value, String, String)> = Vec::new();
+        let mut migrated_docs: Vec<String> = Vec::new();
+
+        for entry in entries {
+            let rel = entry
+                .get("path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let file = abs(&p.dir, &rel);
+            let raw = match fs::read_to_string(&file) {
+                Ok(r) => r,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(LofError::from(e)),
+            };
+            let parsed = read_markdown(&raw)?;
+            let props = markdown_entry(&raw, &entry)?;
+            let is_ep = entry.get("kind").and_then(|v| v.as_str()) == Some("episode");
+            let lof_ok = parsed.properties.get("lof").and_then(|v| v.as_i64()) == Some(1);
+            let id_ok = parsed
+                .properties
+                .get("id")
+                .and_then(|v| v.as_str())
+                .is_some_and(|s| !s.is_empty());
+            let order_ok = !is_ep || parsed.properties.contains_key("order");
+            if !lof_ok || !id_ok || !order_ok {
+                let next = write_markdown(&parsed.body, &props, &raw)?;
+                changes.push((entry.clone(), raw, next));
+            }
+            if !is_ep {
+                migrated_docs.push(rel);
+            }
+        }
+
+        let file_centric = p
+            .project
+            .get("fileCentric")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let prop_storage_md = p.project.get("propertyStorage").and_then(|v| v.as_str())
+            == Some("markdown");
+        let has_doc_meta = migrated_docs
+            .iter()
+            .any(|rel| !meta_of(&p.project, rel).is_empty());
+        let cleanup = !file_centric || !prop_storage_md || has_doc_meta;
+
+        if changes.is_empty() && !cleanup {
+            return Ok(());
+        }
+
+        let backup = self.backup_project(
+            p,
+            &["문서 속성을 Markdown YAML 프런트매터로 이관".to_string()],
+        )?;
+        for (entry, raw, _) in &changes {
+            let rel = entry.get("path").and_then(|v| v.as_str()).unwrap_or("");
+            atomic_write_str(&abs(&backup, &format!("files/{}", rel)), raw)?;
+        }
+        for (entry, raw, next) in &changes {
+            let rel = entry.get("path").and_then(|v| v.as_str()).unwrap_or("");
+            let file = abs(&p.dir, rel);
+            if fs::read_to_string(&file)? != *raw {
+                return Err(fail(
+                    "속성 이관 중 외부에서 파일이 변경됐습니다. 다시 열어 주세요.",
+                    "CONFLICT",
+                ));
+            }
+            atomic_write_str(&file, next)?;
+        }
+        for rel in &migrated_docs {
+            Self::drop_doc_meta(p, rel);
+        }
+        if let Some(pobj) = p.project.as_object_mut() {
+            pobj.insert("propertyStorage".to_string(), json!("markdown"));
+            pobj.insert("fileCentric".to_string(), json!(true));
+        }
+        self.write_project(p)?;
+        Ok(())
+    }
+
+    pub fn set_doc_meta(
+        p: &mut CatalogProject,
+        rel: &str,
+        patch: &Map<String, Value>,
+        replace: bool,
+    ) {
+        let mut all = p
+            .project
+            .get("docMeta")
+            .and_then(|v| v.as_object())
+            .cloned()
+            .unwrap_or_default();
+        let existing_key = all
+            .keys()
+            .find(|k| k.eq_ignore_ascii_case(rel))
+            .cloned();
+        let mut next = if replace {
+            Map::new()
+        } else if let Some(ref k) = existing_key {
+            all.get(k).and_then(|v| v.as_object()).cloned().unwrap_or_default()
+        } else {
+            Map::new()
+        };
+        if let Some(k) = existing_key {
+            all.remove(&k);
+        }
+        for (k, v) in patch {
+            next.insert(k.clone(), v.clone());
+        }
+        next.retain(|k, v| {
+            !(v.is_null()
+                || v.as_bool() == Some(false)
+                || v.as_array().is_some_and(|a| a.is_empty())
+                || (k == "type" && v.as_str() == Some("memo")))
+        });
+        if !next.is_empty() {
+            all.insert(rel.to_string(), Value::Object(next));
+        }
+        if let Some(pobj) = p.project.as_object_mut() {
+            pobj.insert("docMeta".to_string(), Value::Object(all));
+        }
+    }
+
+    pub fn move_doc_meta(p: &mut CatalogProject, from: &str, to: &str) -> bool {
+        let mut changed = false;
+        let f = from.to_lowercase();
+        let f_slash = format!("{}/", f);
+        let mut next = Map::new();
+        if let Some(dm) = p.project.get("docMeta").and_then(|v| v.as_object()) {
+            for (k, v) in dm {
+                let low = k.to_lowercase();
+                if low == f || low.starts_with(&f_slash) {
+                    let new_key = format!("{}{}", to, &k[from.len()..]);
+                    next.insert(new_key, v.clone());
+                    changed = true;
+                } else {
+                    next.insert(k.clone(), v.clone());
+                }
+            }
+        }
+        if let Some(pobj) = p.project.as_object_mut() {
+            pobj.insert("docMeta".to_string(), Value::Object(next));
+        }
+        changed
+    }
+
+    pub fn drop_doc_meta(p: &mut CatalogProject, rel: &str) -> bool {
+        let f = rel.to_lowercase();
+        let f_slash = format!("{}/", f);
+        let Some(dm) = p.project.get("docMeta").and_then(|v| v.as_object()).cloned() else {
+            return false;
+        };
+        let before = dm.len();
+        let next: Map<String, Value> = dm
+            .into_iter()
+            .filter(|(k, _)| {
+                let low = k.to_lowercase();
+                low != f && !low.starts_with(&f_slash)
+            })
+            .collect();
+        let changed = next.len() != before;
+        if let Some(pobj) = p.project.as_object_mut() {
+            pobj.insert("docMeta".to_string(), Value::Object(next));
+        }
+        changed
+    }
+
+    fn unlinked_files(&self, p: &CatalogProject) -> Result<Vec<(String, String, Option<String>)>, LofError> {
+        let tracked: HashSet<String> = p
+            .project
+            .get("documents")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|d| d.get("path").and_then(|v| v.as_str()))
+                    .map(|s| s.to_lowercase())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut out = Vec::new();
+        for rel in walk_rel(&p.dir, "episodes") {
+            if rel.to_ascii_lowercase().ends_with(".md") && !tracked.contains(&rel.to_lowercase()) {
+                match fs::read_to_string(abs(&p.dir, &rel)) {
+                    Ok(raw) => {
+                        let parsed = read_markdown(&raw)?;
+                        let h = hash_str(&parsed.body);
+                        let id = parsed
+                            .properties
+                            .get("id")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string());
+                        out.push((rel, h, id));
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(e) => return Err(LofError::from(e)),
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn repair(&mut self) -> Result<Value, LofError> {
+        let prev_enabled = self.index_enabled;
+        self.index_enabled = false;
+        let res = (|| -> Result<Value, LofError> {
+            let mut cat = self.scan_disk()?;
+            let mut restored = Vec::new();
+            let mut relinked = Vec::new();
+            let mut ambiguous = Vec::new();
+
+            for p in &mut cat.projects {
+                let mut write = self.migrate_legacy(p)?;
+                let mut reasons = Vec::new();
+                let proj_id = p
+                    .project
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if p.from_backup {
+                    reasons.push("project.json을 읽지 못해 project.backup.json으로 되살림".to_string());
+                    restored.push(proj_id.clone());
+                }
+
+                let mut lost_indices = Vec::new();
+                if let Some(docs) = p
+                    .project
+                    .get_mut("documents")
+                    .and_then(|v| v.as_array_mut())
+                {
+                    for (idx, d) in docs.iter_mut().enumerate() {
+                        let rel = d.get("path").and_then(|v| v.as_str()).unwrap_or("");
+                        match fs::read_to_string(abs(&p.dir, rel)) {
+                            Ok(raw) => {
+                                let h = hash_str(&read_markdown(&raw)?.body);
+                                if d.get("hash").and_then(|v| v.as_str()) != Some(&h) {
+                                    if let Some(dobj) = d.as_object_mut() {
+                                        dobj.insert("hash".to_string(), json!(h));
+                                    }
+                                    write = true;
+                                }
+                            }
+                            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                                lost_indices.push(idx);
+                            }
+                            Err(e) => return Err(LofError::from(e)),
+                        }
+                    }
+                }
+
+                if !lost_indices.is_empty() {
+                    let files = self.unlinked_files(p)?;
+                    let root_of =
+                        |rel: &str| rel.split('/').next().unwrap_or("").to_string();
+                    let name_of = |rel: &str| {
+                        rel.rfind('/')
+                            .map(|i| &rel[i + 1..])
+                            .unwrap_or(rel)
+                            .to_lowercase()
+                    };
+                    let mut pick: HashMap<usize, String> = HashMap::new();
+                    let docs_snapshot = p
+                        .project
+                        .get("documents")
+                        .and_then(|v| v.as_array())
+                        .cloned()
+                        .unwrap_or_default();
+
+                    for &idx in &lost_indices {
+                        let d = &docs_snapshot[idx];
+                        let did = d.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                        let dhash = d.get("hash").and_then(|v| v.as_str());
+                        let dpath = d.get("path").and_then(|v| v.as_str()).unwrap_or("");
+                        let dtitle = d.get("title").and_then(|v| v.as_str()).unwrap_or("");
+
+                        let mut found: Vec<&(String, String, Option<String>)> = files
+                            .iter()
+                            .filter(|f| f.2.as_deref() == Some(did))
+                            .collect();
+                        if found.is_empty() {
+                            if let Some(dh) = dhash {
+                                found = files
+                                    .iter()
+                                    .filter(|f| {
+                                        f.1 == dh && (f.2.is_none() || f.2.as_deref() == Some(did))
+                                    })
+                                    .collect();
+                            }
+                        }
+                        if found.is_empty() {
+                            found = files
+                                .iter()
+                                .filter(|f| {
+                                    (f.2.is_none() || f.2.as_deref() == Some(did))
+                                        && root_of(&f.0) == root_of(dpath)
+                                        && name_of(&f.0) == name_of(dpath)
+                                })
+                                .collect();
+                        }
+                        if found.len() == 1 {
+                            pick.insert(idx, found[0].0.clone());
+                        } else if found.len() > 1 {
+                            ambiguous.push(json!({
+                                "projectId": proj_id,
+                                "id": did,
+                                "title": dtitle,
+                            }));
+                        }
+                    }
+
+                    let mut claims: HashMap<String, usize> = HashMap::new();
+                    for fpath in pick.values() {
+                        *claims.entry(fpath.clone()).or_insert(0) += 1;
+                    }
+                    if let Some(docs) = p
+                        .project
+                        .get_mut("documents")
+                        .and_then(|v| v.as_array_mut())
+                    {
+                        for (idx, fpath) in pick {
+                            let d = &mut docs[idx];
+                            let did = d
+                                .get("id")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let dtitle = d
+                                .get("title")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let dpath = d
+                                .get("path")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            if claims.get(&fpath).copied().unwrap_or(0) > 1 {
+                                ambiguous.push(json!({
+                                    "projectId": proj_id,
+                                    "id": did,
+                                    "title": dtitle,
+                                }));
+                            } else {
+                                reasons.push(format!("{} → {}", dpath, fpath));
+                                relinked.push(json!({
+                                    "projectId": proj_id,
+                                    "id": did,
+                                    "from": dpath,
+                                    "to": fpath,
+                                }));
+                                if let Some(dobj) = d.as_object_mut() {
+                                    dobj.insert("path".to_string(), json!(fpath));
+                                }
+                                write = true;
+                            }
+                        }
+                    }
+                }
+
+                if !reasons.is_empty() {
+                    self.backup_project(p, &reasons)?;
+                }
+                if write || p.from_backup {
+                    self.write_project(p)?;
+                }
+                self.migrate_properties(p)?;
+            }
+
+            self.migration_warning.clear();
+            let fresh_cat = self.scan_disk()?;
+            let vault_id = self
+                .vault
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            self.index.dirty.clear();
+            self.index.save(&vault_id, &fresh_cat)?;
+            self.catalog = Some(fresh_cat);
+            self.index_enabled = true;
+            self.index_sequence = CHANGE_SEQUENCE.load(Ordering::SeqCst);
+
+            Ok(json!({
+                "restored": restored,
+                "relinked": relinked,
+                "ambiguous": ambiguous,
+            }))
+        })();
+
+        if res.is_err() {
+            self.index_enabled = prev_enabled;
+        }
+        res
+    }
+
+    pub fn project_file(&mut self, project_id: &str, rel: &str) -> Result<PathBuf, LofError> {
+        if !valid_rel(rel) {
+            return Err(fail_invalid("잘못된 경로"));
+        }
+        let p = self.get_project(project_id)?;
+        Ok(abs(&p.dir, rel))
+    }
+
+    pub fn relink_document(&mut self, input: &Value) -> Result<Value, LofError> {
+        let project_id = input.get("projectId").and_then(|v| v.as_str()).unwrap_or("");
+        let id = input.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        let path = input.get("path").and_then(|v| v.as_str()).unwrap_or("");
+
+        let mut p = self.get_project(project_id)?;
+        let docs = p
+            .project
+            .get("documents")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let Some(entry_idx) = docs
+            .iter()
+            .position(|d| d.get("id").and_then(|v| v.as_str()) == Some(id))
+        else {
+            return Err(fail("문서를 찾을 수 없습니다.", "NOT_FOUND"));
+        };
+        let old_path = docs[entry_idx]
+            .get("path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if abs(&p.dir, old_path).exists() {
+            return Err(fail_invalid("이 문서의 파일은 이미 있습니다."));
+        }
+        let unlinked = self.unlinked_files(&p)?;
+        let Some((file_path, file_hash, _)) = unlinked.into_iter().find(|f| f.0 == path) else {
+            return Err(fail_invalid("연결되지 않은 파일이 아닙니다."));
+        };
+        let raw = fs::read_to_string(abs(&p.dir, &file_path))?;
+        let backup = self.backup_project(&p, &[format!("수동 연결: {} → {}", old_path, file_path)])?;
+        atomic_write_str(&abs(&backup, &format!("files/{}", file_path)), &raw)?;
+
+        let mut entry = markdown_entry(&raw, &docs[entry_idx])?;
+        if let Some(eobj) = entry.as_object_mut() {
+            eobj.insert("path".to_string(), json!(file_path));
+            eobj.insert("hash".to_string(), json!(file_hash));
+            eobj.insert("_markdown".to_string(), json!(true));
+        }
+        let body = read_markdown(&raw)?.body;
+        atomic_write_str(
+            &abs(&p.dir, &file_path),
+            &write_markdown(&body, &entry, &raw)?,
+        )?;
+        if let Some(arr) = p
+            .project
+            .get_mut("documents")
+            .and_then(|v| v.as_array_mut())
+        {
+            arr[entry_idx] = entry;
+        }
+        self.write_project(&p)?;
+        self.read(id)
+    }
+
+    pub fn adopt_file(&mut self, input: &Value) -> Result<Value, LofError> {
+        let project_id = input.get("projectId").and_then(|v| v.as_str()).unwrap_or("");
+        let path = input.get("path").and_then(|v| v.as_str()).unwrap_or("");
+        if let Some(k) = input.get("kind").and_then(|v| v.as_str()) {
+            if k != "episode" {
+                return Err(fail_invalid("회차만 등록할 수 있습니다."));
+            }
+        }
+        let mut p = self.get_project(project_id)?;
+        let unlinked = self.unlinked_files(&p)?;
+        let Some((file_path, file_hash, file_id)) = unlinked.into_iter().find(|f| f.0 == path)
+        else {
+            return Err(fail_invalid("연결되지 않은 파일이 아닙니다."));
+        };
+
+        let cat = self.scan()?;
+        let available_id = file_id.as_deref().is_some_and(|fid| {
+            valid_id(fid)
+                && !cat.projects.iter().any(|proj| {
+                    proj.project
+                        .get("documents")
+                        .and_then(|v| v.as_array())
+                        .is_some_and(|arr| {
+                            arr.iter()
+                                .any(|d| d.get("id").and_then(|v| v.as_str()) == Some(fid))
+                        })
+                })
+        });
+        let id = if available_id {
+            file_id.unwrap()
+        } else {
+            Uuid::new_v4().to_string()
+        };
+
+        let docs = p
+            .project
+            .get("documents")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let max_order = docs
+            .iter()
+            .filter(|d| d.get("kind").and_then(|v| v.as_str()) == Some("episode"))
+            .filter_map(|d| d.get("order").and_then(|v| v.as_i64()))
+            .max();
+        let order = max_order.map(|m| m + 1).unwrap_or(0);
+
+        static NUM_PREFIX_RE: OnceLock<Regex> = OnceLock::new();
+        let num_re = NUM_PREFIX_RE.get_or_init(|| Regex::new(r"^\d+\s+").unwrap());
+        let bn = base_name(&file_path);
+        let stripped = num_re.replace(&bn, "").to_string();
+        let title = if stripped.is_empty() {
+            "제목 없음".to_string()
+        } else {
+            stripped
+        };
+        let now = now_iso();
+        let manual_lb = line_break_default(Some(&p.project), self.default_manual_line_break);
+
+        let mut base_entry = json!({
+            "id": id,
+            "kind": "episode",
+            "title": title,
+            "status": "in_progress",
+            "order": order,
+            "archived": false,
+            "createdAt": now,
+            "updatedAt": now,
+            "hash": file_hash,
+            "path": file_path,
+        });
+        if manual_lb {
+            if let Some(o) = base_entry.as_object_mut() {
+                o.insert("manualLineBreak".to_string(), json!(true));
+            }
+        }
+
+        let raw = fs::read_to_string(abs(&p.dir, &file_path))?;
+        let backup = self.backup_project(&p, &[format!("파일 등록: {}", file_path)])?;
+        atomic_write_str(&abs(&backup, &format!("files/{}", file_path)), &raw)?;
+
+        let mut entry = markdown_entry(&raw, &base_entry)?;
+        let entry_id = entry
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let body = read_markdown(&raw)?.body;
+        atomic_write_str(
+            &abs(&p.dir, &file_path),
+            &write_markdown(&body, &entry, &raw)?,
+        )?;
+        if let Some(eobj) = entry.as_object_mut() {
+            eobj.insert("_markdown".to_string(), json!(true));
+        }
+        if let Some(arr) = p
+            .project
+            .get_mut("documents")
+            .and_then(|v| v.as_array_mut())
+        {
+            arr.push(entry);
+        }
+        let _ = self.layout(&mut p);
+        self.write_project(&p)?;
+        self.read(&entry_id)
+    }
+
+    pub fn forget_document(&mut self, input: &Value) -> Result<bool, LofError> {
+        let project_id = input.get("projectId").and_then(|v| v.as_str()).unwrap_or("");
+        let id = input.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        let mut p = self.get_project(project_id)?;
+        let docs = p
+            .project
+            .get("documents")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let Some(entry) = docs
+            .iter()
+            .find(|d| d.get("id").and_then(|v| v.as_str()) == Some(id))
+        else {
+            return Err(fail("문서를 찾을 수 없습니다.", "NOT_FOUND"));
+        };
+        let rel = entry.get("path").and_then(|v| v.as_str()).unwrap_or("");
+        if abs(&p.dir, rel).exists() {
+            return Err(fail_invalid(
+                "파일이 있는 문서는 연결을 끊을 수 없습니다. 삭제를 사용해 주세요.",
+            ));
+        }
+        self.backup_project(&p, &[format!("연결 해제: {}", rel)])?;
+        if let Some(arr) = p
+            .project
+            .get_mut("documents")
+            .and_then(|v| v.as_array_mut())
+        {
+            arr.retain(|d| d.get("id").and_then(|v| v.as_str()) != Some(id));
+        }
+        self.write_project(&p)?;
+        Ok(true)
+    }
+
+    pub fn create_project(&mut self, input: &Value) -> Result<Value, LofError> {
+        let p = self.new_project(input, &Value::Null)?;
+        Ok(public_project(&p))
+    }
+
+    pub fn new_project(
+        &mut self,
+        input: &Value,
+        fixed: &Value,
+    ) -> Result<CatalogProject, LofError> {
+        let cat = self.scan()?;
+        let used: HashSet<i64> = cat
+            .projects
+            .iter()
+            .filter_map(|p| p.project.get("index").and_then(|v| v.as_i64()))
+            .collect();
+        let fixed_index = fixed.get("index").and_then(|v| v.as_i64()).unwrap_or(0);
+        let index = if fixed_index > 0 && !used.contains(&fixed_index) {
+            fixed_index
+        } else {
+            used.iter().copied().max().unwrap_or(0) + 1
+        };
+
+        let raw_title = input
+            .get("title")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or("제목 없는 작품");
+        let title = slice_utf16(raw_title, 300);
+
+        let mut taken: HashSet<String> = fs::read_dir(&self.root)
+            .map(|rd| {
+                rd.filter_map(|e| e.ok())
+                    .map(|e| e.file_name().to_string_lossy().to_lowercase())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let folder = unique_name(
+            &format!("{} {}", pad(index), safe_name(&title, "제목 없는 작품")),
+            "",
+            &mut taken,
+        );
+        let now = now_iso();
+        let id = fixed
+            .get("id")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
+        let description = slice_utf16(
+            input
+                .get("description")
+                .and_then(|v| v.as_str())
+                .unwrap_or(""),
+            3000,
+        );
+        let tags = normalize_tags(input.get("tags"))?;
+        let writing = normalize_writing(input.get("writing"));
+        let cover = fixed.get("cover").cloned().unwrap_or(Value::Null);
+        let created_at = fixed
+            .get("createdAt")
+            .and_then(|v| v.as_str())
+            .unwrap_or(&now)
+            .to_string();
+        let updated_at = fixed
+            .get("updatedAt")
+            .and_then(|v| v.as_str())
+            .unwrap_or(&now)
+            .to_string();
+
+        let mut proj = Map::new();
+        proj.insert("format".to_string(), json!(FORMAT));
+        proj.insert("id".to_string(), json!(id));
+        proj.insert("index".to_string(), json!(index));
+        proj.insert("title".to_string(), json!(title));
+        proj.insert("description".to_string(), json!(description));
+        proj.insert("tags".to_string(), json!(tags));
+        proj.insert("writing".to_string(), writing);
+        if let Some(mlb) = input.get("manualLineBreak").and_then(|v| v.as_bool()) {
+            proj.insert("manualLineBreak".to_string(), json!(mlb));
+        }
+        proj.insert("cover".to_string(), cover);
+        proj.insert("createdAt".to_string(), json!(created_at));
+        proj.insert("updatedAt".to_string(), json!(updated_at));
+        proj.insert("documents".to_string(), json!([]));
+        proj.insert("propertyStorage".to_string(), json!("markdown"));
+        proj.insert("fileCentric".to_string(), json!(true));
+
+        let p = CatalogProject {
+            dir: self.root.join(folder),
+            project: Value::Object(proj),
+            from_backup: false,
+            files: HashMap::new(),
+            errors: HashMap::new(),
+            project_stamp: None,
+        };
+        for f in FOLDERS {
+            fs::create_dir_all(p.dir.join(f))?;
+        }
+        self.write_project(&p)?;
+        Ok(p)
+    }
+
+    pub fn update_project(&mut self, input: &Value) -> Result<Value, LofError> {
+        self.update_project_inner(input, false)
+    }
+
+    pub fn update_project_inner(
+        &mut self,
+        input: &Value,
+        keep_time: bool,
+    ) -> Result<Value, LofError> {
+        let id = input.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        let mut p = self.get_project(id)?;
+        let old = p.project.as_object().cloned().unwrap_or_default();
+
+        let title = if let Some(t) = input.get("title") {
+            if !t.is_null() {
+                slice_utf16(t.as_str().unwrap_or(""), 300)
+            } else {
+                slice_utf16(old.get("title").and_then(|v| v.as_str()).unwrap_or(""), 300)
+            }
+        } else {
+            slice_utf16(old.get("title").and_then(|v| v.as_str()).unwrap_or(""), 300)
+        };
+
+        let description = if let Some(d) = input.get("description") {
+            if !d.is_null() {
+                slice_utf16(d.as_str().unwrap_or(""), 3000)
+            } else {
+                slice_utf16(
+                    old.get("description").and_then(|v| v.as_str()).unwrap_or(""),
+                    3000,
+                )
+            }
+        } else {
+            slice_utf16(
+                old.get("description").and_then(|v| v.as_str()).unwrap_or(""),
+                3000,
+            )
+        };
+
+        let mut next = old.clone();
+        next.insert("title".to_string(), json!(title));
+        next.insert("description".to_string(), json!(description));
+
+        if let Some(tags_in) = input.get("tags") {
+            next.insert("tags".to_string(), json!(normalize_tags(Some(tags_in))?));
+        }
+        if let Some(w_in) = input.get("writing") {
+            next.insert("writing".to_string(), normalize_writing(Some(w_in)));
+        }
+        if let Some(mlb_in) = input.as_object().and_then(|o| o.get("manualLineBreak")) {
+            if let Some(b) = mlb_in.as_bool() {
+                next.insert("manualLineBreak".to_string(), json!(b));
+            } else {
+                next.remove("manualLineBreak");
+            }
+        }
+        if let Some(cov_in) = input.as_object().and_then(|o| o.get("cover")) {
+            if cov_in.is_null() {
+                next.insert("cover".to_string(), Value::Null);
+            } else if valid_cover(cov_in.as_str()) {
+                next.insert("cover".to_string(), cov_in.clone());
+            } else {
+                return Err(fail_invalid("잘못된 표지 경로"));
+            }
+        }
+        let updated_at = if keep_time {
+            input
+                .get("updatedAt")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(now_iso)
+        } else {
+            now_iso()
+        };
+        next.insert("updatedAt".to_string(), json!(updated_at));
+        p.project = Value::Object(next);
+
+        let index = p.project.get("index").and_then(|v| v.as_i64()).unwrap_or(1);
+        let want = format!("{} {}", pad(index), safe_name(&title, "제목 없는 작품"));
+        let cur_folder = p
+            .dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
+        if !is_variant(&cur_folder, &want, "") {
+            let mut taken: HashSet<String> = fs::read_dir(&self.root)
+                .map(|rd| {
+                    rd.filter_map(|e| e.ok())
+                        .map(|e| e.file_name().to_string_lossy().to_string())
+                        .filter(|n| n != &cur_folder)
+                        .map(|n| n.to_lowercase())
+                        .collect()
+                })
+                .unwrap_or_default();
+            let next_dir = self.root.join(unique_name(&want, "", &mut taken));
+            if rename_with_retry(&p.dir, &next_dir).is_ok() {
+                p.dir = next_dir;
+            }
+        }
+        self.write_project(&p)?;
+        Ok(public_project(&p))
+    }
+
+    pub fn set_cover(&mut self, id: &str, data: &[u8]) -> Result<Value, LofError> {
+        let filename = validate_cover(data, None)?;
+        let p = self.get_project(id)?;
+        atomic_write_bytes(&p.dir.join("assets").join(&filename), data)?;
+        self.update_project(&json!({ "id": id, "cover": filename }))
+    }
+
+    pub fn cover_data(&self, project: &Value) -> Result<Value, LofError> {
+        let cover = project.get("cover").and_then(|v| v.as_str());
+        let folder = project.get("folder").and_then(|v| v.as_str());
+        if !valid_cover(cover) || folder.is_none() {
+            return Ok(Value::Null);
+        }
+        let file = self
+            .root
+            .join(folder.unwrap())
+            .join("assets")
+            .join(cover.unwrap());
+        match fs::metadata(&file) {
+            Ok(m) => {
+                if m.len() > 8_000_000 {
+                    return Err(fail_invalid("표지 용량 초과"));
+                }
+                let bytes = fs::read(&file)?;
+                let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
+                Ok(json!(format!("data:image/png;base64,{}", b64)))
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Value::Null),
+            Err(e) => Err(LofError::from(e)),
+        }
+    }
+
+    pub fn create(&mut self, input: &Value) -> Result<Value, LofError> {
+        self.create_inner(input, &Value::Null)
+    }
+
+    pub fn create_inner(&mut self, input: &Value, fixed: &Value) -> Result<Value, LofError> {
+        let kind = input
+            .get("kind")
+            .and_then(|v| v.as_str())
+            .unwrap_or("episode");
+        if !KINDS.contains(&kind) {
+            return Err(fail_invalid("잘못된 문서 종류"));
+        }
+        let project_id = input.get("projectId").and_then(|v| v.as_str()).unwrap_or("");
+        let mut p = self.get_project(project_id)?;
+        let body = input
+            .get("body")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        if utf16_len(&body) > 10_000_000 {
+            return Err(fail_invalid("본문은 10MB 이하만 지원합니다."));
+        }
+        let raw_title = input
+            .get("title")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or("제목 없음");
+        let title = slice_utf16(raw_title, 300);
+
+        if kind != "episode" {
+            let ep_id = input
+                .get("episodeId")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty());
+            if let Some(eid) = ep_id {
+                let exists_ep = p
+                    .project
+                    .get("documents")
+                    .and_then(|v| v.as_array())
+                    .is_some_and(|docs| {
+                        docs.iter().any(|d| {
+                            d.get("id").and_then(|v| v.as_str()) == Some(eid)
+                                && d.get("kind").and_then(|v| v.as_str()) == Some("episode")
+                                && d.get("archived").and_then(|v| v.as_bool()) != Some(true)
+                        })
+                    });
+                if !exists_ep {
+                    return Err(fail_invalid("연결할 회차를 찾을 수 없습니다."));
+                }
+            }
+            for &key in DOCUMENT_META_FIELDS {
+                if let Some(val) = input.get(key) {
+                    if let Some(problem) = check_meta_patch(key, val) {
+                        return Err(fail_invalid(problem));
+                    }
+                }
+            }
+            let folder = input.get("folder").and_then(|v| v.as_str());
+            let mut attrs = stored_document_meta(Some(input));
+            let props = input
+                .get("properties")
+                .and_then(|v| v.as_object())
+                .cloned()
+                .unwrap_or_default();
+            attrs.insert("properties".to_string(), Value::Object(props));
+            if let Some(co) = fixed
+                .get("conflictOf")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+            {
+                attrs.insert("conflictOf".to_string(), json!(co));
+            }
+            return self.create_doc_file(&p, kind, &title, &body, folder, ep_id, &attrs);
+        }
+
+        let docs = p
+            .project
+            .get("documents")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let max_order = docs
+            .iter()
+            .filter(|d| d.get("kind").and_then(|v| v.as_str()) == Some("episode"))
+            .filter_map(|d| d.get("order").and_then(|v| v.as_i64()))
+            .max();
+        let order = fixed
+            .get("order")
+            .and_then(|v| v.as_i64())
+            .unwrap_or_else(|| max_order.map(|m| m + 1).unwrap_or(0));
+
+        let now = now_iso();
+        let id = fixed
+            .get("id")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
+        let status = if let Some(st) = fixed.get("status").and_then(|v| v.as_str()) {
+            normalize_status(Some(st))
+        } else if !body.trim().is_empty() {
+            "in_progress".to_string()
+        } else {
+            "planned".to_string()
+        };
+
+        let manual_lb = input
+            .get("manualLineBreak")
+            .and_then(|v| v.as_bool())
+            .unwrap_or_else(|| line_break_default(Some(&p.project), self.default_manual_line_break));
+        let mut meta_input = input.as_object().cloned().unwrap_or_default();
+        meta_input.insert("manualLineBreak".to_string(), json!(manual_lb));
+
+        let mut entry = Map::new();
+        entry.insert("id".to_string(), json!(id));
+        entry.insert("kind".to_string(), json!(kind));
+        entry.insert("title".to_string(), json!(title));
+        entry.insert("status".to_string(), json!(status));
+        for (k, v) in stored_meta(Some(&Value::Object(meta_input))) {
+            entry.insert(k, v);
+        }
+        entry.insert(
+            "properties".to_string(),
+            input
+                .get("properties")
+                .and_then(|v| v.as_object())
+                .cloned()
+                .map(Value::Object)
+                .unwrap_or_else(|| json!({})),
+        );
+        entry.insert("order".to_string(), json!(order));
+        entry.insert(
+            "archived".to_string(),
+            json!(fixed.get("archived").and_then(|v| v.as_bool()).unwrap_or(false)),
+        );
+        entry.insert(
+            "createdAt".to_string(),
+            json!(fixed.get("createdAt").and_then(|v| v.as_str()).unwrap_or(&now)),
+        );
+        entry.insert(
+            "updatedAt".to_string(),
+            json!(fixed.get("updatedAt").and_then(|v| v.as_str()).unwrap_or(&now)),
+        );
+        if let Some(co) = fixed
+            .get("conflictOf")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        {
+            entry.insert("conflictOf".to_string(), json!(co));
+        }
+        entry.insert("hash".to_string(), json!(hash_str(&body)));
+        entry.insert("path".to_string(), json!(""));
+
+        let entry_val = Value::Object(entry);
+        let eid = entry_val
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        self.insert_episode(&mut p, entry_val, &body)?;
+        self.read(&eid)
+    }
+
+    fn insert_episode(
+        &self,
+        p: &mut CatalogProject,
+        mut entry: Value,
+        body: &str,
+    ) -> Result<(), LofError> {
+        let id = entry
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let temp = format!("episodes/.{}.lofnew", id);
+        if let Some(eobj) = entry.as_object_mut() {
+            eobj.insert("path".to_string(), json!(temp));
+            eobj.insert("_markdown".to_string(), json!(true));
+        }
+        atomic_write_str(&abs(&p.dir, &temp), &write_markdown(body, &entry, "")?)?;
+        if let Some(arr) = p
+            .project
+            .get_mut("documents")
+            .and_then(|v| v.as_array_mut())
+        {
+            arr.push(entry);
+        }
+        if let Err(e) = self.layout(p) {
+            let _ = fs::remove_file(abs(&p.dir, &temp));
+            return Err(e);
+        }
+        self.write_project(p)
+    }
+
+    fn doc_folder(folder: Option<&str>) -> Result<String, LofError> {
+        let Some(f) = folder.filter(|s| !s.is_empty()) else {
+            return Ok("doc".to_string());
+        };
+        if !valid_rel(f) {
+            return Err(fail_invalid("잘못된 문서 폴더"));
+        }
+        Ok(format!("doc/{}", f))
+    }
+
+    fn create_doc_file(
+        &mut self,
+        p: &CatalogProject,
+        kind: &str,
+        title: &str,
+        body: &str,
+        folder: Option<&str>,
+        episode_id: Option<&str>,
+        attributes: &Map<String, Value>,
+    ) -> Result<Value, LofError> {
+        let dir = Self::doc_folder(folder)?;
+        let mut taken: HashSet<String> = walk_rel(&p.dir, "doc")
+            .into_iter()
+            .map(|r| r.to_lowercase())
+            .collect();
+        let rel = unique_name(
+            &format!("{}/{}.md", dir, safe_name(title, "제목 없음")),
+            ".md",
+            &mut taken,
+        );
+        let now = now_iso();
+        let id = Uuid::new_v4().to_string();
+        let mut doc = Map::new();
+        for (k, v) in attributes {
+            doc.insert(k.clone(), v.clone());
+        }
+        doc.insert("id".to_string(), json!(id));
+        doc.insert("kind".to_string(), json!(kind));
+        doc.insert("title".to_string(), json!(title));
+        doc.insert(
+            "episodeId".to_string(),
+            episode_id.map(|s| json!(s)).unwrap_or(Value::Null),
+        );
+        doc.insert("createdAt".to_string(), json!(now));
+        doc.insert("updatedAt".to_string(), json!(now));
+        atomic_write_str(
+            &abs(&p.dir, &rel),
+            &write_markdown(body, &Value::Object(doc), "")?,
+        )?;
+        self.read(&id)
+    }
+
+    pub fn save(&mut self, input: &Value) -> Result<Value, LofError> {
+        let id = input.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        let (mut f_proj, mut f_entry, f_file) = self.find_doc(id)?;
+        let raw = fs::read_to_string(&f_file)?;
+        let proj_id = f_proj
+            .project
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let current = doc_of(&f_proj.dir, &proj_id, &f_entry, &raw)?;
+        if current.get("id").and_then(|v| v.as_str()) != Some(id) {
+            return Err(fail(
+                "문서 ID가 외부에서 변경됐습니다. 문서를 다시 열어 주세요.",
+                "CONFLICT",
+            ));
+        }
+        let expected_rev = input.get("expectedRevision").and_then(|v| v.as_str());
+        let current_rev = current.get("revision").and_then(|v| v.as_str());
+        if expected_rev.is_none() || expected_rev != current_rev {
+            return Err(fail(
+                "다른 곳에서 수정된 문서입니다. 현재 내용을 다시 확인해 주세요.",
+                "CONFLICT",
+            ));
+        }
+
+        let is_doc = f_entry.get("kind").and_then(|v| v.as_str()) != Some("episode");
+        let allowed_keys: Vec<&str> = if is_doc {
+            let mut v = vec!["title", "archived", "episodeId", "kind", "properties"];
+            v.extend_from_slice(DOCUMENT_META_FIELDS);
+            v
+        } else {
+            let mut v = vec!["title", "status", "order", "archived", "properties"];
+            v.extend_from_slice(META_FIELDS);
+            v
+        };
+
+        let mut patch = Map::new();
+        if let Some(in_obj) = input.as_object() {
+            for &key in &allowed_keys {
+                if let Some(val) = in_obj.get(key) {
+                    patch.insert(key.to_string(), val.clone());
+                }
+            }
+        }
+
+        for &key in META_FIELDS {
+            if let Some(val) = patch.get(key).cloned() {
+                if let Some(problem) = check_meta_patch(key, &val) {
+                    return Err(fail_invalid(problem));
+                }
+                let norm = normalize_meta(Some(&json!({ key: val })));
+                if let Some(nv) = norm.get(key) {
+                    patch.insert(key.to_string(), nv.clone());
+                }
+            }
+        }
+
+        if let Some(t) = patch.get("title").cloned() {
+            let s = match t {
+                Value::String(s) => s,
+                other => other.to_string(),
+            };
+            patch.insert("title".to_string(), json!(slice_utf16(&s, 300)));
+        }
+        if let Some(st) = patch.get("status").cloned() {
+            let s = st.as_str().unwrap_or("");
+            if !STATUSES.contains(&s) && !["초안", "진행", "완료"].contains(&s) {
+                return Err(fail_invalid("잘못된 상태"));
+            }
+            patch.insert("status".to_string(), json!(normalize_status(Some(s))));
+        }
+        if let Some(ord) = patch.get("order") {
+            if !ord.is_number() {
+                return Err(fail_invalid("잘못된 순서"));
+            }
+        }
+        if let Some(k) = patch.get("kind") {
+            let ks = k.as_str().unwrap_or("");
+            if ks != "plot" && ks != "memo" {
+                return Err(fail_invalid("문서 타입은 플롯이나 메모여야 합니다."));
+            }
+        }
+        if let Some(arch) = patch.get("archived") {
+            if !arch.is_boolean() {
+                return Err(fail_invalid("잘못된 보관 상태"));
+            }
+        }
+        if let Some(props) = patch.get("properties") {
+            if !props.is_object() {
+                return Err(fail_invalid("사용자 속성은 객체여야 합니다."));
+            }
+        }
+        if let Some(ep_id_val) = patch.get("episodeId") {
+            let cur_ep = current
+                .get("episodeId")
+                .cloned()
+                .unwrap_or(Value::Null);
+            if *ep_id_val != cur_ep && !ep_id_val.is_null() {
+                let target_ep = ep_id_val.as_str().unwrap_or("");
+                let exists_ep = f_proj
+                    .project
+                    .get("documents")
+                    .and_then(|v| v.as_array())
+                    .is_some_and(|docs| {
+                        docs.iter().any(|d| {
+                            d.get("id").and_then(|v| v.as_str()) == Some(target_ep)
+                                && d.get("kind").and_then(|v| v.as_str()) == Some("episode")
+                                && d.get("archived").and_then(|v| v.as_bool()) != Some(true)
+                        })
+                    });
+                if !exists_ep {
+                    return Err(fail_invalid("연결할 회차를 찾을 수 없습니다."));
+                }
+            }
+        }
+
+        let current_body = current
+            .get("body")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let body = if let Some(b_val) = input.as_object().and_then(|o| o.get("body")) {
+            let Some(b_str) = b_val.as_str() else {
+                return Err(fail_invalid("본문은 문자열이어야 합니다."));
+            };
+            if utf16_len(b_str) > 10_000_000 {
+                return Err(fail_invalid("본문은 10MB 이하만 지원합니다."));
+            }
+            b_str.to_string()
+        } else {
+            current_body.clone()
+        };
+
+        let mut changed: Vec<String> = Vec::new();
+        for (k, v) in &patch {
+            let is_diff = if k == "tags" {
+                let cur_tags = current.get("tags").cloned().unwrap_or_else(|| json!([]));
+                serde_json::to_string(&cur_tags).ok() != serde_json::to_string(v).ok()
+            } else if k == "properties" {
+                let cur_props = current
+                    .get("properties")
+                    .cloned()
+                    .unwrap_or_else(|| json!({}));
+                serde_json::to_string(&cur_props).ok() != serde_json::to_string(v).ok()
+            } else if k == "episodeId" {
+                let cur_ep = f_entry.get("episodeId").cloned().unwrap_or(Value::Null);
+                &cur_ep != v
+            } else {
+                current.get(k) != Some(v)
+            };
+            if is_diff {
+                changed.push(k.clone());
+            }
+        }
+
+        if changed.is_empty() && body == current_body {
+            return Ok(current);
+        }
+
+        let cur_status = current.get("status").and_then(|v| v.as_str()).unwrap_or("");
+        let next_status = patch
+            .get("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("completed");
+        if !is_doc
+            && cur_status == "completed"
+            && next_status == "completed"
+            && (body != current_body || changed.iter().any(|k| k == "title"))
+        {
+            return Err(fail(
+                "집필 완료된 회차는 원고 보호 중이라 제목과 본문을 고칠 수 없습니다. 상태를 바꾼 뒤 편집해 주세요.",
+                "PROTECTED",
+            ));
+        }
+
+        let force_history = input
+            .get("forceHistory")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if force_history || !changed.is_empty() || self.history_due(id, &current_body) {
+            self.write_history(id, &current, &raw)?;
+        }
+
+        if hash_str(&fs::read_to_string(&f_file)?) != current_rev.unwrap_or("") {
+            return Err(fail("파일이 외부에서 변경됐습니다.", "CONFLICT"));
+        }
+
+        if is_doc {
+            return self.save_doc_file(&mut f_proj, &f_entry, &f_file, &patch, &body, &current, &raw);
+        }
+
+        if let Some(eobj) = f_entry.as_object_mut() {
+            for k in &changed {
+                if let Some(v) = patch.get(k) {
+                    if k == "episodeId" && v.is_null() {
+                        eobj.remove("episodeId");
+                    } else {
+                        eobj.insert(k.clone(), v.clone());
+                    }
+                }
+            }
+            if changed.iter().any(|k| META_FIELDS.contains(&k.as_str())) {
+                let kept = stored_meta(Some(&Value::Object(eobj.clone())));
+                for &mk in META_FIELDS {
+                    if let Some(mv) = kept.get(mk) {
+                        eobj.insert(mk.to_string(), mv.clone());
+                    } else {
+                        eobj.remove(mk);
+                    }
+                }
+            }
+            eobj.insert("updatedAt".to_string(), json!(now_iso()));
+            eobj.insert("hash".to_string(), json!(hash_str(&body)));
+            eobj.insert("_markdown".to_string(), json!(true));
+        }
+
+        if let Some(arr) = f_proj
+            .project
+            .get_mut("documents")
+            .and_then(|v| v.as_array_mut())
+        {
+            if let Some(slot) = arr
+                .iter_mut()
+                .find(|d| d.get("id").and_then(|v| v.as_str()) == Some(id))
+            {
+                *slot = f_entry.clone();
+            }
+        }
+
+        if changed.iter().any(|k| k == "title" || k == "order") {
+            self.layout(&mut f_proj)?;
+            if let Some(updated_entry) = f_proj
+                .project
+                .get("documents")
+                .and_then(|v| v.as_array())
+                .and_then(|arr| {
+                    arr.iter()
+                        .find(|d| d.get("id").and_then(|v| v.as_str()) == Some(id))
+                })
+            {
+                f_entry = updated_entry.clone();
+            }
+        }
+
+        let entry_path = f_entry.get("path").and_then(|v| v.as_str()).unwrap_or("");
+        atomic_write_str(
+            &abs(&f_proj.dir, entry_path),
+            &write_markdown(&body, &f_entry, &raw)?,
+        )?;
+        self.write_project(&f_proj)?;
+        self.read(id)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn save_doc_file(
+        &mut self,
+        f_proj: &mut CatalogProject,
+        f_entry: &Value,
+        f_file: &Path,
+        patch: &Map<String, Value>,
+        body: &str,
+        current: &Value,
+        raw: &str,
+    ) -> Result<Value, LofError> {
+        let rel = f_entry
+            .get("path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let mut next = current.as_object().cloned().unwrap_or_default();
+        for (k, v) in patch {
+            next.insert(k.clone(), v.clone());
+        }
+        next.insert("updatedAt".to_string(), json!(now_iso()));
+        atomic_write_str(f_file, &write_markdown(body, &Value::Object(next), raw)?)?;
+        if Self::drop_doc_meta(f_proj, &rel) {
+            self.write_project(f_proj)?;
+        }
+        if let Some(title) = patch.get("title").and_then(|v| v.as_str()) {
+            if safe_name(title, "제목 없음") != base_name(&rel) {
+                let mut taken: HashSet<String> = walk_rel(&f_proj.dir, "doc")
+                    .into_iter()
+                    .filter(|r| r != &rel)
+                    .map(|r| r.to_lowercase())
+                    .collect();
+                let next_rel = unique_name(
+                    &format!("{}/{}.md", folder_of(&rel), safe_name(title, "제목 없음")),
+                    ".md",
+                    &mut taken,
+                );
+                self.move_files(&f_proj.dir, &[(rel.clone(), next_rel.clone())])?;
+                if Self::move_doc_meta(f_proj, &rel, &next_rel) {
+                    self.write_project(f_proj)?;
+                }
+            }
+        }
+        let cid = current.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        self.read(cid)
+    }
+
+    pub fn reorder(&mut self, input: &Value) -> Result<bool, LofError> {
+        let project_id = input.get("projectId").and_then(|v| v.as_str()).unwrap_or("");
+        let mut p = self.get_project(project_id)?;
+        let Some(ids_arr) = input.get("ids").and_then(|v| v.as_array()) else {
+            return Err(fail_invalid("잘못된 순서 목록"));
+        };
+        if ids_arr.len() > 20000 {
+            return Err(fail_invalid("잘못된 순서 목록"));
+        }
+        let docs = p
+            .project
+            .get("documents")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let mut entries = Vec::with_capacity(ids_arr.len());
+        for id_val in ids_arr {
+            let Some(id_str) = id_val.as_str() else {
+                return Err(fail_invalid("잘못된 순서 목록"));
+            };
+            let Some(found) = docs.iter().find(|d| {
+                d.get("id").and_then(|v| v.as_str()) == Some(id_str)
+                    && d.get("kind").and_then(|v| v.as_str()) == Some("episode")
+            }) else {
+                return Err(fail_invalid("잘못된 순서 목록"));
+            };
+            entries.push(found.clone());
+        }
+
+        for (i, d) in entries.iter_mut().enumerate() {
+            let ord = i as i64;
+            if d.get("order").and_then(|v| v.as_i64()) == Some(ord) {
+                continue;
+            }
+            let rel = d
+                .get("path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let did = d
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let raw = fs::read_to_string(abs(&p.dir, &rel))?;
+            let current_doc = doc_of(&p.dir, project_id, d, &raw)?;
+            self.write_history(&did, &current_doc, &raw)?;
+            if let Some(dobj) = d.as_object_mut() {
+                dobj.insert("order".to_string(), json!(ord));
+            }
+            let body = read_markdown(&raw)?.body;
+            atomic_write_str(&abs(&p.dir, &rel), &write_markdown(&body, d, &raw)?)?;
+        }
+
+        if let Some(arr) = p
+            .project
+            .get_mut("documents")
+            .and_then(|v| v.as_array_mut())
+        {
+            for ed in entries {
+                let eid = ed.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                if let Some(slot) = arr
+                    .iter_mut()
+                    .find(|x| x.get("id").and_then(|v| v.as_str()) == Some(eid))
+                {
+                    *slot = ed;
+                }
+            }
+        }
+        self.layout(&mut p)?;
+        self.write_project(&p)?;
+        Ok(true)
+    }
+
+    fn now_ms() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0)
+    }
+
+    fn write_history(&mut self, id: &str, doc: &Value, previous_raw: &str) -> Result<(), LofError> {
+        let at = Self::now_ms();
+        let body = doc.get("body").and_then(|v| v.as_str()).unwrap_or("");
+        let hfile = self
+            .root
+            .join(".lof")
+            .join("history")
+            .join(id)
+            .join(format!("{}-{}.md", at, Uuid::new_v4()));
+        let content = write_properties(body, &document_properties(doc), previous_raw)?;
+        atomic_write_str(&hfile, &content)?;
+        self.last_snapshot.insert(
+            id.to_string(),
+            Some(SnapshotEntry {
+                at,
+                body: body.to_string(),
+            }),
+        );
+        Ok(())
+    }
+
+    fn latest_snapshot(&mut self, id: &str) -> Option<SnapshotEntry> {
+        if let Some(cached) = self.last_snapshot.get(id) {
+            return cached.clone();
+        }
+        let dir = self.root.join(".lof").join("history").join(id);
+        static HIST_RE: OnceLock<Regex> = OnceLock::new();
+        let re = HIST_RE.get_or_init(|| Regex::new(r"^\d+-[a-f0-9-]+\.(json|md)$").unwrap());
+        let mut names: Vec<String> = fs::read_dir(&dir)
+            .map(|rd| {
+                rd.filter_map(|e| e.ok())
+                    .map(|e| e.file_name().to_string_lossy().to_string())
+                    .filter(|n| re.is_match(n))
+                    .collect()
+            })
+            .unwrap_or_default();
+        names.sort_by_key(|a| {
+            a.split('-')
+                .next()
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(0)
+        });
+        let latest = if let Some(name) = names.last() {
+            let at = name
+                .split('-')
+                .next()
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(0);
+            let raw = fs::read_to_string(dir.join(name)).unwrap_or_default();
+            let body = if name.ends_with(".md") {
+                read_markdown(&raw).map(|m| m.body).unwrap_or_default()
+            } else {
+                serde_json::from_str::<Value>(&raw)
+                    .ok()
+                    .and_then(|v| {
+                        v.get("body")
+                            .and_then(|b| b.as_str())
+                            .map(|s| s.to_string())
+                    })
+                    .unwrap_or_default()
+            };
+            Some(SnapshotEntry { at, body })
+        } else {
+            None
+        };
+        self.last_snapshot.insert(id.to_string(), latest.clone());
+        latest
+    }
+
+    fn history_due(&mut self, id: &str, body: &str) -> bool {
+        let min_minutes = self.history_policy.min_minutes;
+        let min_chars = self.history_policy.min_chars;
+        let latest = self.latest_snapshot(id);
+        let now = Self::now_ms();
+        if let Some(ref l) = latest {
+            let elapsed = now.saturating_sub(l.at) as f64;
+            if elapsed < min_minutes * 60_000.0 {
+                return false;
+            }
+        }
+        let prev_body = latest.as_ref().map(|l| l.body.as_str()).unwrap_or("");
+        changed_chars(prev_body, body) >= min_chars
+    }
+
+    pub fn history(&self, id: &str) -> Result<Value, LofError> {
+        if !valid_id(id) {
+            return Err(fail_invalid("잘못된 ID"));
+        }
+        let dir = self.root.join(".lof").join("history").join(id);
+        let mut names: Vec<String> = fs::read_dir(&dir)
+            .map(|rd| {
+                rd.filter_map(|e| e.ok())
+                    .map(|e| e.file_name().to_string_lossy().to_string())
+                    .filter(|n| n.ends_with(".json") || n.ends_with(".md"))
+                    .collect()
+            })
+            .unwrap_or_default();
+        names.sort();
+        names.reverse();
+        names.truncate(100);
+        let out: Vec<Value> = names.into_iter().map(|name| json!({ "name": name })).collect();
+        Ok(Value::Array(out))
+    }
+
+    pub fn history_read(&self, id: &str, name: &str) -> Result<Value, LofError> {
+        static HIST_RE: OnceLock<Regex> = OnceLock::new();
+        let re = HIST_RE.get_or_init(|| Regex::new(r"^\d+-[a-f0-9-]+\.(json|md)$").unwrap());
+        if !valid_id(id) || !re.is_match(name) {
+            return Err(fail_invalid("잘못된 이력"));
+        }
+        let raw = fs::read_to_string(self.root.join(".lof").join("history").join(id).join(name))?;
+        if name.ends_with(".md") {
+            let parsed = read_markdown(&raw)?;
+            let attrs = parsed.properties.clone();
+            let kind = attrs
+                .get("kind")
+                .and_then(|v| v.as_str())
+                .unwrap_or("episode");
+            let title = attrs.get("title").and_then(|v| v.as_str()).unwrap_or("");
+            let normalized = markdown_entry(
+                &raw,
+                &json!({ "id": id, "kind": kind, "title": title }),
+            )?;
+            let ts_ms = name
+                .split('-')
+                .next()
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(0);
+            let saved_at = sys_time_to_iso(UNIX_EPOCH + Duration::from_millis(ts_ms));
+            let mut attr_out = attrs;
+            if let Some(p) = normalized.get("properties") {
+                attr_out.insert("properties".to_string(), p.clone());
+            }
+            return Ok(json!({
+                "id": id,
+                "title": normalized.get("title"),
+                "status": normalized.get("status"),
+                "body": parsed.body,
+                "savedAt": saved_at,
+                "attributes": attr_out,
+            }));
+        }
+        let v: Value = serde_json::from_str(&raw).map_err(|e| fail(e.to_string(), "FORMAT"))?;
+        Ok(json!({
+            "id": id,
+            "title": v.get("title").and_then(|x| x.as_str()).unwrap_or(""),
+            "status": normalize_status_val(v.get("status")),
+            "body": v.get("body").and_then(|x| x.as_str()).unwrap_or(""),
+            "savedAt": v.get("savedAt"),
+        }))
+    }
+
+    pub fn restore(&mut self, input: &Value) -> Result<Value, LofError> {
+        let id = input.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        let name = input.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        let expected_rev = input.get("expectedRevision").cloned().unwrap_or(Value::Null);
+        let old = self.history_read(id, name)?;
+        let mut attrs = old
+            .get("attributes")
+            .and_then(|v| v.as_object())
+            .cloned()
+            .unwrap_or_default();
+        if let Some(ep_id) = attrs
+            .get("episodeId")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+        {
+            let (cur_proj, _, _) = self.find_doc(id)?;
+            let valid_ep = cur_proj
+                .project
+                .get("documents")
+                .and_then(|v| v.as_array())
+                .is_some_and(|docs| {
+                    docs.iter().any(|d| {
+                        d.get("id").and_then(|v| v.as_str()) == Some(ep_id.as_str())
+                            && d.get("archived").and_then(|v| v.as_bool()) != Some(true)
+                    })
+                });
+            if !valid_ep {
+                attrs.insert("episodeId".to_string(), Value::Null);
+            }
+        }
+        attrs.insert("id".to_string(), json!(id));
+        attrs.insert("expectedRevision".to_string(), expected_rev);
+        attrs.insert("forceHistory".to_string(), json!(true));
+        attrs.insert(
+            "body".to_string(),
+            old.get("body").cloned().unwrap_or(json!("")),
+        );
+        attrs.insert(
+            "title".to_string(),
+            old.get("title").cloned().unwrap_or(json!("")),
+        );
+        attrs.insert(
+            "status".to_string(),
+            old.get("status").cloned().unwrap_or(json!("in_progress")),
+        );
+        self.save(&Value::Object(attrs))
+    }
+
+    pub fn search(&mut self, query: &str, project_id: Option<&str>) -> Result<Value, LofError> {
+        let q = query.to_lowercase();
+        if q.trim().is_empty() {
+            return Ok(json!([]));
+        }
+        let pid_filter = project_id.filter(|s| !s.is_empty());
+        let list = self.list()?;
+        let docs = list
+            .get("documents")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let mut results = Vec::new();
+        for m in docs {
+            if m.get("archived").and_then(|v| v.as_bool()) == Some(true) {
+                continue;
+            }
+            let m_pid = m
+                .get("projectId")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if let Some(pf) = pid_filter {
+                if m_pid != pf {
+                    continue;
+                }
+            }
+            let m_id = m
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let body = if self.index_enabled {
+                self.cached_body(&m_pid, &m_id).unwrap_or_default()
+            } else {
+                self.read(&m_id)
+                    .ok()
+                    .and_then(|d| {
+                        d.get("body")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string())
+                    })
+                    .unwrap_or_default()
+            };
+            let title = m.get("title").and_then(|v| v.as_str()).unwrap_or("");
+            let body_low = body.to_lowercase();
+            let title_low = title.to_lowercase();
+            let body_u16: Vec<u16> = body.encode_utf16().collect();
+            let body_low_u16: Vec<u16> = body_low.encode_utf16().collect();
+            let q_u16: Vec<u16> = q.encode_utf16().collect();
+
+            let pos_u16 = if !q_u16.is_empty() && body_low_u16.len() >= q_u16.len() {
+                body_low_u16
+                    .windows(q_u16.len())
+                    .position(|w| w == q_u16.as_slice())
+            } else {
+                None
+            };
+
+            if pos_u16.is_some() || title_low.contains(&q) {
+                let p = pos_u16.unwrap_or(0);
+                let start = p.saturating_sub(35);
+                let end = (p + 150).min(body_u16.len());
+                let snippet = String::from_utf16_lossy(&body_u16[start..end]);
+                let mut item = m.as_object().cloned().unwrap_or_default();
+                item.insert("snippet".to_string(), json!(snippet));
+                results.push(Value::Object(item));
+                if results.len() >= 100 {
+                    break;
+                }
+            }
+        }
+        Ok(Value::Array(results))
+    }
+
+    pub fn search_text(
+        &mut self,
+        query: &str,
+        project_id: Option<&str>,
+        case_sensitive: bool,
+    ) -> Result<Value, LofError> {
+        if query.trim().is_empty() {
+            return Ok(json!({ "results": [], "total": 0, "truncated": false }));
+        }
+        let pid_filter = project_id.filter(|s| !s.is_empty());
+        let list = self.list()?;
+        let docs = list
+            .get("documents")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let mut results = Vec::new();
+        let mut total = 0;
+        let mut truncated = false;
+
+        for m in docs {
+            let m_pid = m
+                .get("projectId")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if let Some(pf) = pid_filter {
+                if m_pid != pf {
+                    continue;
+                }
+            }
+            let m_id = m
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let body = if self.index_enabled {
+                self.cached_body(&m_pid, &m_id).unwrap_or_default()
+            } else {
+                let Ok(d) = self.read(&m_id) else { continue };
+                d.get("body")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string()
+            };
+            let max_here = 100.min(2000usize.saturating_sub(total));
+            let (found_matches, is_trunc) = match_lines(&body, query, case_sensitive, max_here);
+            if is_trunc {
+                truncated = true;
+            }
+            total += found_matches.len();
+            if !found_matches.is_empty() {
+                results.push(json!({
+                    "id": m_id,
+                    "projectId": m_pid,
+                    "kind": m.get("kind"),
+                    "title": m.get("title"),
+                    "relPath": m.get("relPath"),
+                    "archived": m.get("archived"),
+                    "matches": found_matches,
+                }));
+            }
+            if total >= 2000 {
+                truncated = true;
+                break;
+            }
+        }
+
+        Ok(json!({
+            "results": results,
+            "total": total,
+            "truncated": truncated,
+        }))
+    }
+
+    pub fn search_all(
+        &mut self,
+        query: &str,
+        project_id: Option<&str>,
+        case_sensitive: bool,
+    ) -> Result<Value, LofError> {
+        let raw = query.trim();
+        let empty = json!({
+            "projects": [],
+            "files": [],
+            "results": [],
+            "total": 0,
+            "truncated": false,
+        });
+        if raw.is_empty() {
+            return Ok(empty);
+        }
+        let norm = |t: &str| -> String {
+            if case_sensitive {
+                t.to_string()
+            } else {
+                t.to_lowercase()
+            }
+        };
+        let tag_only = raw.starts_with('#');
+        let q = norm(if tag_only {
+            raw.trim_start_matches('#')
+        } else {
+            raw
+        });
+        if q.is_empty() {
+            return Ok(empty);
+        }
+
+        let list = self.list()?;
+        let mut projects = Vec::new();
+        if let Some(projs) = list.get("projects").and_then(|v| v.as_array()) {
+            for p in projs {
+                let tags: Vec<String> = p
+                    .get("tags")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|t| t.as_str())
+                            .filter(|t| norm(t).contains(&q))
+                            .map(|t| t.to_string())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let title = p.get("title").and_then(|v| v.as_str()).unwrap_or("");
+                let desc = p.get("description").and_then(|v| v.as_str()).unwrap_or("");
+                let mut fields = Vec::new();
+                if tag_only {
+                    if !tags.is_empty() {
+                        fields.push("태그");
+                    }
+                } else {
+                    if norm(title).contains(&q) {
+                        fields.push("제목");
+                    }
+                    if norm(desc).contains(&q) {
+                        fields.push("소개");
+                    }
+                    if !tags.is_empty() {
+                        fields.push("태그");
+                    }
+                }
+                if !fields.is_empty() {
+                    projects.push(json!({
+                        "id": p.get("id"),
+                        "title": title,
+                        "tags": tags,
+                        "fields": fields,
+                        "description": desc,
+                    }));
+                }
+            }
+        }
+        let inner_rel = |rel: &str| -> String {
+            for prefix in ["assets/", "doc/", "episodes/", "plot/", "memo/"] {
+                if rel.len() >= prefix.len() && rel[..prefix.len()].eq_ignore_ascii_case(prefix) {
+                    return rel[prefix.len()..].to_string();
+                }
+            }
+            rel.to_string()
+        };
+        let pid_filter = project_id.filter(|s| !s.is_empty());
+        let mut files = Vec::new();
+        if let Some(docs) = list.get("documents").and_then(|v| v.as_array()) {
+            for d in docs {
+                let d_pid = d.get("projectId").and_then(|v| v.as_str()).unwrap_or("");
+                if let Some(pf) = pid_filter {
+                    if d_pid != pf {
+                        continue;
+                    }
+                }
+                let tags: Vec<String> = d
+                    .get("tags")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|t| t.as_str())
+                            .filter(|t| norm(t).contains(&q))
+                            .map(|t| t.to_string())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let title = d.get("title").and_then(|v| v.as_str()).unwrap_or("");
+                let rel_path = d.get("relPath").and_then(|v| v.as_str()).unwrap_or("");
+                let searchable_rel = inner_rel(rel_path);
+                let matched = if tag_only {
+                    !tags.is_empty()
+                } else {
+                    norm(title).contains(&q)
+                        || norm(&searchable_rel).contains(&q)
+                        || !tags.is_empty()
+                };
+                if matched {
+                    files.push(json!({
+                        "id": d.get("id"),
+                        "projectId": d_pid,
+                        "kind": d.get("kind"),
+                        "title": title,
+                        "relPath": rel_path,
+                        "archived": d.get("archived"),
+                        "tags": tags,
+                    }));
+                    if files.len() >= 200 {
+                        break;
+                    }
+                }
+            }
+        }
+
+        if tag_only {
+            return Ok(json!({
+                "projects": projects,
+                "files": files,
+                "results": [],
+                "total": 0,
+                "truncated": false,
+            }));
+        }
+
+        let st = self.search_text(raw, project_id, case_sensitive)?;
+        Ok(json!({
+            "projects": projects,
+            "files": files,
+            "results": st.get("results").cloned().unwrap_or(json!([])),
+            "total": st.get("total").cloned().unwrap_or(json!(0)),
+            "truncated": st.get("truncated").cloned().unwrap_or(json!(false)),
+        }))
+    }
+
+    pub fn draft(&self, input: &Value) -> Result<bool, LofError> {
+        let id = input.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        if !valid_id(id) {
+            return Err(fail_invalid("잘못된 문서 ID"));
+        }
+        let mut payload = input.as_object().cloned().unwrap_or_default();
+        payload.insert("savedAt".to_string(), json!(now_iso()));
+        let file = self
+            .root
+            .join(".lof")
+            .join("drafts")
+            .join(format!("{}.json", id));
+        atomic_write_str(&file, &serde_json::to_string(&payload).unwrap_or_default())?;
+        Ok(true)
+    }
+
+    pub fn drafts(&self) -> Result<Vec<Value>, LofError> {
+        let dir = self.root.join(".lof").join("drafts");
+        let mut out = Vec::new();
+        let Ok(rd) = fs::read_dir(&dir) else {
+            return Ok(out);
+        };
+        let mut entries: Vec<_> = rd.filter_map(|e| e.ok()).collect();
+        entries.sort_by_key(|e| e.file_name());
+        for e in entries {
+            let name = e.file_name().to_string_lossy().to_string();
+            if name.ends_with(".json") {
+                if let Ok(raw) = fs::read_to_string(e.path()) {
+                    if let Ok(v) = serde_json::from_str(&raw) {
+                        out.push(v);
+                    }
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn clear_draft(&self, id: &str) -> Result<(), LofError> {
+        if !valid_id(id) {
+            return Err(fail_invalid("잘못된 ID"));
+        }
+        let file = self
+            .root
+            .join(".lof")
+            .join("drafts")
+            .join(format!("{}.json", id));
+        let _ = fs::remove_file(file);
+        Ok(())
+    }
+
+    fn deleted_file(&self) -> PathBuf {
+        self.root.join(".lof").join("deleted.json")
+    }
+
+    pub fn deleted(&self) -> Result<Map<String, Value>, LofError> {
+        match fs::read_to_string(self.deleted_file()) {
+            Ok(raw) => serde_json::from_str(&raw).map_err(|e| fail(e.to_string(), "FORMAT")),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Map::new()),
+            Err(e) => Err(LofError::from(e)),
+        }
+    }
+
+    pub fn tombstone(&self, id: &str, project_id: &str, deleted_at: &str) -> Result<(), LofError> {
+        let mut deleted = self.deleted()?;
+        let is_proj = id == project_tombstone(project_id);
+        let mut info = Map::new();
+        info.insert("projectId".to_string(), json!(project_id));
+        info.insert("deletedAt".to_string(), json!(deleted_at));
+        if is_proj {
+            info.insert("project".to_string(), json!(true));
+        }
+        deleted.insert(id.to_string(), Value::Object(info));
+        let pretty = serde_json::to_string_pretty(&deleted).unwrap_or_default();
+        atomic_write_str(&self.deleted_file(), &pretty)
+    }
+
+    pub fn remove(&mut self, id: &str) -> Result<bool, LofError> {
+        self.remove_inner(id, &now_iso())
+    }
+
+    pub fn remove_inner(&mut self, id: &str, deleted_at: &str) -> Result<bool, LofError> {
+        let (mut f_proj, f_entry, f_file) = self.find_doc(id)?;
+        if f_file.exists() {
+            self.trash_path(&f_file)?;
+        }
+        record_change(&f_file);
+        let rel = f_entry.get("path").and_then(|v| v.as_str()).unwrap_or("");
+        let is_ep = f_entry.get("kind").and_then(|v| v.as_str()) == Some("episode");
+        let proj_id = f_proj
+            .project
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        if !is_ep && Self::drop_doc_meta(&mut f_proj, rel) {
+            self.write_project(&f_proj)?;
+        }
+        if is_ep {
+            if let Some(arr) = f_proj
+                .project
+                .get_mut("documents")
+                .and_then(|v| v.as_array_mut())
+            {
+                arr.retain(|d| d.get("id").and_then(|v| v.as_str()) != Some(id));
+            }
+            for doc in self.doc_files(&f_proj) {
+                if doc.get("episodeId").and_then(|v| v.as_str()) == Some(id) {
+                    let drel = doc.get("path").and_then(|v| v.as_str()).unwrap_or("");
+                    let did = doc.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                    let dfile = abs(&f_proj.dir, drel);
+                    if let Ok(raw) = fs::read_to_string(&dfile) {
+                        if let Ok(cur_doc) = doc_of(&f_proj.dir, &proj_id, &doc, &raw) {
+                            let _ = self.write_history(did, &cur_doc, &raw);
+                        }
+                        let mut updated_doc = doc.as_object().cloned().unwrap_or_default();
+                        updated_doc.insert("episodeId".to_string(), Value::Null);
+                        updated_doc.insert("updatedAt".to_string(), json!(now_iso()));
+                        if let Ok(parsed) = read_markdown(&raw) {
+                            if let Ok(next_md) = write_markdown(
+                                &parsed.body,
+                                &Value::Object(updated_doc),
+                                &raw,
+                            ) {
+                                let _ = atomic_write_str(&dfile, &next_md);
+                            }
+                        }
+                    }
+                }
+            }
+            let _ = self.layout(&mut f_proj);
+            self.write_project(&f_proj)?;
+        }
+
+        let _ = fs::remove_dir_all(self.root.join(".lof").join("history").join(id));
+        self.last_snapshot.remove(id);
+        let _ = self.clear_draft(id);
+        self.tombstone(id, &proj_id, deleted_at)?;
+        Ok(true)
+    }
+
+    pub fn remove_project(&mut self, id: &str) -> Result<bool, LofError> {
+        self.remove_project_inner(id, &now_iso())
+    }
+
+    pub fn remove_project_inner(&mut self, id: &str, deleted_at: &str) -> Result<bool, LofError> {
+        let p = self.get_project(id)?;
+        let mut ids: Vec<String> = p
+            .project
+            .get("documents")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|d| d.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        for d in self.doc_files(&p) {
+            if let Some(did) = d.get("id").and_then(|v| v.as_str()) {
+                ids.push(did.to_string());
+            }
+        }
+        self.trash_path(&p.dir)?;
+        record_change(&p.dir);
+        let mut deleted = self.deleted()?;
+        for doc_id in ids {
+            let _ = fs::remove_dir_all(self.root.join(".lof").join("history").join(&doc_id));
+            self.last_snapshot.remove(&doc_id);
+            let _ = self.clear_draft(&doc_id);
+            deleted.insert(
+                doc_id,
+                json!({
+                    "projectId": id,
+                    "deletedAt": deleted_at,
+                }),
+            );
+        }
+        deleted.insert(
+            project_tombstone(id),
+            json!({
+                "projectId": id,
+                "deletedAt": deleted_at,
+                "project": true,
+            }),
+        );
+        let pretty = serde_json::to_string_pretty(&deleted).unwrap_or_default();
+        atomic_write_str(&self.deleted_file(), &pretty)?;
+        Ok(true)
+    }
+
+    pub fn snapshot(&mut self) -> Result<Value, LofError> {
+        let list = self.list()?;
+        if let Some(warnings) = list.get("warnings").and_then(|v| v.as_array()) {
+            if !warnings.is_empty() {
+                let joined: Vec<&str> = warnings.iter().filter_map(|w| w.as_str()).collect();
+                return Err(fail_invalid(format!(
+                    "읽을 수 없는 문서가 있어 동기화를 중단했습니다. {}",
+                    joined.join("; ")
+                )));
+            }
+        }
+        let projects_arr = list
+            .get("projects")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let projects_out: Vec<Value> = projects_arr.iter().map(project_fields).collect();
+        let mut assets = Vec::new();
+        for p in &projects_arr {
+            let cov = p.get("cover").and_then(|v| v.as_str());
+            let folder = p.get("folder").and_then(|v| v.as_str());
+            if valid_cover(cov) && folder.is_some() {
+                let bytes = fs::read(
+                    self.root
+                        .join(folder.unwrap())
+                        .join("assets")
+                        .join(cov.unwrap()),
+                )?;
+                assets.push(json!({
+                    "projectId": p.get("id"),
+                    "filename": cov.unwrap(),
+                    "data": base64::engine::general_purpose::STANDARD.encode(bytes),
+                }));
+            }
+        }
+
+        let docs_arr = list
+            .get("documents")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let mut documents = Vec::with_capacity(docs_arr.len());
+        for m in &docs_arr {
+            let mid = m.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            let d = self.read(mid)?;
+            let kind = d.get("kind").and_then(|v| v.as_str()).unwrap_or("episode");
+            let mut item = Map::new();
+            item.insert("id".to_string(), d.get("id").cloned().unwrap_or(json!("")));
+            item.insert(
+                "projectId".to_string(),
+                d.get("projectId").cloned().unwrap_or(json!("")),
+            );
+            item.insert("kind".to_string(), json!(kind));
+            item.insert(
+                "title".to_string(),
+                d.get("title").cloned().unwrap_or(json!("")),
+            );
+            item.insert(
+                "status".to_string(),
+                d.get("status").cloned().unwrap_or(json!("in_progress")),
+            );
+            let meta = if kind == "episode" {
+                stored_meta(Some(&d))
+            } else {
+                stored_document_meta(Some(&d))
+            };
+            for (k, v) in meta {
+                item.insert(k, v);
+            }
+            if let Some(props) = d.get("properties").and_then(|v| v.as_object()) {
+                if !props.is_empty() {
+                    item.insert("properties".to_string(), Value::Object(props.clone()));
+                }
+            }
+            item.insert(
+                "order".to_string(),
+                d.get("order").cloned().unwrap_or(json!(0)),
+            );
+            item.insert(
+                "archived".to_string(),
+                d.get("archived").cloned().unwrap_or(json!(false)),
+            );
+            if let Some(ca) = d.get("createdAt") {
+                item.insert("createdAt".to_string(), ca.clone());
+            }
+            if let Some(ua) = d.get("updatedAt") {
+                item.insert("updatedAt".to_string(), ua.clone());
+            }
+            if let Some(ep_id) = d
+                .get("episodeId")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+            {
+                item.insert("episodeId".to_string(), json!(ep_id));
+            }
+            if kind != "episode" {
+                if let Some(rp) = d.get("relPath") {
+                    item.insert("path".to_string(), rp.clone());
+                }
+            }
+            item.insert(
+                "body".to_string(),
+                d.get("body").cloned().unwrap_or(json!("")),
+            );
+            item.insert(
+                "revision".to_string(),
+                d.get("fingerprint").cloned().unwrap_or(json!("")),
+            );
+            documents.push(Value::Object(item));
+        }
+
+        let all_deleted = self.deleted()?;
+        let mut deleted = Map::new();
+        for (id, info) in all_deleted {
+            let exists_doc = docs_arr
+                .iter()
+                .any(|d| d.get("id").and_then(|v| v.as_str()) == Some(&id));
+            let exists_proj = projects_arr.iter().any(|p| {
+                p.get("id")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|pid| project_tombstone(pid) == id)
+            });
+            if !exists_doc && !exists_proj {
+                deleted.insert(id, info);
+            }
+        }
+
+        Ok(json!({
+            "format": FORMAT,
+            "projects": projects_out,
+            "assets": assets,
+            "documents": documents,
+            "deleted": deleted,
+        }))
+    }
+
+    fn put_remote_doc(&mut self, remote: &Value) -> Result<(), LofError> {
+        let project_id = remote
+            .get("projectId")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let mut p = self.get_project(project_id)?;
+        let kind = remote
+            .get("kind")
+            .and_then(|v| v.as_str())
+            .unwrap_or("episode");
+        let rid = remote.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        let body = remote.get("body").and_then(|v| v.as_str()).unwrap_or("");
+
+        if kind != "episode" {
+            let rpath = remote.get("path").and_then(|v| v.as_str()).unwrap_or("");
+            let old = self
+                .doc_files(&p)
+                .into_iter()
+                .find(|d| d.get("id").and_then(|v| v.as_str()) == Some(rid));
+            let old_path = old
+                .as_ref()
+                .and_then(|d| d.get("path").and_then(|v| v.as_str()));
+            if abs(&p.dir, rpath).exists() && old_path != Some(rpath) {
+                return Err(fail(
+                    "동기화 대상 경로에 다른 문서가 있습니다. 파일 이름을 바꾼 뒤 다시 동기화해 주세요.",
+                    "EXISTS",
+                ));
+            }
+            if let Some(op) = old_path {
+                if op != rpath {
+                    self.move_files(&p.dir, &[(op.to_string(), rpath.to_string())])?;
+                }
+            }
+            let ep_id = remote
+                .get("episodeId")
+                .and_then(|v| v.as_str())
+                .filter(|eid| {
+                    p.project
+                        .get("documents")
+                        .and_then(|v| v.as_array())
+                        .is_some_and(|docs| {
+                            docs.iter().any(|d| {
+                                d.get("id").and_then(|v| v.as_str()) == Some(*eid)
+                                    && d.get("kind").and_then(|v| v.as_str()) == Some("episode")
+                            })
+                        })
+                });
+            let mut rdoc = remote.as_object().cloned().unwrap_or_default();
+            rdoc.insert(
+                "episodeId".to_string(),
+                ep_id.map(|s| json!(s)).unwrap_or(Value::Null),
+            );
+            atomic_write_str(
+                &abs(&p.dir, rpath),
+                &write_markdown(body, &Value::Object(rdoc), "")?,
+            )?;
+            if Self::drop_doc_meta(&mut p, rpath) {
+                self.write_project(&p)?;
+            }
+            return Ok(());
+        }
+
+        let mut fields = Map::new();
+        fields.insert(
+            "title".to_string(),
+            remote.get("title").cloned().unwrap_or(json!("")),
+        );
+        fields.insert(
+            "status".to_string(),
+            json!(normalize_status_val(remote.get("status"))),
+        );
+        for (k, v) in stored_meta(Some(remote)) {
+            fields.insert(k, v);
+        }
+        fields.insert(
+            "properties".to_string(),
+            remote
+                .get("properties")
+                .and_then(|v| v.as_object())
+                .cloned()
+                .map(Value::Object)
+                .unwrap_or_else(|| json!({})),
+        );
+        let order = remote.get("order").and_then(|v| v.as_i64()).unwrap_or(0);
+        fields.insert("order".to_string(), json!(order));
+        fields.insert(
+            "archived".to_string(),
+            json!(remote.get("archived").and_then(|v| v.as_bool()).unwrap_or(false)),
+        );
+        let now = now_iso();
+        fields.insert(
+            "createdAt".to_string(),
+            json!(remote.get("createdAt").and_then(|v| v.as_str()).unwrap_or(&now)),
+        );
+        fields.insert(
+            "updatedAt".to_string(),
+            json!(remote.get("updatedAt").and_then(|v| v.as_str()).unwrap_or(&now)),
+        );
+        fields.insert("hash".to_string(), json!(hash_str(body)));
+
+        let existing_idx = p
+            .project
+            .get("documents")
+            .and_then(|v| v.as_array())
+            .and_then(|docs| {
+                docs.iter()
+                    .position(|d| d.get("id").and_then(|v| v.as_str()) == Some(rid))
+            });
+
+        let Some(idx) = existing_idx else {
+            let mut entry = fields;
+            entry.insert("id".to_string(), json!(rid));
+            entry.insert("kind".to_string(), json!(kind));
+            self.insert_episode(&mut p, Value::Object(entry), body)?;
+            return Ok(());
+        };
+
+        if let Some(arr) = p
+            .project
+            .get_mut("documents")
+            .and_then(|v| v.as_array_mut())
+        {
+            if let Some(eobj) = arr[idx].as_object_mut() {
+                for &mk in META_FIELDS {
+                    eobj.remove(mk);
+                }
+                for (k, v) in fields {
+                    eobj.insert(k, v);
+                }
+                eobj.insert("_markdown".to_string(), json!(true));
+            }
+        }
+        self.layout(&mut p)?;
+        let entry = p
+            .project
+            .get("documents")
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.get(idx))
+            .cloned()
+            .unwrap_or(Value::Null);
+        let epath = entry.get("path").and_then(|v| v.as_str()).unwrap_or("");
+        atomic_write_str(&abs(&p.dir, epath), &write_markdown(body, &entry, "")?)?;
+        self.write_project(&p)
+    }
+
+    pub fn merge(
+        &mut self,
+        snapshot: &Value,
+        base: &HashMap<String, String>,
+    ) -> Result<Value, LofError> {
+        let Some(snap_projects) = snapshot.get("projects").and_then(|v| v.as_array()) else {
+            return Err(fail_invalid("지원하지 않는 동기화 형식"));
+        };
+        let Some(snap_docs) = snapshot.get("documents").and_then(|v| v.as_array()) else {
+            return Err(fail_invalid("지원하지 않는 동기화 형식"));
+        };
+        if snapshot.get("format").and_then(|v| v.as_i64()) != Some(FORMAT)
+            || snap_docs.len() > 20000
+        {
+            return Err(fail_invalid("지원하지 않는 동기화 형식"));
+        }
+
+        let assets = match snapshot.get("assets") {
+            None | Some(Value::Null) => Vec::new(),
+            Some(Value::Array(a)) if a.len() <= snap_projects.len() => a.clone(),
+            _ => return Err(fail_invalid("잘못된 표지 목록")),
+        };
+
+        for p in snap_projects {
+            let pid = p.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            if !valid_id(pid) || !p.get("title").is_some_and(|v| v.is_string()) {
+                return Err(fail_invalid("잘못된 작품 데이터"));
+            }
+            normalize_tags(p.get("tags"))?;
+            if let Some(cov) = p.get("cover").filter(|v| !v.is_null()) {
+                if !valid_cover(cov.as_str()) {
+                    return Err(fail_invalid("잘못된 표지 경로"));
+                }
+            }
+        }
+
+        let mut seen_assets = HashSet::new();
+        for asset in &assets {
+            let Some(data_str) = asset.get("data").and_then(|v| v.as_str()) else {
+                return Err(fail_invalid("잘못된 표지 데이터"));
+            };
+            let apid = asset.get("projectId").and_then(|v| v.as_str()).unwrap_or("");
+            let afn = asset.get("filename").and_then(|v| v.as_str()).unwrap_or("");
+            let matches_proj = snap_projects.iter().any(|p| {
+                p.get("id").and_then(|v| v.as_str()) == Some(apid)
+                    && p.get("cover").and_then(|v| v.as_str()) == Some(afn)
+            });
+            if data_str.len() > 11_000_000 || !matches_proj || !seen_assets.insert(apid.to_string())
+            {
+                return Err(fail_invalid("잘못된 표지 데이터"));
+            }
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(data_str)
+                .map_err(|_| fail_invalid("잘못된 표지 데이터"))?;
+            validate_cover(&bytes, Some(afn))?;
+        }
+
+        for p in snap_projects {
+            if p.get("cover").is_some_and(|v| !v.is_null()) {
+                let pid = p.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                if !seen_assets.contains(pid) {
+                    return Err(fail_invalid("원격 표지가 누락됐습니다."));
+                }
+            }
+        }
+
+        let mut ids = HashSet::new();
+        for remote in snap_docs {
+            let rid = remote.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            let rkind = remote.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+            let rpid = remote.get("projectId").and_then(|v| v.as_str()).unwrap_or("");
+            let Some(rbody) = remote.get("body").and_then(|v| v.as_str()) else {
+                return Err(fail_invalid("잘못된 원격 문서"));
+            };
+            if !valid_id(rid)
+                || !ids.insert(rid.to_string())
+                || !KINDS.contains(&rkind)
+                || !remote.get("title").is_some_and(|v| v.is_string())
+                || utf16_len(rbody) > 10_000_000
+                || !snap_projects
+                    .iter()
+                    .any(|p| p.get("id").and_then(|v| v.as_str()) == Some(rpid))
+            {
+                return Err(fail_invalid("잘못된 원격 문서"));
+            }
+            if rkind != "episode" {
+                let rpath = remote.get("path").and_then(|v| v.as_str()).unwrap_or("");
+                let low = rpath.to_ascii_lowercase();
+                if !valid_rel(rpath) || !low.starts_with("doc/") || !low.ends_with(".md") {
+                    return Err(fail_invalid("잘못된 원격 문서 경로"));
+                }
+            }
+            let rrev = remote.get("revision").and_then(|v| v.as_str()).unwrap_or("");
+            if fingerprint(remote, rbody) != rrev {
+                return Err(fail_invalid("원격 문서 체크섬 불일치"));
+            }
+        }
+
+        let remote_deleted = match snapshot.get("deleted") {
+            None | Some(Value::Null) => Map::new(),
+            Some(Value::Object(m))
+                if m.len() <= 20000 && m.keys().all(|id| valid_id(id)) =>
+            {
+                m.clone()
+            }
+            _ => return Err(fail_invalid("잘못된 삭제 기록")),
+        };
+
+        let mut local = self.list()?;
+        let mut tombstones = self.deleted()?;
+        let mut removed = Vec::new();
+
+        for (id, info) in &remote_deleted {
+            if info.get("project").and_then(|v| v.as_bool()) != Some(true) || !id.starts_with("p-")
+            {
+                continue;
+            }
+            let project_id = &id[2..];
+            let lp = local
+                .get("projects")
+                .and_then(|v| v.as_array())
+                .and_then(|arr| {
+                    arr.iter()
+                        .find(|p| p.get("id").and_then(|v| v.as_str()) == Some(project_id))
+                })
+                .cloned();
+            if let Some(lp_val) = lp {
+                let pf_hash =
+                    hash_str(&serde_json::to_string(&project_fields(&lp_val)).unwrap_or_default());
+                let proj_unchanged =
+                    base.get(&format!("project:{}", project_id)) == Some(&pf_hash);
+                let docs_unchanged = local
+                    .get("documents")
+                    .and_then(|v| v.as_array())
+                    .is_some_and(|arr| {
+                        arr.iter()
+                            .filter(|d| {
+                                d.get("projectId").and_then(|v| v.as_str()) == Some(project_id)
+                            })
+                            .all(|d| {
+                                let did = d.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                                let dfp =
+                                    d.get("fingerprint").and_then(|v| v.as_str()).unwrap_or("");
+                                base.get(did).map(|s| s.as_str()) == Some(dfp)
+                            })
+                    });
+                if proj_unchanged && docs_unchanged {
+                    let del_at = info
+                        .get("deletedAt")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(now_iso);
+                    self.remove_project_inner(project_id, &del_at)?;
+                    removed.push(id.clone());
+                }
+            } else if !tombstones.contains_key(id) {
+                let del_at = info
+                    .get("deletedAt")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(now_iso);
+                tombstones.insert(
+                    id.clone(),
+                    json!({
+                        "projectId": project_id,
+                        "deletedAt": del_at,
+                        "project": true,
+                    }),
+                );
+                let pretty = serde_json::to_string_pretty(&tombstones).unwrap_or_default();
+                atomic_write_str(&self.deleted_file(), &pretty)?;
+            }
+        }
+
+        if !removed.is_empty() {
+            local = self.list()?;
+        }
+
+        for (id, info) in &remote_deleted {
+            let info_pid = info
+                .get("projectId")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if info.get("project").and_then(|v| v.as_bool()) == Some(true)
+                || remote_deleted.contains_key(&project_tombstone(info_pid))
+            {
+                continue;
+            }
+            let lm = local
+                .get("documents")
+                .and_then(|v| v.as_array())
+                .and_then(|arr| {
+                    arr.iter()
+                        .find(|d| d.get("id").and_then(|v| v.as_str()) == Some(id))
+                })
+                .cloned();
+            if let Some(lm_val) = lm {
+                let lfp = lm_val
+                    .get("fingerprint")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                if base.get(id).map(|s| s.as_str()) == Some(lfp) {
+                    let del_at = info
+                        .get("deletedAt")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(now_iso);
+                    self.remove_inner(id, &del_at)?;
+                    removed.push(id.clone());
+                }
+            } else if !tombstones.contains_key(id) {
+                let del_at = info
+                    .get("deletedAt")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(now_iso);
+                tombstones.insert(
+                    id.clone(),
+                    json!({
+                        "projectId": info_pid,
+                        "deletedAt": del_at,
+                    }),
+                );
+                let pretty = serde_json::to_string_pretty(&tombstones).unwrap_or_default();
+                atomic_write_str(&self.deleted_file(), &pretty)?;
+            }
+        }
+
+        if !removed.is_empty() {
+            local = self.list()?;
+        }
+
+        let deleted_here = self.deleted()?;
+        let mut imported = Vec::new();
+        let mut conflicts = Vec::new();
+        let mut project_conflicts = Vec::new();
+
+        for p in snap_projects {
+            let pid = p.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            let existing = local
+                .get("projects")
+                .and_then(|v| v.as_array())
+                .and_then(|arr| {
+                    arr.iter()
+                        .find(|x| x.get("id").and_then(|v| v.as_str()) == Some(pid))
+                })
+                .cloned();
+            let fields = project_fields(p);
+            if existing.is_none() && deleted_here.contains_key(&project_tombstone(pid)) {
+                continue;
+            }
+            if existing.is_none() {
+                self.new_project(
+                    &fields,
+                    &json!({
+                        "id": pid,
+                        "index": p.get("index"),
+                        "cover": p.get("cover").cloned().unwrap_or(Value::Null),
+                        "createdAt": p.get("createdAt"),
+                        "updatedAt": p.get("updatedAt"),
+                    }),
+                )?;
+            } else if let Some(ex) = existing {
+                let mine = project_fields(&ex);
+                let mine_json = serde_json::to_string(&mine).unwrap_or_default();
+                let fields_json = serde_json::to_string(&fields).unwrap_or_default();
+                if mine_json == fields_json {
+                    continue;
+                }
+                let old_hash = hash_str(&mine_json);
+                let remote_hash = hash_str(&fields_json);
+                let base_proj = base.get(&format!("project:{}", pid));
+                if base_proj == Some(&old_hash) {
+                    let mut upd = fields.as_object().cloned().unwrap_or_default();
+                    upd.insert(
+                        "manualLineBreak".to_string(),
+                        p.get("manualLineBreak").cloned().unwrap_or(Value::Null),
+                    );
+                    upd.insert(
+                        "cover".to_string(),
+                        p.get("cover").cloned().unwrap_or(Value::Null),
+                    );
+                    self.update_project_inner(&Value::Object(upd), true)?;
+                } else if base_proj != Some(&remote_hash) {
+                    let cfile = self
+                        .root
+                        .join(".lof")
+                        .join("project-conflicts")
+                        .join(format!("{}-{}.json", pid, remote_hash));
+                    let pretty = serde_json::to_string_pretty(p).unwrap_or_default();
+                    atomic_write_str(&cfile, &pretty)?;
+                    project_conflicts.push(pid.to_string());
+                }
+            }
+        }
+
+        for asset in &assets {
+            let apid = asset.get("projectId").and_then(|v| v.as_str()).unwrap_or("");
+            let has_local_proj = local
+                .get("projects")
+                .and_then(|v| v.as_array())
+                .is_some_and(|arr| {
+                    arr.iter()
+                        .any(|x| x.get("id").and_then(|v| v.as_str()) == Some(apid))
+                });
+            if deleted_here.contains_key(&project_tombstone(apid)) && !has_local_proj {
+                continue;
+            }
+            let p = self.get_project(apid)?;
+            let afn = asset.get("filename").and_then(|v| v.as_str()).unwrap_or("");
+            let data_str = asset.get("data").and_then(|v| v.as_str()).unwrap_or("");
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(data_str)
+                .unwrap_or_default();
+            atomic_write_bytes(&p.dir.join("assets").join(afn), &bytes)?;
+        }
+
+        let mut sorted_docs = snap_docs.clone();
+        sorted_docs.sort_by_key(|d| {
+            if d.get("kind").and_then(|v| v.as_str()) == Some("episode") {
+                0
+            } else {
+                1
+            }
+        });
+
+        for remote in &sorted_docs {
+            let rid = remote.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            let rpid = remote.get("projectId").and_then(|v| v.as_str()).unwrap_or("");
+            let rkind = remote.get("kind").and_then(|v| v.as_str()).unwrap_or("episode");
+            let rrev = remote.get("revision").and_then(|v| v.as_str()).unwrap_or("");
+
+            let lm = local
+                .get("documents")
+                .and_then(|v| v.as_array())
+                .and_then(|arr| {
+                    arr.iter()
+                        .find(|d| d.get("id").and_then(|v| v.as_str()) == Some(rid))
+                })
+                .cloned();
+
+            if lm.is_none()
+                && (deleted_here.contains_key(rid)
+                    || deleted_here.contains_key(&project_tombstone(rpid)))
+            {
+                continue;
+            }
+            if lm.is_none() {
+                self.put_remote_doc(remote)?;
+                imported.push(rid.to_string());
+            } else if let Some(lm_val) = lm {
+                let lfp = lm_val
+                    .get("fingerprint")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let lpid = lm_val
+                    .get("projectId")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let lkind = lm_val
+                    .get("kind")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("episode");
+
+                if lfp != rrev {
+                    let kind_compat =
+                        lkind == rkind || (lkind != "episode" && rkind != "episode");
+                    if base.get(rid).map(|s| s.as_str()) == Some(lfp)
+                        && lpid == rpid
+                        && kind_compat
+                    {
+                        let current = self.read(rid)?;
+                        if current.get("fingerprint").and_then(|v| v.as_str()) != Some(lfp) {
+                            return Err(fail("동기화 중 로컬 문서가 변경됐습니다.", "CONFLICT"));
+                        }
+                        let (_, _, f_file) = self.find_doc(rid)?;
+                        let prev_raw = fs::read_to_string(&f_file).unwrap_or_default();
+                        self.write_history(rid, &current, &prev_raw)?;
+                        self.put_remote_doc(remote)?;
+                        imported.push(rid.to_string());
+                    } else if base.get(rid).map(|s| s.as_str()) != Some(rrev) {
+                        let key = format!("{}:{}", rid, rrev);
+                        let already_has_conflict = local
+                            .get("documents")
+                            .and_then(|v| v.as_array())
+                            .is_some_and(|arr| {
+                                arr.iter().any(|d| {
+                                    d.get("conflictOf").and_then(|v| v.as_str()) == Some(&key)
+                                })
+                            });
+                        if !already_has_conflict {
+                            let rtitle = remote
+                                .get("title")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("제목 없음");
+                            let mut create_in = Map::new();
+                            create_in.insert("projectId".to_string(), json!(rpid));
+                            create_in.insert("kind".to_string(), json!(rkind));
+                            create_in.insert(
+                                "title".to_string(),
+                                json!(format!("{} (동기화 충돌 사본)", rtitle)),
+                            );
+                            create_in.insert(
+                                "body".to_string(),
+                                remote.get("body").cloned().unwrap_or(json!("")),
+                            );
+                            if rkind != "episode" {
+                                for (k, v) in stored_document_meta(Some(remote)) {
+                                    create_in.insert(k, v);
+                                }
+                                let rpath =
+                                    remote.get("path").and_then(|v| v.as_str()).unwrap_or("");
+                                let folder = folder_of(rpath);
+                                if folder.len() > 4 && folder.starts_with("doc/") {
+                                    create_in.insert("folder".to_string(), json!(&folder[4..]));
+                                }
+                            }
+                            create_in.insert(
+                                "properties".to_string(),
+                                remote
+                                    .get("properties")
+                                    .cloned()
+                                    .unwrap_or_else(|| json!({})),
+                            );
+                            if let Some(rep_id) =
+                                remote.get("episodeId").and_then(|v| v.as_str())
+                            {
+                                let has_ep = local
+                                    .get("documents")
+                                    .and_then(|v| v.as_array())
+                                    .is_some_and(|arr| {
+                                        arr.iter().any(|d| {
+                                            d.get("id").and_then(|v| v.as_str()) == Some(rep_id)
+                                        })
+                                    });
+                                if has_ep {
+                                    create_in.insert("episodeId".to_string(), json!(rep_id));
+                                }
+                            }
+                            let copy = self.create_inner(
+                                &Value::Object(create_in),
+                                &json!({ "conflictOf": key }),
+                            )?;
+                            if let Some(cid) = copy.get("id").and_then(|v| v.as_str()) {
+                                conflicts.push(cid.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(json!({
+            "imported": imported,
+            "conflicts": conflicts,
+            "projectConflicts": project_conflicts,
+            "removed": removed,
+        }))
+    }
+}
+
+pub fn strip_verbatim_prefix(p: &Path) -> PathBuf {
+    let s = p.to_string_lossy();
+    if let Some(stripped) = s.strip_prefix(r"\\?\") {
+        PathBuf::from(stripped)
+    } else {
+        p.to_path_buf()
+    }
+}

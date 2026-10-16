@@ -1,0 +1,48 @@
+[package]
+name = "lof-writer"
+version = "1.0.0-beta.1"
+description = "Local First Writing Tool"
+authors = ["Lof Writer"]
+license = "MIT"
+edition = "2021"
+default-run = "lof-writer"
+
+[lib]
+name = "lof_writer_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-updater = { version = "2.14", default-features = false, features = ["rustls-tls", "system-proxy"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+serde_yaml = "0.9"
+sha2 = "0.10"
+hex = "0.4"
+base64 = "0.22"
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+notify = "6"
+trash = "5"
+rfd = "0.15"
+arboard = "3"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+suppaftp = { version = "6", default-features = false, features = ["rustls"] }
+unicode-normalization = "0.1"
+regex = "1"
+rand = "0.8"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+  "Win32_Foundation",
+  "Win32_Security_Cryptography",
+  "Win32_System_Com",
+  "Win32_System_Memory",
+  "Win32_System_Threading",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+] }

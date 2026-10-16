@@ -1,0 +1,15 @@
+node_modules/
+dist/
+release/
+src-tauri/target/
+src-tauri/gen/
+.test-data/
+test-results/
+playwright-report/
+*.log
+# 조사 자료와 작업 기록은 로컬에만 둔다.
+docs/
+.private/
+src-tauri/tauri.updater.generated.json
+.AGENTS.md
+/AGENTS.md

@@ -1,0 +1,58 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Lof Writer",
+  "version": "1.0.0-beta.1",
+  "identifier": "local.lof.writer",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:5173",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Lof Writer",
+        "width": 1440,
+        "height": 960,
+        "minWidth": 1000,
+        "minHeight": 650,
+        "decorations": false,
+        "resizable": true,
+        "shadow": true,
+        "dragDropEnabled": false,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "",
+      "endpoints": [],
+      "windows": { "installMode": "passive" }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["msi"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico",
+      "icons/icon.png"
+    ],
+    "windows": {
+      "wix": {
+        "version": "1.0.0.1",
+        "language": "ko-KR",
+        "upgradeCode": "CCB5E981-0E56-55BC-ABDF-2EF14082207A"
+      }
+    }
+  }
+}

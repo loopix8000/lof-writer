@@ -1,0 +1,95 @@
+export type Kind = "episode" | "plot" | "memo";
+export type WritingRules = {
+  version?: number;
+  platform: string;
+  rule: "noSpace" | "spaces" | "all" | "collapsed" | "novelpia";
+  unit: "codepoint" | "utf16";
+  punctuation?: "include" | "ascii" | "unicode";
+  excludeSpecial?: boolean;
+  ellipsisWeight?: number;
+  goal: number;
+  customName: string;
+};
+export type Project = {
+  id: string;
+  title: string;
+  description: string;
+  createdAt: string;
+  updatedAt: string;
+  tags?: string[];
+  cover?: string | null;
+  coverData?: string | null;
+  writing?: WritingRules;
+  // 이 작품에서 새로 만드는 회차의 줄바꿈 방식. 없으면 공통 설정을 따른다.
+  manualLineBreak?: boolean;
+  // 작품 번호(폴더 이름 앞의 001)와 도서관 안의 작품 폴더 이름.
+  index?: number;
+  folder?: string;
+};
+export type Doc = {
+  id: string;
+  projectId: string;
+  kind: Kind;
+  title: string;
+  // 회차 상태(뮤블과 같은 값): planned·in_progress·revision·completed.
+  status: string;
+  // 회차 유형: 0 일반·2 프롤로그·3 에필로그·4 특별편·6 단편.
+  episodeType?: number;
+  description?: string;
+  authorComment?: string;
+  tags?: string[];
+  contentRestrictionLevel?: string | null;
+  pointOfView?: string | null;
+  // 줄바꿈 관리 방식. true 수동 관리, false 자동 관리.
+  manualLineBreak?: boolean;
+  order: number;
+  archived: boolean;
+  createdAt: string;
+  updatedAt: string;
+  revision: string;
+  body: string;
+  characters?: number;
+  platformCharacters?: number;
+  // 디스크의 절대 경로와 작품 폴더 기준 상대 경로('/' 구분).
+  path?: string;
+  relPath?: string;
+  // 플롯·메모 문서가 연결된 회차. 저장할 때 null이면 연결을 푼다.
+  episodeId?: string | null;
+  fingerprint?: string;
+  // 앱에서 별도 UI를 제공하지 않는 사용자 정의 YAML 속성도 보존한다.
+  properties?: Record<string, unknown>;
+};
+export type Library = {
+  root: string;
+  projects: Project[];
+  documents: Doc[];
+  warnings: string[];
+  // 회차·플롯 폴더에 있지만 project.json에 연결되지 않은 Markdown 파일.
+  unlinked?: { projectId: string; path: string }[];
+  // project.json에는 있지만 파일을 찾을 수 없는 회차·플롯.
+  missing?: { projectId: string; id: string; kind: Kind; title: string; path: string }[];
+  drafts: Partial<Doc>[];
+  preferences: Record<string, any>;
+  version: string;
+};
+declare global {
+  interface Window {
+    lof: Record<string, (args?: any) => Promise<any>> & {
+      onChange: (fn: () => void) => () => void;
+      onFlush: (fn: () => Promise<void>) => () => void;
+      windowMinimize?: () => Promise<void>;
+      windowToggleMaximize?: () => Promise<boolean>;
+      windowIsMaximized?: () => Promise<boolean>;
+      windowClose?: () => Promise<void>;
+      windowStartDragging?: () => Promise<void>;
+    };
+  }
+}
+export async function call<T = any>(name: string, args?: any): Promise<T> {
+  const r = await window.lof[name](args);
+  if (!r.ok) {
+    const e = Object.assign(new Error(r.error), { code: r.code });
+    throw e;
+  }
+  return r.data;
+}
