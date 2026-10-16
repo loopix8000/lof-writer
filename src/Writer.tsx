@@ -28,15 +28,27 @@ import { TypingAssist, typesettingPluginKey } from "./typing-extension";
 import { Fragment, Slice, type Node as PMNode } from "@tiptap/pm/model";
 import type { EditorProps } from "@tiptap/pm/view";
 
+function compactBlankLines<T>(lines: readonly T[], isBlank: (line: T) => boolean): T[] {
+  let blankCount = 0;
+  return lines.filter((line) => {
+    if (!isBlank(line)) {
+      blankCount = 0;
+      return true;
+    }
+    return ++blankCount % 2 === 0;
+  });
+}
+
+function normalizePastedText(text: string, manual: boolean): string {
+  const lines = text.split(/\r\n?|\n/);
+  return (manual ? lines : compactBlankLines(lines, (line) => line.trim() === "")).join("\n");
+}
+
 function clipboardTextParser(manual: boolean): NonNullable<EditorProps["clipboardTextParser"]> {
   return (text, $context, _plainText, view) => {
     const { schema } = view.state;
     const marks = $context.marks();
-    const lines = text.split(/\r\n?|\n/);
-    // 수동은 원문을 보존하고, 자동은 연속된 빈 줄을 한 줄만 남긴다.
-    const keptLines = manual ? lines : lines.filter((line, index) =>
-      line.trim() !== "" || index === 0 || lines[index - 1].trim() !== "",
-    );
+    const keptLines = normalizePastedText(text, manual).split("\n");
     const paragraphs = keptLines.map((line) =>
       schema.nodes.paragraph.create(null, line ? schema.text(line, marks) : undefined),
     );
@@ -47,19 +59,29 @@ function clipboardTextParser(manual: boolean): NonNullable<EditorProps["clipboar
 const parseManualClipboardText = clipboardTextParser(true);
 const parseAutomaticClipboardText = clipboardTextParser(false);
 
-// HTML 붙여넣기도 서식은 유지하면서 연속된 빈 문단만 한 문단으로 합친다.
-const normalizeAutomaticPaste: NonNullable<EditorProps["transformPasted"]> = (slice) => {
+// 텍스트는 위 파서에서 한 번 처리한다. HTML의 빈 문단·줄바꿈도 같은 규칙을 적용한다.
+const normalizeAutomaticPaste: NonNullable<EditorProps["transformPasted"]> = (slice, _view, plain) => {
+  if (plain) return slice;
   const normalize = (content: Fragment): Fragment => {
     const nodes: PMNode[] = [];
-    let previousBlank = false;
     content.forEach((node) => {
-      const blank = node.type.name === "paragraph" &&
-        node.content.content.every((child) => child.isText && child.text!.trim() === "");
-      if (blank && previousBlank) return;
-      previousBlank = blank;
       nodes.push(!node.isLeaf && !node.type.spec.code ? node.copy(normalize(node.content)) : node);
     });
-    return Fragment.fromArray(nodes);
+    const hardBreak = nodes.find((node) => node.type.name === "hardBreak");
+    if (hardBreak) {
+      const lines: PMNode[][] = [[]];
+      for (const node of nodes) {
+        if (node.type.name === "hardBreak") lines.push([]);
+        else lines[lines.length - 1].push(node);
+      }
+      const kept = compactBlankLines(lines, (line) =>
+        line.every((node) => node.isText && node.text!.trim() === ""));
+      return Fragment.fromArray(kept.flatMap((line, index) => index ? [hardBreak, ...line] : line));
+    }
+    const kept = compactBlankLines(nodes, (node) => node.type.name === "paragraph" &&
+      node.content.content.every((child) => child.isText && child.text!.trim() === ""));
+    // 문단이 필수인 인용·목록 항목 안에서는 최소 한 문단을 남긴다.
+    return Fragment.fromArray(kept.length || !nodes.length ? kept : [nodes[0]]);
   };
   return new Slice(normalize(slice.content), slice.openStart, slice.openEnd);
 };
@@ -290,6 +312,20 @@ export default function Writer({
           aria-label={readOnly ? "다른 그룹 Markdown 원문" : "Markdown 원문"}
           spellCheck={false}
           value={body}
+          onPaste={(event) => {
+            const target = event.currentTarget;
+            const start = target.selectionStart;
+            if (manualLineBreak || readOnly || inMarkdownCode(body.slice(0, start))) return;
+            const text = event.clipboardData.getData("text/plain");
+            const normalized = normalizePastedText(text, false);
+            if (!text || normalized === text) return;
+            event.preventDefault();
+            const end = target.selectionEnd;
+            if (!document.execCommand("insertText", false, normalized)) {
+              pendingSelection.current = start + normalized.length;
+              onChange(body.slice(0, start) + normalized + body.slice(end));
+            }
+          }}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={(e) => {
             if (e.nativeEvent.isComposing || e.ctrlKey || e.metaKey || e.altKey)
