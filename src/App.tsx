@@ -44,6 +44,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import Writer from "./Writer";
+import ResizableSidebar from "./ResizableSidebar";
 import { useAppUpdater, UpdateSettings, UpdateNotice, UpdateLock } from "./Updater";
 import {
   call,
@@ -2590,6 +2591,7 @@ export default function App() {
             }
             saved={loaded ? (lib.preferences?.memoSession ?? null) : undefined}
             prefs={prefs}
+            onSidebarResize={(width) => savePrefs({ leftSidebarWidth: width }).catch(report)}
             flushRef={memoFlush}
             report={report}
           />
@@ -2599,7 +2601,8 @@ export default function App() {
           >
         {/* 본문 검색 패널은 집필 화면에서는 파일 트리 자리에, 다른 화면에서는 왼쪽에 연다. */}
         {searchOpen && !memoOpen && (
-          <aside className="file-sidebar search-sidebar">
+          <ResizableSidebar className="search-sidebar" label="검색" width={prefs.leftSidebarWidth}
+            onResize={(width) => savePrefs({ leftSidebarWidth: width }).catch(report)}>
             <SearchPanel
               projectId={view === "library" ? "" : projectId}
               scope={
@@ -2636,10 +2639,11 @@ export default function App() {
               onClose={() => setSearchOpen(false)}
               report={report}
             />
-          </aside>
+          </ResizableSidebar>
         )}
         {isWorkspace && treeOpen && !searchOpen && (
-          <aside className="file-sidebar">
+          <ResizableSidebar label="파일 트리" width={prefs.leftSidebarWidth}
+            onResize={(width) => savePrefs({ leftSidebarWidth: width }).catch(report)}>
             <div className="panel-caption">
               <span>
                 <FolderOpen size={15} />
@@ -2770,7 +2774,7 @@ export default function App() {
               <Archive size={14} />
               {archive ? "현재 문서 보기" : "보관함 보기"}
             </button>
-          </aside>
+          </ResizableSidebar>
         )}
         <main className={isWorkspace ? "workspace" : "main-page"}>
           {view === "library" && (

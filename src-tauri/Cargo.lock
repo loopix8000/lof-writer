@@ -2311,7 +2311,7 @@ dependencies = [
 
 [[package]]
 name = "lof-writer"
-version = "1.0.0-beta.2"
+version = "1.0.0-beta.3"
 dependencies = [
  "arboard",
  "base64 0.22.1",

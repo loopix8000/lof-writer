@@ -16,6 +16,7 @@ import Writer from "./Writer";
 import ContextMenu, { type MenuItem } from "./ContextMenu";
 import { call, type Doc, type Kind } from "./types";
 import { normalizeEditorStyle, resolveKindPrefs } from "../core/typesetting.mjs";
+import ResizableSidebar from "./ResizableSidebar";
 
 type Space = { id: string; title: string; root: string };
 // 작품 스페이스(doc/)의 파일에는 문서 타입(플롯/메모)과 연결된 회차가 붙어 온다.
@@ -97,6 +98,7 @@ export default function MemoSession({
   documents,
   onOpenDoc,
   prefs,
+  onSidebarResize,
   flushRef,
   report,
 }: {
@@ -110,6 +112,7 @@ export default function MemoSession({
   // 지난번에 앱을 닫을 때의 메모 화면 상태. 서재를 읽기 전에는 undefined, 없으면 null.
   saved: any;
   prefs: Record<string, any>;
+  onSidebarResize: (width: number) => void;
   flushRef: React.MutableRefObject<(() => Promise<void>) | null>;
   report: (e: any) => void;
 }) {
@@ -1147,7 +1150,8 @@ export default function MemoSession({
   const projectSpaces = spaces.filter((s) => s.id !== COMMON);
   return (
     <div className="memo-session" style={active ? undefined : { display: "none" }}>
-      <aside className="file-sidebar memo-sidebar">
+      <ResizableSidebar className="memo-sidebar" label="메모" width={prefs.leftSidebarWidth}
+        onResize={onSidebarResize} active={active}>
         <div className="panel-caption">
           <span>
             <StickyNote size={15} />
@@ -1240,7 +1244,7 @@ export default function MemoSession({
           )}
           {space !== COMMON && filter.has("episode") && docSection("episode")}
         </div>
-      </aside>
+      </ResizableSidebar>
       <main className="workspace memo-main">
         <div
           className={`editor-groups ${split ? "split" : ""}`}

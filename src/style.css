@@ -736,7 +736,9 @@ h1 small {
   font-weight: 300;
   letter-spacing: -1px;
   color: var(--text);
-  width: 48px;
+  width: 56px;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 .episode-row b {
   font-weight: 500;
@@ -772,6 +774,37 @@ h1 small {
   display: flex;
   flex-direction: column;
   overflow: auto;
+}
+.resizable-sidebar {
+  position: relative;
+  display: flex;
+  flex-shrink: 0;
+  min-width: 180px;
+  min-height: 0;
+}
+.resizable-sidebar > .file-sidebar {
+  width: 100%;
+  min-width: 0;
+}
+.sidebar-sash {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  bottom: 0;
+  width: 6px;
+  z-index: 5;
+  cursor: col-resize;
+  touch-action: none;
+}
+.sidebar-sash:hover,
+.sidebar-sash:focus-visible,
+.resizable-sidebar.resizing > .sidebar-sash {
+  background: var(--accent);
+}
+body.sidebar-resizing,
+body.sidebar-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
 }
 .panel-caption {
   height: 39px;
@@ -898,6 +931,8 @@ h1 small {
   color: var(--text);
   font-size: 13px;
   min-width: 23px;
+  flex-shrink: 0;
+  white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
 .tree-item > svg {

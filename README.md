@@ -1,6 +1,6 @@
 # Lof Writer
 
-**Local First Writing Tool** · 1.0.0-beta.2 (Windows)
+**Local First Writing Tool** · 1.0.0-beta.3 (Windows)
 
 내 PC에 원고를 저장하는 웹소설 집필 도구입니다.
 
