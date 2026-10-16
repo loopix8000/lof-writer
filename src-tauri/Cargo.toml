@@ -30,7 +30,7 @@ trash = "5"
 rfd = "0.15"
 arboard = "3"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "json"] }
 suppaftp = { version = "6", default-features = false, features = ["rustls"] }
 unicode-normalization = "0.1"
 regex = "1"

@@ -3,6 +3,7 @@ pub mod assets;
 pub mod episode;
 pub mod error;
 pub mod file_index;
+mod google_drive;
 pub mod import;
 pub mod markdown;
 pub mod memo;
@@ -196,33 +197,76 @@ fn safe_connection(c: &Value) -> Value {
         .and_then(|v| v.as_str().map(|s| !s.is_empty()))
         .unwrap_or(false);
     obj.insert("hasPassword".to_string(), json!(has_pw));
+    let has_google_auth = obj.remove("refreshToken").is_some();
+    obj.remove("accessToken");
+    obj.remove("clientSecret");
+    obj.insert("hasGoogleAuth".to_string(), json!(has_google_auth));
     Value::Object(obj)
 }
 
 fn encrypt_connection(c: &Value) -> Result<Value, LofError> {
     let mut obj = c.as_object().cloned().unwrap_or_default();
-    if let Some(pw) = obj
-        .get("password")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-    {
-        let enc = dpapi_encrypt(pw)?;
-        obj.insert("password".to_string(), json!(enc));
+    for key in ["password", "refreshToken"] {
+        if let Some(secret) = obj.get(key).and_then(Value::as_str).filter(|s| !s.is_empty()) {
+            let encrypted = dpapi_encrypt(secret)?;
+            obj.insert(key.to_string(), json!(encrypted));
+        }
     }
     Ok(Value::Object(obj))
 }
 
 fn decrypt_connection(c: &Value) -> Result<Value, LofError> {
     let mut obj = c.as_object().cloned().unwrap_or_default();
-    if let Some(pw) = obj
-        .get("password")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-    {
-        let dec = dpapi_decrypt(pw)?;
-        obj.insert("password".to_string(), json!(dec));
+    for key in ["password", "refreshToken"] {
+        if let Some(secret) = obj.get(key).and_then(Value::as_str).filter(|s| !s.is_empty()) {
+            let decrypted = dpapi_decrypt(secret)?;
+            obj.insert(key.to_string(), json!(decrypted));
+        }
     }
     Ok(Value::Object(obj))
+}
+
+fn connect_google_drive(args: &Value, state: &AppState, auth: &google_drive::AuthState) -> Result<Value, LofError> {
+    if !cfg!(windows) {
+        return Err(fail_invalid("Google Drive 연결은 현재 Windows에서 지원합니다."));
+    }
+    let old = if let Some(id) = args.get("id").and_then(Value::as_str) {
+        let settings = state.settings.lock().unwrap();
+        Some(settings.get("connections").and_then(Value::as_array)
+            .and_then(|conns| conns.iter().find(|c| c.get("id").and_then(Value::as_str) == Some(id)
+                && c.get("type").and_then(Value::as_str) == Some("google-drive")))
+            .cloned().ok_or_else(|| fail_invalid("Google Drive 연결을 찾을 수 없습니다."))?)
+    } else { None };
+    let account = google_drive::authorize(auth)?;
+    if let Some(previous) = &old {
+        if previous.get("accountId").and_then(Value::as_str) != Some(&account.account_id) {
+            return Err(fail_invalid("기존에 연결한 Google 계정으로 로그인해 주세요. 다른 계정은 새 연결로 추가할 수 있습니다."));
+        }
+    }
+    let id = old.as_ref().and_then(|c| c.get("id")).and_then(Value::as_str)
+        .map(str::to_string).unwrap_or_else(|| Uuid::new_v4().to_string());
+    let name: String = old.as_ref().and_then(|c| c.get("name"))
+        .or_else(|| args.get("name")).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty())
+        .unwrap_or("Google Drive").chars().take(100).collect();
+    let conn = json!({ "id": id, "name": name, "type": "google-drive",
+        "email": account.email, "accountId": account.account_id,
+        "clientId": google_drive::CLIENT_ID, "refreshToken": account.refresh_token });
+    let encrypted = encrypt_connection(&conn)?;
+    auth.check_cancelled()?;
+    let mut settings = state.settings.lock().unwrap();
+    let mut next = settings.clone();
+    let mut connections = next.get("connections").and_then(Value::as_array).cloned().unwrap_or_default();
+    if old.is_some() {
+        let previous = connections.iter_mut().find(|c| c.get("id") == conn.get("id"))
+            .ok_or_else(|| fail_invalid("연결이 제거되었습니다. 새 연결로 추가해 주세요."))?;
+        *previous = encrypted;
+    } else {
+        connections.push(encrypted);
+    }
+    next["connections"] = json!(connections);
+    persist_settings(&state.config_file, &next)?;
+    *settings = next;
+    Ok(safe_connection(&conn))
 }
 
 fn history_policy_from_settings(settings: &Value) -> HistoryPolicy {
@@ -1182,6 +1226,10 @@ fn handle_method(
             }
             Ok(safe_connection(&conn_val))
         }
+        "cancelGoogleDrive" => {
+            app.state::<google_drive::AuthState>().cancel();
+            Ok(json!(true))
+        }
         "removeConnection" => {
             let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
             let mut s_guard = state.settings.lock().unwrap();
@@ -1335,7 +1383,24 @@ async fn lof_invoke(
     window: WebviewWindow,
 ) -> Result<Value, String> {
     let args_val = args.unwrap_or_else(|| json!({}));
-    match handle_method(&method, args_val, &state, &app, &window) {
+    let result = if matches!(method.as_str(), "connectGoogleDrive" | "sync") {
+        tauri::async_runtime::spawn_blocking(move || {
+            let state = app.state::<AppState>();
+            if method == "connectGoogleDrive" {
+                let auth = app.state::<google_drive::AuthState>();
+                let result = connect_google_drive(&args_val, &state, &auth);
+                restore_main_window(&app);
+                result
+            } else {
+                handle_method(&method, args_val, &state, &app, &window)
+            }
+        })
+        .await
+        .unwrap_or_else(|_| Err(fail_invalid("요청 처리 중 오류가 발생했습니다.")))
+    } else {
+        handle_method(&method, args_val, &state, &app, &window)
+    };
+    match result {
         Ok(data) => Ok(json!({ "ok": true, "data": data })),
         Err(e) => Ok(json!({ "ok": false, "error": e.message, "code": e.code })),
     }
@@ -1560,7 +1625,7 @@ pub fn run() {
                 .filter(|c| {
                     c.get("type")
                         .and_then(|v| v.as_str())
-                        .is_some_and(|t| matches!(t, "folder" | "ftp" | "webdav"))
+                        .is_some_and(|t| matches!(t, "folder" | "ftp" | "webdav" | "google-drive"))
                 })
                 .cloned()
                 .collect()
@@ -1670,6 +1735,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(state)
+        .manage(google_drive::AuthState::default())
         .invoke_handler(tauri::generate_handler![
             lof_invoke,
             lof_flushed,

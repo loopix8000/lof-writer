@@ -23,6 +23,8 @@ const methods = [
   "reveal",
   "settings",
   "saveConnection",
+  "connectGoogleDrive",
+  "cancelGoogleDrive",
   "removeConnection",
   "sync",
   "chooseCover",
