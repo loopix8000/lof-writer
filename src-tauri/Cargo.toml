@@ -21,6 +21,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 serde_yaml = "0.9"
 sha2 = "0.10"
+pbkdf2 = "0.12"
+subtle = "2.6"
 hex = "0.4"
 base64 = "0.22"
 uuid = { version = "1", features = ["v4"] }

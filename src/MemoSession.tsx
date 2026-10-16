@@ -566,6 +566,7 @@ export default function MemoSession({
   activeRef.current = active;
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      if (document.documentElement.dataset.pinLocked === "true") return;
       if (!activeRef.current || !(e.ctrlKey || e.metaKey) || e.altKey) return;
       const current = tabsRef.current.find((t) => sameTab(t, memoRef.current));
       let run: (() => Promise<void>) | null = null;

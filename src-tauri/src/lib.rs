@@ -1,5 +1,6 @@
 pub mod api;
 pub mod assets;
+mod auto_sync;
 pub mod episode;
 pub mod error;
 pub mod file_index;
@@ -8,12 +9,13 @@ pub mod import;
 pub mod markdown;
 pub mod memo;
 pub mod platforms;
+mod pin;
 pub mod store;
 pub mod sync;
 pub mod text;
 
 use crate::api::{start_api, ApiServer};
-use crate::error::{fail_invalid, LofError};
+use crate::error::{fail, fail_invalid, LofError};
 use crate::import::import_files;
 use crate::memo::Memos;
 use crate::store::{atomic_write_str, strip_verbatim_prefix, HistoryPolicy, Store};
@@ -523,7 +525,69 @@ fn set_clipboard_text(text: &str) -> Result<(), LofError> {
         .map_err(|e| fail_invalid(e.to_string()))
 }
 
+struct SyncGuard<'a>(&'a AtomicBool);
+
+impl Drop for SyncGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
+fn sync_connection(state: &AppState, id: &str, root: &Path) -> Result<Value, LofError> {
+    if state.syncing.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+        return Err(fail("이미 동기화 중입니다.", "SYNC_BUSY"));
+    }
+    let _guard = SyncGuard(&state.syncing);
+    let (conn, device_id) = {
+        let settings = state.settings.lock().unwrap();
+        let conn = settings.get("connections").and_then(Value::as_array)
+            .and_then(|connections| connections.iter().find(|c| c.get("id").and_then(Value::as_str) == Some(id)))
+            .cloned().ok_or_else(|| fail("연결을 찾을 수 없습니다.", "CONNECTION_REMOVED"))?;
+        let device = settings.get("deviceId").and_then(Value::as_str).unwrap_or("").to_string();
+        (decrypt_connection(&conn)?, device)
+    };
+    {
+        let store = state.store.lock().unwrap();
+        if store.as_ref().map(|store| store.root.as_path()) != Some(root) {
+            return Err(fail("동기화 중 서재가 변경되었습니다.", "VAULT_CHANGED"));
+        }
+    }
+    let prepared = sync::prepare_connection(&conn)?;
+    if prepared.get("folderId") != conn.get("folderId") {
+        let mut settings = state.settings.lock().unwrap();
+        let mut next = settings.clone();
+        let saved = next.get_mut("connections").and_then(Value::as_array_mut)
+            .and_then(|connections| connections.iter_mut().find(|c| {
+                c.get("id") == conn.get("id") && c.get("accountId") == conn.get("accountId")
+            })).ok_or_else(|| fail("동기화 연결이 변경되었습니다.", "CONNECTION_REMOVED"))?;
+        saved["folderId"] = prepared["folderId"].clone();
+        persist_settings(&state.config_file, &next)?;
+        *settings = next;
+    }
+    sync_once(&state.store, root, &prepared, &device_id)
+}
+
 fn handle_method(
+    method: &str,
+    args: Value,
+    state: &AppState,
+    app: &AppHandle,
+    window: &WebviewWindow,
+) -> Result<Value, LofError> {
+    let result = dispatch_method(method, args, state, app, window);
+    if result.as_ref().is_ok_and(|value| !value.is_null()) && matches!(method,
+        "createProject" | "updateProject" | "chooseCover" | "removeCover" | "createDocument" |
+        "saveDocument" | "reorderDocuments" | "deleteProject" | "repair" | "relinkDocument" |
+        "adoptFile" | "forgetDocument" | "memoSave" | "memoCreate" | "memoCreateFolder" |
+        "memoRename" | "memoMove" | "memoRemove" | "restore" | "deleteDocument" | "importFiles" |
+        "saveConnection" | "chooseVault")
+    {
+        auto_sync::request(app);
+    }
+    result
+}
+
+fn dispatch_method(
     method: &str,
     args: Value,
     state: &AppState,
@@ -544,6 +608,15 @@ fn handle_method(
     };
 
     match method {
+        "autoSyncStatus" => Ok(app.state::<auto_sync::AutoSyncState>().status()),
+        "pinStatus" => Ok(pin_status(app)),
+        "pinReady" => {
+            let generation = args.get("generation").and_then(Value::as_u64).unwrap_or(0);
+            if app.state::<pin::PinState>().ready_to_show(generation) {
+                show_main_window(app);
+            }
+            Ok(json!(true))
+        }
         "bootstrap" => {
             let prefs = {
                 let s = state.settings.lock().unwrap();
@@ -1150,6 +1223,7 @@ fn handle_method(
                 "apiPort": state.api.port,
                 "preferences": prefs,
                 "syncing": state.syncing.load(Ordering::SeqCst),
+                "autoSync": app.state::<auto_sync::AutoSyncState>().status(),
             }))
         }
         "saveConnection" => {
@@ -1257,52 +1331,10 @@ fn handle_method(
             Ok(json!(true))
         }
         "sync" => {
-            if state
-                .syncing
-                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-                .is_err()
-            {
-                return Err(fail_invalid("이미 동기화 중입니다."));
-            }
             let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
-            let sync_res = (|| -> Result<Value, LofError> {
-                let (conn, device_id) = {
-                    let s_guard = state.settings.lock().unwrap();
-                    let found = s_guard
-                        .get("connections")
-                        .and_then(|v| v.as_array())
-                        .and_then(|arr| {
-                            arr.iter()
-                                .find(|c| c.get("id").and_then(|v| v.as_str()) == Some(id))
-                        })
-                        .cloned()
-                        .ok_or_else(|| fail_invalid("연결을 찾을 수 없습니다."))?;
-                    let dev = s_guard
-                        .get("deviceId")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    (decrypt_connection(&found)?, dev)
-                };
-                let prepared = sync::prepare_connection(&conn)?;
-                if prepared.get("folderId") != conn.get("folderId") {
-                    let mut settings = state.settings.lock().unwrap();
-                    let mut next = settings.clone();
-                    let saved = next.get_mut("connections").and_then(Value::as_array_mut)
-                        .and_then(|conns| conns.iter_mut().find(|c| {
-                            c.get("id") == conn.get("id") && c.get("accountId") == conn.get("accountId")
-                        })).ok_or_else(|| fail_invalid("동기화 연결이 변경되었습니다. 다시 시도해 주세요."))?;
-                    saved["folderId"] = prepared["folderId"].clone();
-                    persist_settings(&state.config_file, &next)?;
-                    *settings = next;
-                }
-                let mut guard = state.store.lock().unwrap();
-                let st = guard
-                    .as_mut()
-                    .ok_or_else(|| fail_invalid("Store not initialized"))?;
-                sync_once(st, &prepared, &device_id)
-            })();
-            state.syncing.store(false, Ordering::SeqCst);
+            let root = state.store.lock().unwrap().as_ref()
+                .ok_or_else(|| fail_invalid("Store not initialized"))?.root.clone();
+            let sync_res = sync_connection(state, id, &root);
             schedule_notify(app, &state.notify_seq);
             sync_res
         }
@@ -1402,12 +1434,37 @@ async fn lof_invoke(
     window: WebviewWindow,
 ) -> Result<Value, String> {
     let args_val = args.unwrap_or_else(|| json!({}));
-    let result = if matches!(method.as_str(), "connectGoogleDrive" | "sync") {
+    let result = if matches!(method.as_str(), "connectGoogleDrive" | "sync" | "pinUnlock" | "pinSave") {
         tauri::async_runtime::spawn_blocking(move || {
             let state = app.state::<AppState>();
-            if method == "connectGoogleDrive" {
+            if method == "pinUnlock" || method == "pinSave" {
+                let pin = app.state::<pin::PinState>();
+                if method == "pinUnlock" {
+                    pin.unlock(args_val.get("pin").and_then(Value::as_str).unwrap_or(""))?;
+                } else {
+                    let current = args_val.get("currentPin").and_then(Value::as_str).unwrap_or("");
+                    let next = match args_val.get("newPin") {
+                        Some(Value::String(pin)) => Some(pin.as_str()),
+                        Some(Value::Null) => None,
+                        _ => return Err(fail_invalid("새 PIN을 확인해 주세요.")),
+                    };
+                    if next.is_some() && args_val.get("confirmPin").and_then(Value::as_str) != next {
+                        return Err(fail_invalid("새 PIN과 확인 번호가 일치하지 않습니다."));
+                    }
+                    pin.save(current, next)?;
+                    if !window.is_visible().unwrap_or(false) {
+                        pin.lock_for_tray();
+                    }
+                }
+                let status = pin_status(&app);
+                let _ = app.emit("lof:pin-state", &status);
+                Ok(status)
+            } else if method == "connectGoogleDrive" {
                 let auth = app.state::<google_drive::AuthState>();
                 let result = connect_google_drive(&args_val, &state, &auth);
+                if result.is_ok() {
+                    auto_sync::request(&app);
+                }
                 restore_main_window(&app);
                 result
             } else {
@@ -1450,11 +1507,40 @@ fn lof_flushed(ok: bool, state: State<'_, AppState>, window: WebviewWindow) {
         state.closing.store(true, Ordering::SeqCst);
         let _ = window.close();
     } else {
-        let _ = window.hide();
+        hide_to_tray(window.app_handle());
+    }
+}
+
+fn pin_status(app: &AppHandle) -> Value {
+    let mut status = app.state::<pin::PinState>().status();
+    let state = app.state::<AppState>();
+    let settings = state.settings.lock().unwrap();
+    let prefs = settings.get("preferences");
+    status["theme"] = prefs.and_then(|p| p.get("theme")).cloned().unwrap_or(json!("light"));
+    status["colorTheme"] = prefs.and_then(|p| p.get("colorTheme")).cloned().unwrap_or(json!("modern"));
+    status
+}
+
+fn hide_to_tray(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        if window.hide().is_ok() {
+            app.state::<pin::PinState>().lock_for_tray();
+            let _ = app.emit("lof:pin-state", pin_status(app));
+        }
     }
 }
 
 fn restore_main_window(app: &AppHandle) {
+    let pin = app.state::<pin::PinState>();
+    if pin.is_locked() {
+        pin.request_show();
+        let _ = app.emit("lof:pin-state", pin_status(app));
+        return;
+    }
+    show_main_window(app);
+}
+
+fn show_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.unminimize();
@@ -1612,6 +1698,14 @@ pub fn run() {
         return;
     }
 
+    let pin_state = match pin::PinState::load(user_dir.join("pin.json")) {
+        Ok(pin) => pin,
+        Err(error) => {
+            MessageDialog::new().set_level(MessageLevel::Error)
+                .set_title("Lof Writer 시작 실패").set_description(error.to_string()).show();
+            return;
+        }
+    };
     let config_file = user_dir.join("settings.json");
     let mut settings: Value = match fs::read_to_string(&config_file) {
         Ok(raw) => serde_json::from_str(&raw).unwrap_or_else(|_| json!({})),
@@ -1703,6 +1797,8 @@ pub fn run() {
             if let Ok(guard) = holder_for_api.lock() {
                 if let Some(ref app) = *guard {
                     schedule_notify(app, &notify_seq_for_api);
+                    let app = app.clone();
+                    thread::spawn(move || auto_sync::request(&app));
                 }
             }
         }),
@@ -1755,6 +1851,8 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(state)
         .manage(google_drive::AuthState::default())
+        .manage(pin_state)
+        .manage(auto_sync::AutoSyncState::default())
         .invoke_handler(tauri::generate_handler![
             lof_invoke,
             lof_flushed,
@@ -1914,8 +2012,7 @@ pub fn run() {
                     }
                 }
                 let _ = win.set_background_color(Some(bg_color));
-                let _ = win.show();
-                let _ = win.set_focus();
+                restore_main_window(&handle);
             }
             {
                 let mut vw = st.vault_watcher.lock().unwrap();
@@ -1931,6 +2028,7 @@ pub fn run() {
                 let mut cw = st.common_watcher.lock().unwrap();
                 *cw = setup_common_watcher(&clean_vault_root, &common_root, &handle, &st.notify_seq);
             }
+            auto_sync::request(&handle);
             Ok(())
         })
         .on_window_event(move |window, event| {
@@ -1988,7 +2086,7 @@ pub fn run() {
                     if !state.quit_requested.load(Ordering::SeqCst) {
                         close_pending_clone.store(false, Ordering::SeqCst);
                         close_seq_clone.fetch_add(1, Ordering::SeqCst);
-                        let _ = win_clone.hide();
+                        hide_to_tray(win_clone.app_handle());
                         return;
                     }
                     restore_main_window(win_clone.app_handle());

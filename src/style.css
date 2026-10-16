@@ -7,6 +7,45 @@
   -webkit-font-smoothing: antialiased;
   font-size: 15px;
 }
+.pin-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+}
+.pin-titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 36px;
+  padding-left: 16px;
+  border-bottom: 1px solid var(--border);
+  user-select: none;
+  font-size: 12px;
+  color: var(--muted);
+}
+.pin-screen-main {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  overflow: auto;
+}
+.pin-card {
+  width: min(100%, 340px);
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.pin-card h1 { margin: 0; font-size: 23px; font-weight: 600; text-align: center; }
+.pin-card > p { margin: 0; text-align: center; color: var(--muted); line-height: 1.6; }
+.pin-symbol { color: var(--accent); text-align: center; margin-bottom: 4px; }
+.pin-input-label { display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+.pin-input-label input { text-align: center; font-size: 24px; letter-spacing: .25em; }
+.pin-error, .pin-card > .pin-error { color: var(--danger-text); font-size: 13px; line-height: 1.6; margin: 0; }
+.pin-settings-form { max-width: 360px; display: flex; flex-direction: column; gap: 16px; }
+.pin-settings-form > label { display: flex; flex-direction: column; gap: 7px; font-size: 13px; }
+.auto-sync-status { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); white-space: nowrap; }
+.auto-sync-status.error { color: var(--danger-text); }
 * {
   box-sizing: border-box;
 }

@@ -1,4 +1,4 @@
-use crate::error::{fail_invalid, hash_str, now_iso, valid_id, LofError};
+use crate::error::{fail, fail_invalid, hash_str, now_iso, valid_id, LofError};
 use crate::store::{atomic_write_str, project_fields, Store};
 use regex::Regex;
 use reqwest::blocking::Client as HttpClient;
@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use suppaftp::RustlsConnector;
 use suppaftp::RustlsFtpStream;
@@ -379,13 +379,29 @@ fn create_adapter(config: &Value) -> Result<Box<dyn RemoteAdapter>, LofError> {
     }
 }
 
-pub fn sync_once(store: &mut Store, config: &Value, device_id: &str) -> Result<Value, LofError> {
+fn with_store<T>(
+    store: &Mutex<Option<Store>>,
+    root: &Path,
+    action: impl FnOnce(&mut Store) -> Result<T, LofError>,
+) -> Result<T, LofError> {
+    let mut guard = store.lock().unwrap();
+    let store = guard.as_mut().ok_or_else(|| fail_invalid("Store not initialized"))?;
+    if store.root != root {
+        return Err(fail("동기화 중 서재가 변경되었습니다.", "VAULT_CHANGED"));
+    }
+    action(store)
+}
+
+pub fn sync_once(store: &Mutex<Option<Store>>, root: &Path, config: &Value, device_id: &str) -> Result<Value, LofError> {
     if !valid_id(device_id) {
         return Err(fail_invalid("잘못된 장치 ID"));
     }
     let cid = config.get("id").and_then(|v| v.as_str()).unwrap_or("");
-    let state_file = store
-        .root
+    if !valid_id(cid) {
+        return Err(fail_invalid("잘못된 동기화 연결 ID"));
+    }
+    with_store(store, root, |_| Ok(()))?;
+    let state_file = root
         .join(".lof")
         .join("sync")
         .join(format!("{}.json", cid));
@@ -439,7 +455,7 @@ pub fn sync_once(store: &mut Store, config: &Value, device_id: &str) -> Result<V
                 }
             }
 
-            let merged = store.merge(&snapshot, &base)?;
+            let merged = with_store(store, root, |store| store.merge(&snapshot, &base))?;
             downloaded += merged
                 .get("imported")
                 .and_then(|v| v.as_array())
@@ -490,7 +506,7 @@ pub fn sync_once(store: &mut Store, config: &Value, device_id: &str) -> Result<V
             }
         }
 
-        let mut snapshot = store.snapshot()?;
+        let mut snapshot = with_store(store, root, Store::snapshot)?;
         let uploaded = snapshot
             .get("documents")
             .and_then(|v| v.as_array())
@@ -525,6 +541,7 @@ pub fn sync_once(store: &mut Store, config: &Value, device_id: &str) -> Result<V
         if raw_snap.len() > MAX_SYNC_BYTES {
             return Err(fail_invalid("알파 동기화는 도서관당 50MB까지 지원합니다."));
         }
+        with_store(store, root, |_| Ok(()))?;
         remote.write(&own_file, &raw_snap)?;
 
         if let Some(sobj) = state.as_object_mut() {
