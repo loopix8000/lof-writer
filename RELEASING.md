@@ -1,6 +1,6 @@
 # Windows 설치형 릴리즈와 업데이트
 
-현재 저장소와 서명 키는 연결하지 않았다. 기본 설정의 업데이트 주소와 공개키는 비어 있으며, 이 상태에서는 업데이트 요청을 보내지 않는다. 앱의 설정 > 앱 업데이트에서 준비 상태를 확인할 수 있다.
+공개 배포 저장소는 `loopix8000/lof-writer`이다. 베타 업데이트 주소는 `https://github.com/loopix8000/lof-writer/releases/download/beta/latest.json`이다. Actions가 등록된 공개키와 이 주소를 빌드에 포함한다. 기본 개발 설정에는 업데이트 주소와 공개키가 비어 있으며, 앱의 설정 > 앱 업데이트에서 준비 상태를 확인할 수 있다.
 
 ## 앱의 동작
 
@@ -10,14 +10,15 @@
 - 한글 조합, 저장 실패, 충돌, 진행 중인 작업이 있으면 설치를 중단하고 편집 화면으로 돌아간다.
 - 서명을 검증한 설치 파일을 MSI 설치 프로그램으로 실행한다. Windows 앱은 종료되고 설치 완료 후 다시 실행된다.
 
-## 나중에 저장소를 연결할 때
+## 서명 설정
 
 1. Tauri 서명 키를 만든다. 비밀키는 소스에 넣지 않고 별도로 백업한다. `.private/`는 Git에서 제외되어 있다.
 
    ```powershell
-   New-Item -ItemType Directory -Force .private
-   node node_modules/@tauri-apps/cli/tauri.js signer generate --ci -w .private/updater.key
+   npm run updater:keygen
    ```
+
+   비밀키는 `.private/updater.key`, 공개키는 `.private/updater.key.pub`에 저장한다. 기존 키가 있으면 덮어쓰지 않으며, 키 내용은 터미널에 출력하지 않는다. 이 명령으로 생성한 키에는 별도 암호가 없으므로 비밀키 암호 Secret은 생략한다.
 
 2. GitHub Actions 설정에 다음 값을 등록한다.
 
@@ -29,9 +30,11 @@
    | Secret | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | 비밀키에 암호를 설정했다면 그 암호 |
 
 3. `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`의 버전을 함께 올린다. 준비 스크립트는 버전이 다르면 빌드를 중단한다. MSI 내부 버전인 `bundle.windows.wix.version`도 숫자 형식으로 맞춘다. 현재 앱 버전 `1.0.0-beta.1`에 대응하는 MSI 내부 버전은 `1.0.0.1`이다.
-4. GitHub Actions의 **Build Windows MSI release**를 수동 실행한다. MSI, 서명, `latest.json`을 포함한 초안 릴리즈가 생성된다. 검사한 뒤 릴리즈를 공개한다.
+4. GitHub Actions의 **Build Windows MSI release**를 `main`에서 수동 실행한다. **Publish the release and update the beta channel after building**을 선택하면 MSI·서명·`latest.json`을 업로드한 뒤 공개하고 베타 채널을 갱신한다. 선택하지 않으면 초안으로 남는다.
 
-정식 릴리즈의 업데이트 주소는 `https://github.com/OWNER/REPO/releases/latest/download/latest.json` 형식으로 사용할 수 있다. GitHub의 Latest에는 prerelease가 포함되지 않으므로, 베타 배포에는 별도 고정 채널의 JSON 주소가 필요하다. 현재 워크플로는 버전별 릴리즈에 JSON을 업로드하며, 별도 베타 채널을 갱신하는 작업은 저장소·채널이 정해진 뒤 연결한다.
+`beta` 릴리즈의 `latest.json`은 버전별 릴리즈의 MSI 주소를 가리킨다. 버전별 설치 파일은 유지하고, 새 베타 버전을 공개할 때 고정 채널의 JSON만 갱신한다. 공개 스크립트는 버전·MSI 존재 여부·서명을 확인하고 설치 파일을 먼저 공개한다. 공개 단계만 재시도할 때는 해당 버전의 소스를 체크아웃하고 `GITHUB_REPOSITORY=loopix8000/lof-writer` 환경 변수를 설정한 뒤 `node scripts/publish-release.mjs`를 실행한다.
+
+정식 배포로 전환할 때는 업데이트 주소를 `https://github.com/loopix8000/lof-writer/releases/latest/download/latest.json`으로 변경한다. GitHub의 Latest에는 prerelease가 포함되지 않는다.
 
 소스 저장소와 공개 배포 저장소를 분리할 경우에는 워크플로의 업로드 대상과 해당 저장소에 접근할 토큰도 함께 설정한다. 기본 워크플로의 대상은 실행 중인 저장소다.
 

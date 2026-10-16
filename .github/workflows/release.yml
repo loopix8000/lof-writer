@@ -2,6 +2,11 @@ name: Build Windows MSI release
 
 on:
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the release and update the beta channel after building
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -47,3 +52,8 @@ jobs:
           uploadUpdaterSignatures: true
           updaterJsonPreferNsis: false
           args: --bundles msi --config src-tauri/tauri.updater.generated.json
+      - name: Publish release and update channel
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/publish-release.mjs

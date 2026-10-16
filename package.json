@@ -22,6 +22,7 @@
     "package:dir": "node scripts/package-tauri.mjs dir",
     "package:msi": "node scripts/package-tauri.mjs msi",
     "updater:prepare": "node scripts/prepare-updater.mjs",
+    "updater:keygen": "node scripts/generate-updater-key.mjs",
     "smoke:chrome": "node scripts/chrome-smoke.mjs"
   },
   "dependencies": {
