@@ -28,10 +28,11 @@ try {
   if (!platform?.signature) throw new Error("Signed Windows updater entry is missing.");
   const download = new URL(platform.url);
   const prefix = `/${repo}/releases/download/${tag}/`;
-  if (download.origin !== "https://github.com" || !download.pathname.startsWith(prefix)) {
-    throw new Error("Updater must point to this version's release assets.");
-  }
-  const installer = decodeURIComponent(download.pathname.slice(prefix.length));
+  // The build action can emit an API asset URL while the release is still a draft.
+  const asset = release.assets.find(item => item.apiUrl === download.href || item.url === download.href ||
+    (download.origin === "https://github.com" && download.pathname === `${prefix}${encodeURIComponent(item.name)}`));
+  if (!asset) throw new Error("Updater must point to this version's release assets.");
+  const installer = asset.name;
   if (!installer.endsWith(".msi") || installer.includes("/")) throw new Error("Invalid MSI asset name.");
   for (const name of [installer, `${installer}.sig`]) {
     if (!release.assets.some(asset => asset.name === name && asset.size > 0)) {
@@ -42,6 +43,13 @@ try {
   if (fs.readFileSync(path.join(temporary, `${installer}.sig`), "utf8").trim() !== platform.signature.trim()) {
     throw new Error("Updater signature does not match the MSI signature asset.");
   }
+  const publicDownload = `https://github.com${prefix}${encodeURIComponent(installer)}`;
+  const originalDownload = platform.url;
+  for (const entry of Object.values(manifest.platforms)) {
+    if (entry.url === originalDownload) entry.url = publicDownload;
+  }
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
+  gh("release", "upload", tag, manifestPath, "--clobber");
 
   // Publish installers before moving the channel so the manifest always has a public download.
   if (release.isDraft) gh("release", "edit", tag, "--draft=false", "--latest=false");
