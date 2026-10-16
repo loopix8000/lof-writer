@@ -43,6 +43,9 @@ pub struct AppState {
     pub common_watcher: Mutex<Option<RecommendedWatcher>>,
     pub syncing: Arc<AtomicBool>,
     pub title_bar_dimmed: AtomicBool,
+    /// 집중 모드에서 요청한 작은 창 허용 여부와 실제로 적용된 값.
+    pub compact_window: AtomicBool,
+    pub compact_applied: AtomicBool,
     pub closing: Arc<AtomicBool>,
     pub close_pending: Arc<AtomicBool>,
     pub close_seq: Arc<AtomicU64>,
@@ -1268,27 +1271,8 @@ fn handle_method(
                 .get("compact")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
-            let (min_w, min_h) = if compact {
-                (320.0, 260.0)
-            } else {
-                (1000.0, 650.0)
-            };
-            let _ = window.set_min_size(Some(tauri::LogicalSize::new(min_w, min_h)));
-            if !compact
-                && !window.is_maximized().unwrap_or(false)
-                && !window.is_fullscreen().unwrap_or(false)
-            {
-                if let (Ok(size), Ok(scale)) = (window.outer_size(), window.scale_factor()) {
-                    let logical_w = size.width as f64 / scale;
-                    let logical_h = size.height as f64 / scale;
-                    if logical_w < min_w || logical_h < min_h {
-                        let _ = window.set_size(tauri::LogicalSize::new(
-                            logical_w.max(min_w),
-                            logical_h.max(min_h),
-                        ));
-                    }
-                }
-            }
+            state.compact_window.store(compact, Ordering::SeqCst);
+            apply_window_min_size(window, state);
             Ok(json!(compact))
         }
         "setTitleBarDimmed" => {
@@ -1375,6 +1359,40 @@ fn lof_flushed(ok: bool, state: State<'_, AppState>, window: WebviewWindow) {
     }
     state.closing.store(true, Ordering::SeqCst);
     let _ = window.close();
+}
+
+/// 집중 모드의 작은 창 허용 여부에 맞춰 창 최소 크기를 적용한다.
+/// 최소 크기를 바꾸면 창 크기를 다시 지정하게 되어 최대화·전체 화면이 풀리므로,
+/// 그 상태에서는 적용을 미뤘다가 창이 일반 상태로 돌아왔을 때(Resized) 적용한다.
+fn apply_window_min_size(window: &WebviewWindow, state: &AppState) {
+    if window.is_maximized().unwrap_or(false)
+        || window.is_fullscreen().unwrap_or(false)
+        || window.is_minimized().unwrap_or(false)
+    {
+        return;
+    }
+    let compact = state.compact_window.load(Ordering::SeqCst);
+    if state.compact_applied.swap(compact, Ordering::SeqCst) == compact {
+        return;
+    }
+    let (min_w, min_h) = if compact {
+        (320.0, 260.0)
+    } else {
+        (1000.0, 650.0)
+    };
+    let _ = window.set_min_size(Some(tauri::LogicalSize::new(min_w, min_h)));
+    if !compact {
+        if let (Ok(size), Ok(scale)) = (window.outer_size(), window.scale_factor()) {
+            let logical_w = size.width as f64 / scale;
+            let logical_h = size.height as f64 / scale;
+            if logical_w < min_w || logical_h < min_h {
+                let _ = window.set_size(tauri::LogicalSize::new(
+                    logical_w.max(min_w),
+                    logical_h.max(min_h),
+                ));
+            }
+        }
+    }
 }
 
 #[tauri::command]
@@ -1620,6 +1638,8 @@ pub fn run() {
         common_watcher: Mutex::new(None),
         syncing: Arc::new(AtomicBool::new(false)),
         title_bar_dimmed: AtomicBool::new(false),
+        compact_window: AtomicBool::new(false),
+        compact_applied: AtomicBool::new(false),
         closing: Arc::clone(&closing),
         close_pending: Arc::clone(&close_pending),
         close_seq: Arc::clone(&close_seq),
@@ -1776,6 +1796,24 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(move |window, event| {
+            if let tauri::WindowEvent::Resized(_) = event {
+                let app = window.app_handle().clone();
+                let st: State<AppState> = app.state();
+                if st.compact_window.load(Ordering::SeqCst)
+                    == st.compact_applied.load(Ordering::SeqCst)
+                {
+                    return;
+                }
+                let label = window.label().to_string();
+                let app_for_main = app.clone();
+                let _ = app.run_on_main_thread(move || {
+                    if let Some(w) = app_for_main.get_webview_window(&label) {
+                        let st: State<AppState> = app_for_main.state();
+                        apply_window_min_size(&w, &st);
+                    }
+                });
+                return;
+            }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 let app = window.app_handle();
                 let st: State<AppState> = app.state();
