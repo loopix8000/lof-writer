@@ -33,8 +33,6 @@ import {
   Archive,
   ArchiveRestore,
   Trash2,
-  ArrowUp,
-  ArrowDown,
   Sun,
   Moon,
   X,
@@ -47,6 +45,8 @@ import {
   Bookmark as BookmarkIcon,
 } from "lucide-react";
 import Writer from "./Writer";
+import EditorScroll, { type EditorScrollPositions } from "./EditorScroll";
+import RetainedTab from "./RetainedTab";
 import ResizableSidebar from "./ResizableSidebar";
 import { useAppUpdater, UpdateSettings, UpdateNotice, UpdateLock } from "./Updater";
 import {
@@ -134,6 +134,8 @@ type Dialog = {
   type: string;
   kind?: Kind;
   value?: string;
+  // 여러 문서를 한 번에 다루는 대화상자(파일 트리 다중 선택의 영구 삭제).
+  ids?: string[];
   description?: string;
   tags?: string[];
   writing?: WritingRules;
@@ -221,7 +223,7 @@ export default function App() {
     [loaded, setLoaded] = useState(false),
     [view, setView] = useState("library"),
     [projectId, setProjectId] = useState(""),
-    [active, setActive] = useState<Doc | null>(null),
+    [active, setActiveState] = useState<Doc | null>(null),
     [tab, setTab] = useState<Kind>("episode"),
     [dialog, setDialog] = useState<Dialog | null>(null),
     [settingsPage, setSettingsPage] = useState<(typeof settingPages)[number]["id"]>("editor"),
@@ -236,6 +238,8 @@ export default function App() {
     [saveStatus, setSaveStatus] = useState("저장됨"),
     [conflict, setConflict] = useState(false),
     [source, setSource] = useState(false),
+    // 편집 중인 원고에서 커서가 있는 줄 번호(상태줄에 보인다).
+    [cursorLine, setCursorLine] = useState<number | null>(null),
     [focus, setFocus] = useState(false),
     // 집중 모드의 파일 트리는 평소 상태와 따로 두고, 집중 모드에 들어갈 때마다 닫힌 채로 시작한다.
     [focusTree, setFocusTree] = useState(false),
@@ -288,7 +292,12 @@ export default function App() {
     // 작품 삭제 확인: 작품 제목을 그대로 입력해야 삭제 버튼이 켜진다.
     [confirmTitle, setConfirmTitle] = useState(""),
     // 플롯 트리에서 접어 둔 회차, 플롯을 끌어 놓을 대상(회차 ID, 연결 해제는 "").
-    [plotDrop, setPlotDrop] = useState<string | null>(null),
+    // 트리에서 끄는 동안 놓을 곳: 파일을 연결할 회차 ID나 옮길 폴더("folder:경로").
+    [treeDrop, setTreeDrop] = useState<string | null>(null),
+    // 순서를 바꾸려고 끈 회차를 놓을 자리(그 회차 줄의 위·아래).
+    [episodeDrop, setEpisodeDrop] = useState<{ id: string; after: boolean } | null>(null),
+    // 파일 트리에서 Shift·Ctrl+클릭으로 고른 문서(트리에 보이는 순서). 비어 있으면 한 줄씩 다룬다.
+    [treeSelection, setTreeSelection] = useState<string[]>([]),
     // 메모 영역의 memo/ 폴더 목록, 펼친 폴더, 이름을 바꾸는 폴더.
     [memoEntries, setMemoEntries] = useState<{ path: string; name: string; type: string }[]>([]),
     [memoOpenFolders, setMemoOpenFolders] = useState<Set<string>>(new Set()),
@@ -322,10 +331,14 @@ export default function App() {
   const memoApi = useRef<{ open: (space: string, path: string, pinned?: boolean) => Promise<void> } | null>(null);
   // 전역 단축키에서 늘 최신 검색 함수를 부르도록 한다.
   const searchActions = useRef({ openQuick: () => {}, openSearch: () => {} });
-  // 파일 트리에서 끌고 있는 문서 ID(dragPlot)나 doc/ 폴더 경로(dragFolder).
+  // 트리에서 끌고 있는 것. dragTreeDoc은 편집기 그룹에 놓아 열 문서, dragEpisodes는 순서를 바꿀 회차(보관함 밖),
+  // dragFileDocs는 문서 탭의 파일(플롯·메모), dragFolder는 doc/ 폴더 경로다. 여러 줄을 골랐으면 고른 것을 함께 끈다.
   const dragTreeDoc = useRef("");
-  const dragPlot = useRef("");
+  const dragEpisodes = useRef<string[]>([]);
+  const dragFileDocs = useRef<string[]>([]);
   const dragFolder = useRef("");
+  // Shift+클릭 범위 선택의 기준 줄(마지막으로 그냥 누르거나 Ctrl+클릭한 줄).
+  const selectionAnchor = useRef("");
   const closeMenu = useCallback(() => setMenu(null), []);
   const closeViewer = useCallback(() => setViewer(null), []);
   const switchWasOpen = useRef(false);
@@ -348,7 +361,21 @@ export default function App() {
   const [split, setSplit] = useState<EditorGroup | null>(null),
     [focusedSide, setFocusedSide] = useState<Side>("left"),
     [splitRatio, setSplitRatio] = useState(0.5),
-    [sideDoc, setSideDoc] = useState<Doc | null>(null);
+    [sideDoc, setSideDocState] = useState<Doc | null>(null);
+  const retainedDocuments = useRef(new Map<string, Doc>());
+  const setActive = useCallback((doc: Doc | null) => {
+    if (doc) retainedDocuments.current.set(doc.id, doc);
+    setActiveState(doc);
+  }, []);
+  const setSideDoc = useCallback((doc: Doc | null) => {
+    if (doc) retainedDocuments.current.set(doc.id, doc);
+    setSideDocState(doc);
+  }, []);
+  useEffect(() => {
+    const open = new Set([...editorTabs, ...(split?.tabs ?? [])].map((tab) => tab.id));
+    for (const id of retainedDocuments.current.keys())
+      if (!open.has(id)) retainedDocuments.current.delete(id);
+  }, [editorTabs, split]);
   const splitRef = useRef<EditorGroup | null>(null),
     groupsRef = useRef<HTMLDivElement>(null),
     focusedSideRef = useRef<Side>(focusedSide);
@@ -379,6 +406,7 @@ export default function App() {
     toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 앱에서 문서를 처음 열었을 때의 글자 수를 문서별로 유지한다.
   const sessionStarts = useRef(new Map<string, number>());
+  const scrollPositions = useRef<EditorScrollPositions>(new Map());
   const pendingWriting = useRef(new Map<string, WritingRules>()),
     writingQueue = useRef(Promise.resolve()),
     // 조판 설정을 열 때 우측 사이드바가 닫혀 있었으면, 조판 설정을 닫을 때 사이드바도 다시 닫는다.
@@ -751,6 +779,11 @@ export default function App() {
       sessionStarts.current.set(newId, sessionStart);
       sessionStarts.current.delete(oldId);
     }
+    const scrollPosition = scrollPositions.current.get(oldId);
+    if (oldId !== newId && scrollPosition) {
+      scrollPositions.current.set(newId, scrollPosition);
+      scrollPositions.current.delete(oldId);
+    }
     if (activeId.current === oldId) activeId.current = newId;
     updateTabs((tabs) =>
       tabs.some((t) => t.id === oldId) ? tabs.map((t) => ({ ...t, id: swap(t.id) })) : tabs,
@@ -812,28 +845,43 @@ export default function App() {
     setRenaming(renamingRef.current);
   }
   async function archiveDoc(doc: Doc) {
-    const archived = !doc.archived;
-    await patchDoc(doc.id, { archived });
-    if (archived) {
-      await closeTab(doc.id);
-      closeSideTab(doc.id);
+    await archiveDocs([doc], !doc.archived);
+  }
+  // 보관(archived)하거나 보관 해제한다. 이미 그 상태인 문서는 건너뛴다.
+  async function archiveDocs(docs: Doc[], archived: boolean) {
+    const targets = docs.filter((d) => !!d.archived !== archived);
+    if (!targets.length) return;
+    for (const doc of targets) {
+      await patchDoc(doc.id, { archived });
+      if (archived) {
+        await closeTab(doc.id);
+        closeSideTab(doc.id);
+      }
     }
-    message(archived ? "문서를 보관함으로 옮겼습니다." : "문서를 보관함에서 꺼냈습니다.");
+    const what = targets.length > 1 ? `문서 ${targets.length}개를` : "문서를";
+    message(archived ? `${what} 보관함으로 옮겼습니다.` : `${what} 보관함에서 꺼냈습니다.`);
   }
   // 영구 삭제: 편집 중인 내용을 먼저 저장하고 탭을 닫은 뒤 지운다.
   // 문서 파일은 Windows 휴지통으로 가고, 로컬 변경 이력은 보존 정책에 따라 남긴다.
-  async function deleteDoc(doc: Doc) {
+  async function deleteDocs(docs: Doc[]) {
+    if (!docs.length) return;
     await flush();
-    await closeTab(doc.id);
-    closeSideTab(doc.id);
-    if (draft.current?.doc.id === doc.id) {
-      draft.current = null;
-      conflictRef.current = false;
-      setConflict(false);
+    for (const doc of docs) {
+      await closeTab(doc.id);
+      closeSideTab(doc.id);
+      if (draft.current?.doc.id === doc.id) {
+        draft.current = null;
+        conflictRef.current = false;
+        setConflict(false);
+      }
+      await call("deleteDocument", { id: doc.id });
     }
-    await call("deleteDocument", { id: doc.id });
     await refresh();
-    message(`'${doc.title || "제목 없음"}' 문서를 영구 삭제했습니다.`);
+    message(
+      docs.length > 1
+        ? `문서 ${docs.length}개를 영구 삭제했습니다.`
+        : `'${docs[0].title || "제목 없음"}' 문서를 영구 삭제했습니다.`,
+    );
   }
   // 작품 삭제: 작품 폴더 전체를 Windows 휴지통으로 옮긴다. 지금 보고 있는 작품이면 내 서재로 돌아간다.
   async function deleteProject(id: string) {
@@ -972,15 +1020,12 @@ export default function App() {
     if (recent) await openDoc(recent.id);
     else await goView("project", id);
   }
+  // 순서는 파일 트리에서 끌어서 바꾼다(treeRow).
   function docMenu(d: Doc): MenuItem[] {
-    const siblings = lib.documents.filter(
-        (x) => x.projectId === d.projectId && x.kind === d.kind && !x.archived,
-      ),
-      index = siblings.findIndex((x) => x.id === d.id),
-      // 메모는 memo/ 폴더의 일반 파일이라 순서가 없다(보관 상태는 project.json에 기록된다).
-      memo = d.kind === "memo";
     return [
       { label: "열기", action: attempt(() => openDoc(d.id, false)) },
+      // 미리보기 탭을 바꾸지 않고 고정 탭으로 연다(더블클릭과 같다).
+      { label: "새 탭으로 열기", action: attempt(() => openDoc(d.id, true)) },
       "separator",
       { label: "이름 바꾸기", shortcut: "F2", action: () => startRename(d) },
       { label: "복제", action: attempt(() => duplicateDoc(d)) },
@@ -1011,13 +1056,6 @@ export default function App() {
           ] as MenuItem[])
         : []),
       "separator",
-      ...(memo
-        ? []
-        : ([
-            { label: "위로 이동", disabled: d.archived || index <= 0, action: attempt(() => reorder(d.id, -1)) },
-            { label: "아래로 이동", disabled: d.archived || index < 0 || index >= siblings.length - 1, action: attempt(() => reorder(d.id, 1)) },
-            "separator",
-          ] as MenuItem[])),
       { label: "파일 탐색기에서 표시", shortcut: "Shift+Alt+R", action: attempt(() => call("reveal", { id: d.id })) },
       { label: "경로 복사", shortcut: "Shift+Alt+C", action: attempt(() => copyPath(d)) },
       {
@@ -1081,11 +1119,81 @@ export default function App() {
       { label: "경로 복사", disabled: !doc, action: attempt(() => copyPath(doc!)) },
     ];
   }
+  // 파일 트리 다중 선택. d가 고른 줄 가운데 하나이고 둘 이상 골랐으면 고른 문서 전부, 아니면 d 하나를 다룬다.
+  function selectionFor(d: Doc): Doc[] {
+    if (treeSelection.length < 2 || !treeSelection.includes(d.id)) return [d];
+    return treeSelection
+      .map((id) => lib.documents.find((x) => x.id === id))
+      .filter((x): x is Doc => !!x);
+  }
+  // 트리에 보이는 줄 순서(접힌 폴더·묶음 안은 빼고)로 기준 줄부터 누른 줄까지 고른다.
+  function selectTreeRange(row: HTMLElement, id: string) {
+    const ids = [...(row.closest(".tree-panel")?.querySelectorAll<HTMLElement>("[data-doc-id]") ?? [])].map(
+      (el) => el.dataset.docId!,
+    );
+    let from = ids.indexOf(selectionAnchor.current || active?.id || "");
+    const to = ids.indexOf(id);
+    if (to < 0) return;
+    if (from < 0) {
+      from = to;
+      selectionAnchor.current = id;
+    }
+    setTreeSelection(ids.slice(Math.min(from, to), Math.max(from, to) + 1));
+  }
+  function toggleTreeSelection(id: string) {
+    setTreeSelection((sel) => {
+      const base = sel.length ? sel : selectionAnchor.current ? [selectionAnchor.current] : [];
+      return base.includes(id) ? base.filter((x) => x !== id) : [...base, id];
+    });
+    selectionAnchor.current = id;
+  }
+  // 여러 문서를 고르고 우클릭한 메뉴. 회차만 골랐으면 집필 상태도 한 번에 바꾼다.
+  function selectionMenu(docs: Doc[]): MenuItem[] {
+    const episodes = docs.every((d) => d.kind === "episode"),
+      archived = docs.every((d) => d.archived),
+      status = new Set(docs.map((d) => normalizeStatus(d.status))),
+      done = () => setTreeSelection([]);
+    return [
+      { label: `문서 ${docs.length}개 선택됨`, disabled: true, action: () => {} },
+      ...(episodes
+        ? ([
+            "separator",
+            // 상태가 섞여 있으면 어느 항목도 막지 않는다.
+            ...statusItems([...status][0], (next) =>
+              attempt(async () => {
+                for (const d of docs)
+                  if (normalizeStatus(d.status) !== next) await writeMeta(d.id, { status: next });
+                await refresh();
+                done();
+                if (next === "completed")
+                  message("원고 보호 모드로 전환되었습니다. 집필 완료된 에피소드는 편집이 제한됩니다.");
+              })(),
+            ).map((item) => (item === "separator" || status.size === 1 ? item : { ...item, disabled: false })),
+          ] as MenuItem[])
+        : []),
+      "separator",
+      archived
+        ? { label: "보관 해제", action: attempt(async () => { done(); await archiveDocs(docs, false); }) }
+        : { label: "보관함으로 이동", shortcut: "Delete", action: attempt(async () => { done(); await archiveDocs(docs, true); }) },
+      {
+        label: "영구 삭제",
+        shortcut: "Shift+Delete",
+        danger: true,
+        action: () => setDialog({ type: "deleteDoc", ids: docs.map((d) => d.id) }),
+      },
+    ];
+  }
   function treeKey(e: React.KeyboardEvent, d: Doc) {
-    if (e.key === "F2") startRename(d);
+    const docs = selectionFor(d);
+    if (e.key === "Escape" && treeSelection.length) setTreeSelection([]);
+    else if (e.key === "F2" && docs.length === 1) startRename(d);
     else if (e.key === "Delete" && e.shiftKey)
-      setDialog({ type: "deleteDoc", value: d.id });
-    else if (e.key === "Delete" && !d.archived) attempt(() => archiveDoc(d))();
+      setDialog({ type: "deleteDoc", ids: docs.map((x) => x.id) });
+    else if (e.key === "Delete" && docs.some((x) => !x.archived))
+      attempt(async () => {
+        setTreeSelection([]);
+        await archiveDocs(docs, true);
+      })();
     else if (e.shiftKey && e.altKey && e.code === "KeyR") attempt(() => call("reveal", { id: d.id }))();
     else if (e.shiftKey && e.altKey && e.code === "KeyC") attempt(() => copyPath(d))();
     else return;
@@ -1182,38 +1290,40 @@ export default function App() {
   const parentOfRel = (p: string) => p.slice(0, Math.max(0, p.lastIndexOf("/")));
   function folderDropProps(folder: string) {
     const key = "folder:" + folder;
-    const canDrop = () => {
-      if (dragPlot.current) {
-        const d = libraryRef.current.documents.find((x) => x.id === dragPlot.current);
-        return !!d && d.kind !== "episode" && parentOfRel((d.relPath || "").slice(4)) !== folder;
-      }
+    // 옮길 경로: 끈 파일(여러 개면 이미 그 폴더에 있는 것은 빼고)이나 끈 폴더.
+    const paths = () => {
+      if (dragFileDocs.current.length)
+        return dragFileDocs.current
+          .map((id) => libraryRef.current.documents.find((x) => x.id === id)?.relPath?.slice(4) ?? "")
+          .filter((p) => p && parentOfRel(p) !== folder);
       const from = dragFolder.current;
-      return !!from && from !== folder && !folder.startsWith(from + "/") && parentOfRel(from) !== folder;
+      return from && from !== folder && !folder.startsWith(from + "/") && parentOfRel(from) !== folder ? [from] : [];
     };
+    const canDrop = () => paths().length > 0;
     return {
       onDragOver: (e: React.DragEvent) => {
         if (!canDrop()) return;
         e.preventDefault();
         e.stopPropagation();
         e.dataTransfer.dropEffect = "move";
-        setPlotDrop(key);
+        setTreeDrop(key);
       },
       onDragLeave: (e: React.DragEvent) => {
         if (!e.currentTarget.contains(e.relatedTarget as Node))
-          setPlotDrop((t) => (t === key ? null : t));
+          setTreeDrop((t) => (t === key ? null : t));
       },
       onDrop: (e: React.DragEvent) => {
         if (!canDrop()) return;
         e.preventDefault();
         e.stopPropagation();
-        const docId = dragPlot.current,
-          from = dragFolder.current;
-        dragPlot.current = "";
+        const moving = paths();
+        dragFileDocs.current = [];
         dragFolder.current = "";
-        setPlotDrop(null);
-        const d = docId ? libraryRef.current.documents.find((x) => x.id === docId) : undefined;
-        const path = d ? (d.relPath || "").slice(4) : from;
-        if (path) attempt(() => moveDocPath(path, folder))();
+        setTreeDrop(null);
+        setTreeSelection([]);
+        attempt(async () => {
+          for (const path of moving) await moveDocPath(path, folder);
+        })();
       },
     };
   }
@@ -1253,29 +1363,51 @@ export default function App() {
       }
     }
   }
-  // 문서를 끌어 에피소드에 놓으면 그 회차에 연결한다.
-  function plotDropProps(target: string) {
+  // 에피소드 탭의 회차 줄에 놓기. 회차를 끌면 줄의 위쪽 절반이면 그 앞으로, 아래쪽 절반이면 그 뒤로 순서를 옮기고,
+  // 문서 탭의 파일(플롯·메모)을 끌면 그 회차에 연결한다. 여러 개를 골라 끌었으면 함께 옮기거나 연결한다.
+  function episodeDropProps(ep: Doc) {
+    const reordering = () =>
+      dragEpisodes.current.length > 0 && !dragEpisodes.current.includes(ep.id) && !ep.archived;
+    const after = (e: React.DragEvent) => {
+      const r = e.currentTarget.getBoundingClientRect();
+      return e.clientY > r.top + r.height / 2;
+    };
     return {
       onDragOver: (e: React.DragEvent) => {
-        if (!dragPlot.current) return;
+        const reorder = reordering();
+        if (!reorder && !dragFileDocs.current.length) return;
         e.preventDefault();
         e.stopPropagation();
         e.dataTransfer.dropEffect = "move";
-        setPlotDrop(target);
+        if (!reorder) return setTreeDrop(ep.id);
+        const a = after(e);
+        setEpisodeDrop((o) => (o?.id === ep.id && o.after === a ? o : { id: ep.id, after: a }));
       },
       onDragLeave: (e: React.DragEvent) => {
-        if (!e.currentTarget.contains(e.relatedTarget as Node))
-          setPlotDrop((t) => (t === target ? null : t));
+        if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+        setTreeDrop((t) => (t === ep.id ? null : t));
+        setEpisodeDrop((o) => (o?.id === ep.id ? null : o));
       },
       onDrop: (e: React.DragEvent) => {
         e.preventDefault();
         e.stopPropagation();
-        const id = dragPlot.current;
-        dragPlot.current = "";
-        setPlotDrop(null);
-        const d = libraryRef.current.documents.find((x) => x.id === id);
-        if (!d || (d.episodeId ?? "") === target) return;
-        attempt(() => patchDoc(id, { episodeId: target || null }))();
+        const reorder = reordering(),
+          episodeIds = dragEpisodes.current,
+          fileIds = dragFileDocs.current,
+          a = after(e);
+        dragEpisodes.current = [];
+        dragFileDocs.current = [];
+        setTreeDrop(null);
+        setEpisodeDrop(null);
+        setTreeSelection([]);
+        if (reorder) return attempt(() => moveEpisodes(episodeIds, ep.id, a))();
+        const binding = libraryRef.current.documents.filter((d) => fileIds.includes(d.id) && d.episodeId !== ep.id);
+        if (!binding.length) return;
+        attempt(async () => {
+          for (const d of binding) await writeMeta(d.id, { episodeId: ep.id });
+          await refresh();
+          message(binding.length > 1 ? `문서 ${binding.length}개를 에피소드에 연결했습니다.` : "에피소드에 연결했습니다.");
+        })();
       },
     };
   }
@@ -1354,6 +1486,8 @@ export default function App() {
       await flush();
       if (!await call("chooseVault")) return;
       sessionStarts.current.clear();
+      scrollPositions.current.clear();
+      retainedDocuments.current.clear();
       draft.current = null;
       activeId.current = "";
       setActive(null);
@@ -1425,19 +1559,22 @@ export default function App() {
     await openDoc(copy.id, true);
     message("내 편집을 새 문서로 보존했습니다. 기존 문서도 유지됩니다.");
   }
-  async function reorder(id: string, direction: number) {
+  // 순서는 회차에만 있고 에피소드 탭에서 끌어서 바꾼다. 플롯·메모는 파일 트리의 파일이라 순서 없이 폴더로만 옮긴다.
+  // 회차들(ids)을 지금 순서 그대로 묶어 다른 회차(targetId)의 앞이나 뒤(after)로 옮긴다. 바뀐 목록을 한 번에 저장하면
+  // 저장소가 0, 1, 2…로 다시 매기고 파일 이름 번호도 맞춘다.
+  async function moveEpisodes(ids: string[], targetId: string, after: boolean) {
     await flush();
-    const target = libraryRef.current.documents.find((d) => d.id === id);
-    if (!target) return;
+    const target = libraryRef.current.documents.find((d) => d.id === targetId && d.kind === "episode");
+    if (!target || ids.includes(targetId)) return;
     const items = libraryRef.current.documents.filter(
-        (d) =>
-          d.projectId === target.projectId && d.kind === target.kind && !d.archived,
+        (d) => d.projectId === target.projectId && d.kind === "episode" && !d.archived,
       ),
-      index = items.findIndex((d) => d.id === id);
-    if (index < 0 || !items[index + direction]) return;
-    // 자리를 바꾼 목록을 한 번에 저장한다. 저장소가 0, 1, 2…로 다시 매기고 파일 이름 번호도 맞춘다.
-    const next = [...items];
-    next.splice(index + direction, 0, ...next.splice(index, 1));
+      moving = items.filter((d) => ids.includes(d.id)),
+      next = items.filter((d) => !ids.includes(d.id)),
+      at = next.findIndex((d) => d.id === targetId);
+    if (at < 0 || !moving.length) return;
+    next.splice(at + (after ? 1 : 0), 0, ...moving);
+    if (next.every((d, i) => d.id === items[i].id)) return;
     await call("reorderDocuments", {
       projectId: target.projectId,
       ids: next.map((d) => d.id),
@@ -1751,7 +1888,8 @@ export default function App() {
       e.dataTransfer.dropEffect = fromTree ? "copy" : "move";
     }
     setDropZone((prev) =>
-      prev && zone && prev.side === zone.side && prev.left === zone.left && prev.top === zone.top && prev.width === zone.width
+      prev && zone && prev.side === zone.side && prev.tabs === zone.tabs && prev.left === zone.left &&
+      prev.top === zone.top && prev.width === zone.width && prev.height === zone.height
         ? prev
         : zone,
     );
@@ -1765,11 +1903,17 @@ export default function App() {
     e.preventDefault();
     e.stopPropagation();
     dragTreeDoc.current = "";
-    dragPlot.current = "";
-    setPlotDrop(null);
+    dragFileDocs.current = [];
+    dragEpisodes.current = [];
+    setTreeDrop(null);
     setDropZone(null);
     setDragTab("");
-    attempt(() => openInGroup(id, zone.side, !fromTree))();
+    attempt(() => (zone.tabs ? openInTabs(id, zone.side) : openInGroup(id, zone.side, !fromTree)))();
+  }
+  // 트리에서 끌어 그룹의 탭 막대에 놓으면 화면을 나누지 않고 그 그룹에 고정 탭으로 연다.
+  async function openInTabs(id: string, side: Side) {
+    if (splitRef.current) await openInGroup(id, side);
+    else await openDoc(id, true);
   }
   function manuscriptBoxForKind(kind: Kind = "episode") {
     const kindPrefs = resolveKindPrefs(prefs, kind);
@@ -1800,7 +1944,7 @@ export default function App() {
     };
   }
   // 두 그룹은 같은 구성으로 그려 포커스가 바뀌어도 원고와 도구의 위치를 유지한다.
-  function documentBody(active: Doc, focused: boolean) {
+  function documentBody(active: Doc, focused: boolean, visible = true) {
     const activeBox = manuscriptBoxForKind(active.kind);
     const manuscriptClassName = activeBox.className;
     const manuscriptStyle = activeBox.style;
@@ -1854,20 +1998,6 @@ export default function App() {
               onClick={attempt(flush)}
             >
               <Check size={17} />
-            </button>
-            <button
-              aria-label="순서 위로"
-              title="순서 위로"
-              onClick={attempt(() => reorder(active.id, -1))}
-            >
-              <ArrowUp size={16} />
-            </button>
-            <button
-              aria-label="순서 아래로"
-              title="순서 아래로"
-              onClick={attempt(() => reorder(active.id, 1))}
-            >
-              <ArrowDown size={16} />
             </button>
             <button
               aria-label="변경 이력"
@@ -1942,7 +2072,7 @@ export default function App() {
             </button>
           </div>
         )}
-        <div key="scroll" className="editor-scroll">
+        <EditorScroll key={active.id} documentId={active.id} positions={scrollPositions.current} visible={visible}>
           <article className={manuscriptClassName} style={manuscriptStyle}>
             <div className="document-kind">
               {labels[active.kind]} · {numberOf(active)}
@@ -1982,6 +2112,7 @@ export default function App() {
               key="writer"
               readOnly={isProtected}
               inactive={!focused}
+              visible={visible}
               manualLineBreak={!!active.manualLineBreak}
               copyWithBlankLines={prefs.copyWithBlankLines !== false}
               id={active.id}
@@ -2033,22 +2164,33 @@ export default function App() {
               notes={noteMarks[active.id]}
               onOpenNotes={openNotes}
               contextMenu
+              onCursorLine={focused ? setCursorLine : undefined}
               images={docImages(active, !isProtected)}
             />
           </article>
           <div className="end-marker">✧</div>
-        </div>
+        </EditorScroll>
       </div>
     );
   }
+  // 먼저 선택해 읽은 문서만 만들고, 같은 그룹 안에서는 탭을 닫을 때까지 편집기를 유지한다.
+  function documentTabs(tabs: EditorTab[], currentId: string, groupFocused: boolean) {
+    return tabs.map((tab) => {
+      const doc = tab.id === active?.id ? active
+        : tab.id === shownSide?.id ? shownSide : retainedDocuments.current.get(tab.id);
+      if (!doc) return null;
+      const visible = isWorkspace && tab.id === currentId;
+      return <RetainedTab key={tab.id} visible={visible}>
+        {documentBody(doc, visible && groupFocused, visible)}
+      </RetainedTab>;
+    });
+  }
   // 포커스되지 않은 그룹: 읽기 전용으로 보여 주고, 클릭하면 그 그룹으로 포커스를 옮긴다.
-  // 그룹은 포커스와 상관없이 자리(left/right)를 key로 쓰고, 포커스된 그룹과 같은 줄기(group-body >
-  // editor-scroll > article > Writer)로 그린다. 그래야 그룹을 오갈 때 같은 원고의 편집기와 스크롤 영역이
-  // 그대로 남아 읽기 전용 여부만 바뀐다.
+  // 그룹은 포커스와 상관없이 자리(left/right)를 key로 쓰고, 각 탭의 본문과 편집기를 유지한다.
+  // 그룹을 오갈 때 같은 원고의 편집기와 스크롤 영역은 그대로 두고 읽기 전용 여부만 바꾼다.
   function sideGroup() {
     if (!split || !active) return null;
-    const doc = shownSide,
-      side: Side = focusedSide === "left" ? "right" : "left";
+    const side: Side = focusedSide === "left" ? "right" : "left";
     return (
       <section
         key={side}
@@ -2099,7 +2241,7 @@ export default function App() {
             );
           })}
         </div>
-        {doc && documentBody(doc, false)}
+        {documentTabs(split.tabs, split.docId, false)}
       </section>
     );
   }
@@ -2171,22 +2313,26 @@ export default function App() {
     window.addEventListener("keydown", handler, true);
     return () => window.removeEventListener("keydown", handler, true);
   }, [isWorkspace]);
-  // 파일 트리의 문서 한 줄. episode면 플롯을 끌어 놓을 수 있고, plot이면 끌 수 있다.
+  // 트리의 문서 한 줄. 회차 줄은 끌어서 순서를 바꾸고 파일(플롯·메모)을 놓아 연결한다.
+  // 파일 줄은 끌어서 회차에 연결하거나 다른 폴더로 옮긴다.
   function treeRow(
     d: Doc,
     marker: React.ReactNode,
     opts: {
       depth?: number;
-      episode?: boolean;
-      plot?: boolean;
-      remove?: boolean;
       badge?: string;
       // 문서 영역에서 이 줄 위에 놓으면 옮길 폴더(이 문서가 있는 폴더).
       dropFolder?: string;
     } = {},
   ) {
+    const episode = d.kind === "episode";
     const style = opts.depth ? { paddingLeft: 8 + opts.depth * 16 } : undefined;
-    const className = `tree-item ${d.id === active?.id ? "current" : ""} ${menu?.target === d.id ? "context-target" : ""} ${opts.episode && plotDrop === d.id ? "drop-target" : ""}`;
+    const dropMark =
+      episodeDrop?.id === d.id
+        ? episodeDrop.after ? "drop-after" : "drop-before"
+        : episode && treeDrop === d.id ? "drop-target" : "";
+    const selected = treeSelection.length > 1 && treeSelection.includes(d.id);
+    const className = `tree-item ${d.id === active?.id ? "current" : ""} ${selected ? "multi-selected" : ""} ${menu?.target === d.id ? "context-target" : ""} ${dropMark}`;
     if (renaming?.id === d.id && !renaming.widget)
       return (
         <div key={d.id} className={`${className} renaming`} style={style}>
@@ -2218,25 +2364,50 @@ export default function App() {
         key={d.id}
         className={className}
         style={style}
-        onClick={attempt(() => openDoc(d.id, false))}
-        onDoubleClick={attempt(() => openDoc(d.id, true))}
+        data-doc-id={d.id}
+        aria-selected={selected || undefined}
+        // Shift+클릭은 범위를 고르고, Ctrl+클릭은 한 줄씩 넣고 뺀다. 그냥 누르면 고른 것을 풀고 연다.
+        onMouseDown={(e) => {
+          if (e.shiftKey) e.preventDefault();
+        }}
+        onClick={(e) => {
+          if (e.shiftKey) return selectTreeRange(e.currentTarget, d.id);
+          if (e.ctrlKey || e.metaKey) return toggleTreeSelection(d.id);
+          selectionAnchor.current = d.id;
+          setTreeSelection([]);
+          attempt(() => openDoc(d.id, false))();
+        }}
+        onDoubleClick={(e) => {
+          if (!e.shiftKey && !e.ctrlKey && !e.metaKey) attempt(() => openDoc(d.id, true))();
+        }}
         onKeyDown={(e) => treeKey(e, d)}
-        onContextMenu={(e) => openMenu(e, docMenu(d), d.id)}
+        onContextMenu={(e) => {
+          const docs = selectionFor(d);
+          // 고른 줄 전체가 메뉴 대상이므로 우클릭한 줄 하나를 따로 표시하지 않는다.
+          if (docs.length > 1) return openMenu(e, selectionMenu(docs), ":selection");
+          setTreeSelection([]);
+          openMenu(e, docMenu(d), d.id);
+        }}
         draggable
         onDragStart={(e) => {
+          const docs = selectionFor(d);
+          if (docs.length < 2) setTreeSelection([]);
           dragTreeDoc.current = d.id;
-          dragPlot.current = opts.plot ? d.id : "";
+          dragFileDocs.current = docs.filter((x) => x.kind !== "episode").map((x) => x.id);
+          dragEpisodes.current = docs.filter((x) => x.kind === "episode" && !x.archived).map((x) => x.id);
           setDragTab("");
           e.dataTransfer.effectAllowed = "copyMove";
           e.dataTransfer.setData("application/x-lof-document", d.id);
         }}
         onDragEnd={() => {
           dragTreeDoc.current = "";
-          dragPlot.current = "";
-          setPlotDrop(null);
+          dragFileDocs.current = [];
+          dragEpisodes.current = [];
+          setTreeDrop(null);
+          setEpisodeDrop(null);
           setDropZone(null);
         }}
-        {...(opts.episode ? plotDropProps(d.id) : {})}
+        {...(episode ? episodeDropProps(d) : {})}
         {...(opts.dropFolder !== undefined ? folderDropProps(opts.dropFolder) : {})}
       >
         {marker}
@@ -2265,23 +2436,6 @@ export default function App() {
           >
             {d.archived ? <ArchiveRestore size={14} /> : <Archive size={14} />}
           </span>
-          {/* 플롯·메모 트리에서는 삭제 버튼도 보인다(확인 창을 거쳐 휴지통으로). */}
-          {opts.remove && (
-            <span
-              className="tree-action"
-              role="button"
-              tabIndex={-1}
-              title="삭제"
-              aria-label={`${d.title} 삭제`}
-              onClick={(e) => {
-                e.stopPropagation();
-                setDialog({ type: "deleteDoc", value: d.id });
-              }}
-              onDoubleClick={(e) => e.stopPropagation()}
-            >
-              <Trash2 size={14} />
-            </span>
-          )}
         </span>
       </button>
     );
@@ -3157,7 +3311,7 @@ export default function App() {
             return (
               <Fragment key={"folder-" + f.path}>
                 <button
-                  className={`tree-item memo-folder ${menu?.target === "folder-" + f.path ? "context-target" : ""} ${plotDrop === "folder:" + f.path ? "drop-target" : ""}`}
+                  className={`tree-item memo-folder ${menu?.target === "folder-" + f.path ? "context-target" : ""} ${treeDrop === "folder:" + f.path ? "drop-target" : ""}`}
                   style={style}
                   title={f.path}
                   draggable
@@ -3167,7 +3321,7 @@ export default function App() {
                   }}
                   onDragEnd={() => {
                     dragFolder.current = "";
-                    setPlotDrop(null);
+                    setTreeDrop(null);
                   }}
                   {...folderDropProps(f.path)}
                   onClick={() =>
@@ -3263,8 +3417,6 @@ export default function App() {
               : undefined;
             return treeRow(d, docIcon(d), {
               depth,
-              remove: true,
-              plot: true,
               badge: ep ? episodeNumber(ep) : undefined,
               dropFolder: parent,
             });
@@ -3317,7 +3469,7 @@ export default function App() {
                 <b>{labels[kind]}</b>
                 <small>{items.length}</small>
               </button>
-              {open && items.map((d) => treeRow(d, docIcon(d), { depth: 1, remove: true, plot: true }))}
+              {open && items.map((d) => treeRow(d, docIcon(d), { depth: 1 }))}
             </Fragment>
           );
         })}
@@ -3325,6 +3477,10 @@ export default function App() {
       </>
     );
   }
+  // 작품·트리 탭·보관함·문서 범위가 바뀌면 고른 줄이 화면에서 사라지므로 선택을 푼다.
+  useEffect(() => {
+    setTreeSelection([]);
+  }, [projectId, treeTab, archive, docScope]);
   // 파일 트리 검색어에 맞는 에피소드(번호나 제목)와 문서(제목). Enter를 누르면 첫 번째 것을 연다.
   const treeEpisodes = docs.filter(
       (d) => d.kind === "episode" && (!treeQuery.episode.trim() || treeMatch(`${numberOf(d)} ${d.title}`, treeQuery.episode)),
@@ -3704,7 +3860,7 @@ export default function App() {
                   onClick={() => setTreeTab(tab)}
                   // 문서를 끌어 에피소드 탭에 올리면 탭을 바꿔 회차 위에 놓을 수 있게 한다.
                   onDragEnter={() => {
-                    if (tab === "episode" && dragPlot.current) setTreeTab("episode");
+                    if (tab === "episode" && dragFileDocs.current.length) setTreeTab("episode");
                   }}
                 >
                   {tab === "memo" ? "문서" : labels.episode}
@@ -3809,9 +3965,9 @@ export default function App() {
                             className="tree-item episode-group"
                             aria-expanded={open}
                             onClick={() => toggle(!open)}
-                            // 문서를 끌어 접힌 묶음에 올리면 펼쳐서 회차 위에 놓을 수 있게 한다.
+                            // 문서나 회차를 끌어 접힌 묶음에 올리면 펼쳐서 회차 위에 놓을 수 있게 한다.
                             onDragEnter={() => {
-                              if (dragPlot.current && !open) toggle(true);
+                              if ((dragFileDocs.current.length || dragEpisodes.current.length) && !open) toggle(true);
                             }}
                           >
                             {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
@@ -3821,13 +3977,13 @@ export default function App() {
                           </button>
                           {open &&
                             items.map((d) =>
-                              treeRow(d, <span className="episode-number">{numberOf(d)}</span>, { episode: true }),
+                              treeRow(d, <span className="episode-number">{numberOf(d)}</span>),
                             )}
                         </Fragment>
                       );
                     })
                   : treeEpisodes.map((d) =>
-                      treeRow(d, <span className="episode-number">{numberOf(d)}</span>, { episode: true }),
+                      treeRow(d, <span className="episode-number">{numberOf(d)}</span>),
                     )}
                 {!treeEpisodes.length && (
                   <div className="tree-empty">
@@ -3836,7 +3992,7 @@ export default function App() {
                 )}
               </section>
               <section
-                className={`tree-section tree-panel ${docScope === "all" && plotDrop === "folder:" ? "drop-target" : ""}`}
+                className={`tree-section tree-panel ${docScope === "all" && treeDrop === "folder:" ? "drop-target" : ""}`}
                 hidden={treeTab !== "memo"}
                 onContextMenu={(e) => docScope === "all" && openMenu(e, memoCreateMenu(""))}
                 {...(docScope === "all" ? folderDropProps("") : {})}
@@ -4176,10 +4332,12 @@ export default function App() {
               </div>
             </div>
           )}
-          {isWorkspace && (
+          {active && (
             <>
               <div
                 className={`editor-groups ${split ? "split" : ""} ${previewOpen ? "with-preview" : ""}`}
+                hidden={!isWorkspace}
+                inert={!isWorkspace}
                 ref={groupsRef}
                 onDragOverCapture={dragOverGroups}
                 onDragLeave={(e) => {
@@ -4190,7 +4348,12 @@ export default function App() {
               {dropZone && (
                 <div
                   className="group-drop-zone"
-                  style={{ left: dropZone.left, top: dropZone.top, width: dropZone.width }}
+                  style={{
+                    left: dropZone.left,
+                    top: dropZone.top,
+                    width: dropZone.width,
+                    ...(dropZone.height !== undefined && { height: dropZone.height, bottom: "auto" }),
+                  }}
                 />
               )}
               {split && focusedSide === "right" && sideGroup()}
@@ -4273,7 +4436,7 @@ export default function App() {
                   );
                 })}
               </div>
-              {documentBody(active, true)}
+              {documentTabs(editorTabs, active.id, true)}
               </section>
               {split && focusedSide === "left" && sash}
               {split && focusedSide === "left" && sideGroup()}
@@ -4296,12 +4459,13 @@ export default function App() {
                 />
               )}
               </div>
-              <footer className="editor-footer">
+              <footer className="editor-footer" hidden={!isWorkspace}>
                 <span>
                   {active.kind === "episode"
                     ? <>{writingName(writingRules)} {platformChars.toLocaleString()}자</>
                     : <>공백 제외 {charsWithoutSpaces.toLocaleString()}자</>}
                   <i /> 공백 포함 {charsWithSpaces.toLocaleString()}자
+                  {cursorLine !== null && <><i /> {cursorLine.toLocaleString()}번째 줄</>}
                 </span>
                 {focus && (
                   <button className="footer-exit-focus" onClick={() => setFocus(false)}>
@@ -4783,12 +4947,15 @@ export default function App() {
             )}
             {dialog.type === "deleteDoc" &&
               (() => {
-                const target = lib.documents.find((d) => d.id === dialog.value);
-                if (!target) return <p>이미 삭제된 문서입니다.</p>;
+                const ids = dialog.ids ?? [dialog.value],
+                  targets = lib.documents.filter((d) => ids.includes(d.id));
+                if (!targets.length) return <p>이미 삭제된 문서입니다.</p>;
                 return (
                   <>
                     <p>
-                      <b>{target.title || "제목 없음"}</b> 문서를 영구 삭제할까요?
+                      {targets.length > 1
+                        ? <><b>문서 {targets.length}개</b>를 영구 삭제할까요?</>
+                        : <><b>{targets[0].title || "제목 없음"}</b> 문서를 영구 삭제할까요?</>}
                     </p>
                     <p className="muted">
                       문서 목록과 임시 원고에서 제거됩니다. 이 PC의 변경 이력은 보존 정책에 따라 남습니다.
@@ -4803,7 +4970,8 @@ export default function App() {
                         className="danger-solid"
                         onClick={attempt(async () => {
                           setDialog(null);
-                          await deleteDoc(target);
+                          setTreeSelection([]);
+                          await deleteDocs(targets);
                         })}
                       >
                         <Trash2 size={15} />

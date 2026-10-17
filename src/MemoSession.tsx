@@ -13,6 +13,8 @@ import {
   X,
 } from "lucide-react";
 import Writer from "./Writer";
+import EditorScroll, { type EditorScrollPositions } from "./EditorScroll";
+import RetainedTab from "./RetainedTab";
 import { editorDropZone, type EditorDropZone } from "./editor-groups";
 import ContextMenu, { type MenuItem } from "./ContextMenu";
 import { call, type Doc, type Kind } from "./types";
@@ -143,6 +145,8 @@ export default function MemoSession({
     [memo, setMemo] = useState<Memo | null>(null),
     [title, setTitle] = useState(""),
     [selected, setSelected] = useState(""),
+    // Shift·Ctrl+클릭으로 고른 메모·폴더 경로(트리에 보이는 순서). 비어 있으면 한 줄씩 다룬다.
+    [picked, setPicked] = useState<string[]>([]),
     [renaming, setRenaming] = useState<{ path: string; value: string } | null>(null),
     [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[]; target: string } | null>(
       null,
@@ -159,9 +163,20 @@ export default function MemoSession({
     [split, setSplitState] = useState<MemoGroup | null>(null),
     [focusedSide, setFocusedSideState] = useState<Side>("left"),
     [splitRatio, setSplitRatio] = useState(0.5),
-    [sideMemo, setSideMemo] = useState<Memo | null>(null),
+    [sideMemo, setSideMemoState] = useState<Memo | null>(null),
     [sideRev, setSideRev] = useState(0),
     [dropZone, setDropZone] = useState<EditorDropZone | null>(null);
+  const scrollPositions = useRef<EditorScrollPositions>(new Map());
+  const retainedMemos = useRef(new Map<string, Memo>());
+  const setSideMemo = useCallback((m: Memo | null) => {
+    if (m) retainedMemos.current.set(`${m.space}\n${m.path}`, m);
+    setSideMemoState(m);
+  }, []);
+  useEffect(() => {
+    const open = new Set([...tabs, ...(split?.tabs ?? [])].map((tab) => `${tab.space}\n${tab.path}`));
+    for (const key of retainedMemos.current.keys())
+      if (!open.has(key)) retainedMemos.current.delete(key);
+  }, [tabs, split]);
   const memoRef = useRef<Memo | null>(null),
     spaceRef = useRef(space),
     dirty = useRef({ seq: 0, saved: 0 }),
@@ -170,7 +185,10 @@ export default function MemoSession({
     timer = useRef<number | undefined>(undefined),
     chain = useRef<Promise<void>>(Promise.resolve()),
     openSeq = useRef(0),
-    dragging = useRef(""),
+    // 트리에서 끌고 있는 경로. 여러 줄을 골랐으면 고른 것을 함께 끈다.
+    dragging = useRef<string[]>([]),
+    // Shift+클릭 범위 선택의 기준 줄(마지막으로 그냥 누르거나 Ctrl+클릭한 줄).
+    pickAnchor = useRef(""),
     dragTreeMemo = useRef<MemoTab | null>(null),
     tabsRef = useRef<MemoTab[]>([]),
     splitRef = useRef<MemoGroup | null>(null),
@@ -179,6 +197,7 @@ export default function MemoSession({
   spaceRef.current = space;
   conflictRef.current = conflict;
   const setCurrent = (m: Memo | null) => {
+    if (m) retainedMemos.current.set(`${m.space}\n${m.path}`, m);
     memoRef.current = m;
     setMemo(m);
   };
@@ -566,7 +585,8 @@ export default function MemoSession({
       e.dataTransfer.dropEffect = fromTree ? "copy" : "move";
     }
     setDropZone((prev) =>
-      prev && zone && prev.side === zone.side && prev.left === zone.left && prev.top === zone.top && prev.width === zone.width
+      prev && zone && prev.side === zone.side && prev.tabs === zone.tabs && prev.left === zone.left &&
+      prev.top === zone.top && prev.width === zone.width && prev.height === zone.height
         ? prev
         : zone,
     );
@@ -579,11 +599,16 @@ export default function MemoSession({
     e.preventDefault();
     e.stopPropagation();
     dragTreeMemo.current = null;
-    dragging.current = "";
+    dragging.current = [];
     setDropTarget(null);
     setDropZone(null);
     setDragTab(null);
-    attempt(() => openInGroup(t, zone.side, !fromTree))();
+    attempt(() => (zone.tabs ? openInTabs(t, zone.side) : openInGroup(t, zone.side, !fromTree)))();
+  }
+  // 트리에서 끌어 그룹의 탭 막대에 놓으면 화면을 나누지 않고 그 그룹에 고정 탭으로 연다.
+  async function openInTabs(t: MemoTab, side: Side) {
+    if (splitRef.current) await openInGroup(t, side);
+    else await activateTab(t, true);
   }
   const closeTab = (t: MemoTab) => closeTabs((x) => !sameTab(x, t));
   async function cycleTab(direction: number) {
@@ -631,6 +656,7 @@ export default function MemoSession({
   async function switchSpace(id: string) {
     if (id === space) return;
     setSelected("");
+    setPicked([]);
     setExpanded(new Set());
     setEntries([]);
     setSpace(id);
@@ -691,19 +717,31 @@ export default function MemoSession({
     if (to) setExpanded((old) => new Set([...old, to, ...ancestors(to)]));
     await loadTree();
   }
-  async function remove(entry: Entry) {
-    const what = entry.type === "folder" ? "폴더와 그 안의 메모를" : "메모를";
-    if (!window.confirm(`'${entry.name}' ${what} 휴지통으로 옮길까요?`)) return;
-    const gone = (t: MemoTab) =>
-      t.space === space && (t.path === entry.path || t.path.startsWith(entry.path + "/"));
-    if (touchesOpen(entry.path)) {
-      clearTimeout(timer.current);
-      await chain.current;
-      closeCurrent();
+  // 고른 폴더 안에 든 항목은 폴더와 함께 다뤄지므로 빼고, 바깥쪽 항목만 남긴다.
+  const outermost = <T extends { path: string }>(list: T[]) =>
+    list.filter((x) => !list.some((y) => y !== x && x.path.startsWith(y.path + "/")));
+  // 메모·폴더를 휴지통으로 옮긴다. 여러 개면 한 번만 묻고, 고른 폴더 안에 든 것은 폴더와 함께 지운다.
+  async function remove(targets: Entry[]) {
+    const top = outermost(targets);
+    if (!top.length) return;
+    const question =
+      top.length > 1
+        ? `고른 항목 ${top.length}개를 휴지통으로 옮길까요?${top.some((x) => x.type === "folder") ? " 폴더 안의 메모도 함께 옮겨집니다." : ""}`
+        : `'${top[0].name}' ${top[0].type === "folder" ? "폴더와 그 안의 메모를" : "메모를"} 휴지통으로 옮길까요?`;
+    if (!window.confirm(question)) return;
+    for (const entry of top) {
+      const gone = (t: MemoTab) =>
+        t.space === space && (t.path === entry.path || t.path.startsWith(entry.path + "/"));
+      if (touchesOpen(entry.path)) {
+        clearTimeout(timer.current);
+        await chain.current;
+        closeCurrent();
+      }
+      await call("memoRemove", { space, path: entry.path });
+      mapGroups((t) => (gone(t) ? null : t));
     }
-    await call("memoRemove", { space, path: entry.path });
-    mapGroups((t) => (gone(t) ? null : t));
     setSelected("");
+    setPicked([]);
     await loadTree();
   }
   async function reloadFromDisk() {
@@ -743,6 +781,7 @@ export default function MemoSession({
           ] as MenuItem[])
         : ([
             { label: "열기", action: attempt(() => openMemo(entry.path)) },
+            { label: "새 탭으로 열기", action: attempt(() => openMemo(entry.path, spaceRef.current, true)) },
             "separator",
           ] as MenuItem[])),
       {
@@ -761,7 +800,50 @@ export default function MemoSession({
         action: attempt(() => call("memoReveal", { space, path: entry.path })),
       },
       "separator",
-      { label: "삭제", shortcut: "Delete", danger: true, action: attempt(() => remove(entry)) },
+      { label: "삭제", shortcut: "Delete", danger: true, action: attempt(() => remove([entry])) },
+    ];
+  }
+  // 트리 다중 선택. entry가 고른 줄 가운데 하나이고 둘 이상 골랐으면 고른 항목 전부, 아니면 entry 하나를 다룬다.
+  function pickedFor(entry: Entry): Entry[] {
+    if (picked.length < 2 || !picked.includes(entry.path)) return [entry];
+    return picked.map((p) => entries.find((x) => x.path === p)).filter((x): x is Entry => !!x);
+  }
+  // 트리에 보이는 줄 순서(접힌 폴더 안은 빼고)로 기준 줄부터 누른 줄까지 고른다.
+  function pickRange(row: HTMLElement, path: string) {
+    const paths = [...(row.closest(".memo-tree")?.querySelectorAll<HTMLElement>("[data-path]") ?? [])].map(
+      (el) => el.dataset.path!,
+    );
+    let from = paths.indexOf(pickAnchor.current || selected);
+    const to = paths.indexOf(path);
+    if (to < 0) return;
+    if (from < 0) {
+      from = to;
+      pickAnchor.current = path;
+    }
+    setPicked(paths.slice(Math.min(from, to), Math.max(from, to) + 1));
+  }
+  function togglePick(path: string) {
+    setPicked((old) => {
+      const base = old.length ? old : pickAnchor.current ? [pickAnchor.current] : [];
+      return base.includes(path) ? base.filter((x) => x !== path) : [...base, path];
+    });
+    pickAnchor.current = path;
+  }
+  // 여러 줄을 고르고 우클릭한 메뉴.
+  function pickedMenu(list: Entry[]): MenuItem[] {
+    return [
+      { label: `항목 ${list.length}개 선택됨`, disabled: true, action: () => {} },
+      "separator",
+      {
+        label: "최상위로 옮기기",
+        disabled: list.every((x) => !parentOf(x.path)),
+        action: attempt(async () => {
+          setPicked([]);
+          for (const x of outermost(list)) await move(x.path, "");
+        }),
+      },
+      "separator",
+      { label: "삭제", shortcut: "Delete", danger: true, action: attempt(() => remove(list)) },
     ];
   }
   const rootMenu = (): MenuItem[] => [
@@ -780,9 +862,13 @@ export default function MemoSession({
     }
     return map;
   }, [entries]);
+  // 끈 항목 가운데 folder로 옮길 수 있는 것(이미 거기 있거나 자기 안으로 들어가는 것은 뺀다).
+  const movable = (folder: string) =>
+    outermost(dragging.current.map((path) => ({ path }))).filter(
+      ({ path }) => path !== folder && !folder.startsWith(path + "/") && parentOf(path) !== folder,
+    );
   function dragOver(e: React.DragEvent, folder: string) {
-    const from = dragging.current;
-    if (!from || from === folder || folder.startsWith(from + "/") || parentOf(from) === folder) return;
+    if (!movable(folder).length) return;
     e.preventDefault();
     e.stopPropagation();
     e.dataTransfer.dropEffect = "move";
@@ -791,10 +877,13 @@ export default function MemoSession({
   function drop(e: React.DragEvent, folder: string) {
     e.preventDefault();
     e.stopPropagation();
-    const from = dragging.current;
-    dragging.current = "";
+    const moving = movable(folder);
+    dragging.current = [];
     setDropTarget(null);
-    attempt(() => move(from, folder))();
+    setPicked([]);
+    attempt(async () => {
+      for (const { path } of moving) await move(path, folder);
+    })();
   }
   const openHere = (path: string) => memo?.space === space && memo.path === path;
   function tabMenu(t: MemoTab, index: number): MenuItem[] {
@@ -929,7 +1018,7 @@ export default function MemoSession({
     />
   );
   // 두 그룹은 같은 요소를 사용해 포커스만 바뀔 때 본문을 다시 만들지 않는다.
-  function memoBody(memo: Memo, focused: boolean) {
+  function memoBody(memo: Memo, focused: boolean, visible = true) {
     const groupStatus = focused ? status : "저장됨";
     return (
       <div
@@ -974,7 +1063,7 @@ export default function MemoSession({
             <button onClick={attempt(keepMine)}>내 내용으로 덮어쓰기</button>
           </div>
         )}
-        <div key="scroll" className="editor-scroll">
+        <EditorScroll key={`${memo.space}\n${memo.path}`} documentId={`${memo.space}\n${memo.path}`} positions={scrollPositions.current} visible={visible}>
           {(() => {
             const mainBox = manuscriptBoxOf(kindOf(memo));
             return (
@@ -1014,6 +1103,7 @@ export default function MemoSession({
                   key="writer"
                   id={`memo-${memo.space}\n${memo.path}`}
                   inactive={!focused}
+                  visible={visible}
                   revision={memo.revision}
                   body={memo.body}
                   tables={kindOf(memo) !== "episode"}
@@ -1044,16 +1134,27 @@ export default function MemoSession({
               </article>
             );
           })()}
-        </div>
+        </EditorScroll>
       </div>
     );
+  }
+  // 한 번 연 메모는 탭별로 유지하며, 실제 선택된 탭만 표시하고 편집한다.
+  function memoTabs(list: MemoTab[], current: MemoTab | Memo | null, groupFocused: boolean) {
+    return list.map((tab) => {
+      const key = `${tab.space}\n${tab.path}`;
+      const shown = sameTab(tab, memo) ? memo
+        : sameTab(tab, sideMemo) ? sideMemo : retainedMemos.current.get(key);
+      if (!shown) return null;
+      const visible = active && sameTab(tab, current);
+      return <RetainedTab key={key} visible={visible}>
+        {memoBody(shown, visible && groupFocused, visible)}
+      </RetainedTab>;
+    });
   }
   // 포커스되지 않은 그룹: 읽기 전용으로 보여 주고, 클릭하면 그 그룹으로 포커스를 옮긴다.
   function sideGroup() {
     if (!split) return null;
     const cur = split.current;
-    const shown =
-      cur && sameTab(cur, memo) ? memo : cur && sideMemo && sameTab(cur, sideMemo) ? sideMemo : null;
     return (
       <section
         key={focusedSide === "left" ? "right" : "left"}
@@ -1103,7 +1204,7 @@ export default function MemoSession({
             );
           })}
         </div>
-        {shown && memoBody(shown, false)}
+        {memoTabs(split.tabs, cur, false)}
       </section>
     );
   }
@@ -1129,7 +1230,7 @@ export default function MemoSession({
           draggable
           onDragStart={(e) => {
             dragTreeMemo.current = t;
-            dragging.current = "";
+            dragging.current = [];
             setDragTab(null);
             e.dataTransfer.effectAllowed = "copyMove";
             e.dataTransfer.setData("application/x-lof-memo", JSON.stringify(t));
@@ -1202,6 +1303,7 @@ export default function MemoSession({
   function row(entry: Entry, depth: number) {
     const folder = entry.type === "folder",
       open = expanded.has(entry.path),
+      multi = picked.length > 1 && picked.includes(entry.path),
       style = { paddingLeft: 8 + depth * 14 };
     if (renaming?.path === entry.path)
       return (
@@ -1225,22 +1327,26 @@ export default function MemoSession({
     return (
       <button
         className={`tree-item memo-row ${openHere(entry.path) ? "current" : ""} ${
-          selected === entry.path && !openHere(entry.path) ? "selected" : ""
-        } ${dropTarget === entry.path ? "drop-target" : ""} ${
+          selected === entry.path && !openHere(entry.path) && !multi ? "selected" : ""
+        } ${multi ? "multi-selected" : ""} ${dropTarget === entry.path ? "drop-target" : ""} ${
           menu?.target === entry.path ? "context-target" : ""
         }`}
         style={style}
         title={entry.path}
+        data-path={entry.path}
+        aria-selected={multi || undefined}
         draggable
         onDragStart={(e) => {
-          dragging.current = entry.path;
+          const list = pickedFor(entry);
+          if (list.length < 2) setPicked([]);
+          dragging.current = list.map((x) => x.path);
           dragTreeMemo.current = folder ? null : { space, path: entry.path };
           setDragTab(null);
           e.dataTransfer.effectAllowed = folder ? "move" : "copyMove";
           e.dataTransfer.setData("text/plain", entry.path);
         }}
         onDragEnd={() => {
-          dragging.current = "";
+          dragging.current = [];
           dragTreeMemo.current = null;
           setDropTarget(null);
           setDropZone(null);
@@ -1248,8 +1354,16 @@ export default function MemoSession({
         onDragOver={folder ? (e) => dragOver(e, entry.path) : undefined}
         onDragLeave={() => setDropTarget((t) => (t === entry.path ? null : t))}
         onDrop={folder ? (e) => drop(e, entry.path) : undefined}
+        // Shift+클릭은 범위를 고르고, Ctrl+클릭은 한 줄씩 넣고 뺀다. 그냥 누르면 고른 것을 풀고 연다.
+        onMouseDown={(e) => {
+          if (e.shiftKey) e.preventDefault();
+        }}
         onClick={(e) => {
           e.stopPropagation();
+          if (e.shiftKey) return pickRange(e.currentTarget, entry.path);
+          if (e.ctrlKey || e.metaKey) return togglePick(entry.path);
+          pickAnchor.current = entry.path;
+          setPicked([]);
           setSelected(entry.path);
           if (folder)
             setExpanded((old) => {
@@ -1262,19 +1376,27 @@ export default function MemoSession({
         }}
         onDoubleClick={(e) => {
           e.stopPropagation();
-          if (!folder) attempt(() => openMemo(entry.path, space, true))();
+          if (!folder && !e.shiftKey && !e.ctrlKey && !e.metaKey) attempt(() => openMemo(entry.path, space, true))();
         }}
         onContextMenu={(e) => {
+          const list = pickedFor(entry);
+          // 고른 줄 전체가 메뉴 대상이므로 우클릭한 줄 하나를 따로 표시하지 않는다.
+          if (list.length > 1) return openMenu(e, pickedMenu(list), ":picked");
+          setPicked([]);
           setSelected(entry.path);
           openMenu(e, entryMenu(entry), entry.path);
         }}
         onKeyDown={(e) => {
-          if (e.key === "F2") {
+          const list = pickedFor(entry);
+          if (e.key === "Escape" && picked.length) {
+            e.preventDefault();
+            setPicked([]);
+          } else if (e.key === "F2" && list.length === 1) {
             e.preventDefault();
             setRenaming({ path: entry.path, value: entry.name });
           } else if (e.key === "Delete") {
             e.preventDefault();
-            attempt(() => remove(entry))();
+            attempt(() => remove(list))();
           }
         }}
       >
@@ -1380,7 +1502,10 @@ export default function MemoSession({
           className={`memo-tree ${dropTarget === "" ? "drop-target" : ""}`}
           role="tree"
           aria-label={`${spaceTitle} 메모 목록`}
-          onClick={() => setSelected("")}
+          onClick={() => {
+            setSelected("");
+            setPicked([]);
+          }}
           onContextMenu={(e) => openMenu(e, rootMenu(), "")}
           onDragOver={(e) => dragOver(e, "")}
           onDragLeave={(e) => {
@@ -1415,7 +1540,12 @@ export default function MemoSession({
         {dropZone && (
           <div
             className="group-drop-zone"
-            style={{ left: dropZone.left, top: dropZone.top, width: dropZone.width }}
+            style={{
+              left: dropZone.left,
+              top: dropZone.top,
+              width: dropZone.width,
+              ...(dropZone.height !== undefined && { height: dropZone.height, bottom: "auto" }),
+            }}
           />
         )}
         {split && focusedSide === "right" && sideGroup()}
@@ -1488,9 +1618,8 @@ export default function MemoSession({
             })}
           </div>
         )}
-        {memo ? (
-          memoBody(memo, true)
-        ) : (
+        {memoTabs(tabs, memo, true)}
+        {!memo && (
           <div className="memo-blank">
             <StickyNote size={30} />
             <p>

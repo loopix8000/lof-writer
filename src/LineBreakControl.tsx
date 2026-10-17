@@ -45,7 +45,7 @@ export default function LineBreakControl({
     <div className="line-break-control" ref={ref}>
       <button
         type="button"
-        className={`line-break-button${differs ? " differs" : ""}${anchor ? " active" : ""}`}
+        className={`line-break-button${anchor ? " active" : ""}`}
         aria-label={`줄바꿈: ${label}`}
         aria-expanded={!!anchor}
         title={

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties, type MouseEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent } from "react";
 import { useEditor, useEditorState, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { Markdown } from "@tiptap/markdown";
@@ -145,6 +145,25 @@ function offsetToPos(node: PMNode, pos: number, offset: number) {
   }
   return p;
 }
+// 커서가 있는 줄 번호(1부터). 문단(표 칸·목록 항목 포함)과 구분선을 한 줄로 세고, 문단 안의 강제 줄바꿈도 한 줄로 센다.
+function cursorLineAt(doc: PMNode, pos: number) {
+  let line = 0;
+  doc.nodesBetween(0, pos, (node, start) => {
+    if (!node.isTextblock && !(node.isBlock && node.isLeaf)) return true;
+    line++;
+    if (node.isTextblock)
+      node.forEach((child, offset) => {
+        if (child.type.name === "hardBreak" && start + 1 + offset < pos) line++;
+      });
+    return false;
+  });
+  return Math.max(1, line);
+}
+// Markdown 원문에서 커서(선택의 움직이는 끝)가 있는 줄 번호.
+function sourceLineAt(area: HTMLTextAreaElement) {
+  const head = area.selectionDirection === "backward" ? area.selectionStart : area.selectionEnd;
+  return area.value.slice(0, head).split("\n").length;
+}
 // 줄바꿈 방식을 바꿀 때 본문의 실제 빈 줄을 맞춘다. 맨 위 단계에서 글이 있는 블록 사이의 빈 문단 묶음만 바꾼다.
 // 자동 관리로: 붙여 넣기와 같은 규칙으로 빈 줄 n개를 n/2개(내림)로 줄인다. 빈 줄 1개는 단락 간격이 된다.
 // 수동 관리로: 단락 간격 대신 실제 빈 줄을 넣어 빈 줄 k개를 2k+1개로 늘린다(자동 관리로 되돌리면 다시 k개).
@@ -269,6 +288,7 @@ export default function Writer({
   revision,
   readOnly = false,
   inactive = false,
+  visible = true,
   reveal = null,
   manualLineBreak = false,
   copyWithBlankLines = true,
@@ -286,6 +306,7 @@ export default function Writer({
   onOpenNotes,
   contextMenu = false,
   images,
+  onCursorLine,
 }: {
   id: string;
   body: string;
@@ -299,6 +320,7 @@ export default function Writer({
   // 원고 보호 여부와 그룹 포커스를 분리해 도구 막대 구성을 그대로 유지한다.
   readOnly?: boolean;
   inactive?: boolean;
+  visible?: boolean;
   // 검색 결과로 열었을 때 본문에서 index번째 일치를 골라 보여 준다. seq가 바뀔 때마다 다시 한다.
   reveal?: { query: string; index: number; caseSensitive?: boolean; seq: number } | null;
   // 수동 줄바꿈 관리: 단락 간격 없이 Enter 한 번이 한 줄이 된다.
@@ -332,6 +354,8 @@ export default function Writer({
     resolve: (src: string) => Promise<string | null>;
     save?: SaveImage;
   };
+  // 편집 중인(다른 그룹이 아니고 보이는) 원고의 커서 줄 번호를 알린다.
+  onCursorLine?: (line: number) => void;
 }) {
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
   const style = normalizeEditorStyle({
@@ -363,6 +387,11 @@ export default function Writer({
   const editable = !readOnly && !inactive;
   const editableRef = useRef(editable);
   editableRef.current = editable;
+  const compositionRef = useRef(onComposition);
+  compositionRef.current = onComposition;
+  const cursorLineRef = useRef(onCursorLine);
+  cursorLineRef.current = onCursorLine;
+  const reportsCursor = !inactive && visible;
   const notesJson = JSON.stringify(notes || []);
   // 북마크: 최신 목록과 저장 함수, 마지막으로 깔거나 알린 목록(같으면 다시 깔지 않는다).
   const bookmarksRef = useRef(bookmarks),
@@ -431,16 +460,16 @@ export default function Writer({
         },
         attributes: {
           "aria-label": inactive ? "다른 그룹 원고 본문" : "원고 본문",
-          "data-testid": editable ? "manuscript" : "manuscript-readonly",
+          "data-testid": visible ? (editable ? "manuscript" : "manuscript-readonly") : "",
           spellcheck: "false",
         },
         handleDOMEvents: {
           compositionstart: () => {
-            onComposition(true);
+            if (editableRef.current) compositionRef.current(true);
             return false;
           },
           compositionend: () => {
-            onComposition(false);
+            if (editableRef.current) compositionRef.current(false);
             return false;
           },
           // 본문 안의 링크를 눌러도 앱 화면이 그 주소로 넘어가지 않게 막고, 문서 링크면 그 문서로 간다.
@@ -560,11 +589,40 @@ export default function Writer({
     style.indent,
   ]);
   // 원고 보호(집필 완료)처럼 열린 채로 읽기 전용이 바뀔 때.
+  useLayoutEffect(() => {
+    if (!editor || editor.isDestroyed) return;
+    if (editor.isEditable !== editable) editor.setEditable(editable, false);
+    editor.setOptions({ editorProps: {
+      ...editor.options.editorProps,
+      attributes: {
+        ...editor.options.editorProps.attributes,
+        "aria-label": inactive ? "다른 그룹 원고 본문" : "원고 본문",
+        "data-testid": visible ? (editable ? "manuscript" : "manuscript-readonly") : "",
+      },
+    } });
+    if (!editable && editor.isFocused) editor.view.dom.blur();
+  }, [editor, editable, inactive, visible]);
+  useLayoutEffect(() => { if (!visible || inactive) setMenu(null); }, [visible, inactive]);
+  // 편집 중인 원고가 되거나 원문 편집으로 바뀌면 지금 줄을 알리고, 편집기에서는 바뀔 때마다 다시 알린다.
   useEffect(() => {
-    if (editor && !editor.isDestroyed && editor.isEditable !== editable)
-      editor.setEditable(editable, false);
-  }, [editor, editable]);
-  useEffect(() => () => onComposition(false), []);
+    if (!reportsCursor) return;
+    if (textareaRef.current) {
+      cursorLineRef.current?.(sourceLineAt(textareaRef.current));
+      return;
+    }
+    if (!editor || editor.isDestroyed) return;
+    const report = () => {
+      if (!editor.isDestroyed) cursorLineRef.current?.(cursorLineAt(editor.state.doc, editor.state.selection.head));
+    };
+    report();
+    editor.on("transaction", report);
+    return () => {
+      editor.off("transaction", report);
+    };
+  }, [editor, reportsCursor, source, protectedSource]);
+  useEffect(() => () => {
+    if (editableRef.current) compositionRef.current(false);
+  }, []);
   useEffect(() => {
     if (pendingSelection.current !== null && textareaRef.current) {
       textareaRef.current.setSelectionRange(
@@ -789,6 +847,9 @@ export default function Writer({
             }
           }}
           onChange={(e) => onChange(e.target.value)}
+          onSelect={(e) => {
+            if (reportsCursor) cursorLineRef.current?.(sourceLineAt(e.currentTarget));
+          }}
           onKeyDown={(e) => {
             if (!editable || e.nativeEvent.isComposing || e.ctrlKey || e.metaKey || e.altKey)
               return;
@@ -836,8 +897,8 @@ export default function Writer({
             const endPos = end + (plan.deleteAfter || 0);
             replace(pos, endPos, plan.insert, pos + plan.caret);
           }}
-          onCompositionStart={() => onComposition(true)}
-          onCompositionEnd={() => onComposition(false)}
+          onCompositionStart={() => { if (editable) compositionRef.current(true); }}
+          onCompositionEnd={() => { if (editable) compositionRef.current(false); }}
           style={{ fontSize: style.fontSize, lineHeight: style.lineHeight }}
         />
         {selectionMenu}
@@ -915,7 +976,8 @@ export default function Writer({
   ];
   return (
     <>
-      <div className="format-bar">
+      {/* 다른 그룹의 원고는 도구를 흐리게만 하고 클릭은 막대로 넘긴다. 막대를 누르면 그 그룹으로 옮겨 간다. */}
+      <div className={`format-bar${inactive ? " inactive" : ""}`} aria-disabled={inactive || undefined}>
         {tools.map((t) => (
           <button
             key={t.label}
@@ -953,7 +1015,7 @@ export default function Writer({
             <ImagePlus size={16} />
           </button>
         )}
-        {lineBreak && (
+        {lineBreak && visible && (
           <>
             <i className="format-divider" />
             <LineBreakControl
@@ -963,6 +1025,7 @@ export default function Writer({
               // 본문의 빈 줄도 함께 바꾸므로, 고칠 수 없는 원고(집필 완료)에서는 바꾸지 않는다.
               disabled={readOnly}
               onChange={(manual) => {
+                // 다른 그룹의 원고는 누르면 그 그룹으로 먼저 옮겨 가므로, 여기서는 고치지 않는다.
                 if (!editable) return;
                 if (!editor.isDestroyed) convertBlankLines(editor, manual);
                 lineBreak.onChange(manual);
@@ -970,9 +1033,8 @@ export default function Writer({
             />
           </>
         )}
-        <span>본문</span>
       </div>
-      {tables && !readOnly && (
+      {tables && editable && visible && (
         <BubbleMenu
           editor={editor}
           pluginKey="tableToolbar"

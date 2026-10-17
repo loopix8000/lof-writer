@@ -1503,10 +1503,9 @@ body.sidebar-resizing * {
   color: var(--text);
   background: var(--soft);
 }
-.format-bar > span {
-  margin-left: auto;
-  font-size: 13px;
-  color: var(--muted);
+.format-bar.inactive button {
+  opacity: 0.45;
+  pointer-events: none;
 }
 .tiptap {
   outline: none;
@@ -2876,6 +2875,15 @@ textarea::-webkit-scrollbar-track {
   flex-direction: column;
   min-height: 0;
 }
+/* 탭 본문은 마운트 상태를 유지하고, 선택한 탭만 그룹의 공간을 차지한다. */
+.retained-tab {
+  display: contents;
+}
+.retained-tab[hidden],
+.editor-groups[hidden],
+.editor-footer[hidden] {
+  display: none;
+}
 .group-sash {
   flex: 0 0 4px;
   cursor: col-resize;
@@ -3233,6 +3241,12 @@ select:not([multiple]) {
 .tree-item:focus-visible .tree-actions {
   display: flex;
 }
+/* 버튼 묶음이 뜨는 동안에는 같은 자리의 연결 회차 배지를 감춘다(자리는 그대로 두어 제목이 밀리지 않는다).
+   다중 선택한 줄은 버튼 묶음을 띄우지 않으므로 배지를 그대로 둔다. */
+.tree-item:not(.multi-selected):hover .tree-badge,
+.tree-item:not(.multi-selected):focus-visible .tree-badge {
+  visibility: hidden;
+}
 .tree-item.current .tree-actions {
   background: var(--selection-bg);
 }
@@ -3251,6 +3265,45 @@ select:not([multiple]) {
   background: var(--soft);
   color: var(--text);
 }
+/* Shift·Ctrl+클릭으로 여러 줄을 고른 상태(파일 트리·메모 트리).
+   줄마다 칠하면 줄 사이 틈과 둥근 모서리 때문에 끊겨 보이므로, 줄 뒤에 틈까지 덮는 배경(::after)을 깔아
+   이어진 줄을 한 덩어리로 보이게 하고 덩어리의 처음과 끝에만 모서리를 둥글린다. 겹쳐도 진해지지 않게 불투명한 색을 쓴다. */
+.tree-item.multi-selected,
+.tree-item.multi-selected:hover {
+  background: transparent;
+  color: var(--text);
+  isolation: isolate;
+}
+.tree-item.multi-selected::after {
+  content: "";
+  position: absolute;
+  inset: -2px 0;
+  z-index: -1;
+  background: color-mix(in srgb, var(--accent) 16%, var(--sidebar));
+  pointer-events: none;
+}
+.tree-item.multi-selected:not(.multi-selected + .multi-selected)::after {
+  top: 0;
+  border-top-left-radius: 5px;
+  border-top-right-radius: 5px;
+}
+.tree-item.multi-selected:not(:has(+ .multi-selected))::after {
+  bottom: 0;
+  border-bottom-left-radius: 5px;
+  border-bottom-right-radius: 5px;
+}
+/* 고른 줄은 함께 다루므로 한 줄짜리 표시(포커스 테두리, 호버하면 뜨는 보관 버튼)를 감춘다. */
+.tree-item.multi-selected:focus-visible {
+  outline: none;
+}
+.tree-item.multi-selected .tree-actions {
+  display: none;
+}
+/* 연결 회차 배지는 평소의 밝은 바탕이면 강조 배경 위에서 떠 보이므로 같은 색 계열로 조금 진하게 맞춘다. */
+.tree-item.multi-selected .tree-badge {
+  background: color-mix(in srgb, var(--accent) 28%, var(--sidebar));
+  color: var(--text);
+}
 /* 플롯 트리: 회차 폴더 줄과 플롯을 끌어 놓을 곳 */
 .tree-item.plot-episode {
   gap: 5px;
@@ -3264,6 +3317,24 @@ select:not([multiple]) {
 .tree-section.drop-target {
   outline: 1px dashed var(--accent);
   outline-offset: -1px;
+}
+/* 끌어서 순서를 바꿀 때 놓을 자리. 줄의 둥근 모서리를 따라 휘지 않도록 줄 사이 경계에 곧은 선을 따로 그린다. */
+.tree-item.drop-before::before,
+.tree-item.drop-after::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  pointer-events: none;
+}
+.tree-item.drop-before::before {
+  top: -1px;
+}
+.tree-item.drop-after::before {
+  bottom: -1px;
 }
 /* 위젯 보드의 '이 회차의 플롯' */
 .episode-plots .widget-title {
@@ -4272,16 +4343,12 @@ button.episode-tag[draggable]:active {
   min-width: 0;
   max-width: 100%;
 }
-/* 편집 도구 막대의 줄바꿈 방식 버튼. 기본값과 다른 방식이면 강조색으로 표시한다. */
+/* 편집 도구 막대의 줄바꿈 방식 버튼. */
 .format-bar .line-break-button {
   gap: 5px;
   padding: 5px 7px;
   font-size: 12px;
   white-space: nowrap;
-}
-.format-bar .line-break-button.differs {
-  color: var(--accent);
-  font-weight: 600;
 }
 /* 작은 창은 도구 막대 밖(.app)에 화면 기준 위치로 띄운다. 위치는 버튼 자리로 정한다. */
 .line-break-pop {
