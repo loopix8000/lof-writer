@@ -16,8 +16,9 @@ export type QuickNoteSource = {
 // 줄 맨 앞의 Markdown 블록 기호가 제목·목록으로 읽히지 않게 막는다.
 const escapeLine = (line: string) => line.replace(/^(\s*)(#{1,6}\s|[-+*]\s|\d+[.)]\s|>)/, "$1\\$2");
 
-// 메모 첫 줄을 문서 제목으로 쓴다. 비어 있으면 출처 제목으로 이름을 붙인다.
-export function quickNoteTitle(source: QuickNoteSource, memo: string): string {
+// 입력한 제목을 쓰고, 없으면 메모 첫 줄을 제목으로 쓴다. 메모도 비어 있으면 출처 제목으로 이름을 붙인다.
+export function quickNoteTitle(source: QuickNoteSource, memo: string, input = ""): string {
+  if (input.trim()) return input.trim();
   const first = memo.split(/\r\n?|\n/).map((line) => line.trim()).find(Boolean) ?? "";
   const title = first.replace(/[.!?。…]+$/, "");
   if (!title) return `${source.title || "제목 없음"} 메모`;
@@ -44,10 +45,12 @@ export default function QuickNote({
   onClose,
 }: {
   source: QuickNoteSource;
-  onSave: (memo: string) => Promise<void>;
+  onSave: (memo: string, title: string) => Promise<void>;
   onClose: () => void;
 }) {
   const [memo, setMemo] = useState(""),
+    // 비워 두면 저장할 때 제목을 자동으로 붙인다(입력칸에 미리 보여 준다).
+    [title, setTitle] = useState(""),
     [saving, setSaving] = useState(false),
     // 창 자리. 우클릭한 곳 오른쪽 아래에 열고, 머리 부분을 끌어 옮긴다.
     [pos, setPos] = useState({ left: source.at.x, top: source.at.y });
@@ -69,7 +72,7 @@ export default function QuickNote({
     if (saving) return;
     setSaving(true);
     try {
-      await onSave(memo);
+      await onSave(memo, title);
     } finally {
       setSaving(false);
     }
@@ -116,6 +119,23 @@ export default function QuickNote({
         </button>
       </div>
       <div className="quick-note-source">{source.title || "제목 없음"}</div>
+      <label className="quick-note-label" htmlFor="quick-note-title">
+        제목
+      </label>
+      <input
+        id="quick-note-title"
+        className="quick-note-title"
+        value={title}
+        placeholder={quickNoteTitle(source, memo)}
+        spellCheck={false}
+        onChange={(e) => setTitle(e.target.value)}
+        onKeyDown={(e) => {
+          // Enter는 메모 입력으로 넘어간다(Ctrl+Enter는 저장).
+          if (e.key !== "Enter" || e.ctrlKey || e.metaKey || e.nativeEvent.isComposing) return;
+          e.preventDefault();
+          textRef.current?.focus();
+        }}
+      />
       <div className="quick-note-label">선택한 본문</div>
       <blockquote className="quick-note-quote">{source.text}</blockquote>
       <label className="quick-note-label" htmlFor="quick-note-memo">
@@ -130,7 +150,6 @@ export default function QuickNote({
         onChange={(e) => setMemo(e.target.value)}
       />
       <div className="quick-note-foot">
-        <small>선택한 본문과 메모가 함께 저장됩니다.</small>
         <button onClick={onClose}>취소</button>
         <button className="primary" disabled={saving} title="메모 저장 (Ctrl+Enter)" onClick={() => void save()}>
           메모 저장

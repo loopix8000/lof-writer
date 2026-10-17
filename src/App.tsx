@@ -2072,12 +2072,12 @@ export default function App() {
     startRename(doc);
   }
   // 퀵 노트: 고른 문장과 메모를 문서 영역 맨 위에 메모 문서로 만들고 바로 연다.
-  async function saveQuickNote(note: QuickNoteSource, memo: string) {
+  async function saveQuickNote(note: QuickNoteSource, memo: string, title: string) {
     await flush();
     const doc = await call<Doc>("createDocument", {
       projectId: note.projectId,
       kind: "memo",
-      title: quickNoteTitle(note, memo),
+      title: quickNoteTitle(note, memo, title),
       body: quickNoteMarkdown(note, memo),
       episodeId: note.episodeId,
       manualLineBreak: true,
@@ -4365,7 +4365,7 @@ export default function App() {
       {quickNote && (
         <QuickNote
           source={quickNote}
-          onSave={(memo) => saveQuickNote(quickNote, memo).catch(report)}
+          onSave={(memo, title) => saveQuickNote(quickNote, memo, title).catch(report)}
           onClose={() => setQuickNote(null)}
         />
       )}

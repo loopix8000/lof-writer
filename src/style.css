@@ -5050,6 +5050,10 @@ button.episode-tag[draggable]:active {
   color: var(--muted);
   font-size: 12px;
 }
+.quick-note-title {
+  margin-bottom: 14px;
+  padding: 7px 10px;
+}
 .quick-note-quote {
   max-height: 132px;
   margin: 0 0 14px;
@@ -5070,13 +5074,8 @@ button.episode-tag[draggable]:active {
   display: flex;
   align-items: center;
   gap: 8px;
+  justify-content: flex-end;
   margin-top: 14px;
-}
-.quick-note-foot small {
-  flex: 1;
-  min-width: 0;
-  color: var(--faint);
-  font-size: 11px;
 }
 .quick-note-foot button {
   padding: 7px 14px;
