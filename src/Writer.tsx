@@ -42,6 +42,8 @@ import { TypingAssist, typesettingPluginKey } from "./typing-extension";
 import { MarkdownTables } from "./table-extension";
 import { Bookmarks, BOOKMARK_LOAD, bookmarkPluginKey, readBookmarks, resolveBookmarks } from "./bookmark-extension";
 import type { Bookmark } from "./types";
+import { NoteMarks, notePluginKey } from "./note-extension";
+import { NOTE_LINK_PROTOCOL, noteLinkTarget, type NoteMark } from "./note-links";
 import LineBreakControl from "./LineBreakControl";
 import { Fragment, Slice, type Node as PMNode } from "@tiptap/pm/model";
 import { TextSelection } from "@tiptap/pm/state";
@@ -193,6 +195,16 @@ function convertBlankLines(editor: Editor, toManual: boolean) {
   }
   if (tr.docChanged) editor.view.dispatch(tr);
 }
+// 링크가 있는 문단 뒤의 첫 인용문 첫 문단 글. 퀵 노트에서는 출처 링크 아래의 '선택한 본문'이다.
+function quoteAfter(doc: PMNode, pos: number): string {
+  const $pos = doc.resolve(Math.min(pos, doc.content.size)),
+    top = $pos.depth ? $pos.before(1) : pos;
+  let quote = "";
+  doc.forEach((node, offset) => {
+    if (!quote && offset > top && node.type.name === "blockquote") quote = node.firstChild?.textContent.trim() || "";
+  });
+  return quote;
+}
 // 저장된 북마크를 편집기에 다시 깐다. 되돌리기 기록과 저장 대상에서는 뺀다.
 function loadBookmarks(editor: Editor, list: Bookmark[] = []) {
   editor.view.dispatch(
@@ -224,6 +236,10 @@ export default function Writer({
   onBookmarksChange,
   jumpToBookmark = null,
   onQuickNote,
+  links = false,
+  onOpenLink,
+  notes,
+  onOpenNotes,
 }: {
   id: string;
   body: string;
@@ -255,6 +271,13 @@ export default function Writer({
   // 본문을 고르고 우클릭한 메뉴의 '메모 추가'. 있을 때만 고른 글에 우클릭 메뉴를 띄운다.
   // at은 우클릭한 화면 위치로, 퀵 노트 창을 그 근처에 연다.
   onQuickNote?: (text: string, at: { x: number; y: number }) => void;
+  // Markdown 링크를 원문 편집 없이 보여 준다(플롯·메모). 문서 링크(lof://doc/)를 누르면 onOpenLink에
+  // 링크 주소와, 링크 뒤 첫 인용문의 글(퀵 노트의 선택한 본문)을 넘긴다.
+  links?: boolean;
+  onOpenLink?: (href: string, quote: string) => void;
+  // 이 원고를 인용한 메모. 인용한 문단의 왼쪽 여백에 메모 아이콘을 달고, 누르면 onOpenNotes를 부른다.
+  notes?: NoteMark[];
+  onOpenNotes?: (notes: NoteMark[], at: { x: number; y: number }) => void;
 }) {
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
   const style = normalizeEditorStyle({
@@ -275,7 +298,12 @@ export default function Writer({
   // 편집기에 마지막으로 읽어 들인 원고. 편집기는 줄을 문단으로 나눠 읽으므로(splitSoftBreaks) 저장 형식과
   // 편집기의 Markdown이 달라도, 같은 원고를 다시 읽어 커서가 튀지 않게 한다.
   const loadedBody = useRef(body);
-  const protectedSource = requiresSource(body, { tables });
+  const protectedSource = requiresSource(body, { tables, links });
+  const onOpenLinkRef = useRef(onOpenLink),
+    onOpenNotesRef = useRef(onOpenNotes);
+  onOpenLinkRef.current = onOpenLink;
+  onOpenNotesRef.current = onOpenNotes;
+  const notesJson = JSON.stringify(notes || []);
   // 북마크: 최신 목록과 저장 함수, 마지막으로 깔거나 알린 목록(같으면 다시 깔지 않는다).
   const bookmarksRef = useRef(bookmarks),
     onBookmarksRef = useRef(onBookmarksChange),
@@ -286,11 +314,25 @@ export default function Writer({
   const editor = useEditor(
     {
       extensions: [
-        StarterKit.configure({ link: false, underline: false }),
+        StarterKit.configure({
+          link: links
+            ? {
+                openOnClick: false,
+                autolink: false,
+                linkOnPaste: false,
+                protocols: [NOTE_LINK_PROTOCOL],
+                HTMLAttributes: { target: null, rel: null },
+              }
+            : false,
+          underline: false,
+        }),
         Markdown,
         ...(tables ? [MarkdownTables] : []),
         TypingAssist.configure({ getOptions: () => optionsRef.current }),
         Bookmarks.configure({ canToggle: () => !!onBookmarksRef.current }),
+        NoteMarks.configure({
+          onOpen: (list, event) => onOpenNotesRef.current?.(list, { x: event.clientX, y: event.clientY }),
+        }),
         Placeholder.configure({
           placeholder: "이곳에서 이야기를 시작해 보세요.",
         }),
@@ -315,6 +357,21 @@ export default function Writer({
             onComposition(false);
             return false;
           },
+          // 본문 안의 링크를 눌러도 앱 화면이 그 주소로 넘어가지 않게 막고, 문서 링크면 그 문서로 간다.
+          click: (view, event) => {
+            const anchor = (event.target as HTMLElement).closest?.("a[href]");
+            if (!anchor || !view.dom.contains(anchor)) return false;
+            event.preventDefault();
+            const href = anchor.getAttribute("href") || "";
+            if (!noteLinkTarget(href) || !onOpenLinkRef.current) return true;
+            onOpenLinkRef.current(href, quoteAfter(view.state.doc, view.posAtDOM(anchor, 0)));
+            return true;
+          },
+          auxclick: (view, event) => {
+            const anchor = (event.target as HTMLElement).closest?.("a[href]");
+            if (anchor && view.dom.contains(anchor)) event.preventDefault();
+            return false;
+          },
         },
       },
       onUpdate: ({ editor }) => onChange(editor.getMarkdown()),
@@ -329,8 +386,15 @@ export default function Writer({
         onBookmarksRef.current?.(list);
       },
     },
-    [id, tables],
+    [id, tables, links],
   );
+  // 이 원고를 인용한 메모 목록이 바뀌면 메모 표시를 다시 단다.
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return;
+    editor.view.dispatch(
+      editor.state.tr.setMeta(notePluginKey, JSON.parse(notesJson)).setMeta("addToHistory", false),
+    );
+  }, [editor, notesJson]);
   // 문서를 열 때, 그리고 목록에서 북마크를 지우는 등 밖에서 목록이 바뀌었을 때 다시 깐다.
   useEffect(() => {
     if (!editor || editor.isDestroyed) return;

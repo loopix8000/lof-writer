@@ -32,11 +32,12 @@ export function plainText(markdown) {
 }
 export const characterCount = (markdown, spaces = false) =>
   (spaces ? plainText(markdown).replace(/[\r\n]/g, "") : plainText(markdown).replace(/\s/g, "")).length;
-export function requiresSource(markdown, { tables = false } = {}) {
+export function requiresSource(markdown, { tables = false, links = false } = {}) {
   let unsupported = false;
   marked.walkTokens(marked.lexer(markdown), (t) => {
     if (tables && (t.type === "table" ||
       (t.type === "html" && /^<br\s*\/?\s*>$/i.test(t.raw.trim())))) return;
+    if (links && t.type === "link") return;
     if (["table", "image", "html", "link"].includes(t.type)) unsupported = true;
   });
   return unsupported;

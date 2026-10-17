@@ -5080,3 +5080,29 @@ button.episode-tag[draggable]:active {
 .quick-note-foot button {
   padding: 7px 14px;
 }
+/* 플롯·메모 본문의 링크. 문서 링크(퀵 노트 출처)는 누르면 그 문서의 인용한 문장으로 간다. */
+.editor-content .tiptap a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+/* 원고 메모 표시: 메모가 인용한 문단의 왼쪽 여백, 북마크 리본보다 바깥에 메모 아이콘을 둔다. 누르면 메모를 연다. */
+.editor-content .tiptap > .noted {
+  position: relative;
+}
+.editor-content .tiptap > .noted::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -64px;
+  width: 22px;
+  cursor: pointer;
+  background-color: var(--accent);
+  opacity: 0.8;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M16 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8Z'/%3E%3Cpath d='M15 3v4a2 2 0 0 0 2 2h4'/%3E%3C/svg%3E")
+    no-repeat center 0.2em / 15px 15px;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M16 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8Z'/%3E%3Cpath d='M15 3v4a2 2 0 0 0 2 2h4'/%3E%3C/svg%3E")
+    no-repeat center 0.2em / 15px 15px;
+}

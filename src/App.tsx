@@ -102,6 +102,7 @@ import {
 import MobilePreview from "./MobilePreview";
 import MemoSession from "./MemoSession";
 import QuickNote, { quickNoteMarkdown, quickNoteTitle, type QuickNoteSource } from "./QuickNote";
+import { firstQuote, noteLink, noteLinkTarget, type NoteMark } from "./note-links";
 import {
   QuickOpen,
   SearchPanel,
@@ -282,6 +283,8 @@ export default function App() {
     [commonMemoPath, setCommonMemoPath] = useState(""),
     // 본문 우클릭 '메모 추가'로 연 퀵 노트 창.
     [quickNote, setQuickNote] = useState<QuickNoteSource | null>(null),
+    // 지금 원고를 출처 링크로 인용한 메모. 원고 왼쪽 여백에 메모 아이콘으로 보여 준다.
+    [noteMarks, setNoteMarks] = useState<{ docId: string; list: NoteMark[] }>({ docId: "", list: [] }),
     // 작품 삭제 확인: 작품 제목을 그대로 입력해야 삭제 버튼이 켜진다.
     [confirmTitle, setConfirmTitle] = useState(""),
     // 플롯 트리에서 접어 둔 회차, 플롯을 끌어 놓을 대상(회차 ID, 연결 해제는 "").
@@ -1602,6 +1605,62 @@ export default function App() {
     });
   }
   searchActions.current = { openQuick: () => openQuick().catch(report), openSearch };
+  // 메모의 문서 링크(lof://doc/)를 누르면 그 문서를 열고, 메모가 인용한 문장을 찾아 보여 준다.
+  async function openNoteLink(href: string, quote: string) {
+    const id = noteLinkTarget(href);
+    if (!id || !libraryRef.current.documents.some((d) => d.id === id)) {
+      message("연결된 문서를 찾을 수 없습니다.");
+      return;
+    }
+    await flush();
+    await openDoc(id, true);
+    if (!quote || activeId.current !== id) return;
+    setReveal({ docId: id, query: quote, index: 0, caseSensitive: true, seq: Date.now() });
+  }
+  // 원고 여백의 메모 아이콘: 메모가 하나면 바로 열고, 여럿이면 고를 수 있게 메뉴를 띄운다.
+  function openNotes(list: NoteMark[], at: { x: number; y: number }) {
+    if (list.length === 1) return attempt(() => openDoc(list[0].id, true))();
+    setMenu({
+      x: at.x,
+      y: at.y,
+      items: list.map((n) => ({
+        label: n.title || "제목 없는 메모",
+        icon: <StickyNote size={15} />,
+        action: attempt(() => openDoc(n.id, true)),
+      })),
+    });
+  }
+  // 지금 원고를 출처 링크로 인용한 메모를 찾는다. 다른 플롯·메모가 바뀌면 다시 찾는다.
+  const noteScan = active
+    ? lib.documents
+        .filter((d) => d.projectId === active.projectId && d.kind !== "episode" && d.id !== active.id)
+        .map((d) => d.id + d.updatedAt + d.archived)
+        .join()
+    : "";
+  useEffect(() => {
+    const id = active?.id,
+      projectId = active?.projectId;
+    if (!id) return;
+    let canceled = false;
+    (async () => {
+      const found = await call<{ results: { id: string; archived: boolean }[] }>("searchText", {
+        query: noteLink(id),
+        projectId,
+        caseSensitive: true,
+      });
+      const list: NoteMark[] = [];
+      for (const hit of found.results || []) {
+        if (hit.id === id || hit.archived) continue;
+        const doc = await call<Doc>("readDocument", { id: hit.id });
+        const text = firstQuote(doc.body);
+        if (text) list.push({ id: doc.id, title: doc.title, text });
+      }
+      if (!canceled) setNoteMarks({ docId: id, list });
+    })().catch(() => {});
+    return () => {
+      canceled = true;
+    };
+  }, [active?.id, noteScan]);
   const docs = lib.documents.filter(
       (d) => d.projectId === projectId && d.archived === archive,
     ),
@@ -1856,6 +1915,8 @@ export default function App() {
                   typingOptions={{}}
                   editorStyle={sideBox.kindPrefs}
                   bookmarks={doc.bookmarks}
+                  links={doc.kind === "memo" || doc.kind === "plot"}
+                  onOpenLink={(href, quote) => attempt(() => openNoteLink(href, quote))()}
                 />
               </article>
             )}
@@ -3362,6 +3423,12 @@ export default function App() {
             onSidebarResize={(width) => savePrefs({ leftSidebarWidth: width }).catch(report)}
             flushRef={memoFlush}
             report={report}
+            onOpenLink={(href, quote) =>
+              attempt(async () => {
+                await memoFlush.current?.();
+                await openNoteLink(href, quote);
+              })()
+            }
           />
           <div
             className="content-shell"
@@ -4225,6 +4292,7 @@ export default function App() {
                     onQuickNote={(text, at) =>
                       setQuickNote({
                         projectId: active.projectId,
+                        docId: active.id,
                         // 회차는 회차 번호를 붙여 출처를 알아보기 쉽게 한다(예: 44. 아이스크림 두 개).
                         title:
                           active.kind === "episode" && numberOf(active)
@@ -4235,6 +4303,10 @@ export default function App() {
                         at,
                       })
                     }
+                    links={active.kind === "memo" || active.kind === "plot"}
+                    onOpenLink={(href, quote) => attempt(() => openNoteLink(href, quote))()}
+                    notes={noteMarks.docId === active.id ? noteMarks.list : undefined}
+                    onOpenNotes={openNotes}
                   />
                 </article>
                 <div className="end-marker">✧</div>

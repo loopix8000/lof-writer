@@ -1,10 +1,12 @@
 import { useLayoutEffect, useRef, useState, type PointerEvent } from "react";
 import { GripHorizontal, NotebookPen, X } from "lucide-react";
+import { escapeLinkText, noteLink } from "./note-links";
 
 // 퀵 노트: 본문에서 고른 문장과 그때 떠오른 생각을 한 메모 문서로 저장한다.
 export type QuickNoteSource = {
   projectId: string;
-  // 문장을 고른 문서의 제목. 메모의 출처로 남긴다.
+  // 문장을 고른 문서와 그 제목. 메모의 출처 링크로 남긴다.
+  docId: string;
   title: string;
   text: string;
   // 새 메모를 연결할 회차(회차에서 골랐으면 그 회차, 플롯·메모에서 골랐으면 그 문서의 회차).
@@ -25,7 +27,7 @@ export function quickNoteTitle(source: QuickNoteSource, memo: string, input = ""
   return [...title].length > 30 ? [...title].slice(0, 30).join("") + "…" : title;
 }
 
-// 선택한 문장은 한 줄을 한 문단으로 인용하고, 메모는 그대로 아래에 붙인다.
+// 출처는 원래 문서로 가는 링크로 남긴다. 선택한 문장은 한 줄을 한 문단으로 인용하고, 메모는 그대로 아래에 붙인다.
 export function quickNoteMarkdown(source: QuickNoteSource, memo: string): string {
   const quote = source.text
     .split(/\r\n?|\n/)
@@ -33,7 +35,11 @@ export function quickNoteMarkdown(source: QuickNoteSource, memo: string): string
     .filter(Boolean)
     .map((line) => `> ${escapeLine(line)}`)
     .join("\n>\n");
-  const parts = [`출처: ${source.title || "제목 없음"}`, "## 선택한 본문", quote];
+  const parts = [
+    `출처: [${escapeLinkText(source.title || "제목 없음")}](${noteLink(source.docId)})`,
+    "## 선택한 본문",
+    quote,
+  ];
   const note = memo.trim();
   if (note) parts.push("## 메모", note);
   return parts.join("\n\n") + "\n";

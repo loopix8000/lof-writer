@@ -117,6 +117,7 @@ export default function MemoSession({
   onSidebarResize,
   flushRef,
   report,
+  onOpenLink,
 }: {
   // 서재의 문서 목록(작품 스페이스에서 플롯·에피소드를 보여 줄 때 쓴다)과, 문서를 집필 창에서 여는 함수.
   documents: Doc[];
@@ -131,6 +132,8 @@ export default function MemoSession({
   onSidebarResize: (width: number) => void;
   flushRef: React.MutableRefObject<(() => Promise<void>) | null>;
   report: (e: any) => void;
+  // 메모의 문서 링크(퀵 노트 출처)를 누르면 집필 창에서 그 문서를 열고 인용한 문장으로 간다.
+  onOpenLink: (href: string, quote: string) => void;
 }) {
   const [spaces, setSpaces] = useState<Space[]>([]),
     [space, setSpace] = useState(COMMON),
@@ -988,6 +991,8 @@ export default function MemoSession({
                     onComposition={() => {}}
                     typingOptions={{}}
                     editorStyle={shownBox.kindPrefs}
+                    links={kindOf(shown) !== "episode"}
+                    onOpenLink={onOpenLink}
                   />
                 </article>
               </div>
@@ -1435,6 +1440,8 @@ export default function MemoSession({
                         textReplacements: prefs.textReplacements,
                       }}
                       editorStyle={mainBox.kindPrefs}
+                      links={kindOf(memo) !== "episode"}
+                      onOpenLink={onOpenLink}
                     />
                   </article>
                 );

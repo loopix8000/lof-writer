@@ -3,6 +3,7 @@ import { Plugin, PluginKey, type EditorState } from "@tiptap/pm/state";
 import { Decoration, DecorationSet, type EditorView } from "@tiptap/pm/view";
 import type { Node as PMNode } from "@tiptap/pm/model";
 import type { Bookmark } from "./types";
+import { NOTE_GUTTER } from "./note-extension";
 
 // 원고 북마크. 본문 맨 위 단계의 문단에 붙이고, 왼쪽 여백을 눌러 넣고 뺀다.
 // 붙인 자리는 편집하는 동안 문단을 따라 옮겨 가고, 저장할 때는 문단 순서와 앞부분 글로 남긴다.
@@ -26,7 +27,9 @@ function mark(doc: PMNode, pos: number) {
 function gutterBlock(view: EditorView, event: MouseEvent) {
   let el = event.target as HTMLElement | null;
   while (el && el.parentElement !== view.dom) el = el.parentElement;
-  if (!el || event.clientX >= el.getBoundingClientRect().left) return -1;
+  const left = el?.getBoundingClientRect().left ?? 0;
+  // 리본 바깥쪽은 메모 아이콘 자리이므로 북마크로 받지 않는다.
+  if (!el || event.clientX >= left || event.clientX < left - NOTE_GUTTER.to) return -1;
   let pos = -1;
   view.state.doc.forEach((node, offset) => {
     if (pos < 0 && markable(node) && view.nodeDOM(offset) === el) pos = offset;
