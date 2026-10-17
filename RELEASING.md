@@ -29,7 +29,7 @@
    | Secret | `TAURI_SIGNING_PRIVATE_KEY` | 비밀키 파일 내용 |
    | Secret | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | 비밀키에 암호를 설정했다면 그 암호 |
 
-3. `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`의 버전을 함께 올리고 두 잠금 파일의 앱 버전도 맞춘다. 준비 스크립트는 버전이 다르면 빌드를 중단한다. MSI 내부 버전인 `bundle.windows.wix.version`은 앱 버전과 별도로 매 릴리즈마다 증가시킨다. 현재 앱 버전 `1.0.3-beta.3`의 MSI 내부 버전은 `1.0.11`이다. [Windows Installer는 버전의 앞 세 자리만 비교](https://learn.microsoft.com/en-us/windows/win32/msi/productversion)하므로 네 번째 자리만 올리면 업그레이드를 구분할 수 없다. 기존 MSI의 UpgradeCode는 유지한다.
+3. `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`의 버전을 함께 올리고 두 잠금 파일의 앱 버전도 맞춘다. 준비 스크립트는 버전이 다르면 빌드를 중단한다. MSI 내부 버전인 `bundle.windows.wix.version`은 앱 버전과 별도로 매 릴리즈마다 증가시킨다. 현재 앱 버전 `1.0.3-beta.4`의 MSI 내부 버전은 `1.0.12`이다. [Windows Installer는 버전의 앞 세 자리만 비교](https://learn.microsoft.com/en-us/windows/win32/msi/productversion)하므로 네 번째 자리만 올리면 업그레이드를 구분할 수 없다. 기존 MSI의 UpgradeCode는 유지한다.
 4. GitHub Actions의 **Build Windows MSI release**를 `main`에서 수동 실행한다. **Publish the release and update the beta channel after building**을 선택하면 MSI·서명·`latest.json`을 업로드한 뒤 공개하고 베타 채널을 갱신한다. 선택하지 않으면 초안으로 남는다.
 
 `beta` 릴리즈의 `latest.json`은 버전별 릴리즈의 MSI 주소를 가리킨다. 버전별 설치 파일은 유지하고, 새 베타 버전을 공개할 때 고정 채널의 JSON만 갱신한다. 공개 스크립트는 버전·MSI 존재 여부·서명을 확인하고 설치 파일을 먼저 공개한다. 공개 단계만 재시도할 때는 해당 버전의 소스를 체크아웃하고 `GITHUB_REPOSITORY=loopix8000/lof-writer` 환경 변수를 설정한 뒤 `node scripts/publish-release.mjs`를 실행한다.

@@ -27,13 +27,12 @@ import {
   SquareDashed,
   ClipboardPaste,
   ImagePlus,
-  Pilcrow,
 } from "lucide-react";
 import { createPortal } from "react-dom";
 import ContextMenu, { type MenuItem } from "./ContextMenu";
 import { BubbleMenu } from "@tiptap/react/menus";
-import type { Editor } from "@tiptap/core";
-import { requiresSource } from "../core/text.mjs";
+import { getTextBetween, getTextSerializersFromSchema, type Editor } from "@tiptap/core";
+import { requiresSource, splitSoftBreaks } from "../core/text.mjs";
 import {
   typingPlan,
   pairedBackspace,
@@ -90,6 +89,22 @@ function selectedTableElement(editor: Editor): HTMLElement | null {
 const parseManualClipboardText = clipboardTextParser(true);
 const parseAutomaticClipboardText = clipboardTextParser(false);
 
+// 복사 단축키와 우클릭 메뉴가 같은 문단 간격을 쓰도록 한다. 표 선택은 선택한 셀만 복사한다.
+function automaticClipboardTextSerializer(blankLines: boolean): NonNullable<EditorProps["clipboardTextSerializer"]> {
+  return (_slice, view) => {
+    const { doc, selection, schema } = view.state;
+    const blockSeparator = blankLines ? "\n\n" : "\n";
+    const textSerializers = getTextSerializersFromSchema(schema);
+    return [...selection.ranges]
+      .sort((a, b) => a.$from.pos - b.$from.pos)
+      .map(({ $from, $to }) => getTextBetween(doc, { from: $from.pos, to: $to.pos }, {
+        blockSeparator,
+        textSerializers,
+      }))
+      .join(blockSeparator);
+  };
+}
+
 // 텍스트는 위 파서에서 한 번 처리한다. HTML의 빈 문단·줄바꿈도 같은 규칙을 적용한다.
 const normalizeAutomaticPaste: NonNullable<EditorProps["transformPasted"]> = (slice, _view, plain) => {
   if (plain) return slice;
@@ -129,32 +144,6 @@ function offsetToPos(node: PMNode, pos: number, offset: number) {
     p += child.nodeSize;
   }
   return p;
-}
-// 웹소설 원고처럼 한 줄바꿈으로만 이어진 줄도 한 줄을 한 문단으로 읽는다. Markdown 규칙대로라면 이런 줄은
-// 한 문단으로 합쳐져 문단 간격·들여쓰기가 첫 줄에만 붙으므로, 읽기 전에 줄 사이를 문단 구분(빈 줄)으로 바꾼다.
-// 자동 관리(hardBreaks)에서는 강제 줄바꿈(줄 끝 공백 두 칸·역슬래시)으로 이어진 줄도 붙여 넣기 규칙처럼
-// 한 줄을 한 문단으로 나눈다. 수동 관리에서는 강제 줄바꿈을 그대로 둔다. 코드 블록 안, 이어지는 표·인용 줄은 건드리지 않는다.
-function splitSoftBreaks(markdown: string, hardBreaks: boolean): string {
-  const lines = markdown.split(/\r\n?|\n/),
-    fenceLine = /^\s*(```|~~~)/,
-    hardEnd = /( {2,}|\\)$/,
-    joined = (line: string) => /^\s*[|>]/.test(line);
-  const out: string[] = [];
-  let fence = false;
-  lines.forEach((line, i) => {
-    if (fenceLine.test(line)) fence = !fence;
-    const next = lines[i + 1],
-      split =
-        !fence &&
-        next !== undefined &&
-        !!line.trim() &&
-        !!next.trim() &&
-        !(joined(line) && joined(next)) &&
-        (hardBreaks || !hardEnd.test(line));
-    out.push(split ? line.replace(hardEnd, "") : line);
-    if (split) out.push("");
-  });
-  return out.join("\n");
 }
 // 줄바꿈 방식을 바꿀 때 본문의 실제 빈 줄을 맞춘다. 맨 위 단계에서 글이 있는 블록 사이의 빈 문단 묶음만 바꾼다.
 // 자동 관리로: 붙여 넣기와 같은 규칙으로 빈 줄 n개를 n/2개(내림)로 줄인다. 빈 줄 1개는 단락 간격이 된다.
@@ -282,11 +271,11 @@ export default function Writer({
   inactive = false,
   reveal = null,
   manualLineBreak = false,
+  copyWithBlankLines = true,
   editorStyle,
   onReplaceSymbols,
   tables = false,
   lineBreak,
-  typesetting,
   bookmarks,
   onBookmarksChange,
   jumpToBookmark = null,
@@ -314,13 +303,12 @@ export default function Writer({
   reveal?: { query: string; index: number; caseSensitive?: boolean; seq: number } | null;
   // 수동 줄바꿈 관리: 단락 간격 없이 Enter 한 번이 한 줄이 된다.
   manualLineBreak?: boolean;
+  copyWithBlankLines?: boolean;
   editorStyle?: Record<string, any>;
   onReplaceSymbols?: () => void;
   tables?: boolean;
   // 도구 막대의 줄바꿈 방식 버튼. 현재 방식은 manualLineBreak를 쓰고, def는 새 문서 기본값이다.
   lineBreak?: { def: boolean; defaultLabel: string; onChange: (manual: boolean) => void };
-  // 도구 막대의 조판 버튼. 우측 사이드바에 조판 설정을 펼쳐 본문을 보며 고친다.
-  typesetting?: { open: boolean; onToggle: () => void };
   // 원고 북마크. onBookmarksChange가 있을 때만 왼쪽 여백을 눌러 넣고 뺄 수 있다.
   bookmarks?: Bookmark[];
   onBookmarksChange?: (bookmarks: Bookmark[]) => void;
@@ -418,6 +406,7 @@ export default function Writer({
       editable,
       editorProps: {
         clipboardTextParser: manualLineBreak ? parseManualClipboardText : parseAutomaticClipboardText,
+        clipboardTextSerializer: manualLineBreak ? undefined : automaticClipboardTextSerializer(copyWithBlankLines),
         transformPasted: manualLineBreak ? undefined : normalizeAutomaticPaste,
         // 그림 파일을 붙여 넣거나 끌어 놓으면 작품의 assets/에 저장하고 이미지로 넣는다.
         handlePaste: (view, event) => {
@@ -530,11 +519,12 @@ export default function Writer({
         editorProps: {
           ...editor.options.editorProps,
           clipboardTextParser: manualLineBreak ? parseManualClipboardText : parseAutomaticClipboardText,
+          clipboardTextSerializer: manualLineBreak ? undefined : automaticClipboardTextSerializer(copyWithBlankLines),
           transformPasted: manualLineBreak ? undefined : normalizeAutomaticPaste,
         },
       });
     }
-  }, [editor, manualLineBreak]);
+  }, [editor, manualLineBreak, copyWithBlankLines]);
   useEffect(() => {
     if (
       editor &&
@@ -980,23 +970,6 @@ export default function Writer({
             />
           </>
         )}
-        {typesetting && (
-          <>
-            {!lineBreak && <i className="format-divider" />}
-            <button
-              type="button"
-              className={`typesetting-button${typesetting.open ? " active" : ""}`}
-              aria-label="조판 설정"
-              aria-pressed={typesetting.open}
-              title={typesetting.open ? "조판 설정 닫기" : "조판 설정 (본문을 보며 고치기)"}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={typesetting.onToggle}
-            >
-              <Pilcrow size={16} />
-              <span>조판</span>
-            </button>
-          </>
-        )}
         <span>본문</span>
       </div>
       {tables && !readOnly && (
@@ -1054,7 +1027,10 @@ export default function Writer({
         style={contentVars}
         onContextMenu={(e) => {
           const { from, to } = editor.state.selection;
-          openEditorMenu(e, editor.state.doc.textBetween(from, to, "\n"), {
+          const text = manualLineBreak
+            ? editor.state.doc.textBetween(from, to, "\n")
+            : editor.view.serializeForClipboard(editor.state.selection.content()).text;
+          openEditorMenu(e, text, {
             cut: () => editor.chain().focus().deleteSelection().run(),
             selectAll: () => editor.chain().focus().selectAll().run(),
             refocus: () => editor.commands.focus(),

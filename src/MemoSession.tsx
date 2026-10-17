@@ -1018,6 +1018,7 @@ export default function MemoSession({
                   body={memo.body}
                   tables={kindOf(memo) !== "episode"}
                   manualLineBreak={!!memo.manualLineBreak}
+                  copyWithBlankLines={prefs.copyWithBlankLines !== false}
                   onChange={(body) => { if (focused) edit(body); }}
                   fontSize={mainBox.norm.fontSize}
                   lineHeight={mainBox.norm.lineHeight}

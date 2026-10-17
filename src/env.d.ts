@@ -1,5 +1,6 @@
 declare module "*.mjs" {
-  export function plainText(text: string): string;
+  export function plainText(text: string, options?: { preserveParagraphBreaks?: boolean }): string;
+  export function splitSoftBreaks(markdown: string, hardBreaks: boolean): string;
   export function characterCount(text: string, spaces?: boolean): number;
   export function requiresSource(text: string, options?: { tables?: boolean; links?: boolean; images?: boolean }): boolean;
   export const DEFAULT_TEXT_REPLACEMENTS: {

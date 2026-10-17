@@ -1,13 +1,43 @@
 import { marked } from "marked";
 import { decodeHTMLStrict } from "entities";
-export function plainText(markdown) {
+
+// 웹소설 원고처럼 한 줄바꿈으로만 이어진 줄도 한 줄을 한 문단으로 읽는다. Markdown 규칙대로라면 이런 줄은
+// 한 문단으로 합쳐져 문단 간격·들여쓰기가 첫 줄에만 붙으므로, 읽기 전에 줄 사이를 문단 구분(빈 줄)으로 바꾼다.
+// 자동 관리(hardBreaks)에서는 강제 줄바꿈(줄 끝 공백 두 칸·역슬래시)으로 이어진 줄도 붙여 넣기 규칙처럼
+// 한 줄을 한 문단으로 나눈다. 수동 관리에서는 강제 줄바꿈을 그대로 둔다. 코드 블록 안, 이어지는 표·인용 줄은 건드리지 않는다.
+export function splitSoftBreaks(markdown, hardBreaks) {
+  const lines = markdown.split(/\r\n?|\n/),
+    fenceLine = /^\s*(```|~~~)/,
+    hardEnd = /( {2,}|\\)$/,
+    joined = (line) => /^\s*[|>]/.test(line);
+  const out = [];
+  let fence = false;
+  lines.forEach((line, i) => {
+    if (fenceLine.test(line)) fence = !fence;
+    const next = lines[i + 1],
+      split =
+        !fence &&
+        next !== undefined &&
+        !!line.trim() &&
+        !!next.trim() &&
+        !(joined(line) && joined(next)) &&
+        (hardBreaks || !hardEnd.test(line));
+    out.push(split ? line.replace(hardEnd, "") : line);
+    if (split) out.push("");
+  });
+  return out.join("\n");
+}
+
+export function plainText(markdown, { preserveParagraphBreaks = false } = {}) {
   function walk(tokens) {
     return tokens
       .map((t) => {
-        if (t.type === "space")
+        if (t.type === "space") {
+          const breaks = (t.raw.match(/\n/g) || []).length;
           return "\n".repeat(
-            Math.max(0, Math.floor((t.raw.match(/\n/g) || []).length / 2) - 1),
+            Math.max(0, (preserveParagraphBreaks ? breaks : Math.floor(breaks / 2)) - 1),
           );
+        }
         if (t.type === "br" || t.type === "hr") return "\n";
         if (t.type === "list")
           return t.items.map((i) => walk(i.tokens).replace(/\n$/, "")).join("\n") + "\n";
@@ -28,7 +58,9 @@ export function plainText(markdown) {
       })
       .join("");
   }
-  return walk(marked.lexer(markdown)).replace(/\n$/, "");
+  // 자동 관리 복사는 편집기와 같은 문단 구분을 적용하고, 문단 사이의 빈 줄을 보존한다.
+  const content = preserveParagraphBreaks ? splitSoftBreaks(markdown, true) : markdown;
+  return walk(marked.lexer(content)).replace(/\n$/, "");
 }
 export const characterCount = (markdown, spaces = false) =>
   (spaces ? plainText(markdown).replace(/[\r\n]/g, "") : plainText(markdown).replace(/\s/g, "")).length;

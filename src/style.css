@@ -1390,6 +1390,10 @@ body.sidebar-resizing * {
   align-items: center;
   gap: 6px;
 }
+/* 버튼을 숨겨도 도구 막대의 높이와 저장 상태 표시의 자리를 유지한다. */
+.editor-action-buttons[aria-hidden="true"] {
+  visibility: hidden;
+}
 .editor-actions button {
   padding: 6px;
   border: 0;
@@ -4783,15 +4787,6 @@ button.episode-tag[draggable]:active {
 }
 .panel-caption-actions button:hover {
   color: var(--text);
-}
-/* 편집 도구 막대의 조판 버튼. 우측 사이드바에 조판 설정을 펼친다. */
-.format-bar .typesetting-button {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 5px 7px;
-  font-size: 12px;
-  white-space: nowrap;
 }
 /* 위젯 보드 자리에 펼친 조판 설정. 설정 창보다 좁으므로 한 열로 쌓는다. */
 .widget-sidebar.typesetting-open {

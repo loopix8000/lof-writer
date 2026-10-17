@@ -264,6 +264,7 @@ export default function App() {
       goal: 3000,
       theme: "light",
       colorTheme: "modern",
+      copyWithBlankLines: true,
       autoCloseQuotes: true,
       autoCloseBrackets: true,
       smartBrackets: true,
@@ -277,7 +278,6 @@ export default function App() {
     [googleDriveEnabled, setGoogleDriveEnabled] = useState(false),
     [googleConnecting, setGoogleConnecting] = useState(false),
     [busy, setBusy] = useState(false),
-    [sessionCount, setSessionCount] = useState(0),
     // 메모 세션(레일의 메모 버튼). 열려 있는 동안 집필 화면은 그대로 두고 가린다.
     [memoOpen, setMemoOpen] = useState(false),
     [commonMemoPath, setCommonMemoPath] = useState(""),
@@ -326,8 +326,6 @@ export default function App() {
   const dragTreeDoc = useRef("");
   const dragPlot = useRef("");
   const dragFolder = useRef("");
-  // 마지막 화면 복원이 끝나기 전에는 저장하지 않는다(시작 화면으로 덮어쓰지 않도록).
-  const sessionRestored = useRef(false);
   const closeMenu = useCallback(() => setMenu(null), []);
   const closeViewer = useCallback(() => setViewer(null), []);
   const switchWasOpen = useRef(false);
@@ -375,11 +373,12 @@ export default function App() {
     conflictRef = useRef(false),
     projectRef = useRef(""),
     activeId = useRef(""),
-    sessionStart = useRef(0),
     refreshSeq = useRef(0),
     initialized = useRef(false),
     navigationSeq = useRef(0),
     toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 앱에서 문서를 처음 열었을 때의 글자 수를 문서별로 유지한다.
+  const sessionStarts = useRef(new Map<string, number>());
   const pendingWriting = useRef(new Map<string, WritingRules>()),
     writingQueue = useRef(Promise.resolve()),
     // 조판 설정을 열 때 우측 사이드바가 닫혀 있었으면, 조판 설정을 닫을 때 사이드바도 다시 닫는다.
@@ -523,20 +522,6 @@ export default function App() {
       const pending = draft.current;
       if (composing.current || (pending && pending.seq !== pending.saved))
         throw Error("원고 저장을 완료한 뒤 다시 시도해 주세요.");
-      await call("setPreferences", {
-        lastSession: {
-          view: here.view,
-          projectId: here.projectId,
-          documentId: here.documentId,
-          tab,
-          archive,
-          tabs: editorTabs,
-          split,
-          focusedSide,
-          splitRatio,
-          memoOpen,
-        },
-      });
     },
   });
   useEffect(() => {
@@ -580,10 +565,6 @@ export default function App() {
     if (timer.current) clearTimeout(timer.current);
     if (!composing.current)
       timer.current = setTimeout(() => flush({ auto: true }).catch(report), 650);
-    if (patch.body !== undefined)
-      setSessionCount(
-        Math.max(0, characterCount(patch.body) - sessionStart.current),
-      );
   }
   function composition(value: boolean) {
     composing.current = value;
@@ -638,8 +619,8 @@ export default function App() {
       );
       draft.current = { doc, seq: 0, saved: 0 };
       activeId.current = doc.id;
-      sessionStart.current = characterCount(doc.body);
-      setSessionCount(0);
+      if (!sessionStarts.current.has(doc.id))
+        sessionStarts.current.set(doc.id, characterCount(doc.body));
       setActive(doc);
       setSaveStatus("저장됨");
       setConflict(false);
@@ -762,41 +743,14 @@ export default function App() {
       return next;
     });
   }
-  // 앱을 다시 열면 마지막으로 보던 화면(작품 페이지, 집필 중이던 문서와 탭·분할, 메모 화면)으로 연다.
-  async function restoreSession(saved: any) {
-    const data = libraryRef.current,
-      ids = new Set(data.documents.map((d) => d.id)),
-      hasProject = (id: string) => data.projects.some((p) => p.id === id);
-    if (saved?.view === "workspace" && ids.has(saved.documentId)) {
-      const doc = data.documents.find((d) => d.id === saved.documentId)!;
-      const valid = (t: EditorTab) =>
-        ids.has(t.id) && data.documents.find((d) => d.id === t.id)?.projectId === doc.projectId;
-      projectRef.current = doc.projectId;
-      setProjectId(doc.projectId);
-      updateTabs(() => (Array.isArray(saved.tabs) ? saved.tabs.filter(valid) : []));
-      const side = Array.isArray(saved.split?.tabs) ? saved.split.tabs.filter(valid) : [];
-      if (side.length) {
-        updateSplit(() => ({
-          tabs: side,
-          docId: side.some((t: EditorTab) => t.id === saved.split.docId) ? saved.split.docId : side[0].id,
-        }));
-        setFocusedSide(saved.focusedSide === "right" ? "right" : "left");
-        setSplitRatio(Math.min(0.8, Math.max(0.2, Number(saved.splitRatio) || 0.5)));
-      }
-      await openDoc(saved.documentId);
-    } else if (saved?.view === "project" && hasProject(saved.projectId))
-      await navigate({
-        view: "project",
-        projectId: saved.projectId,
-        tab: ["episode", "plot", "memo"].includes(saved.tab) ? saved.tab : "episode",
-        archive: saved.archive === true,
-      });
-    else if (saved?.view === "bookmarks") await goView("bookmarks");
-    if (saved?.memoOpen) setMemoOpen(true);
-  }
   // 문서 ID가 바뀌었을 때(메모 이름 바꾸기) 탭·분할 보기·이동 기록이 새 ID를 가리키게 한다.
   function replaceDocId(oldId: string, newId: string) {
     const swap = (id: string) => (id === oldId ? newId : id);
+    const sessionStart = sessionStarts.current.get(oldId);
+    if (oldId !== newId && sessionStart !== undefined) {
+      sessionStarts.current.set(newId, sessionStart);
+      sessionStarts.current.delete(oldId);
+    }
     if (activeId.current === oldId) activeId.current = newId;
     updateTabs((tabs) =>
       tabs.some((t) => t.id === oldId) ? tabs.map((t) => ({ ...t, id: swap(t.id) })) : tabs,
@@ -949,7 +903,12 @@ export default function App() {
       message("Markdown 원문을 복사했습니다.");
       return;
     }
-    await call("copyManuscript", { id: latest.id, text: plainText(latest.body) });
+    await call("copyManuscript", {
+      id: latest.id,
+      text: plainText(latest.body, {
+        preserveParagraphBreaks: !latest.manualLineBreak && prefs.copyWithBlankLines !== false,
+      }),
+    });
     message("본문을 복사했습니다.");
   }
   function replaceActiveSymbols() {
@@ -1133,7 +1092,7 @@ export default function App() {
     e.preventDefault();
   }
   // 작품 페이지로 새로 들어올 때는 항상 에피소드 목록에서 시작한다.
-  // 뒤로/앞으로 이동과 앱 재시작 복원은 navigate에 저장된 탭을 그대로 넘긴다.
+  // 뒤로/앞으로 이동은 navigate에 저장된 탭을 그대로 넘긴다.
   async function goView(next: "library" | "project" | "bookmarks", id = projectId) {
     const keep = next !== "project" && id === projectId;
     await navigate({ view: next, projectId: id,
@@ -1321,37 +1280,8 @@ export default function App() {
     };
   }
   useEffect(() => {
-    if (!loaded || sessionRestored.current) return;
-    restoreSession(libraryRef.current.preferences?.lastSession)
-      .catch(report)
-      .finally(() => {
-        sessionRestored.current = true;
-      });
-  }, [loaded]);
-  useEffect(() => {
     if (view === "workspace" && projectId) loadMemoFolders().catch(() => {});
   }, [view, projectId, lib]);
-  const here = navigation.entries[navigation.index];
-  useEffect(() => {
-    if (!sessionRestored.current) return;
-    const t = setTimeout(() => {
-      call("setPreferences", {
-        lastSession: {
-          view: here.view,
-          projectId: here.projectId,
-          documentId: here.documentId,
-          tab,
-          archive,
-          tabs: editorTabs,
-          split,
-          focusedSide,
-          splitRatio,
-          memoOpen,
-        },
-      }).catch(() => {});
-    }, 500);
-    return () => clearTimeout(t);
-  }, [here, tab, archive, editorTabs, split, focusedSide, splitRatio, memoOpen]);
   async function savePrefs(p: Record<string, any>) {
     let payload = p;
     if (
@@ -1423,6 +1353,7 @@ export default function App() {
     try {
       await flush();
       if (!await call("chooseVault")) return;
+      sessionStarts.current.clear();
       draft.current = null;
       activeId.current = "";
       setActive(null);
@@ -1737,6 +1668,9 @@ export default function App() {
   const treeMatch = (text: string, query: string) => text.toLowerCase().includes(query.trim().toLowerCase());
   const writingRules = normalizeWriting(project?.writing || prefs.defaultWriting);
   const stats = active ? manuscriptStats(active.body) : null;
+  const sessionCount = active && stats
+    ? Math.max(0, stats.utf16WithoutSpaces - (sessionStarts.current.get(active.id) ?? stats.utf16WithoutSpaces))
+    : 0;
   // 원고 보호: 집필 완료인 회차는 제목과 본문을 고칠 수 없다(상태는 바꿀 수 있다).
   const isProtected = active?.kind === "episode" && normalizeStatus(active.status) === "completed";
   const platformChars = stats ? countForWriting(stats, writingRules) : 0;
@@ -1913,7 +1847,7 @@ export default function App() {
             role="status" title={autoSync.message || "저장한 변경 사항을 외부 저장소에 동기화합니다."}>
             <Cloud size={13} />{autoSyncLabels[autoSync.phase]}
           </span>}
-          <div>
+          <div className="editor-action-buttons" aria-hidden={!focused}>
             <button
               aria-label="저장"
               title="저장 (Ctrl+S)"
@@ -2049,6 +1983,7 @@ export default function App() {
               readOnly={isProtected}
               inactive={!focused}
               manualLineBreak={!!active.manualLineBreak}
+              copyWithBlankLines={prefs.copyWithBlankLines !== false}
               id={active.id}
               revision={active.revision}
               body={active.body}
@@ -2075,10 +2010,6 @@ export default function App() {
                 def: active.kind === "episode" ? lineBreakDefault(project, prefs.defaultManualLineBreak) : false,
                 defaultLabel: active.kind === "episode" ? "새 에피소드 기본값" : "기본값",
                 onChange: (manualLineBreak) => edit({ manualLineBreak }),
-              }}
-              typesetting={{
-                open: right && rightView === "typesetting",
-                onToggle: toggleTypesettingPanel,
               }}
               bookmarks={active.bookmarks}
               onBookmarksChange={(bookmarks) => { if (focused) edit({ bookmarks }); }}
@@ -2641,7 +2572,7 @@ export default function App() {
       </div>
     );
   }
-  // 편집 도구 막대의 조판 버튼: 위젯 보드 자리에 조판 설정을 펼치거나 접는다.
+  // 조판 버튼: 위젯 보드 자리에 조판 설정을 펼치거나 접는다.
   function toggleTypesettingPanel() {
     if (right && rightView === "typesetting") {
       setRightView("widgets");
@@ -2674,14 +2605,6 @@ export default function App() {
         )
         .catch(report);
     };
-    const copyFromEpisodePrefs = () => {
-      const epStyle = normalizeEditorStyle(prefs, "episode");
-      saveKindPrefs(targetKind, epStyle)
-        .then(() =>
-          message(`'에피소드 원고'의 조판 설정을 '${targetKindInfo.label}'에 복사했습니다.`),
-        )
-        .catch(report);
-    };
     return (
       <>
         <div className="typesetting-kind-bar">
@@ -2711,11 +2634,6 @@ export default function App() {
           <div className="typesetting-kind-meta">
             <span>{targetKindInfo.description}</span>
             <div className="row gap">
-              {targetKind !== "episode" && (
-                <button type="button" onClick={copyFromEpisodePrefs}>
-                  에피소드 조판 복사
-                </button>
-              )}
               <button type="button" onClick={resetTargetPrefs}>
                 {targetKind === "episode" ? "원고 기본값 초기화" : "메모장 기본값 초기화"}
               </button>
@@ -4405,21 +4323,33 @@ export default function App() {
             <div className="panel-caption">
               <span>{rightView === "bookmarks" ? "북마크" : rightView === "typesetting" ? "조판 설정" : "위젯 보드"}</span>
               <div className="panel-caption-actions">
-                {/* 조판 설정에서는 북마크 대신 닫기 버튼만 둔다. */}
+                {/* 조판 설정과 북마크 목록에서는 닫기 버튼만 둔다. */}
                 {rightView === "typesetting" ? (
                   <button aria-label="조판 설정 닫기" title="조판 설정 닫기" onClick={toggleTypesettingPanel}>
                     <X size={15} />
                   </button>
-                ) : (
-                  <button
-                    className={`bookmark-toggle ${rightView === "bookmarks" ? "active" : ""}`}
-                    aria-pressed={rightView === "bookmarks"}
-                    aria-label="북마크 목록"
-                    title={rightView === "bookmarks" ? "위젯 보드로 돌아가기" : "북마크 목록 보기"}
-                    onClick={() => setRightView((v) => (v === "bookmarks" ? "widgets" : "bookmarks"))}
-                  >
-                    <BookmarkIcon size={15} />
+                ) : rightView === "bookmarks" ? (
+                  <button aria-label="북마크 목록 닫기" title="북마크 목록 닫기" onClick={() => setRightView("widgets")}>
+                    <X size={15} />
                   </button>
+                ) : (
+                  <>
+                    <button
+                      aria-label="조판 설정"
+                      title="조판 설정 열기"
+                      onClick={toggleTypesettingPanel}
+                    >
+                      <Pilcrow size={15} />
+                    </button>
+                    <button
+                      className="bookmark-toggle"
+                      aria-label="북마크 목록"
+                      title="북마크 목록 보기"
+                      onClick={() => setRightView("bookmarks")}
+                    >
+                      <BookmarkIcon size={15} />
+                    </button>
+                  </>
                 )}
               </div>
             </div>
@@ -5453,6 +5383,26 @@ export default function App() {
                       ))}
                     </div>
                     <p className="settings-note">새로 만드는 에피소드에 적용됩니다. 기존 회차는 에피소드 속성에서 개별 변경할 수 있습니다.</p>
+                  </fieldset>
+                </section>
+                <section className="settings-section" hidden={settingsPage !== "defaults"}>
+                  <fieldset className="linebreak-options">
+                    <legend>자동 관리 본문 복사</legend>
+                    <p className="settings-description">자동 관리 중인 본문을 복사할 때 문단 사이에 빈 줄을 넣을지 선택합니다.</p>
+                    <div className="linebreak-choices">
+                      {[false, true].map((blankLines) => (
+                        <label key={String(blankLines)} className={`linebreak-choice${(prefs.copyWithBlankLines !== false) === blankLines ? " selected" : ""}`}>
+                          <input type="radio" name="copyWithBlankLines" value={String(blankLines)}
+                            checked={(prefs.copyWithBlankLines !== false) === blankLines}
+                            onChange={() => savePrefs({ copyWithBlankLines: blankLines }).catch(report)} />
+                          <span>
+                            <strong>{blankLines ? "빈 줄을 추가해 복사" : "기존 방식으로 복사"}{blankLines && <small>기본</small>}</strong>
+                            <span>{blankLines ? "문단 사이에 빈 줄 한 줄을 넣어 복사합니다." : "문단 사이에 빈 줄을 추가하지 않고 복사합니다."}</span>
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                    <p className="settings-note">본문 전체 복사, 우클릭 복사와 Ctrl+C에 적용됩니다.</p>
                   </fieldset>
                 </section>
                 <section id="settings-connections" className="settings-section" hidden={settingsPage !== "connections"}>

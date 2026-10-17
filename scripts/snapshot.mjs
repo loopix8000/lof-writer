@@ -183,25 +183,43 @@ async function waitUntil(fn, message, child) {
 }
 
 async function arrange(page, scene, demo, theme) {
-  // 앱이 이전 화면을 저장하는 500ms 타이머가 끝난 뒤 다음 세션을 지정한다.
-  await delay(650);
   const doc = scene.document ? demo[scene.document] : demo.episodes[0];
-  const session = {
-    view: scene.view || "workspace", projectId: demo.project.id, documentId: doc.id,
-    tab: doc.kind, archive: false, memoOpen: false,
-    tabs: [{ id: doc.id, pinned: true }, { id: demo.episodes[1].id, pinned: false }],
-    split: scene.split ? { docId: demo.plot.id, tabs: [{ id: demo.plot.id, pinned: true }] } : null,
-    focusedSide: "left", splitRatio: 0.55,
-  };
-  await appCall(page, "setPreferences", { ...demoPreferences, ...scene.preferences, theme, lastSession: session });
+  const view = scene.view || "workspace";
+  await appCall(page, "setPreferences", { ...demoPreferences, ...scene.preferences, theme });
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.locator(".app").waitFor();
-  if (session.view === "workspace") await page.getByTestId("manuscript").waitFor();
-  else if (session.view === "project") await page.locator(".project-hero").waitFor();
-  else if (session.view === "bookmarks") await page.locator(".bookmarks-page").waitFor();
-  else await page.locator(".project-grid .project-card").first().waitFor();
+  await page.locator(".project-grid .project-card").first().waitFor();
   await page.waitForFunction(dark => document.querySelector(".app")?.classList.contains("dark") === dark, theme === "dark");
-  if (session.view === "workspace") {
+  // 서재에서 시작한 뒤 촬영할 화면을 직접 연다.
+  if (view === "project") {
+    await page.locator(".project-card").filter({ hasText: demo.project.title }).click();
+    await page.locator(".project-hero").waitFor();
+  } else if (view === "bookmarks") {
+    await page.locator(".rail").getByRole("button", { name: "북마크", exact: true }).click();
+    await page.locator(".bookmarks-page").waitFor();
+  } else if (view === "workspace") {
+    const openDocument = async target => {
+      await page.keyboard.press("Control+p");
+      await page.getByRole("textbox", { name: "파일 이름", exact: true }).fill(target.title);
+      await page.getByRole("option").filter({ has: page.getByText(target.title, { exact: true }) }).click();
+      await page.waitForFunction(title => document.querySelector('.editor-group.focused .document-title, .editor-groups:not(.split) .document-title')?.value === title, target.title);
+    };
+    await openDocument(doc);
+    await openDocument(demo.episodes[1]);
+    await page.locator(".editor-tab").filter({ has: page.getByText(doc.title, { exact: true }) }).click();
+    if (scene.split) {
+      await openDocument(demo.plot);
+      await page.locator(".editor-tab.current").click({ button: "right" });
+      await page.getByRole("menuitem", { name: /^오른쪽으로 분할/ }).click();
+      await page.locator('.editor-group[data-side="left"] .editor-tab').filter({ has: page.getByText(doc.title, { exact: true }) }).click();
+      const groups = await page.locator(".editor-groups").boundingBox();
+      const sash = await page.locator(".group-sash").boundingBox();
+      await page.mouse.move(sash.x + sash.width / 2, sash.y + sash.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(groups.x + groups.width * 0.55, sash.y + sash.height / 2);
+      await page.mouse.up();
+    }
+    await page.getByTestId("manuscript").waitFor();
     await page.getByRole("button", { name: "저장", exact: true }).click();
     await page.locator(".editor-group.focused .save-indicator, .editor-group:not(.focused) .save-indicator").filter({ hasText: "저장됨" }).first().waitFor();
   }
