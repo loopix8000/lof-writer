@@ -13,6 +13,7 @@ import {
   X,
 } from "lucide-react";
 import Writer from "./Writer";
+import { editorDropZone, type EditorDropZone } from "./editor-groups";
 import ContextMenu, { type MenuItem } from "./ContextMenu";
 import { call, type Doc, type Kind } from "./types";
 import { normalizeEditorStyle, resolveKindPrefs } from "../core/typesetting.mjs";
@@ -140,7 +141,6 @@ export default function MemoSession({
     [entries, setEntries] = useState<Entry[]>([]),
     [expanded, setExpanded] = useState<Set<string>>(new Set()),
     [memo, setMemo] = useState<Memo | null>(null),
-    [opened, setOpened] = useState(0),
     [title, setTitle] = useState(""),
     [selected, setSelected] = useState(""),
     [renaming, setRenaming] = useState<{ path: string; value: string } | null>(null),
@@ -161,7 +161,7 @@ export default function MemoSession({
     [splitRatio, setSplitRatio] = useState(0.5),
     [sideMemo, setSideMemo] = useState<Memo | null>(null),
     [sideRev, setSideRev] = useState(0),
-    [dropZone, setDropZone] = useState<{ left: number; top: number; width: number } | null>(null);
+    [dropZone, setDropZone] = useState<EditorDropZone | null>(null);
   const memoRef = useRef<Memo | null>(null),
     spaceRef = useRef(space),
     dirty = useRef({ seq: 0, saved: 0 }),
@@ -171,6 +171,7 @@ export default function MemoSession({
     chain = useRef<Promise<void>>(Promise.resolve()),
     openSeq = useRef(0),
     dragging = useRef(""),
+    dragTreeMemo = useRef<MemoTab | null>(null),
     tabsRef = useRef<MemoTab[]>([]),
     splitRef = useRef<MemoGroup | null>(null),
     focusedSideRef = useRef<Side>("left"),
@@ -339,7 +340,6 @@ export default function MemoSession({
     setConflict(false);
     setStatus("저장됨");
     setCurrent(m);
-    setOpened((n) => n + 1);
     setTabs((list) => placeMemoTab(list, { space: spaceId, path }, pinned, prev));
     if (spaceId === spaceRef.current) {
       setSelected(path);
@@ -394,51 +394,71 @@ export default function MemoSession({
     const other = splitRef.current;
     if (!other) return;
     await flush();
-    const mine: MemoGroup = { tabs: tabsRef.current, current: currentTab() },
-      side = focusedSideRef.current;
-    setTabs(() => other.tabs);
-    setSplit(() => (mine.tabs.length ? mine : null));
-    setFocusedSide(side === "left" ? "right" : "left");
+    const seq = ++openSeq.current;
     const target = open ?? other.current;
-    try {
-      closeCurrent();
-      if (target) await activateTab(target, pinned);
-    } catch (e) {
-      setTabs(() => mine.tabs);
-      setSplit(() => other);
-      setFocusedSide(side);
-      if (mine.current) await activateTab(mine.current).catch(() => {});
-      throw e;
-    }
+    // 읽기를 마친 뒤 두 그룹을 함께 바꿔 빈 화면이 끼어들지 않게 한다.
+    const next = target ? await readItem(target.space, target.path) : null;
+    if (seq !== openSeq.current || splitRef.current !== other) return;
+    const mine: MemoGroup = { tabs: tabsRef.current, current: currentTab() };
+    setSideMemo(memoRef.current);
+    setTabs(() => target ? placeMemoTab(other.tabs, target, pinned, null) : other.tabs);
+    setSplit(() => (mine.tabs.length ? mine : null));
+    setFocusedSide(focusedSideRef.current === "left" ? "right" : "left");
+    selectGroupMemo(next);
   }
+  // 그룹 전환에서는 편집기를 비우지 않고 새 메모와 트리 상태를 한 번에 반영한다.
+  function selectGroupMemo(next: Memo | null) {
+    dirty.current = { seq: 0, saved: 0 };
+    setConflict(false);
+    setStatus("저장됨");
+    setCurrent(next);
+    setTitle(next?.title ?? "");
+    if (!next) return;
+    if (next.space !== spaceRef.current) {
+      spaceRef.current = next.space;
+      setEntries([]);
+      setSpace(next.space);
+      setExpanded(new Set(ancestors(next.path)));
+    } else {
+      setExpanded((old) => new Set([...old, ...ancestors(next.path)]));
+    }
+    setSelected(next.path);
+  }
+
   async function focusSide(side: Side) {
     if (splitRef.current && side !== focusedSideRef.current) await focusOther();
   }
-  // 오른쪽으로 분할(Ctrl+\). 이미 나뉘어 있으면 다른 그룹에서 연다.
-  // 탭은 옮겨 가므로 원래 그룹에서 뺀다. 그룹에 탭이 하나뿐이면 그대로 둔다.
-  async function splitTo(t: MemoTab | null = currentTab()) {
-    if (!t) return;
+  // 트리에서 열 때는 원래 탭을 유지하고, 탭을 끌어 놓을 때만 그룹 사이에서 옮긴다.
+  async function openInGroup(t: MemoTab, side: Side, moveTab = false) {
     if (splitRef.current) {
-      await focusOther(t, true);
-      setSplit((g) => (g && g.tabs.length > 1 ? withoutMemoTab(g, t) : g));
+      if (side === focusedSideRef.current) {
+        await activateTab(t, true);
+      } else {
+        await focusOther(t, true);
+        if (moveTab) setSplit((g) => withoutMemoTab(g, t));
+      }
+      return;
+    }
+    if (!memoRef.current) {
+      await activateTab(t, true);
       return;
     }
     await flush();
+    const seq = ++openSeq.current;
+    const next = await readItem(t.space, t.path);
+    if (seq !== openSeq.current) return;
     const mine: MemoGroup = { tabs: tabsRef.current, current: currentTab() };
-    setTabs(() => []);
-    setSplit(() => (mine.tabs.length > 1 ? withoutMemoTab(mine, t) : mine));
-    setFocusedSide("right");
-    try {
-      closeCurrent();
-      await activateTab(t, true);
-    } catch (e) {
-      setTabs(() => mine.tabs);
-      setSplit(() => null);
-      setFocusedSide("left");
-      if (mine.current) await activateTab(mine.current).catch(() => {});
-      throw e;
-    }
+    setSideMemo(memoRef.current);
+    setTabs(() => placeMemoTab([], t, true, null));
+    setSplit(() => (moveTab && mine.tabs.length > 1 ? withoutMemoTab(mine, t) : mine));
+    setFocusedSide(side);
+    selectGroupMemo(next);
   }
+  // 오른쪽 그룹이 이미 있으면 그 자리에 열고, 없으면 새로 나눈다.
+  async function splitTo(t: MemoTab | null = currentTab()) {
+    if (t) await openInGroup(t, "right", true);
+  }
+
   async function closeGroup() {
     if (!splitRef.current) return;
     await focusOther();
@@ -534,37 +554,36 @@ export default function MemoSession({
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
   }
-  // 탭을 편집기 본문으로 끌어 분할한다. 분할 전에는 오른쪽 절반, 분할 뒤에는 다른 그룹이 놓을 곳이다.
+  // 파일 트리와 탭은 같은 놓기 영역을 사용하되, 트리의 파일은 옮기지 않고 연다.
   function dragOverGroups(e: React.DragEvent) {
-    if (!dragTab) return;
-    const target = e.target as HTMLElement,
-      group = target.closest<HTMLElement>(".editor-group"),
-      box = groupsRef.current?.getBoundingClientRect();
-    let zone: typeof dropZone = null;
-    if (group && box && !target.closest(".editor-tabs")) {
-      const r = group.getBoundingClientRect(),
-        top = r.top - box.top;
-      if (group.classList.contains("inactive")) zone = { left: r.left - box.left, top, width: r.width };
-      else if (!split && e.clientX > r.left + r.width / 2)
-        zone = { left: r.left - box.left + r.width / 2, top, width: r.width / 2 };
-    }
+    const fromTree = !!dragTreeMemo.current;
+    const zone = dragTab || fromTree
+      ? editorDropZone(e.target, e.clientX, groupsRef.current, !!splitRef.current, fromTree)
+      : null;
     if (zone) {
       e.preventDefault();
-      e.dataTransfer.dropEffect = "move";
+      e.stopPropagation();
+      e.dataTransfer.dropEffect = fromTree ? "copy" : "move";
     }
     setDropZone((prev) =>
-      prev && zone && prev.left === zone.left && prev.top === zone.top && prev.width === zone.width
+      prev && zone && prev.side === zone.side && prev.left === zone.left && prev.top === zone.top && prev.width === zone.width
         ? prev
         : zone,
     );
   }
   function dropOnGroups(e: React.DragEvent) {
-    const t = dragTab;
-    if (!dropZone || !t) return;
+    const fromTree = !!dragTreeMemo.current;
+    const t = dragTreeMemo.current || dragTab;
+    const zone = t ? editorDropZone(e.target, e.clientX, groupsRef.current, !!splitRef.current, fromTree) : null;
+    if (!zone || !t) return;
     e.preventDefault();
+    e.stopPropagation();
+    dragTreeMemo.current = null;
+    dragging.current = "";
+    setDropTarget(null);
     setDropZone(null);
     setDragTab(null);
-    attempt(() => (splitRef.current ? moveToOther(t) : splitTo(t)))();
+    attempt(() => openInGroup(t, zone.side, !fromTree))();
   }
   const closeTab = (t: MemoTab) => closeTabs((x) => !sameTab(x, t));
   async function cycleTab(direction: number) {
@@ -722,7 +741,10 @@ export default function MemoSession({
             { label: "새 폴더", action: attempt(() => newFolder(entry.path)) },
             "separator",
           ] as MenuItem[])
-        : ([{ label: "열기", action: attempt(() => openMemo(entry.path)) }, "separator"] as MenuItem[])),
+        : ([
+            { label: "열기", action: attempt(() => openMemo(entry.path)) },
+            "separator",
+          ] as MenuItem[])),
       {
         label: "이름 바꾸기",
         shortcut: "F2",
@@ -906,16 +928,135 @@ export default function MemoSession({
       onDoubleClick={() => setSplitRatio(0.5)}
     />
   );
+  // 두 그룹은 같은 요소를 사용해 포커스만 바뀔 때 본문을 다시 만들지 않는다.
+  function memoBody(memo: Memo, focused: boolean) {
+    const groupStatus = focused ? status : "저장됨";
+    return (
+      <div
+        className="group-body"
+        onMouseDownCapture={(e) => {
+          if (!focused && e.button === 0) {
+            e.stopPropagation();
+            attempt(() => focusOther())();
+          }
+        }}
+        onClickCapture={(e) => {
+          if (!focused) {
+            e.preventDefault();
+            e.stopPropagation();
+          }
+        }}
+        onContextMenuCapture={(e) => {
+          if (!focused) {
+            e.preventDefault();
+            e.stopPropagation();
+            attempt(() => focusOther())();
+          }
+        }}
+        onKeyDownCapture={(e) => {
+          if (!focused && e.key !== "Tab") {
+            e.preventDefault();
+            e.stopPropagation();
+            attempt(() => focusOther())();
+          }
+        }}
+      >
+        <div className="memo-head">
+          <span className="memo-crumbs" title={memo.path}>
+            {crumbs(memo)}
+          </span>
+          <span className={`memo-status ${groupStatus === "저장됨" ? "" : "pending"}`}>{groupStatus}</span>
+        </div>
+        {focused && conflict && (
+          <div className="memo-conflict" role="alert">
+            <span>다른 곳에서 이 메모가 바뀌었습니다.</span>
+            <button onClick={attempt(reloadFromDisk)}>바뀐 내용 불러오기</button>
+            <button onClick={attempt(keepMine)}>내 내용으로 덮어쓰기</button>
+          </div>
+        )}
+        <div key="scroll" className="editor-scroll">
+          {(() => {
+            const mainBox = manuscriptBoxOf(kindOf(memo));
+            return (
+              <article className={mainBox.className} style={mainBox.style}>
+                <input
+                  className="document-title"
+                  aria-label="메모 제목"
+                  readOnly={!focused}
+                  value={focused ? title : memo.title}
+                  placeholder="제목"
+                  onChange={(e) => {
+                    keepTab(memo);
+                    setTitle(e.target.value);
+                  }}
+                  onBlur={attempt(async () => {
+                    if (!focused) return;
+                    if (!title.trim() || title.trim() === memo.title) return setTitle(memo.title);
+                    if (!isDocPath(memo.path)) return rename(memo.path, title);
+                    await flush();
+                    await call("saveDocument", {
+                      id: memo.path.slice(DOC.length),
+                      title: title.trim(),
+                      expectedRevision: memoRef.current!.revision,
+                    });
+                    if (memoRef.current?.path === memo.path)
+                      setCurrent({ ...memoRef.current, title: title.trim() });
+                  })}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") e.currentTarget.blur();
+                    if (e.key === "Escape") {
+                      setTitle(memo.title);
+                      e.currentTarget.blur();
+                    }
+                  }}
+                />
+                <Writer
+                  key="writer"
+                  id={`memo-${memo.space}\n${memo.path}`}
+                  inactive={!focused}
+                  revision={memo.revision}
+                  body={memo.body}
+                  tables={kindOf(memo) !== "episode"}
+                  manualLineBreak={!!memo.manualLineBreak}
+                  onChange={(body) => { if (focused) edit(body); }}
+                  fontSize={mainBox.norm.fontSize}
+                  lineHeight={mainBox.norm.lineHeight}
+                  source={false}
+                  onComposition={(value) => {
+                    if (!focused) return;
+                    composing.current = value;
+                    if (!value && dirty.current.seq !== dirty.current.saved) schedule();
+                  }}
+                  typingOptions={{
+                    autoCloseQuotes: prefs.autoCloseQuotes,
+                    autoCloseBrackets: prefs.autoCloseBrackets,
+                    smartBrackets: prefs.smartBrackets,
+                    autoSymbolReplacement: prefs.autoSymbolReplacement,
+                    autoDividerReplacement: prefs.autoDividerReplacement,
+                    quoteStyle: prefs.quoteStyle,
+                    textReplacements: prefs.textReplacements,
+                  }}
+                  editorStyle={mainBox.kindPrefs}
+                  links={kindOf(memo) !== "episode"}
+                  onOpenLink={onOpenLink}
+                />
+              </article>
+            );
+          })()}
+        </div>
+      </div>
+    );
+  }
   // 포커스되지 않은 그룹: 읽기 전용으로 보여 주고, 클릭하면 그 그룹으로 포커스를 옮긴다.
   function sideGroup() {
     if (!split) return null;
     const cur = split.current;
     const shown =
       cur && sameTab(cur, memo) ? memo : cur && sideMemo && sameTab(cur, sideMemo) ? sideMemo : null;
-    const shownBox = shown ? manuscriptBoxOf(kindOf(shown)) : null;
     return (
       <section
-        key="side"
+        key={focusedSide === "left" ? "right" : "left"}
+        data-side={focusedSide === "left" ? "right" : "left"}
         className="editor-group inactive"
         style={groupStyle(focusedSide === "left" ? "right" : "left")}
       >
@@ -946,6 +1087,7 @@ export default function MemoSession({
               >
                 <FileText size={14} />
                 <span>{name}</span>
+                {current && <i className="saved-dot" />}
                 <button
                   aria-label={`다른 그룹의 ${name} 닫기`}
                   title="닫기"
@@ -960,45 +1102,7 @@ export default function MemoSession({
             );
           })}
         </div>
-        <div
-          className="group-body"
-          aria-label="다른 편집기 그룹"
-          onMouseDown={(e) => {
-            if (e.button === 0) attempt(() => focusOther())();
-          }}
-        >
-          {shown && shownBox && (
-            <>
-              <div className="memo-head">
-                <span className="memo-crumbs">{crumbs(shown)}</span>
-                <span>클릭하면 이 그룹에서 편집합니다</span>
-              </div>
-              <div className="editor-scroll">
-                <article className={shownBox.className} style={shownBox.style}>
-                  <div className="document-title static">{shown.title}</div>
-                  <Writer
-                    key={"side-" + sideKey}
-                    id={"memo-side-" + sideKey}
-                    revision={shown.revision}
-                    body={shown.body}
-                    tables={kindOf(shown) !== "episode"}
-                    manualLineBreak={!!shown.manualLineBreak}
-                    readOnly
-                    onChange={() => {}}
-                    fontSize={shownBox.norm.fontSize}
-                    lineHeight={shownBox.norm.lineHeight}
-                    source={false}
-                    onComposition={() => {}}
-                    typingOptions={{}}
-                    editorStyle={shownBox.kindPrefs}
-                    links={kindOf(shown) !== "episode"}
-                    onOpenLink={onOpenLink}
-                  />
-                </article>
-              </div>
-            </>
-          )}
-        </div>
+        {shown && memoBody(shown, false)}
       </section>
     );
   }
@@ -1021,6 +1125,18 @@ export default function MemoSession({
           }`}
           style={{ paddingLeft: 8 + depth * 14 }}
           title={d.relPath}
+          draggable
+          onDragStart={(e) => {
+            dragTreeMemo.current = t;
+            dragging.current = "";
+            setDragTab(null);
+            e.dataTransfer.effectAllowed = "copyMove";
+            e.dataTransfer.setData("application/x-lof-memo", JSON.stringify(t));
+          }}
+          onDragEnd={() => {
+            dragTreeMemo.current = null;
+            setDropZone(null);
+          }}
           onClick={attempt(() => activateTab(t))}
           onDoubleClick={attempt(() => activateTab(t, true))}
           onContextMenu={(e) =>
@@ -1028,7 +1144,6 @@ export default function MemoSession({
               e,
               [
                 { label: "열기", action: attempt(() => activateTab(t)) },
-                { label: "오른쪽으로 분할", action: attempt(() => splitTo(t)) },
                 "separator",
                 { label: "집필 창에서 열기", action: () => onOpenDoc(d.id) },
               ],
@@ -1118,12 +1233,16 @@ export default function MemoSession({
         draggable
         onDragStart={(e) => {
           dragging.current = entry.path;
-          e.dataTransfer.effectAllowed = "move";
+          dragTreeMemo.current = folder ? null : { space, path: entry.path };
+          setDragTab(null);
+          e.dataTransfer.effectAllowed = folder ? "move" : "copyMove";
           e.dataTransfer.setData("text/plain", entry.path);
         }}
         onDragEnd={() => {
           dragging.current = "";
+          dragTreeMemo.current = null;
           setDropTarget(null);
+          setDropZone(null);
         }}
         onDragOver={folder ? (e) => dragOver(e, entry.path) : undefined}
         onDragLeave={() => setDropTarget((t) => (t === entry.path ? null : t))}
@@ -1286,22 +1405,23 @@ export default function MemoSession({
         <div
           className={`editor-groups ${split ? "split" : ""}`}
           ref={groupsRef}
-          onDragOver={dragOverGroups}
+          onDragOverCapture={dragOverGroups}
           onDragLeave={(e) => {
             if (!e.currentTarget.contains(e.relatedTarget as Node)) setDropZone(null);
           }}
-          onDrop={dropOnGroups}
+          onDropCapture={dropOnGroups}
         >
         {dropZone && (
           <div
             className="group-drop-zone"
-            style={{ left: dropZone.left, top: dropZone.top + 39, width: dropZone.width }}
+            style={{ left: dropZone.left, top: dropZone.top, width: dropZone.width }}
           />
         )}
         {split && focusedSide === "right" && sideGroup()}
         {split && focusedSide === "right" && sash}
         <section
-          key="focused"
+          key={focusedSide}
+          data-side={focusedSide}
           className={`editor-group ${split ? "focused" : ""}`}
           style={groupStyle(focusedSide)}
         >
@@ -1368,86 +1488,7 @@ export default function MemoSession({
           </div>
         )}
         {memo ? (
-          <>
-            <div className="memo-head">
-              <span className="memo-crumbs" title={memo.path}>
-                {crumbs(memo)}
-              </span>
-              <span className={`memo-status ${status === "저장됨" ? "" : "pending"}`}>{status}</span>
-            </div>
-            {conflict && (
-              <div className="memo-conflict" role="alert">
-                <span>다른 곳에서 이 메모가 바뀌었습니다.</span>
-                <button onClick={attempt(reloadFromDisk)}>바뀐 내용 불러오기</button>
-                <button onClick={attempt(keepMine)}>내 내용으로 덮어쓰기</button>
-              </div>
-            )}
-            <div className="editor-scroll">
-              {(() => {
-                const mainBox = manuscriptBoxOf(kindOf(memo));
-                return (
-                  <article className={mainBox.className} style={mainBox.style}>
-                    <input
-                      className="document-title"
-                      aria-label="메모 제목"
-                      value={title}
-                      placeholder="제목"
-                      onChange={(e) => {
-                        keepTab(memo);
-                        setTitle(e.target.value);
-                      }}
-                      onBlur={attempt(async () => {
-                        if (!title.trim() || title.trim() === memo.title) return setTitle(memo.title);
-                        if (!isDocPath(memo.path)) return rename(memo.path, title);
-                        await flush();
-                        await call("saveDocument", {
-                          id: memo.path.slice(DOC.length),
-                          title: title.trim(),
-                          expectedRevision: memoRef.current!.revision,
-                        });
-                        if (memoRef.current?.path === memo.path)
-                          setCurrent({ ...memoRef.current, title: title.trim() });
-                      })}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") e.currentTarget.blur();
-                        if (e.key === "Escape") {
-                          setTitle(memo.title);
-                          e.currentTarget.blur();
-                        }
-                      }}
-                    />
-                    <Writer
-                      id={`memo-${opened}`}
-                      revision={memo.revision}
-                      body={memo.body}
-                      tables={kindOf(memo) !== "episode"}
-                      manualLineBreak={!!memo.manualLineBreak}
-                      onChange={edit}
-                      fontSize={mainBox.norm.fontSize}
-                      lineHeight={mainBox.norm.lineHeight}
-                      source={false}
-                      onComposition={(value) => {
-                        composing.current = value;
-                        if (!value && dirty.current.seq !== dirty.current.saved) schedule();
-                      }}
-                      typingOptions={{
-                        autoCloseQuotes: prefs.autoCloseQuotes,
-                        autoCloseBrackets: prefs.autoCloseBrackets,
-                        smartBrackets: prefs.smartBrackets,
-                        autoSymbolReplacement: prefs.autoSymbolReplacement,
-                        autoDividerReplacement: prefs.autoDividerReplacement,
-                        quoteStyle: prefs.quoteStyle,
-                        textReplacements: prefs.textReplacements,
-                      }}
-                      editorStyle={mainBox.kindPrefs}
-                      links={kindOf(memo) !== "episode"}
-                      onOpenLink={onOpenLink}
-                    />
-                  </article>
-                );
-              })()}
-            </div>
-          </>
+          memoBody(memo, true)
         ) : (
           <div className="memo-blank">
             <StickyNote size={30} />

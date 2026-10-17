@@ -1,7 +1,7 @@
 {
   "name": "lof-writer",
   "productName": "Lof Writer",
-  "version": "1.0.3-beta.2",
+  "version": "1.0.3-beta.3",
   "private": true,
   "description": "Local First Writing Tool",
   "author": "Lof Writer",

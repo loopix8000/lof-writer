@@ -1,5 +1,6 @@
 import { Fragment, useState, useEffect, useRef, useCallback } from "react";
 import CoverImage, { ImageViewer } from "./CoverImage";
+import { editorDropZone, type EditorDropZone } from "./editor-groups";
 import {
   BookOpen,
   FileQuestion,
@@ -92,7 +93,6 @@ import ContextMenu, { type MenuItem } from "./ContextMenu";
 import EpisodeProperties, { statusItems } from "./EpisodeProperties";
 import EpisodeBindingPicker from "./EpisodeBindingPicker";
 import {
-  STATUS_LABELS,
   STATUS_SHORT,
   normalizeStatus,
   episodeNumbers,
@@ -284,7 +284,7 @@ export default function App() {
     // 본문 우클릭 '메모 추가'로 연 퀵 노트 창.
     [quickNote, setQuickNote] = useState<QuickNoteSource | null>(null),
     // 지금 원고를 출처 링크로 인용한 메모. 원고 왼쪽 여백에 메모 아이콘으로 보여 준다.
-    [noteMarks, setNoteMarks] = useState<{ docId: string; list: NoteMark[] }>({ docId: "", list: [] }),
+    [noteMarks, setNoteMarks] = useState<Record<string, NoteMark[]>>({}),
     // 작품 삭제 확인: 작품 제목을 그대로 입력해야 삭제 버튼이 켜진다.
     [confirmTitle, setConfirmTitle] = useState(""),
     // 플롯 트리에서 접어 둔 회차, 플롯을 끌어 놓을 대상(회차 ID, 연결 해제는 "").
@@ -312,7 +312,7 @@ export default function App() {
     // 이름 바꾸기 입력칸. widget이면 위젯 보드의 연결 문서 목록에서, 아니면 파일 트리에서 받는다.
     [renaming, setRenaming] = useState<{ id: string; value: string; widget?: boolean } | null>(null),
     [dragTab, setDragTab] = useState(""),
-    [dropZone, setDropZone] = useState<{ left: number; top: number; width: number } | null>(null);
+    [dropZone, setDropZone] = useState<EditorDropZone | null>(null);
   const editorTabsRef = useRef<EditorTab[]>([]),
     renamingRef = useRef<{ id: string; value: string; widget?: boolean } | null>(null);
   const memoFlush = useRef<(() => Promise<void>) | null>(null);
@@ -323,6 +323,7 @@ export default function App() {
   // 전역 단축키에서 늘 최신 검색 함수를 부르도록 한다.
   const searchActions = useRef({ openQuick: () => {}, openSearch: () => {} });
   // 파일 트리에서 끌고 있는 문서 ID(dragPlot)나 doc/ 폴더 경로(dragFolder).
+  const dragTreeDoc = useRef("");
   const dragPlot = useRef("");
   const dragFolder = useRef("");
   // 마지막 화면 복원이 끝나기 전에는 저장하지 않는다(시작 화면으로 덮어쓰지 않도록).
@@ -351,7 +352,9 @@ export default function App() {
     [splitRatio, setSplitRatio] = useState(0.5),
     [sideDoc, setSideDoc] = useState<Doc | null>(null);
   const splitRef = useRef<EditorGroup | null>(null),
-    groupsRef = useRef<HTMLDivElement>(null);
+    groupsRef = useRef<HTMLDivElement>(null),
+    focusedSideRef = useRef<Side>(focusedSide);
+  focusedSideRef.current = focusedSide;
   const updateSplit = useCallback(
     (fn: (group: EditorGroup | null) => EditorGroup | null) => {
       const next = fn(splitRef.current);
@@ -691,26 +694,35 @@ export default function App() {
     if (draft.current) setSideDoc(draft.current.doc);
   }
   async function focusSide(side: Side) {
-    if (splitRef.current && side !== focusedSide) await focusOther();
+    if (splitRef.current && side !== focusedSideRef.current) await focusOther();
   }
-  // VS Code의 오른쪽으로 분할(Ctrl+\). 이미 나뉘어 있으면 다른 그룹에서 연다.
-  // 탭은 옮겨 가므로 원래 그룹에서 뺀다. 그룹에 탭이 하나뿐이면 그대로 둔다.
-  async function splitTo(id: string) {
+  // 열 위치를 포커스와 별도로 지정한다. 트리에서 열면 원래 그룹의 탭을 유지한다.
+  async function openInGroup(id: string, side: Side, moveTab = false) {
     if (splitRef.current) {
-      await focusOther(id, true);
-      updateSplit((group) =>
-        group && group.tabs.length > 1 ? withoutTab(group, id) : group,
-      );
+      if (side === focusedSideRef.current) {
+        await openDoc(id, true);
+      } else {
+        await focusOther(id, true);
+        if (moveTab) updateSplit((group) => withoutTab(group, id));
+      }
+      return;
+    }
+    if (!activeId.current || !editorTabsRef.current.length) {
+      await openDoc(id, true);
       return;
     }
     await navigate({ view: "workspace", projectId: "", documentId: id, pinned: true }, undefined, () => {
       const mine = { tabs: editorTabsRef.current, docId: activeId.current };
       editorTabsRef.current = [];
       setEditorTabs([]);
-      updateSplit(() => (mine.tabs.length > 1 ? withoutTab(mine, id) : mine));
-      setFocusedSide("right");
+      updateSplit(() => (moveTab && mine.tabs.length > 1 ? withoutTab(mine, id) : mine));
+      setFocusedSide(side);
       keepSideDoc();
     });
+  }
+  // 오른쪽 그룹이 이미 있으면 그 자리에 열고, 없으면 새로 나눈다.
+  async function splitTo(id: string) {
+    await openInGroup(id, "right", true);
   }
   // 포커스된 그룹을 닫고 남은 그룹 하나로 돌아간다.
   async function closeGroup() {
@@ -1010,7 +1022,6 @@ export default function App() {
       memo = d.kind === "memo";
     return [
       { label: "열기", action: attempt(() => openDoc(d.id, false)) },
-      { label: "측면에서 열기", shortcut: "Ctrl+Enter", action: attempt(() => splitTo(d.id)) },
       "separator",
       { label: "이름 바꾸기", shortcut: "F2", action: () => startRename(d) },
       { label: "복제", action: attempt(() => duplicateDoc(d)) },
@@ -1054,7 +1065,7 @@ export default function App() {
         label:
           active?.id === d.id && (source || requiresSource(active.body))
             ? "Markdown 원문 복사"
-            : "본문 복사 (조판 적용)",
+            : "본문 복사",
         action: attempt(() => copyDocManuscript(d)),
       },
       {
@@ -1112,8 +1123,7 @@ export default function App() {
     ];
   }
   function treeKey(e: React.KeyboardEvent, d: Doc) {
-    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") attempt(() => splitTo(d.id))();
-    else if (e.key === "F2") startRename(d);
+    if (e.key === "F2") startRename(d);
     else if (e.key === "Delete" && e.shiftKey)
       setDialog({ type: "deleteDoc", value: d.id });
     else if (e.key === "Delete" && !d.archived) attempt(() => archiveDoc(d))();
@@ -1692,7 +1702,7 @@ export default function App() {
         const text = firstQuote(doc.body);
         if (text) list.push({ id: doc.id, title: doc.title, text });
       }
-      if (!canceled) setNoteMarks({ docId: id, list });
+      if (!canceled) setNoteMarks((previous) => ({ ...previous, [id]: list }));
     })().catch(() => {});
     return () => {
       canceled = true;
@@ -1795,39 +1805,37 @@ export default function App() {
       onDoubleClick={() => setSplitRatio(0.5)}
     />
   );
-  // 탭을 편집기 본문으로 끌어 분할한다. 분할 전에는 오른쪽 절반, 분할 뒤에는 다른 그룹이 놓을 곳이다.
+  // 파일 트리는 놓은 그룹에 열고, 열린 탭은 그 그룹으로 옮긴다.
   function dragOverGroups(e: React.DragEvent) {
-    if (!dragTab) return;
-    const target = e.target as HTMLElement,
-      group = target.closest<HTMLElement>(".editor-group"),
-      box = groupsRef.current?.getBoundingClientRect();
-    let zone: typeof dropZone = null;
-    if (group && box && !target.closest(".editor-tabs")) {
-      const r = group.getBoundingClientRect(),
-        top = r.top - box.top;
-      if (group.classList.contains("inactive"))
-        zone = { left: r.left - box.left, top, width: r.width };
-      else if (!split && e.clientX > r.left + r.width / 2)
-        zone = { left: r.left - box.left + r.width / 2, top, width: r.width / 2 };
-    }
+    const fromTree = !!dragTreeDoc.current;
+    const zone = dragTab || fromTree
+      ? editorDropZone(e.target, e.clientX, groupsRef.current, !!splitRef.current, fromTree)
+      : null;
     if (zone) {
       e.preventDefault();
-      e.dataTransfer.dropEffect = "move";
+      e.stopPropagation();
+      e.dataTransfer.dropEffect = fromTree ? "copy" : "move";
     }
     setDropZone((prev) =>
-      prev && zone && prev.left === zone.left && prev.top === zone.top && prev.width === zone.width
+      prev && zone && prev.side === zone.side && prev.left === zone.left && prev.top === zone.top && prev.width === zone.width
         ? prev
         : zone,
     );
   }
   function dropOnGroups(e: React.DragEvent) {
-    const id = dragTab;
-    if (!dropZone || !id) return;
+    const fromTree = !!dragTreeDoc.current;
+    const id = dragTreeDoc.current || dragTab;
+    const zone = id ? editorDropZone(e.target, e.clientX, groupsRef.current, !!splitRef.current, fromTree) : null;
+    if (!zone || !id) return;
+    // 편집기 본문이 드래그한 파일을 텍스트로 삽입하기 전에 처리한다.
     e.preventDefault();
+    e.stopPropagation();
+    dragTreeDoc.current = "";
+    dragPlot.current = "";
+    setPlotDrop(null);
     setDropZone(null);
     setDragTab("");
-    // 분할된 상태에서 마지막 탭을 옮기면 빈 그룹은 닫힌다.
-    attempt(() => (split ? moveToOther(id) : splitTo(id)))();
+    attempt(() => openInGroup(id, zone.side, !fromTree))();
   }
   function manuscriptBoxForKind(kind: Kind = "episode") {
     const kindPrefs = resolveKindPrefs(prefs, kind);
@@ -1857,9 +1865,251 @@ export default function App() {
       } as React.CSSProperties,
     };
   }
-  const activeBox = manuscriptBoxForKind(active?.kind || "episode");
-  const manuscriptClassName = activeBox.className;
-  const manuscriptStyle = activeBox.style;
+  // 두 그룹은 같은 구성으로 그려 포커스가 바뀌어도 원고와 도구의 위치를 유지한다.
+  function documentBody(active: Doc, focused: boolean) {
+    const activeBox = manuscriptBoxForKind(active.kind);
+    const manuscriptClassName = activeBox.className;
+    const manuscriptStyle = activeBox.style;
+    const isProtected = active.kind === "episode" && normalizeStatus(active.status) === "completed";
+    const groupSaveStatus = focused ? saveStatus : "저장됨";
+    return (
+      <div
+        className="group-body"
+        onMouseDownCapture={(e) => {
+          if (!focused && e.button === 0) {
+            e.stopPropagation();
+            attempt(() => focusOther())();
+          }
+        }}
+        onClickCapture={(e) => {
+          if (!focused) {
+            e.preventDefault();
+            e.stopPropagation();
+          }
+        }}
+        onContextMenuCapture={(e) => {
+          if (!focused) {
+            e.preventDefault();
+            e.stopPropagation();
+            attempt(() => focusOther())();
+          }
+        }}
+        onKeyDownCapture={(e) => {
+          if (!focused && e.key !== "Tab") {
+            e.preventDefault();
+            e.stopPropagation();
+            attempt(() => focusOther())();
+          }
+        }}
+      >
+        <div className="editor-actions">
+          <span
+            className={`save-indicator ${groupSaveStatus !== "저장됨" ? "pending" : ""}`}
+          >
+            <span />
+            {groupSaveStatus}
+          </span>
+          {autoSync.phase !== "idle" && <span className={`auto-sync-status ${autoSync.phase === "error" ? "error" : ""}`}
+            role="status" title={autoSync.message || "저장한 변경 사항을 외부 저장소에 동기화합니다."}>
+            <Cloud size={13} />{autoSyncLabels[autoSync.phase]}
+          </span>}
+          <div>
+            <button
+              aria-label="저장"
+              title="저장 (Ctrl+S)"
+              onClick={attempt(flush)}
+            >
+              <Check size={17} />
+            </button>
+            <button
+              aria-label="순서 위로"
+              title="순서 위로"
+              onClick={attempt(() => reorder(active.id, -1))}
+            >
+              <ArrowUp size={16} />
+            </button>
+            <button
+              aria-label="순서 아래로"
+              title="순서 아래로"
+              onClick={attempt(() => reorder(active.id, 1))}
+            >
+              <ArrowDown size={16} />
+            </button>
+            <button
+              aria-label="변경 이력"
+              title="변경 이력"
+              onClick={attempt(showHistory)}
+            >
+              <History size={18} />
+            </button>
+            <button
+              aria-label="내보내기"
+              title="Markdown 내보내기"
+              onClick={attempt(async () => {
+                await flush();
+                if (await call("exportDocument", { id: active.id }))
+                  message("원고를 내보냈습니다.");
+              })}
+            >
+              <Download size={18} />
+            </button>
+            <button
+              aria-label="본문 텍스트 복사"
+              title={
+                source || requiresSource(active.body)
+                  ? "Markdown 원문 복사"
+                  : "본문 복사"
+              }
+              onClick={attempt(() => copyDocManuscript(active))}
+            >
+              <Copy size={18} />
+            </button>
+            <button
+              className={source ? "active" : ""}
+              aria-label="Markdown 모드"
+              title="Markdown 원문 / 편집"
+              onClick={() => setSource((s) => !s)}
+            >
+              <Code2 size={18} />
+            </button>
+            <button
+              className={previewOpen ? "active" : ""}
+              aria-label="모바일 미리보기"
+              title="모바일 미리보기 (Ctrl+K V)"
+              aria-pressed={previewOpen}
+              onClick={togglePreview}
+            >
+              <Smartphone size={17} />
+            </button>
+            <button
+              aria-label="집중 모드"
+              title="집중 모드 (F11)"
+              onClick={() => setFocus((f) => !f)}
+            >
+              <Maximize size={17} />
+            </button>
+            <button
+              aria-label="문서 더보기"
+              title="문서 보관 및 설정"
+              onClick={() => setDialog({ type: "document" })}
+            >
+              <MoreHorizontal size={20} />
+            </button>
+          </div>
+        </div>
+        {focused && conflict && (
+          <div className="conflict-banner">
+            <span>
+              다른 편집 내용이 있습니다. 내 원고를 사본으로 보존한 뒤
+              계속할 수 있습니다.
+            </span>
+            <button onClick={attempt(resolveConflict)}>
+              내 편집 사본 만들기
+            </button>
+          </div>
+        )}
+        <div key="scroll" className="editor-scroll">
+          <article className={manuscriptClassName} style={manuscriptStyle}>
+            <div className="document-kind">
+              {labels[active.kind]} · {numberOf(active)}
+            </div>
+            <input
+              className="document-title"
+              aria-label="문서 제목"
+              value={active.title}
+              placeholder="제목을 입력해 주세요"
+              readOnly={isProtected || !focused}
+              title={isProtected ? "집필 완료된 에피소드는 편집이 제한됩니다." : undefined}
+              onChange={(e) => {
+                if (focused && !isProtected) edit({ title: e.target.value });
+              }}
+            />
+              <EpisodeProperties
+                propertyPresets={prefs.propertyPresets}
+                onSavePresets={(propertyPresets) => savePrefs({ propertyPresets })}
+                favoriteTags={prefs.favoriteTags}
+                key={active.id}
+                doc={active}
+                open={!!prefs.episodeInfoOpen}
+                onToggle={() =>
+                  savePrefs({ episodeInfoOpen: !prefs.episodeInfoOpen }).catch(report)
+                }
+                onEdit={(patch) => { if (focused) edit(patch); }}
+                onMenu={(rect, items) =>
+                  setMenu({ x: rect.left, y: rect.bottom + 4, items })
+                }
+                onNotice={message}
+                boundEpisode={lib.documents.find((d) => d.id === active.episodeId && d.kind === "episode")}
+                onBind={attempt(() => openBinding(active.id))}
+                onUnbind={attempt(() => bindDocument(active.id, null))}
+                onOpenBound={active.episodeId ? attempt(() => openDoc(active.episodeId!)) : undefined}
+              />
+            <Writer
+              key="writer"
+              readOnly={isProtected}
+              inactive={!focused}
+              manualLineBreak={!!active.manualLineBreak}
+              id={active.id}
+              revision={active.revision}
+              body={active.body}
+              tables={active.kind === "memo" || active.kind === "plot"}
+              reveal={focused && reveal?.docId === active.id ? reveal : null}
+              onChange={(body) => { if (focused) edit({ body }); }}
+              fontSize={activeBox.norm.fontSize}
+              lineHeight={activeBox.norm.lineHeight}
+              source={source}
+              onComposition={(value) => { if (focused) composition(value); }}
+              typingOptions={{
+                autoCloseQuotes: prefs.autoCloseQuotes,
+                autoCloseBrackets: prefs.autoCloseBrackets,
+                smartBrackets: prefs.smartBrackets,
+                autoSymbolReplacement: prefs.autoSymbolReplacement,
+                autoDividerReplacement: prefs.autoDividerReplacement,
+                quoteStyle: prefs.quoteStyle,
+                textReplacements: prefs.textReplacements,
+              }}
+              editorStyle={activeBox.kindPrefs}
+              onReplaceSymbols={replaceActiveSymbols}
+              lineBreak={{
+                // 이 작품의 새 에피소드 줄바꿈 기본값(작품 설정, 없으면 공통 설정). 플롯·메모는 자동 관리가 기본이다.
+                def: active.kind === "episode" ? lineBreakDefault(project, prefs.defaultManualLineBreak) : false,
+                defaultLabel: active.kind === "episode" ? "새 에피소드 기본값" : "기본값",
+                onChange: (manualLineBreak) => edit({ manualLineBreak }),
+              }}
+              typesetting={{
+                open: right && rightView === "typesetting",
+                onToggle: toggleTypesettingPanel,
+              }}
+              bookmarks={active.bookmarks}
+              onBookmarksChange={(bookmarks) => { if (focused) edit({ bookmarks }); }}
+              jumpToBookmark={focused && bookmarkJump?.docId === active.id ? bookmarkJump : null}
+              onQuickNote={(text, at) =>
+                setQuickNote({
+                  projectId: active.projectId,
+                  docId: active.id,
+                  // 회차는 회차 번호를 붙여 출처를 알아보기 쉽게 한다(예: 44. 아이스크림 두 개).
+                  title:
+                    active.kind === "episode" && numberOf(active)
+                      ? `${numberOf(active)}. ${active.title || "제목 없음"}`
+                      : active.title,
+                  text,
+                  episodeId: active.kind === "episode" ? active.id : active.episodeId || undefined,
+                  at,
+                })
+              }
+              links={active.kind === "memo" || active.kind === "plot"}
+              onOpenLink={(href, quote) => attempt(() => openNoteLink(href, quote))()}
+              notes={noteMarks[active.id]}
+              onOpenNotes={openNotes}
+              contextMenu
+              images={docImages(active, !isProtected)}
+            />
+          </article>
+          <div className="end-marker">✧</div>
+        </div>
+      </div>
+    );
+  }
   // 포커스되지 않은 그룹: 읽기 전용으로 보여 주고, 클릭하면 그 그룹으로 포커스를 옮긴다.
   // 그룹은 포커스와 상관없이 자리(left/right)를 key로 쓰고, 포커스된 그룹과 같은 줄기(group-body >
   // editor-scroll > article > Writer)로 그린다. 그래야 그룹을 오갈 때 같은 원고의 편집기와 스크롤 영역이
@@ -1868,10 +2118,10 @@ export default function App() {
     if (!split || !active) return null;
     const doc = shownSide,
       side: Side = focusedSide === "left" ? "right" : "left";
-    const sideBox = doc ? manuscriptBoxForKind(doc.kind) : null;
     return (
       <section
         key={side}
+        data-side={side}
         className="editor-group inactive"
         style={groupStyle(side)}
       >
@@ -1903,6 +2153,7 @@ export default function App() {
               >
                 <Icon size={14} />
                 <span>{title}</span>
+                {current && <i className="saved-dot" />}
                 <button
                   aria-label={`다른 그룹의 ${title} 닫기`}
                   title="닫기"
@@ -1917,55 +2168,7 @@ export default function App() {
             );
           })}
         </div>
-        <div
-          className="group-body"
-          aria-label="다른 편집기 그룹"
-          onMouseDown={(e) => {
-            if (e.button === 0) attempt(() => focusOther())();
-          }}
-        >
-          <div className="editor-actions">
-            <span className="save-indicator">
-              <span />
-              클릭하면 이 그룹에서 편집합니다
-            </span>
-          </div>
-          <div key="scroll" className="editor-scroll">
-            {doc && sideBox && (
-              <article className={sideBox.className} style={sideBox.style}>
-                <div className="document-kind">
-                  {labels[doc.kind]} · {numberOf(doc)}
-                </div>
-                <div className="document-title static">{doc.title}</div>
-                {doc.kind === "episode" && (
-                  <div className="document-details">
-                    <span className="status-label">{STATUS_LABELS[normalizeStatus(doc.status)]}</span>
-                  </div>
-                )}
-                <Writer
-                  key="writer"
-                  manualLineBreak={!!doc.manualLineBreak}
-                  id={doc.id}
-                  revision={doc.revision}
-                  body={doc.body}
-                  tables={doc.kind === "memo" || doc.kind === "plot"}
-                  readOnly
-                  onChange={() => {}}
-                  fontSize={sideBox.norm.fontSize}
-                  lineHeight={sideBox.norm.lineHeight}
-                  source={source}
-                  onComposition={() => {}}
-                  typingOptions={{}}
-                  editorStyle={sideBox.kindPrefs}
-                  bookmarks={doc.bookmarks}
-                  links={doc.kind === "memo" || doc.kind === "plot"}
-                  onOpenLink={(href, quote) => attempt(() => openNoteLink(href, quote))()}
-                  images={docImages(doc, false)}
-                />
-              </article>
-            )}
-          </div>
-        </div>
+        {doc && documentBody(doc, false)}
       </section>
     );
   }
@@ -2088,23 +2291,20 @@ export default function App() {
         onDoubleClick={attempt(() => openDoc(d.id, true))}
         onKeyDown={(e) => treeKey(e, d)}
         onContextMenu={(e) => openMenu(e, docMenu(d), d.id)}
-        draggable={!!opts.plot}
-        onDragStart={
-          opts.plot
-            ? (e) => {
-                dragPlot.current = d.id;
-                e.dataTransfer.effectAllowed = "move";
-              }
-            : undefined
-        }
-        onDragEnd={
-          opts.plot
-            ? () => {
-                dragPlot.current = "";
-                setPlotDrop(null);
-              }
-            : undefined
-        }
+        draggable
+        onDragStart={(e) => {
+          dragTreeDoc.current = d.id;
+          dragPlot.current = opts.plot ? d.id : "";
+          setDragTab("");
+          e.dataTransfer.effectAllowed = "copyMove";
+          e.dataTransfer.setData("application/x-lof-document", d.id);
+        }}
+        onDragEnd={() => {
+          dragTreeDoc.current = "";
+          dragPlot.current = "";
+          setPlotDrop(null);
+          setDropZone(null);
+        }}
         {...(opts.episode ? plotDropProps(d.id) : {})}
         {...(opts.dropFolder !== undefined ? folderDropProps(opts.dropFolder) : {})}
       >
@@ -4063,22 +4263,23 @@ export default function App() {
               <div
                 className={`editor-groups ${split ? "split" : ""} ${previewOpen ? "with-preview" : ""}`}
                 ref={groupsRef}
-                onDragOver={dragOverGroups}
+                onDragOverCapture={dragOverGroups}
                 onDragLeave={(e) => {
                   if (!e.currentTarget.contains(e.relatedTarget as Node)) setDropZone(null);
                 }}
-                onDrop={dropOnGroups}
+                onDropCapture={dropOnGroups}
               >
               {dropZone && (
                 <div
                   className="group-drop-zone"
-                  style={{ left: dropZone.left, top: dropZone.top + 39, width: dropZone.width }}
+                  style={{ left: dropZone.left, top: dropZone.top, width: dropZone.width }}
                 />
               )}
               {split && focusedSide === "right" && sideGroup()}
               {split && focusedSide === "right" && sash}
               <section
                 key={focusedSide}
+                data-side={focusedSide}
                 className={`editor-group ${split ? "focused" : ""}`}
                 style={groupStyle(focusedSide)}
               >
@@ -4154,212 +4355,7 @@ export default function App() {
                   );
                 })}
               </div>
-              <div className="group-body">
-              <div className="editor-actions">
-                <span
-                  className={`save-indicator ${saveStatus !== "저장됨" ? "pending" : ""}`}
-                >
-                  <span />
-                  {saveStatus}
-                </span>
-                {autoSync.phase !== "idle" && <span className={`auto-sync-status ${autoSync.phase === "error" ? "error" : ""}`}
-                  role="status" title={autoSync.message || "저장한 변경 사항을 외부 저장소에 동기화합니다."}>
-                  <Cloud size={13} />{autoSyncLabels[autoSync.phase]}
-                </span>}
-                <div>
-                  <button
-                    aria-label="저장"
-                    title="저장 (Ctrl+S)"
-                    onClick={attempt(flush)}
-                  >
-                    <Check size={17} />
-                  </button>
-                  <button
-                    aria-label="순서 위로"
-                    title="순서 위로"
-                    onClick={attempt(() => reorder(active.id, -1))}
-                  >
-                    <ArrowUp size={16} />
-                  </button>
-                  <button
-                    aria-label="순서 아래로"
-                    title="순서 아래로"
-                    onClick={attempt(() => reorder(active.id, 1))}
-                  >
-                    <ArrowDown size={16} />
-                  </button>
-                  <button
-                    aria-label="변경 이력"
-                    title="변경 이력"
-                    onClick={attempt(showHistory)}
-                  >
-                    <History size={18} />
-                  </button>
-                  <button
-                    aria-label="내보내기"
-                    title="Markdown 내보내기"
-                    onClick={attempt(async () => {
-                      await flush();
-                      if (await call("exportDocument", { id: active.id }))
-                        message("원고를 내보냈습니다.");
-                    })}
-                  >
-                    <Download size={18} />
-                  </button>
-                  <button
-                    aria-label="본문 텍스트 복사"
-                    title={
-                      source || requiresSource(active.body)
-                        ? "Markdown 원문 복사"
-                        : "본문 복사"
-                    }
-                    onClick={attempt(() => copyDocManuscript(active))}
-                  >
-                    <Copy size={18} />
-                  </button>
-                  <button
-                    className={source ? "active" : ""}
-                    aria-label="Markdown 모드"
-                    title="Markdown 원문 / 편집"
-                    onClick={() => setSource((s) => !s)}
-                  >
-                    <Code2 size={18} />
-                  </button>
-                  <button
-                    className={previewOpen ? "active" : ""}
-                    aria-label="모바일 미리보기"
-                    title="모바일 미리보기 (Ctrl+K V)"
-                    aria-pressed={previewOpen}
-                    onClick={togglePreview}
-                  >
-                    <Smartphone size={17} />
-                  </button>
-                  <button
-                    aria-label="집중 모드"
-                    title="집중 모드 (F11)"
-                    onClick={() => setFocus((f) => !f)}
-                  >
-                    <Maximize size={17} />
-                  </button>
-                  <button
-                    aria-label="문서 더보기"
-                    title="문서 보관 및 설정"
-                    onClick={() => setDialog({ type: "document" })}
-                  >
-                    <MoreHorizontal size={20} />
-                  </button>
-                </div>
-              </div>
-              {conflict && (
-                <div className="conflict-banner">
-                  <span>
-                    다른 편집 내용이 있습니다. 내 원고를 사본으로 보존한 뒤
-                    계속할 수 있습니다.
-                  </span>
-                  <button onClick={attempt(resolveConflict)}>
-                    내 편집 사본 만들기
-                  </button>
-                </div>
-              )}
-              <div key="scroll" className="editor-scroll">
-                <article className={manuscriptClassName} style={manuscriptStyle}>
-                  <div className="document-kind">
-                    {labels[active.kind]} · {numberOf(active)}
-                  </div>
-                  <input
-                    className="document-title"
-                    aria-label="문서 제목"
-                    value={active.title}
-                    placeholder="제목을 입력해 주세요"
-                    readOnly={isProtected}
-                    title={isProtected ? "집필 완료된 에피소드는 편집이 제한됩니다." : undefined}
-                    onChange={(e) => {
-                      if (!isProtected) edit({ title: e.target.value });
-                    }}
-                  />
-                    <EpisodeProperties
-                      propertyPresets={prefs.propertyPresets}
-                      onSavePresets={(propertyPresets) => savePrefs({ propertyPresets })}
-                      favoriteTags={prefs.favoriteTags}
-                      key={active.id}
-                      doc={active}
-                      open={!!prefs.episodeInfoOpen}
-                      onToggle={() =>
-                        savePrefs({ episodeInfoOpen: !prefs.episodeInfoOpen }).catch(report)
-                      }
-                      onEdit={edit}
-                      onMenu={(rect, items) =>
-                        setMenu({ x: rect.left, y: rect.bottom + 4, items })
-                      }
-                      onNotice={message}
-                      boundEpisode={lib.documents.find((d) => d.id === active.episodeId && d.kind === "episode")}
-                      onBind={attempt(() => openBinding(active.id))}
-                      onUnbind={attempt(() => bindDocument(active.id, null))}
-                      onOpenBound={active.episodeId ? attempt(() => openDoc(active.episodeId!)) : undefined}
-                    />
-                  <Writer
-                    key="writer"
-                    readOnly={isProtected}
-                    manualLineBreak={!!active.manualLineBreak}
-                    id={active.id}
-                    revision={active.revision}
-                    body={active.body}
-                    tables={active.kind === "memo" || active.kind === "plot"}
-                    reveal={reveal?.docId === active.id ? reveal : null}
-                    onChange={(body) => edit({ body })}
-                    fontSize={activeBox.norm.fontSize}
-                    lineHeight={activeBox.norm.lineHeight}
-                    source={source}
-                    onComposition={composition}
-                    typingOptions={{
-                      autoCloseQuotes: prefs.autoCloseQuotes,
-                      autoCloseBrackets: prefs.autoCloseBrackets,
-                      smartBrackets: prefs.smartBrackets,
-                      autoSymbolReplacement: prefs.autoSymbolReplacement,
-                      autoDividerReplacement: prefs.autoDividerReplacement,
-                      quoteStyle: prefs.quoteStyle,
-                      textReplacements: prefs.textReplacements,
-                    }}
-                    editorStyle={activeBox.kindPrefs}
-                    onReplaceSymbols={replaceActiveSymbols}
-                    lineBreak={{
-                      // 이 작품의 새 에피소드 줄바꿈 기본값(작품 설정, 없으면 공통 설정). 플롯·메모는 자동 관리가 기본이다.
-                      def: active.kind === "episode" ? lineBreakDefault(project, prefs.defaultManualLineBreak) : false,
-                      defaultLabel: active.kind === "episode" ? "새 에피소드 기본값" : "기본값",
-                      onChange: (manualLineBreak) => edit({ manualLineBreak }),
-                    }}
-                    typesetting={{
-                      open: right && rightView === "typesetting",
-                      onToggle: toggleTypesettingPanel,
-                    }}
-                    bookmarks={active.bookmarks}
-                    onBookmarksChange={(bookmarks) => edit({ bookmarks })}
-                    jumpToBookmark={bookmarkJump?.docId === active.id ? bookmarkJump : null}
-                    onQuickNote={(text, at) =>
-                      setQuickNote({
-                        projectId: active.projectId,
-                        docId: active.id,
-                        // 회차는 회차 번호를 붙여 출처를 알아보기 쉽게 한다(예: 44. 아이스크림 두 개).
-                        title:
-                          active.kind === "episode" && numberOf(active)
-                            ? `${numberOf(active)}. ${active.title || "제목 없음"}`
-                            : active.title,
-                        text,
-                        episodeId: active.kind === "episode" ? active.id : active.episodeId || undefined,
-                        at,
-                      })
-                    }
-                    links={active.kind === "memo" || active.kind === "plot"}
-                    onOpenLink={(href, quote) => attempt(() => openNoteLink(href, quote))()}
-                    notes={noteMarks.docId === active.id ? noteMarks.list : undefined}
-                    onOpenNotes={openNotes}
-                    contextMenu
-                    images={docImages(active, !isProtected)}
-                  />
-                </article>
-                <div className="end-marker">✧</div>
-              </div>
-              </div>
+              {documentBody(active, true)}
               </section>
               {split && focusedSide === "left" && sash}
               {split && focusedSide === "left" && sideGroup()}

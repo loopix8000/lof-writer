@@ -2872,9 +2872,6 @@ textarea::-webkit-scrollbar-track {
   flex-direction: column;
   min-height: 0;
 }
-.editor-group.inactive .group-body {
-  cursor: default;
-}
 .group-sash {
   flex: 0 0 4px;
   cursor: col-resize;
@@ -2890,20 +2887,6 @@ textarea::-webkit-scrollbar-track {
 body.sash-dragging {
   cursor: col-resize;
   user-select: none;
-}
-.editor-group.inactive .editor-tab.current {
-  border-top-color: var(--faint);
-}
-.editor-groups.split .editor-group.focused .editor-tab.current {
-  border-top-color: var(--accent);
-}
-.editor-group.inactive .save-indicator > span {
-  display: none;
-}
-.document-title.static {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .status-label {
   display: inline-block;

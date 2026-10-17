@@ -279,6 +279,7 @@ export default function Writer({
   typingOptions,
   revision,
   readOnly = false,
+  inactive = false,
   reveal = null,
   manualLineBreak = false,
   editorStyle,
@@ -306,8 +307,9 @@ export default function Writer({
   onComposition: (value: boolean) => void;
   typingOptions: Record<string, any>;
   revision: string;
-  // 분할 보기에서 포커스되지 않은 그룹이 쓰는 읽기 전용 표시.
+  // 원고 보호 여부와 그룹 포커스를 분리해 도구 막대 구성을 그대로 유지한다.
   readOnly?: boolean;
+  inactive?: boolean;
   // 검색 결과로 열었을 때 본문에서 index번째 일치를 골라 보여 준다. seq가 바뀔 때마다 다시 한다.
   reveal?: { query: string; index: number; caseSensitive?: boolean; seq: number } | null;
   // 수동 줄바꿈 관리: 단락 간격 없이 Enter 한 번이 한 줄이 된다.
@@ -370,6 +372,9 @@ export default function Writer({
     onOpenNotesRef = useRef(onOpenNotes);
   onOpenLinkRef.current = onOpenLink;
   onOpenNotesRef.current = onOpenNotes;
+  const editable = !readOnly && !inactive;
+  const editableRef = useRef(editable);
+  editableRef.current = editable;
   const notesJson = JSON.stringify(notes || []);
   // 북마크: 최신 목록과 저장 함수, 마지막으로 깔거나 알린 목록(같으면 다시 깔지 않는다).
   const bookmarksRef = useRef(bookmarks),
@@ -399,17 +404,18 @@ export default function Writer({
           ? [MarkdownImage.configure({ resolve: (src) => imagesRef.current?.resolve(src) ?? Promise.resolve(null) })]
           : []),
         TypingAssist.configure({ getOptions: () => optionsRef.current }),
-        Bookmarks.configure({ canToggle: () => !!onBookmarksRef.current }),
+        Bookmarks.configure({ canToggle: () => editableRef.current && !!onBookmarksRef.current }),
         NoteMarks.configure({
           onOpen: (list, event) => onOpenNotesRef.current?.(list, { x: event.clientX, y: event.clientY }),
         }),
         Placeholder.configure({
           placeholder: "이곳에서 이야기를 시작해 보세요.",
+          showOnlyWhenEditable: false,
         }),
       ],
       content: splitSoftBreaks(body, !manualLineBreak),
       contentType: "markdown",
-      editable: !readOnly,
+      editable,
       editorProps: {
         clipboardTextParser: manualLineBreak ? parseManualClipboardText : parseAutomaticClipboardText,
         transformPasted: manualLineBreak ? undefined : normalizeAutomaticPaste,
@@ -435,8 +441,8 @@ export default function Writer({
           return true;
         },
         attributes: {
-          "aria-label": readOnly ? "다른 그룹 원고 본문" : "원고 본문",
-          "data-testid": readOnly ? "manuscript-readonly" : "manuscript",
+          "aria-label": inactive ? "다른 그룹 원고 본문" : "원고 본문",
+          "data-testid": editable ? "manuscript" : "manuscript-readonly",
           spellcheck: "false",
         },
         handleDOMEvents: {
@@ -465,7 +471,9 @@ export default function Writer({
           },
         },
       },
-      onUpdate: ({ editor }) => onChange(editor.getMarkdown()),
+      onUpdate: ({ editor }) => {
+        if (editableRef.current) onChange(editor.getMarkdown());
+      },
       // 북마크를 넣고 빼거나, 본문이 바뀌어 북마크 문단의 순서·글이 달라지면 알린다.
       onTransaction: ({ editor, transaction: tr }) => {
         if (tr.getMeta(BOOKMARK_LOAD) || tr.getMeta("preventUpdate")) return;
@@ -563,9 +571,9 @@ export default function Writer({
   ]);
   // 원고 보호(집필 완료)처럼 열린 채로 읽기 전용이 바뀔 때.
   useEffect(() => {
-    if (editor && !editor.isDestroyed && editor.isEditable === readOnly)
-      editor.setEditable(!readOnly, false);
-  }, [editor, readOnly]);
+    if (editor && !editor.isDestroyed && editor.isEditable !== editable)
+      editor.setEditable(editable, false);
+  }, [editor, editable]);
   useEffect(() => () => onComposition(false), []);
   useEffect(() => {
     if (pendingSelection.current !== null && textareaRef.current) {
@@ -636,7 +644,7 @@ export default function Writer({
   };
 
   // 집필 화면의 우클릭 메뉴. 기본 메뉴 대신 잘라내기·복사·붙여넣기·메모 추가·이미지 삽입·전체 선택을 띄운다.
-  function openEditorMenu(e: MouseEvent, text: string, ops: EditorMenuOps) {
+  function openEditorMenu(e: MouseEvent, text: string, ops: EditorMenuOps, hasSelection: boolean) {
     if (!contextMenu) return;
     e.preventDefault();
     const selected = !!text.trim(),
@@ -658,7 +666,7 @@ export default function Writer({
         label: "잘라내기",
         shortcut: "Ctrl+X",
         icon: <Scissors size={15} />,
-        disabled: readOnly || !selected,
+        disabled: !editable || !selected,
         action: () => void navigator.clipboard.writeText(text).then(ops.cut, ops.refocus),
       },
       {
@@ -672,7 +680,7 @@ export default function Writer({
         label: "붙여넣기",
         shortcut: "Ctrl+V",
         icon: <ClipboardPaste size={15} />,
-        disabled: readOnly,
+        disabled: !editable,
         action: () => void paste(),
       },
       "separator",
@@ -686,8 +694,8 @@ export default function Writer({
             },
           ]
         : []),
-      ...(save
-        ? [{ label: "이미지 삽입", icon: <ImagePlus size={15} />, disabled: readOnly, action: () => void addImage() }]
+      ...(save && !hasSelection
+        ? [{ label: "이미지 삽입", icon: <ImagePlus size={15} />, disabled: !editable, action: () => void addImage() }]
         : []),
       "separator",
       { label: "전체 선택", shortcut: "Ctrl+A", icon: <SquareDashed size={15} />, action: ops.selectAll },
@@ -700,6 +708,7 @@ export default function Writer({
   }
   // 도구 막대의 이미지 버튼: 파일을 골라 assets/에 저장하고 지금 커서 자리에 넣는다.
   async function pickImage() {
+    if (!editable) return;
     const img = await images?.save?.();
     if (!img) return;
     const area = textareaRef.current;
@@ -732,8 +741,8 @@ export default function Writer({
         {protectedSource && <div className="source-hint">원문 편집</div>}
         <textarea
           ref={textareaRef}
-          readOnly={readOnly}
-          aria-label={readOnly ? "다른 그룹 Markdown 원문" : "Markdown 원문"}
+          readOnly={!editable}
+          aria-label={inactive ? "다른 그룹 Markdown 원문" : "Markdown 원문"}
           spellCheck={false}
           value={body}
           onContextMenu={(e) => {
@@ -766,19 +775,19 @@ export default function Writer({
                 reselect();
                 insertSourceImage(area, img);
               },
-            });
+            }, start !== end);
           }}
           onPaste={(event) => {
             const target = event.currentTarget;
             const start = target.selectionStart;
             // 그림 파일을 붙여 넣으면 assets/에 저장하고 이미지 문법을 넣는다.
             const files = imageFiles(event.clipboardData);
-            if (files.length && images?.save && !readOnly) {
+            if (files.length && images?.save && editable) {
               event.preventDefault();
               void saveImageFiles(files, images.save, (img) => insertSourceImage(target, img));
               return;
             }
-            if (manualLineBreak || readOnly || inMarkdownCode(body.slice(0, start))) return;
+            if (manualLineBreak || !editable || inMarkdownCode(body.slice(0, start))) return;
             const text = event.clipboardData.getData("text/plain");
             const normalized = normalizePastedText(text, false);
             if (!text || normalized === text) return;
@@ -791,7 +800,7 @@ export default function Writer({
           }}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={(e) => {
-            if (e.nativeEvent.isComposing || e.ctrlKey || e.metaKey || e.altKey)
+            if (!editable || e.nativeEvent.isComposing || e.ctrlKey || e.metaKey || e.altKey)
               return;
             const target = e.currentTarget,
               { selectionStart: start, selectionEnd: end } = target,
@@ -924,7 +933,9 @@ export default function Writer({
             title={t.label}
             className={t.active ? "active" : ""}
             onMouseDown={(e) => e.preventDefault()}
-            onClick={t.action}
+            onClick={() => {
+              if (editable) t.action();
+            }}
           >
             <t.icon size={16} />
           </button>
@@ -935,7 +946,9 @@ export default function Writer({
             title="표 삽입 (3행 × 3열)"
             disabled={inTable}
             onMouseDown={(e) => e.preventDefault()}
-            onClick={() => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()}
+            onClick={() => {
+              if (editable) editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run();
+            }}
           >
             <Table2 size={16} />
           </button>
@@ -960,6 +973,7 @@ export default function Writer({
               // 본문의 빈 줄도 함께 바꾸므로, 고칠 수 없는 원고(집필 완료)에서는 바꾸지 않는다.
               disabled={readOnly}
               onChange={(manual) => {
+                if (!editable) return;
                 if (!editor.isDestroyed) convertBlankLines(editor, manual);
                 lineBreak.onChange(manual);
               }}
@@ -993,7 +1007,7 @@ export default function Writer({
           role="toolbar"
           aria-label="표 편집 (Tab: 다음 셀 · Shift+Tab: 이전 셀)"
           updateDelay={0}
-          shouldShow={({ editor }) => editor.isEditable && editor.isActive("table")}
+          shouldShow={({ editor }) => !inactive && editor.isEditable && editor.isActive("table")}
           getReferencedVirtualElement={() => {
             const table = selectedTableElement(editor);
             return table && { getBoundingClientRect: () => table.getBoundingClientRect() };
@@ -1049,7 +1063,7 @@ export default function Writer({
               editor.view.pasteText(text);
             },
             insertImage: (img) => placeImage(editor.view, img),
-          });
+          }, from !== to);
         }}
       />
       {selectionMenu}
