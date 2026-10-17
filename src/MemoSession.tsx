@@ -712,11 +712,15 @@ export default function MemoSession({
     setRenaming(null);
     await rename(r.path, r.value);
   }
-  async function move(path: string, to: string) {
-    if (!path || path === to || parentOf(path) === to || to.startsWith(path + "/")) return;
-    if (touchesOpen(path)) await flush();
-    const r = await call<{ path: string }>("memoMove", { space, path, to });
-    remap(path, r.path);
+  // 메모·폴더(paths)를 to 폴더로 옮긴다. 여러 개면 파일만 차례로 옮기고 트리는 다 옮긴 뒤 한 번만 다시 읽는다.
+  async function move(paths: string[], to: string) {
+    const valid = paths.filter((path) => path && path !== to && parentOf(path) !== to && !to.startsWith(path + "/"));
+    if (!valid.length) return;
+    if (valid.some(touchesOpen)) await flush();
+    for (const path of valid) {
+      const r = await call<{ path: string }>("memoMove", { space, path, to });
+      remap(path, r.path);
+    }
     if (to) setExpanded((old) => new Set([...old, to, ...ancestors(to)]));
     await loadTree();
   }
@@ -802,7 +806,7 @@ export default function MemoSession({
       {
         label: "최상위로 옮기기",
         disabled: !parentOf(entry.path),
-        action: attempt(() => move(entry.path, "")),
+        action: attempt(() => move([entry.path], "")),
       },
       "separator",
       {
@@ -849,7 +853,7 @@ export default function MemoSession({
         disabled: list.every((x) => !parentOf(x.path)),
         action: attempt(async () => {
           setPicked([]);
-          for (const x of outermost(list)) await move(x.path, "");
+          await move(outermost(list).map((x) => x.path), "");
         }),
       },
       "separator",
@@ -891,9 +895,7 @@ export default function MemoSession({
     dragging.current = [];
     setDropTarget(null);
     setPicked([]);
-    attempt(async () => {
-      for (const { path } of moving) await move(path, folder);
-    })();
+    attempt(() => move(moving.map(({ path }) => path), folder))();
   }
   const openHere = (path: string) => memo?.space === space && memo.path === path;
   function tabMenu(t: MemoTab, index: number): MenuItem[] {

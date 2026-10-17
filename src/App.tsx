@@ -905,13 +905,14 @@ export default function App() {
   async function archiveDocs(docs: Doc[], archived: boolean) {
     const targets = docs.filter((d) => !!d.archived !== archived);
     if (!targets.length) return;
-    for (const doc of targets) {
-      await patchDoc(doc.id, { archived });
-      if (archived) {
+    // 서재는 다 바꾼 뒤 한 번만 다시 읽는다.
+    for (const doc of targets) await writeMeta(doc.id, { archived });
+    await refresh();
+    if (archived)
+      for (const doc of targets) {
         await closeTab(doc.id);
         closeSideTab(doc.id);
       }
-    }
     const what = targets.length > 1 ? `문서 ${targets.length}개를` : "문서를";
     message(archived ? `${what} 보관함으로 옮겼습니다.` : `${what} 보관함에서 꺼냈습니다.`);
   }
@@ -1375,35 +1376,42 @@ export default function App() {
         dragFolder.current = "";
         setTreeDrop(null);
         setTreeSelection([]);
-        attempt(async () => {
-          for (const path of moving) await moveDocPath(path, folder);
-        })();
+        attempt(() => moveDocPaths(moving, folder))();
       },
     };
   }
-  // doc/ 안의 문서나 폴더(path)를 다른 폴더(to, 맨 위는 "")로 옮긴다.
-  async function moveDocPath(path: string, to: string) {
+  // doc/ 안의 문서나 폴더(paths)를 다른 폴더(to, 맨 위는 "")로 옮긴다. 여러 개면 파일만 차례로 옮기고,
+  // 서재·폴더 목록은 다 옮긴 뒤 한 번만 다시 읽는다(항목마다 읽으면 하나씩 옮겨지며 늦어진다).
+  async function moveDocPaths(paths: string[], to: string) {
+    if (!paths.length) return;
     await flush();
-    const from = "doc/" + path,
-      inside = libraryRef.current.documents.filter(
-        (d) =>
-          d.projectId === projectRef.current &&
-          (d.relPath === from || d.relPath?.startsWith(from + "/")),
-      );
-    const r = await call<{ path: string }>("memoMove", { space: projectRef.current, path, to });
-    await remapMovedDocs(inside, from, "doc/" + r.path);
-    setMemoOpenFolders(
-      (old) =>
-        new Set([
-          ...[...old].map((p) => (p === path || p.startsWith(path + "/") ? r.path + p.slice(path.length) : p)),
-          ...(to ? [to] : []),
-        ]),
-    );
+    const moved: { path: string; next: string; inside: Doc[] }[] = [];
+    for (const path of paths) {
+      const from = "doc/" + path,
+        inside = libraryRef.current.documents.filter(
+          (d) =>
+            d.projectId === projectRef.current &&
+            (d.relPath === from || d.relPath?.startsWith(from + "/")),
+        );
+      const r = await call<{ path: string }>("memoMove", { space: projectRef.current, path, to });
+      moved.push({ path, next: r.path, inside });
+    }
+    await refresh();
+    for (const m of moved) remapDocs(m.inside, "doc/" + m.path, "doc/" + m.next);
+    const rename = (p: string) => {
+      const m = moved.find((x) => p === x.path || p.startsWith(x.path + "/"));
+      return m ? m.next + p.slice(m.path.length) : p;
+    };
+    setMemoOpenFolders((old) => new Set([...[...old].map(rename), ...(to ? [to] : [])]));
     await loadMemoFolders();
   }
   // 문서 ID를 유지한 채 파일 경로와 열린 원고의 위치 정보만 갱신한다.
   async function remapMovedDocs(before: Doc[], from: string, to: string) {
     await refresh();
+    remapDocs(before, from, to);
+  }
+  // 서재를 다시 읽은 뒤에 부른다.
+  function remapDocs(before: Doc[], from: string, to: string) {
     for (const d of before) {
       const rel = to + d.relPath!.slice(from.length),
         next = libraryRef.current.documents.find(

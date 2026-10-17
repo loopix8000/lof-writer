@@ -10,5 +10,6 @@ playwright-report/
 *.log
 docs/
 .private/
+.startup-diagnostic/
 src-tauri/tauri.updater.generated.json
 /AGENTS.md

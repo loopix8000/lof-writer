@@ -1,0 +1,7 @@
+html, body, #root { width: 100%; height: 100%; margin: 0; }
+.lab-app { height: 100%; display: flex; flex-direction: column; color: #202124; background: white; }
+.lab-app header { flex: 0 0 40px; padding: 8px 20px; font: 14px sans-serif; }
+.lab-app .editor-scroll { min-height: 0; }
+.lab-app .manuscript { font-family: "Malgun Gothic", sans-serif; font-size: 18px; line-height: 2; }
+/* 화면 밖 배치를 생략하는 실험군이다. 제품 편집기에는 적용하지 않는다. */
+.lab-windowed .tiptap > * { content-visibility: auto; contain-intrinsic-size: auto 36px; }
