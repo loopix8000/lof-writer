@@ -1455,6 +1455,7 @@ body.sidebar-resizing * {
 .document-details > span {
   opacity: 0.65;
 }
+/* 편집 도구 막대는 원고를 내려도 위에 붙어 따라온다. 뒤로 본문이 비치지 않게 원고 배경(원고지 색이 있으면 그 색)을 깐다. */
 .format-bar {
   display: flex;
   align-items: center;
@@ -1463,6 +1464,12 @@ body.sidebar-resizing * {
   border-bottom: 1px solid var(--border);
   padding: 8px 0;
   margin-bottom: 30px;
+  position: sticky;
+  top: 0;
+  z-index: 6;
+  background:
+    linear-gradient(var(--textarea-bg-color, transparent), var(--textarea-bg-color, transparent)),
+    var(--bg);
 }
 .format-bar button {
   padding: 6px;
