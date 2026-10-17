@@ -570,14 +570,13 @@ export default function App() {
   function edit(patch: Partial<Doc>) {
     const d = draft.current;
     if (!d) return;
-    // 수정 시 자동 상태 변경: 집필 예정인 회차에 내용을 쓰기 시작하면 집필 중으로 바꾼다.
+    // 집필 예정인 회차에 내용을 쓰기 시작하면 집필 중으로 바꾼다.
     if (
       patch.body !== undefined &&
       patch.status === undefined &&
       d.doc.kind === "episode" &&
       normalizeStatus(d.doc.status) === "planned" &&
-      patch.body.trim() &&
-      prefsRef.current.autoChangeStatusOnContentEdit !== false
+      patch.body.trim()
     )
       patch = { ...patch, status: "in_progress" };
     d.doc = { ...d.doc, ...patch };
@@ -5157,14 +5156,6 @@ export default function App() {
                         <option value="dark">어둡게</option>
                       </select>
                     </label>
-                  </div>
-                  <div className="settings-subsection">
-                    <h3>집필 도우미</h3>
-                    <div className="settings-toggles">
-                      <SettingsToggle label="수정 시 자동 상태 변경" description="집필 예정인 에피소드에 글을 쓰면 집필 중으로 바꿉니다."
-                        checked={prefs.autoChangeStatusOnContentEdit !== false}
-                        onChange={(checked) => savePrefs({ autoChangeStatusOnContentEdit: checked }).catch(report)} />
-                    </div>
                   </div>
                   <PropertyPresetSettings presets={prefs.propertyPresets} tags={prefs.favoriteTags} onChange={savePrefs} />
                 </section>
