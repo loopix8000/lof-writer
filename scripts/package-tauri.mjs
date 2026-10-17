@@ -8,8 +8,8 @@ const pkg = JSON.parse(fs.readFileSync(path.join(rootDir, "package.json"), "utf8
 const version = pkg.version;
 const mode = process.argv[2] || "dir";
 
-// 앱 버전이 바뀌어도 기존 폴더 배포본의 위치를 유지한다.
-const releaseDir = path.join(rootDir, "release", "1.0.0-beta.1");
+// 앱 버전이나 저장소 위치가 바뀌어도 기존 폴더 배포본의 위치를 유지한다.
+const releaseDir = "C:\\Projects\\lof-writer\\release";
 const unpackedDir = path.join(releaseDir, "win-unpacked");
 const builtExe = path.join(
   rootDir,
@@ -69,7 +69,7 @@ if (process.platform === "win32") {
 }
 
 fs.mkdirSync(unpackedDir, { recursive: true });
-assertChildPath(rootDir, unpackedDir);
+assertChildPath(releaseDir, unpackedDir);
 for (const entry of fs.readdirSync(unpackedDir)) {
   assertChildPath(unpackedDir, path.join(unpackedDir, entry));
 }

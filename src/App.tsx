@@ -1,4 +1,4 @@
-import { Fragment, useState, useEffect, useRef, useCallback } from "react";
+import { Fragment, useState, useEffect, useRef, useCallback, useMemo } from "react";
 import CoverImage, { ImageViewer } from "./CoverImage";
 import { editorDropZone, type EditorDropZone } from "./editor-groups";
 import {
@@ -1908,7 +1908,9 @@ export default function App() {
   }, [active?.id, active?.kind, active?.episodeId]);
   const treeMatch = (text: string, query: string) => text.toLowerCase().includes(query.trim().toLowerCase());
   const writingRules = normalizeWriting(project?.writing || prefs.defaultWriting);
-  const stats = active ? manuscriptStats(active.body) : null;
+  // 글자 수 통계는 원고 전체를 다시 읽으므로, 본문이 바뀔 때만 다시 계산한다.
+  const activeBody = active ? active.body : null;
+  const stats = useMemo(() => (activeBody === null ? null : manuscriptStats(activeBody)), [activeBody]);
   const sessionCount = active && stats
     ? Math.max(0, stats.utf16WithoutSpaces - (sessionStarts.current.get(active.id) ?? stats.utf16WithoutSpaces))
     : 0;

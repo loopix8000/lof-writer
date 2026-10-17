@@ -60,20 +60,36 @@ export function plainText(markdown, { preserveParagraphBreaks = false } = {}) {
   }
   // 자동 관리 복사는 편집기와 같은 문단 구분을 적용하고, 문단 사이의 빈 줄을 보존한다.
   const content = preserveParagraphBreaks ? splitSoftBreaks(markdown, true) : markdown;
-  return walk(marked.lexer(content)).replace(/\n$/, "");
+  return walk(lex(content)).replace(/\n$/, "");
 }
 export const characterCount = (markdown, spaces = false) =>
   (spaces ? plainText(markdown).replace(/[\r\n]/g, "") : plainText(markdown).replace(/\s/g, "")).length;
+// 같은 원고를 화면 여러 곳에서 연달아 검사하므로 마지막으로 읽은 토큰을 다시 쓴다.
+let lastLexed = { markdown: "", tokens: [] };
+function lex(markdown) {
+  if (lastLexed.markdown !== markdown) lastLexed = { markdown, tokens: marked.lexer(markdown) };
+  return lastLexed.tokens;
+}
+// 토큰을 깊이 우선으로 돌며 test가 참인 토큰이 나오면 바로 멈춘다(marked.walkTokens와 같은 자식 순서).
+function someToken(tokens, test) {
+  for (const t of tokens) {
+    if (test(t)) return true;
+    const children =
+      t.type === "table" ? [...t.header, ...t.rows.flat()].flatMap((cell) => cell.tokens)
+      : t.type === "list" ? t.items
+      : t.tokens;
+    if (children && someToken(children, test)) return true;
+  }
+  return false;
+}
 export function requiresSource(markdown, { tables = false, links = false, images = false } = {}) {
-  let unsupported = false;
-  marked.walkTokens(marked.lexer(markdown), (t) => {
+  return someToken(lex(markdown), (t) => {
     if (tables && (t.type === "table" ||
-      (t.type === "html" && /^<br\s*\/?\s*>$/i.test(t.raw.trim())))) return;
-    if (links && t.type === "link") return;
-    if (images && t.type === "image") return;
-    if (["table", "image", "html", "link"].includes(t.type)) unsupported = true;
+      (t.type === "html" && /^<br\s*\/?\s*>$/i.test(t.raw.trim())))) return false;
+    if (links && t.type === "link") return false;
+    if (images && t.type === "image") return false;
+    return ["table", "image", "html", "link"].includes(t.type);
   });
-  return unsupported;
 }
 export function manuscriptStats(markdown) {
   const text = plainText(markdown)
