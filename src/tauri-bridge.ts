@@ -1,7 +1,14 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import type { AutoSyncStatus } from "./types";
 
 const methods = [
+  "autoSyncStatus",
+  "backupStorage",
+  "pinStatus",
+  "pinUnlock",
+  "pinSave",
+  "pinReady",
   "bootstrap",
   "chooseVault",
   "createProject",
@@ -23,6 +30,8 @@ const methods = [
   "reveal",
   "settings",
   "saveConnection",
+  "connectGoogleDrive",
+  "cancelGoogleDrive",
   "removeConnection",
   "sync",
   "chooseCover",
@@ -75,6 +84,16 @@ export function installTauriBridge() {
       disposed = true;
       unlisten?.();
     };
+  };
+
+  api.onAutoSync = (fn: (status: AutoSyncStatus) => void) => {
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    listen<AutoSyncStatus>("lof:auto-sync", (event) => { if (!disposed) fn(event.payload); }).then((off) => {
+      if (disposed) off();
+      else unlisten = off;
+    });
+    return () => { disposed = true; unlisten?.(); };
   };
 
   api.onFlush = (fn: () => Promise<void>) => {

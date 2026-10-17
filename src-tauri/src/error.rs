@@ -32,6 +32,12 @@ impl From<std::io::Error> for LofError {
     }
 }
 
+impl From<rusqlite::Error> for LofError {
+    fn from(error: rusqlite::Error) -> Self {
+        fail(format!("로컬 관리 DB 처리 실패: {error}"), "DATABASE")
+    }
+}
+
 pub fn fail(message: impl Into<String>, code: impl Into<String>) -> LofError {
     LofError {
         message: message.into(),

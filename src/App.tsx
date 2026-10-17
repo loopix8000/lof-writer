@@ -42,6 +42,7 @@ import {
   Copy,
   Pilcrow,
   Sparkles,
+  LockKeyhole,
 } from "lucide-react";
 import Writer from "./Writer";
 import ResizableSidebar from "./ResizableSidebar";
@@ -53,6 +54,7 @@ import {
   type Kind,
   type Project,
   type WritingRules,
+  type AutoSyncStatus,
 } from "./types";
 import {
   characterCount,
@@ -84,6 +86,7 @@ import PlatformCount from "./PlatformCount";
 import PlatformPicker from "./PlatformPicker";
 import TagInput from "./TagInput";
 import PropertyPresetSettings from "./PropertyPresetSettings";
+import PinSettings from "./PinSettings";
 import ContextMenu, { type MenuItem } from "./ContextMenu";
 import EpisodeProperties, { statusItems } from "./EpisodeProperties";
 import EpisodeBindingPicker from "./EpisodeBindingPicker";
@@ -105,6 +108,7 @@ import {
   type SearchResult,
 } from "./SearchViews";
 const composingError = "한글 입력 조합이 끝난 뒤 다시 저장해 주세요.";
+const autoSyncLabels = { idle: "동기화 완료", pending: "동기화 대기", syncing: "동기화 중", error: "동기화 재시도 대기" };
 const labels = { episode: "에피소드", plot: "플롯", memo: "메모" };
 const icons = { episode: BookOpen, plot: FileText, memo: StickyNote };
 const empty: Library = {
@@ -173,6 +177,7 @@ const settingPages = [
   { id: "storage", label: "보관 및 이력", icon: HardDrive },
   { id: "connections", label: "외부 저장소", icon: Cloud },
   { id: "api", label: "MCP / API", icon: Code2 },
+  { id: "security", label: "앱 잠금", icon: LockKeyhole },
   { id: "updates", label: "앱 업데이트", icon: Download },
 ] as const;
 function SettingsToggle({ label, description, checked, onChange }: {
@@ -256,7 +261,10 @@ export default function App() {
       quoteStyle: "straight",
     }),
     [connections, setConnections] = useState<any[]>([]),
+    [autoSync, setAutoSync] = useState<AutoSyncStatus>({ phase: "idle", message: "" }),
     [connectionType, setConnectionType] = useState("folder"),
+    [googleDriveEnabled, setGoogleDriveEnabled] = useState(false),
+    [googleConnecting, setGoogleConnecting] = useState(false),
     [busy, setBusy] = useState(false),
     [sessionCount, setSessionCount] = useState(0),
     // 메모 세션(레일의 메모 버튼). 열려 있는 동안 집필 화면은 그대로 두고 가린다.
@@ -500,9 +508,12 @@ export default function App() {
         saveChain.current.then(() => refresh()).catch(report);
     });
     const offFlush = window.lof.onFlush(flush);
+    const offAutoSync = window.lof.onAutoSync?.(setAutoSync);
+    if (window.lof.onAutoSync) call<AutoSyncStatus>("autoSyncStatus").then(setAutoSync).catch(() => {});
     return () => {
       off();
       offFlush();
+      offAutoSync?.();
     };
   }, [refresh, flush, report]);
   function edit(patch: Partial<Doc>) {
@@ -806,7 +817,7 @@ export default function App() {
     message(archived ? "문서를 보관함으로 옮겼습니다." : "문서를 보관함에서 꺼냈습니다.");
   }
   // 영구 삭제: 편집 중인 내용을 먼저 저장하고 탭을 닫은 뒤 지운다.
-  // 문서 파일은 Windows 휴지통으로 가고, 변경 이력과 임시 원고는 지워진다.
+  // 문서 파일은 Windows 휴지통으로 가고, 로컬 변경 이력은 보존 정책에 따라 남긴다.
   async function deleteDoc(doc: Doc) {
     await flush();
     await closeTab(doc.id);
@@ -1348,6 +1359,9 @@ export default function App() {
     await flush();
     const s = await call("settings");
     setConnections(s.connections);
+    setGoogleDriveEnabled(s.googleDriveEnabled === true);
+    if (!s.googleDriveEnabled && connectionType === "google-drive") setConnectionType("folder");
+    if (s.autoSync) setAutoSync(s.autoSync);
     setCommonMemoPath(s.commonMemoPath || "");
     if (active?.kind) setTypesettingKind(active.kind === "episode" ? "episode" : "document");
     setDialog({ type: "settings" });
@@ -1369,6 +1383,23 @@ export default function App() {
       resetNavigation();
       await refresh();
     } finally {
+      setBusy(false);
+    }
+  }
+  async function connectGoogleDrive(args: { id?: string; name?: string }) {
+    if (!googleDriveEnabled) return;
+    setBusy(true);
+    try {
+      await flush();
+      setGoogleConnecting(true);
+      await call("connectGoogleDrive", args);
+      setConnections((await call("settings")).connections);
+      message("Google 계정을 연결했습니다. 자동 동기화를 시작합니다.");
+    } catch (e: any) {
+      if (e.code === "CANCELLED") message("Google Drive 연결을 취소했습니다.");
+      else report(e);
+    } finally {
+      setGoogleConnecting(false);
       setBusy(false);
     }
   }
@@ -1432,6 +1463,7 @@ export default function App() {
   }
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      if (document.documentElement.dataset.pinLocked === "true") return;
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
         e.preventDefault();
         flush()
@@ -1803,6 +1835,7 @@ export default function App() {
     // 탭: Ctrl+W 닫기, Ctrl+PageDown/PageUp·Ctrl+Tab/Ctrl+Shift+Tab 이동.
     // 모바일 미리보기: VS Code의 측면 미리 보기처럼 Ctrl+K 다음 V.
     const handler = (e: KeyboardEvent) => {
+      if (document.documentElement.dataset.pinLocked === "true") return;
       if (updater.lockRef.current) {
         e.preventDefault();
         e.stopPropagation();
@@ -3179,6 +3212,10 @@ export default function App() {
                   <span />
                   {saveStatus}
                 </span>
+                {autoSync.phase !== "idle" && <span className={`auto-sync-status ${autoSync.phase === "error" ? "error" : ""}`}
+                  role="status" title={autoSync.message || "저장한 변경 사항을 외부 저장소에 동기화합니다."}>
+                  <Cloud size={13} />{autoSyncLabels[autoSync.phase]}
+                </span>}
                 <div>
                   <button
                     aria-label="저장"
@@ -3813,7 +3850,7 @@ export default function App() {
                       <b>{target.title || "제목 없음"}</b> 문서를 영구 삭제할까요?
                     </p>
                     <p className="muted">
-                      앱에서 완전히 사라지고 변경 이력과 임시 원고도 지워집니다.
+                      문서 목록과 임시 원고에서 제거됩니다. 이 PC의 변경 이력은 보존 정책에 따라 남습니다.
                       문서 파일은 Windows 휴지통으로 옮겨집니다. 동기화를 쓰면
                       다른 장치에서도 삭제됩니다.
                     </p>
@@ -3870,7 +3907,7 @@ export default function App() {
                     </p>
                     <p className="muted">
                       작품 폴더 전체(회차 {count}편, 플롯, 작품 메모, 표지)를 Windows
-                      휴지통으로 옮깁니다. 휴지통에서 폴더를 되살릴 수 있지만, 변경 이력과
+                      휴지통으로 옮깁니다. 이 PC의 변경 이력은 보존 정책에 따라 남고,
                       임시 원고는 지워집니다. 동기화를 쓰면 다른 장치에서도 삭제됩니다.
                     </p>
                     <label className="confirm-title">
@@ -3946,6 +3983,9 @@ export default function App() {
                   <UpdateSettings updater={updater} version={lib.version}
                     autoCheck={prefs.checkUpdatesOnStartup !== false}
                     onAutoCheck={(checked) => savePrefs({ checkUpdatesOnStartup: checked }).catch(report)} />
+                </section>
+                <section id="settings-security" className="settings-section" hidden={settingsPage !== "security"}>
+                  {settingsPage === "security" && <PinSettings />}
                 </section>
                 <section id="settings-editor" className="settings-section" hidden={settingsPage !== "editor"}>
                   <h3>화면과 글꼴</h3>
@@ -4751,6 +4791,23 @@ export default function App() {
                     마지막 이력 이후 두 조건을 모두 넘게 고쳤을 때만 저장 직전 원고를
                     이력으로 남깁니다. 둘 다 0이면 저장할 때마다 남깁니다.
                   </p>
+                  <p className="muted">
+                    수정 이력은 이 PC에만 보관하며 동기화하지 않습니다. 외부에서 수정되거나
+                    동기화로 교체되는 원고도 이전 내용을 남깁니다. 오래된 이력은 하루 한 번 정리하며
+                    문서당 최근 100개·30일을 기준으로 최소 10개를 보존합니다.
+                  </p>
+                  <button disabled={busy} onClick={attempt(async () => {
+                    setBusy(true);
+                    try {
+                      await flush();
+                      const result = await call<{ path: string }>("backupStorage");
+                      message("로컬 이력 백업을 저장했습니다: " + result.path);
+                    } finally {
+                      setBusy(false);
+                    }
+                  })}>
+                    <HardDrive size={16} /> 로컬 이력 백업
+                  </button>
                 </section>
                 <section id="settings-defaults" className="settings-section" hidden={settingsPage !== "defaults"}>
                   <h3>새 작품의 기본 설정</h3>
@@ -4789,19 +4846,37 @@ export default function App() {
                     <Cloud size={18} />
                     외부 저장소
                   </h3>
+                  <p className="settings-description">자동 저장과 수동 저장이 끝나면 2초 뒤 등록된 저장소에 자동으로 동기화합니다. 연속 수정은 모아서 처리하며, 트레이에서도 계속됩니다.</p>
+                  <aside className="sync-notice" aria-label="동기화 이용 안내">
+                    <strong>동기화는 아직 불안정할 수 있습니다.</strong>
+                    <p>중요한 원고는 별도로 백업해 주세요.</p>
+                    <p>동기화하려면 사용하는 모든 기기의 Lof Writer를 최신 버전으로 업데이트해야 합니다. 구버전 앱은 새 동기화 데이터를 받을 수 없습니다.</p>
+                    <p>최신 문서만 동기화하며, 수정 이력은 각 기기에 별도로 보관합니다.</p>
+                  </aside>
+                  {connections.length > 0 && <p role="status" className={autoSync.phase === "error" ? "pin-error" : "muted"}>
+                    {autoSyncLabels[autoSync.phase]}{autoSync.message && ` · ${autoSync.message}`}
+                  </p>}
+                  {googleDriveEnabled && googleConnecting && <div className="connection" role="status">
+                    <div><b>Google 계정 연결 중</b><small>브라우저에서 로그인하고 접근을 허용해 주세요.</small></div>
+                    <button type="button" onClick={attempt(async () => { await call("cancelGoogleDrive"); })}>취소</button>
+                  </div>}
                   {connections.map((c) => (
                     <div className="connection" key={c.id}>
                       <div>
                         <b>{c.name}</b>
                         <small>
-                          {c.type === "folder" ? c.folder : c.url || c.host}
+                          {c.type === "google-drive" ? `${c.email} · Google Drive / Lof Writer`
+                            : c.type === "folder" ? c.folder : c.url || c.host}
                         </small>
                       </div>
-                      <button disabled={busy} onClick={() => doSync(c.id)}>
+                      <button disabled={busy || autoSync.phase === "syncing"} onClick={() => doSync(c.id)}>
                         <RefreshCw size={15} />
                         {busy ? "진행 중" : "동기화"}
                       </button>
+                      {googleDriveEnabled && c.type === "google-drive" && <button disabled={busy}
+                        onClick={() => void connectGoogleDrive({ id: c.id })}>계정 다시 연결</button>}
                       <button
+                        disabled={busy}
                         title="연결 제거 (원격 파일 보존)"
                         aria-label={`${c.name} 연결 제거`}
                         onClick={attempt(async () => {
@@ -4820,6 +4895,10 @@ export default function App() {
                       const data = Object.fromEntries(
                         new FormData(e.currentTarget),
                       );
+                      if (connectionType === "google-drive") {
+                        void connectGoogleDrive({ name: String(data.name || "") });
+                        return;
+                      }
                       (async () => {
                         setBusy(true);
                         try {
@@ -4830,7 +4909,7 @@ export default function App() {
                           });
                           setConnections((await call("settings")).connections);
                           message(
-                            "연결을 추가했습니다. 동기화 버튼으로 시작하세요.",
+                            "연결을 추가했습니다. 자동 동기화를 시작합니다.",
                           );
                         } finally {
                           setBusy(false);
@@ -4841,10 +4920,12 @@ export default function App() {
                     <div className="row gap">
                       <select
                         aria-label="연결 방식"
+                        disabled={busy}
                         value={connectionType}
                         onChange={(e) => setConnectionType(e.target.value)}
                       >
                         <option value="folder">로컬 폴더</option>
+                        {googleDriveEnabled && <option value="google-drive">Google Drive</option>}
                         <option value="webdav">WebDAV</option>
                         <option value="ftp">FTP / FTPS</option>
                       </select>
@@ -4852,9 +4933,14 @@ export default function App() {
                         name="name"
                         aria-label="연결 이름"
                         placeholder="연결 이름"
+                        disabled={busy}
                       />
                     </div>
-                    {connectionType !== "folder" && (
+                    {googleDriveEnabled && connectionType === "google-drive" && <p className="muted">
+                      내 Google 계정으로 로그인해 Drive의 Lof Writer 폴더에 동기화합니다.
+                      다른 PC에서도 같은 계정을 연결하세요.
+                    </p>}
+                    {(connectionType === "webdav" || connectionType === "ftp") && (
                       <>
                         <input
                           name={connectionType === "webdav" ? "url" : "host"}
@@ -4910,7 +4996,7 @@ export default function App() {
                       <Link size={15} />
                       {connectionType === "folder"
                         ? "동기화 폴더 선택"
-                        : "연결 추가"}
+                        : connectionType === "google-drive" ? "Google 계정 연결" : "연결 추가"}
                     </button>
                   </form>
                 </section>

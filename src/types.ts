@@ -1,4 +1,5 @@
 export type Kind = "episode" | "plot" | "memo";
+export type AutoSyncStatus = { phase: "idle" | "pending" | "syncing" | "error"; message: string };
 export type WritingRules = {
   version?: number;
   platform: string;
@@ -75,6 +76,7 @@ declare global {
     lof: Record<string, (args?: any) => Promise<any>> & {
       onChange: (fn: () => void) => () => void;
       onFlush: (fn: () => Promise<void>) => () => void;
+      onAutoSync?: (fn: (status: AutoSyncStatus) => void) => () => void;
       windowMinimize?: () => Promise<void>;
       windowToggleMaximize?: () => Promise<boolean>;
       windowIsMaximized?: () => Promise<boolean>;

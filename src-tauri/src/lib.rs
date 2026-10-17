@@ -1,18 +1,22 @@
 pub mod api;
 pub mod assets;
+mod auto_sync;
+pub mod database;
 pub mod episode;
 pub mod error;
 pub mod file_index;
+mod google_drive;
 pub mod import;
 pub mod markdown;
 pub mod memo;
 pub mod platforms;
+mod pin;
 pub mod store;
 pub mod sync;
 pub mod text;
 
 use crate::api::{start_api, ApiServer};
-use crate::error::{fail_invalid, LofError};
+use crate::error::{fail, fail_invalid, LofError};
 use crate::import::import_files;
 use crate::memo::Memos;
 use crate::store::{atomic_write_str, strip_verbatim_prefix, HistoryPolicy, Store};
@@ -30,6 +34,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 use uuid::Uuid;
 
@@ -47,6 +53,7 @@ pub struct AppState {
     pub compact_window: AtomicBool,
     pub compact_applied: AtomicBool,
     pub closing: Arc<AtomicBool>,
+    pub quit_requested: AtomicBool,
     pub close_pending: Arc<AtomicBool>,
     pub close_seq: Arc<AtomicU64>,
     pub notify_seq: Arc<AtomicU64>,
@@ -193,33 +200,80 @@ fn safe_connection(c: &Value) -> Value {
         .and_then(|v| v.as_str().map(|s| !s.is_empty()))
         .unwrap_or(false);
     obj.insert("hasPassword".to_string(), json!(has_pw));
+    let has_google_auth = obj.remove("refreshToken").is_some();
+    obj.remove("accessToken");
+    obj.remove("clientSecret");
+    obj.insert("hasGoogleAuth".to_string(), json!(has_google_auth));
     Value::Object(obj)
 }
 
 fn encrypt_connection(c: &Value) -> Result<Value, LofError> {
     let mut obj = c.as_object().cloned().unwrap_or_default();
-    if let Some(pw) = obj
-        .get("password")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-    {
-        let enc = dpapi_encrypt(pw)?;
-        obj.insert("password".to_string(), json!(enc));
+    for key in ["password", "refreshToken"] {
+        if let Some(secret) = obj.get(key).and_then(Value::as_str).filter(|s| !s.is_empty()) {
+            let encrypted = dpapi_encrypt(secret)?;
+            obj.insert(key.to_string(), json!(encrypted));
+        }
     }
     Ok(Value::Object(obj))
 }
 
 fn decrypt_connection(c: &Value) -> Result<Value, LofError> {
     let mut obj = c.as_object().cloned().unwrap_or_default();
-    if let Some(pw) = obj
-        .get("password")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-    {
-        let dec = dpapi_decrypt(pw)?;
-        obj.insert("password".to_string(), json!(dec));
+    for key in ["password", "refreshToken"] {
+        if let Some(secret) = obj.get(key).and_then(Value::as_str).filter(|s| !s.is_empty()) {
+            let decrypted = dpapi_decrypt(secret)?;
+            obj.insert(key.to_string(), json!(decrypted));
+        }
     }
     Ok(Value::Object(obj))
+}
+
+fn connect_google_drive(args: &Value, state: &AppState, auth: &google_drive::AuthState) -> Result<Value, LofError> {
+    if !cfg!(windows) {
+        return Err(fail_invalid("Google Drive 연결은 현재 Windows에서 지원합니다."));
+    }
+    let old = if let Some(id) = args.get("id").and_then(Value::as_str) {
+        let settings = state.settings.lock().unwrap();
+        Some(settings.get("connections").and_then(Value::as_array)
+            .and_then(|conns| conns.iter().find(|c| c.get("id").and_then(Value::as_str) == Some(id)
+                && c.get("type").and_then(Value::as_str) == Some("google-drive")))
+            .cloned().ok_or_else(|| fail_invalid("Google Drive 연결을 찾을 수 없습니다."))?)
+    } else { None };
+    let account = google_drive::authorize(auth)?;
+    if let Some(previous) = &old {
+        if previous.get("accountId").and_then(Value::as_str) != Some(&account.account_id) {
+            return Err(fail_invalid("기존에 연결한 Google 계정으로 로그인해 주세요. 다른 계정은 새 연결로 추가할 수 있습니다."));
+        }
+    }
+    let id = old.as_ref().and_then(|c| c.get("id")).and_then(Value::as_str)
+        .map(str::to_string).unwrap_or_else(|| Uuid::new_v4().to_string());
+    let name: String = old.as_ref().and_then(|c| c.get("name"))
+        .or_else(|| args.get("name")).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty())
+        .unwrap_or("Google Drive").chars().take(100).collect();
+    let mut conn = json!({ "id": id, "name": name, "type": "google-drive",
+        "email": account.email, "accountId": account.account_id,
+        "clientId": google_drive::CLIENT_ID, "refreshToken": account.refresh_token });
+    if let Some(folder) = old.as_ref().and_then(|c| c.get("folderId")) {
+        conn["folderId"] = folder.clone();
+    }
+    let conn = sync::prepare_connection(&conn)?;
+    let encrypted = encrypt_connection(&conn)?;
+    auth.check_cancelled()?;
+    let mut settings = state.settings.lock().unwrap();
+    let mut next = settings.clone();
+    let mut connections = next.get("connections").and_then(Value::as_array).cloned().unwrap_or_default();
+    if old.is_some() {
+        let previous = connections.iter_mut().find(|c| c.get("id") == conn.get("id"))
+            .ok_or_else(|| fail_invalid("연결이 제거되었습니다. 새 연결로 추가해 주세요."))?;
+        *previous = encrypted;
+    } else {
+        connections.push(encrypted);
+    }
+    next["connections"] = json!(connections);
+    persist_settings(&state.config_file, &next)?;
+    *settings = next;
+    Ok(safe_connection(&conn))
 }
 
 fn history_policy_from_settings(settings: &Value) -> HistoryPolicy {
@@ -276,17 +330,29 @@ fn schedule_notify(app: &AppHandle, seq: &Arc<AtomicU64>) {
     });
 }
 
-fn schedule_index_refresh(store: &Arc<Mutex<Option<Store>>>, seq: &Arc<AtomicU64>) {
+fn schedule_index_refresh(store: &Arc<Mutex<Option<Store>>>, seq: &Arc<AtomicU64>, app: &AppHandle) {
     let my_seq = seq.fetch_add(1, Ordering::SeqCst) + 1;
     let seq_clone = Arc::clone(seq);
     let store_clone = Arc::clone(store);
+    let app=app.clone();
+    let root=store.lock().unwrap().as_ref().map(|store|store.root.clone());
     thread::spawn(move || {
-        thread::sleep(Duration::from_millis(1000));
-        if seq_clone.load(Ordering::SeqCst) == my_seq {
-            if let Ok(mut guard) = store_clone.lock() {
-                if let Some(ref mut st) = *guard {
-                    let _ = st.refresh_index(false);
-                }
+        // A second observation confirms deletions after external editors finish replacing files.
+        for delay in [1000,5500] {
+            thread::sleep(Duration::from_millis(delay));
+            if seq_clone.load(Ordering::SeqCst)!=my_seq{return;}
+            let changed=(||->Result<bool,LofError>{
+                let mut guard=store_clone.lock().unwrap();
+                let Some(st)=guard.as_mut() else{return Ok(false)};
+                if Some(&st.root)!=root.as_ref(){return Ok(false);}
+                let before=(st.database()?.get("catalog")?,st.deleted()?);
+                st.refresh_index(true)?;
+                let after=(st.database()?.get("catalog")?,st.deleted()?);
+                Ok(before!=after)
+            })();
+            if changed.unwrap_or(false) {
+                if let Some(state)=app.try_state::<AppState>(){schedule_notify(&app,&state.notify_seq);}
+                auto_sync::request(&app);
             }
         }
     });
@@ -335,7 +401,7 @@ fn setup_vault_watcher(
             }
             if relevant {
                 schedule_notify(&app_clone, &n_seq);
-                schedule_index_refresh(&store_clone, &r_seq);
+                schedule_index_refresh(&store_clone, &r_seq, &app_clone);
             }
         },
         NotifyConfig::default(),
@@ -382,6 +448,8 @@ fn setup_common_watcher(
 }
 
 fn bind_vault(state: &AppState, app: &AppHandle, root: &Path) -> Result<(), LofError> {
+    let resolved=strip_verbatim_prefix(&fs::canonicalize(root).unwrap_or_else(|_|root.to_path_buf()));
+    if state.store.lock().unwrap().as_ref().is_some_and(|store|store.root==resolved) {return Ok(());}
     {
         let mut vw = state.vault_watcher.lock().unwrap();
         *vw = None;
@@ -425,7 +493,7 @@ fn bind_vault(state: &AppState, app: &AppHandle, root: &Path) -> Result<(), LofE
         *cw = setup_common_watcher(&clean_root, &common_root, app, &state.notify_seq);
     }
     schedule_notify(app, &state.notify_seq);
-    schedule_index_refresh(&state.store, &state.refresh_seq);
+    schedule_index_refresh(&state.store, &state.refresh_seq, app);
     Ok(())
 }
 
@@ -472,7 +540,78 @@ fn set_clipboard_text(text: &str) -> Result<(), LofError> {
         .map_err(|e| fail_invalid(e.to_string()))
 }
 
+struct SyncGuard<'a>(&'a AtomicBool);
+
+impl Drop for SyncGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
+fn sync_connection(state: &AppState, id: &str, root: &Path) -> Result<Value, LofError> {
+    if state.syncing.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+        return Err(fail("이미 동기화 중입니다.", "SYNC_BUSY"));
+    }
+    let _guard = SyncGuard(&state.syncing);
+    let (conn, device_id) = {
+        let settings = state.settings.lock().unwrap();
+        let conn = settings.get("connections").and_then(Value::as_array)
+            .and_then(|connections| connections.iter().find(|c| c.get("id").and_then(Value::as_str) == Some(id)))
+            .cloned().ok_or_else(|| fail("연결을 찾을 수 없습니다.", "CONNECTION_REMOVED"))?;
+        let device = settings.get("deviceId").and_then(Value::as_str).unwrap_or("").to_string();
+        (decrypt_connection(&conn)?, device)
+    };
+    {
+        let store = state.store.lock().unwrap();
+        if store.as_ref().map(|store| store.root.as_path()) != Some(root) {
+            return Err(fail("동기화 중 서재가 변경되었습니다.", "VAULT_CHANGED"));
+        }
+    }
+    let prepared = sync::prepare_connection(&conn)?;
+    if prepared.get("folderId") != conn.get("folderId") {
+        let mut settings = state.settings.lock().unwrap();
+        let mut next = settings.clone();
+        let saved = next.get_mut("connections").and_then(Value::as_array_mut)
+            .and_then(|connections| connections.iter_mut().find(|c| {
+                c.get("id") == conn.get("id") && c.get("accountId") == conn.get("accountId")
+            })).ok_or_else(|| fail("동기화 연결이 변경되었습니다.", "CONNECTION_REMOVED"))?;
+        saved["folderId"] = prepared["folderId"].clone();
+        persist_settings(&state.config_file, &next)?;
+        *settings = next;
+    }
+    sync_once(&state.store, root, &prepared, &device_id)
+}
+
 fn handle_method(
+    method: &str,
+    args: Value,
+    state: &AppState,
+    app: &AppHandle,
+    window: &WebviewWindow,
+) -> Result<Value, LofError> {
+    if matches!(method,
+        "createProject" | "updateProject" | "chooseCover" | "removeCover" | "createDocument" |
+        "saveDocument" | "reorderDocuments" | "deleteProject" | "repair" | "relinkDocument" |
+        "adoptFile" | "forgetDocument" | "memoSave" | "memoCreate" | "memoCreateFolder" |
+        "memoRename" | "memoMove" | "memoRemove" | "restore" | "deleteDocument" | "importFiles")
+    {
+        let store=state.store.lock().unwrap();
+        store.as_ref().ok_or_else(||fail_invalid("서재가 열려 있지 않습니다."))?.require_database()?;
+    }
+    let result = dispatch_method(method, args, state, app, window);
+    if result.as_ref().is_ok_and(|value| !value.is_null()) && matches!(method,
+        "createProject" | "updateProject" | "chooseCover" | "removeCover" | "createDocument" |
+        "saveDocument" | "reorderDocuments" | "deleteProject" | "repair" | "relinkDocument" |
+        "adoptFile" | "forgetDocument" | "memoSave" | "memoCreate" | "memoCreateFolder" |
+        "memoRename" | "memoMove" | "memoRemove" | "restore" | "deleteDocument" | "importFiles" |
+        "saveConnection" | "chooseVault")
+    {
+        auto_sync::request(app);
+    }
+    result
+}
+
+fn dispatch_method(
     method: &str,
     args: Value,
     state: &AppState,
@@ -493,6 +632,23 @@ fn handle_method(
     };
 
     match method {
+        "autoSyncStatus" => Ok(app.state::<auto_sync::AutoSyncState>().status()),
+        "backupStorage" => {
+            let guard=state.store.lock().unwrap();
+            let store=guard.as_ref().ok_or_else(||fail_invalid("서재가 열려 있지 않습니다."))?;
+            let name=format!("library-{}-{}.sqlite",chrono::Utc::now().format("%Y%m%d-%H%M%S"),Uuid::new_v4());
+            let destination=store.root.join(".lof").join("backups").join(name);
+            store.database()?.backup(&destination)?;
+            Ok(json!({"path":destination.to_string_lossy()}))
+        }
+        "pinStatus" => Ok(pin_status(app)),
+        "pinReady" => {
+            let generation = args.get("generation").and_then(Value::as_u64).unwrap_or(0);
+            if app.state::<pin::PinState>().ready_to_show(generation) {
+                show_main_window(app);
+            }
+            Ok(json!(true))
+        }
         "bootstrap" => {
             let prefs = {
                 let s = state.settings.lock().unwrap();
@@ -1082,11 +1238,12 @@ fn handle_method(
         }
         "settings" => {
             let (store_root, common_root) = get_store_and_common()?;
+            let storage=state.store.lock().unwrap().as_ref().map(Store::storage_status);
             let s_guard = state.settings.lock().unwrap();
             let conns: Vec<Value> = s_guard
                 .get("connections")
                 .and_then(|v| v.as_array())
-                .map(|arr| arr.iter().map(safe_connection).collect())
+                .map(|arr| arr.iter().filter(|c| google_drive::connection_enabled(c)).map(safe_connection).collect())
                 .unwrap_or_default();
             let prefs = s_guard
                 .get("preferences")
@@ -1099,12 +1256,18 @@ fn handle_method(
                 "apiPort": state.api.port,
                 "preferences": prefs,
                 "syncing": state.syncing.load(Ordering::SeqCst),
+                "autoSync": app.state::<auto_sync::AutoSyncState>().status(),
+                "storage": storage,
+                "googleDriveEnabled": google_drive::ENABLED,
             }))
         }
         "saveConnection" => {
             let ctype = args.get("type").and_then(|v| v.as_str()).unwrap_or("");
             if !matches!(ctype, "folder" | "ftp" | "webdav") {
                 return Err(fail_invalid("지원하지 않는 연결"));
+            }
+            if ctype == "ftp" {
+                sync::validate_ftp_config(&args)?;
             }
             let raw_name = args
                 .get("name")
@@ -1179,6 +1342,10 @@ fn handle_method(
             }
             Ok(safe_connection(&conn_val))
         }
+        "cancelGoogleDrive" => {
+            app.state::<google_drive::AuthState>().cancel();
+            Ok(json!(true))
+        }
         "removeConnection" => {
             let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
             let mut s_guard = state.settings.lock().unwrap();
@@ -1199,40 +1366,10 @@ fn handle_method(
             Ok(json!(true))
         }
         "sync" => {
-            if state
-                .syncing
-                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-                .is_err()
-            {
-                return Err(fail_invalid("이미 동기화 중입니다."));
-            }
             let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
-            let sync_res = (|| -> Result<Value, LofError> {
-                let (conn, device_id) = {
-                    let s_guard = state.settings.lock().unwrap();
-                    let found = s_guard
-                        .get("connections")
-                        .and_then(|v| v.as_array())
-                        .and_then(|arr| {
-                            arr.iter()
-                                .find(|c| c.get("id").and_then(|v| v.as_str()) == Some(id))
-                        })
-                        .cloned()
-                        .ok_or_else(|| fail_invalid("연결을 찾을 수 없습니다."))?;
-                    let dev = s_guard
-                        .get("deviceId")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    (decrypt_connection(&found)?, dev)
-                };
-                let mut guard = state.store.lock().unwrap();
-                let st = guard
-                    .as_mut()
-                    .ok_or_else(|| fail_invalid("Store not initialized"))?;
-                sync_once(st, &conn, &device_id)
-            })();
-            state.syncing.store(false, Ordering::SeqCst);
+            let root = state.store.lock().unwrap().as_ref()
+                .ok_or_else(|| fail_invalid("Store not initialized"))?.root.clone();
+            let sync_res = sync_connection(state, id, &root);
             schedule_notify(app, &state.notify_seq);
             sync_res
         }
@@ -1332,7 +1469,49 @@ async fn lof_invoke(
     window: WebviewWindow,
 ) -> Result<Value, String> {
     let args_val = args.unwrap_or_else(|| json!({}));
-    match handle_method(&method, args_val, &state, &app, &window) {
+    let result = if matches!(method.as_str(), "connectGoogleDrive" | "sync" | "pinUnlock" | "pinSave" | "backupStorage") {
+        tauri::async_runtime::spawn_blocking(move || {
+            let state = app.state::<AppState>();
+            if method == "pinUnlock" || method == "pinSave" {
+                let pin = app.state::<pin::PinState>();
+                if method == "pinUnlock" {
+                    pin.unlock(args_val.get("pin").and_then(Value::as_str).unwrap_or(""))?;
+                } else {
+                    let current = args_val.get("currentPin").and_then(Value::as_str).unwrap_or("");
+                    let next = match args_val.get("newPin") {
+                        Some(Value::String(pin)) => Some(pin.as_str()),
+                        Some(Value::Null) => None,
+                        _ => return Err(fail_invalid("새 PIN을 확인해 주세요.")),
+                    };
+                    if next.is_some() && args_val.get("confirmPin").and_then(Value::as_str) != next {
+                        return Err(fail_invalid("새 PIN과 확인 번호가 일치하지 않습니다."));
+                    }
+                    pin.save(current, next)?;
+                    if !window.is_visible().unwrap_or(false) {
+                        pin.lock_for_tray();
+                    }
+                }
+                let status = pin_status(&app);
+                let _ = app.emit("lof:pin-state", &status);
+                Ok(status)
+            } else if method == "connectGoogleDrive" {
+                let auth = app.state::<google_drive::AuthState>();
+                let result = connect_google_drive(&args_val, &state, &auth);
+                if result.is_ok() {
+                    auto_sync::request(&app);
+                }
+                restore_main_window(&app);
+                result
+            } else {
+                handle_method(&method, args_val, &state, &app, &window)
+            }
+        })
+        .await
+        .unwrap_or_else(|_| Err(fail_invalid("요청 처리 중 오류가 발생했습니다.")))
+    } else {
+        handle_method(&method, args_val, &state, &app, &window)
+    };
+    match result {
         Ok(data) => Ok(json!({ "ok": true, "data": data })),
         Err(e) => Ok(json!({ "ok": false, "error": e.message, "code": e.code })),
     }
@@ -1345,20 +1524,63 @@ fn lof_flushed(ok: bool, state: State<'_, AppState>, window: WebviewWindow) {
     }
     state.close_seq.fetch_add(1, Ordering::SeqCst);
     if !ok {
+        state.quit_requested.store(false, Ordering::SeqCst);
+        restore_main_window(window.app_handle());
         thread::spawn(move || {
             MessageDialog::new()
                 .set_level(MessageLevel::Warning)
                 .set_title("Lof Writer")
                 .set_description(
-                    "저장하지 못한 원고가 있습니다.\n\n편집 화면에서 충돌을 해결한 뒤 다시 닫아 주세요. 임시 원고는 로컬에 보관됩니다.",
+                    "저장하지 못한 원고가 있습니다.\n\n편집 화면에서 저장 상태와 충돌을 확인한 뒤 다시 시도해 주세요. 임시 원고는 로컬에 보관됩니다.",
                 )
                 .set_buttons(MessageButtons::Ok)
                 .show();
         });
         return;
     }
-    state.closing.store(true, Ordering::SeqCst);
-    let _ = window.close();
+    if state.quit_requested.swap(false, Ordering::SeqCst) {
+        state.closing.store(true, Ordering::SeqCst);
+        let _ = window.close();
+    } else {
+        hide_to_tray(window.app_handle());
+    }
+}
+
+fn pin_status(app: &AppHandle) -> Value {
+    let mut status = app.state::<pin::PinState>().status();
+    let state = app.state::<AppState>();
+    let settings = state.settings.lock().unwrap();
+    let prefs = settings.get("preferences");
+    status["theme"] = prefs.and_then(|p| p.get("theme")).cloned().unwrap_or(json!("light"));
+    status["colorTheme"] = prefs.and_then(|p| p.get("colorTheme")).cloned().unwrap_or(json!("modern"));
+    status
+}
+
+fn hide_to_tray(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        if window.hide().is_ok() {
+            app.state::<pin::PinState>().lock_for_tray();
+            let _ = app.emit("lof:pin-state", pin_status(app));
+        }
+    }
+}
+
+fn restore_main_window(app: &AppHandle) {
+    let pin = app.state::<pin::PinState>();
+    if pin.is_locked() {
+        pin.request_show();
+        let _ = app.emit("lof:pin-state", pin_status(app));
+        return;
+    }
+    show_main_window(app);
+}
+
+fn show_main_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
 }
 
 /// 집중 모드의 작은 창 허용 여부에 맞춰 창 최소 크기를 적용한다.
@@ -1511,6 +1733,14 @@ pub fn run() {
         return;
     }
 
+    let pin_state = match pin::PinState::load(user_dir.join("pin.json")) {
+        Ok(pin) => pin,
+        Err(error) => {
+            MessageDialog::new().set_level(MessageLevel::Error)
+                .set_title("Lof Writer 시작 실패").set_description(error.to_string()).show();
+            return;
+        }
+    };
     let config_file = user_dir.join("settings.json");
     let mut settings: Value = match fs::read_to_string(&config_file) {
         Ok(raw) => serde_json::from_str(&raw).unwrap_or_else(|_| json!({})),
@@ -1543,7 +1773,7 @@ pub fn run() {
                 .filter(|c| {
                     c.get("type")
                         .and_then(|v| v.as_str())
-                        .is_some_and(|t| matches!(t, "folder" | "ftp" | "webdav"))
+                        .is_some_and(|t| matches!(t, "folder" | "ftp" | "webdav" | "google-drive"))
                 })
                 .cloned()
                 .collect()
@@ -1602,6 +1832,8 @@ pub fn run() {
             if let Ok(guard) = holder_for_api.lock() {
                 if let Some(ref app) = *guard {
                     schedule_notify(app, &notify_seq_for_api);
+                    let app = app.clone();
+                    thread::spawn(move || auto_sync::request(&app));
                 }
             }
         }),
@@ -1641,6 +1873,7 @@ pub fn run() {
         compact_window: AtomicBool::new(false),
         compact_applied: AtomicBool::new(false),
         closing: Arc::clone(&closing),
+        quit_requested: AtomicBool::new(false),
         close_pending: Arc::clone(&close_pending),
         close_seq: Arc::clone(&close_seq),
         notify_seq: Arc::clone(&notify_seq),
@@ -1652,6 +1885,9 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(state)
+        .manage(google_drive::AuthState::default())
+        .manage(pin_state)
+        .manage(auto_sync::AutoSyncState::default())
         .invoke_handler(tauri::generate_handler![
             lof_invoke,
             lof_flushed,
@@ -1663,6 +1899,41 @@ pub fn run() {
             updater_status,
         ])
         .setup(move |app| {
+            let open = MenuItem::with_id(app, "tray-open", "Lof Writer 열기", true, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "tray-quit", "종료", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&open, &quit])?;
+            let icon = image::load_from_memory(include_bytes!("../icons/icon.png"))?.to_rgba8();
+            let (width, height) = icon.dimensions();
+            TrayIconBuilder::with_id("main-tray")
+                .icon(tauri::image::Image::new_owned(icon.into_raw(), width, height))
+                .tooltip("Lof Writer")
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "tray-open" => restore_main_window(app),
+                    "tray-quit" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let state: State<AppState> = app.state();
+                            state.quit_requested.store(true, Ordering::SeqCst);
+                            if window.close().is_err() {
+                                state.quit_requested.store(false, Ordering::SeqCst);
+                                restore_main_window(app);
+                            }
+                        }
+                    }
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        restore_main_window(tray.app_handle());
+                    }
+                })
+                .build(app)?;
             let handle = app.handle().clone();
             {
                 let mut h_guard = app_handle_holder.lock().unwrap();
@@ -1776,8 +2047,7 @@ pub fn run() {
                     }
                 }
                 let _ = win.set_background_color(Some(bg_color));
-                let _ = win.show();
-                let _ = win.set_focus();
+                restore_main_window(&handle);
             }
             {
                 let mut vw = st.vault_watcher.lock().unwrap();
@@ -1793,6 +2063,7 @@ pub fn run() {
                 let mut cw = st.common_watcher.lock().unwrap();
                 *cw = setup_common_watcher(&clean_vault_root, &common_root, &handle, &st.notify_seq);
             }
+            auto_sync::request(&handle);
             Ok(())
         })
         .on_window_event(move |window, event| {
@@ -1815,6 +2086,9 @@ pub fn run() {
                 return;
             }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() != "main" {
+                    return;
+                }
                 let app = window.app_handle();
                 let st: State<AppState> = app.state();
                 if st.closing.load(Ordering::SeqCst) {
@@ -1843,6 +2117,14 @@ pub fn run() {
                     {
                         return;
                     }
+                    let state: State<AppState> = win_clone.state();
+                    if !state.quit_requested.load(Ordering::SeqCst) {
+                        close_pending_clone.store(false, Ordering::SeqCst);
+                        close_seq_clone.fetch_add(1, Ordering::SeqCst);
+                        hide_to_tray(win_clone.app_handle());
+                        return;
+                    }
+                    restore_main_window(win_clone.app_handle());
                     let res = MessageDialog::new()
                         .set_level(MessageLevel::Warning)
                         .set_title("Lof Writer")
@@ -1858,6 +2140,7 @@ pub fn run() {
                         return;
                     }
                     close_pending_clone.store(false, Ordering::SeqCst);
+                    state.quit_requested.store(false, Ordering::SeqCst);
                     if matches!(
                         res,
                         MessageDialogResult::Ok | MessageDialogResult::Custom(_)

@@ -624,7 +624,6 @@ impl Memos {
             }
             for rel in &files {
                 if let Some(id) = ids.get(rel) {
-                    let _ = fs::remove_dir_all(store.root.join(".lof").join("history").join(id));
                     let _ = store.clear_draft(id);
                     store.tombstone(id, pid, &now_iso())?;
                 }

@@ -45,6 +45,8 @@ pub struct FileIndex {
     pub bodies: HashMap<String, String>,
     pub dirty: HashSet<String>,
     pub common: CommonIndexCache,
+    pub database: Option<crate::database::LibraryDb>,
+    pub database_error: String,
 }
 
 impl FileIndex {
@@ -58,12 +60,17 @@ impl FileIndex {
                 root: String::new(),
                 files: HashMap::new(),
             },
+            database: None,
+            database_error: String::new(),
         }
     }
 
     pub fn load(&mut self, vault_id: &str) -> Option<Catalog> {
-        let raw = fs::read_to_string(&self.file).ok()?;
-        let data: Value = serde_json::from_str(&raw).ok()?;
+        let data: Value = if let Some(db) = &self.database {
+            db.get("catalog").ok()??
+        } else {
+            serde_json::from_str(&fs::read_to_string(&self.file).ok()?).ok()?
+        };
         if data.get("version").and_then(|v| v.as_i64()) != Some(1)
             || data.get("vaultId").and_then(|v| v.as_str()) != Some(vault_id)
         {
@@ -234,8 +241,8 @@ impl FileIndex {
     pub fn cache_body(&mut self, project_id: &str, id: &str, body: &str) -> Result<(), LofError> {
         let key = format!("{}:{}", project_id, id);
         self.bodies.insert(key, body.to_string());
-        let f = self.body_file(project_id, id)?;
-        crate::store::atomic_write_str(&f, body)?;
+        if let Some(db) = &self.database { db.cache_body(project_id, id, body)?; }
+        else if self.database_error.is_empty() { let f = self.body_file(project_id, id)?; crate::store::atomic_write_str(&f, body)?; }
         Ok(())
     }
 
@@ -244,8 +251,9 @@ impl FileIndex {
         if let Some(b) = self.bodies.get(&key) {
             return Ok(b.clone());
         }
-        let f = self.body_file(project_id, id)?;
-        let content = fs::read_to_string(f)?;
+        let content = if let Some(db) = &self.database {
+            db.body(project_id, id)?.ok_or_else(||fail_invalid("문서 색인을 다시 생성해야 합니다."))?
+        } else { fs::read_to_string(self.body_file(project_id, id)?)? };
         self.bodies.insert(key, content.clone());
         Ok(content)
     }
@@ -310,6 +318,15 @@ impl FileIndex {
         }))
         .unwrap_or_default();
 
-        crate::store::atomic_write_str(&self.file, &payload)
+        if let Some(db) = &self.database { db.set("catalog", &serde_json::from_str(&payload).map_err(|e|fail_invalid(e.to_string()))?) }
+        else if self.database_error.is_empty() { crate::store::atomic_write_str(&self.file, &payload) }
+        else { Ok(()) }
+    }
+
+    pub fn open_database(&mut self, vault_id: &str) {
+        match crate::database::LibraryDb::open(&self.root, vault_id) {
+            Ok(db) => { self.database = Some(db); self.database_error.clear(); }
+            Err(error) => { self.database_error = format!("SQLite 전환을 완료하지 못했습니다. 원본 파일은 보존되며 편집·동기화를 중단합니다: {}", error.message); }
+        }
     }
 }
