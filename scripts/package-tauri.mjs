@@ -45,6 +45,22 @@ if (iconChanged && fs.existsSync(cargoBuildDir)) {
 }
 
 const tauriCli = path.join(rootDir, "node_modules", "@tauri-apps", "cli", "tauri.js");
+// 빌드가 중단되면 압축 캐시가 빈 파일로 남을 수 있다. 존재 여부만으로 재사용되지 않도록 지운다.
+if (fs.existsSync(cargoBuildDir)) {
+  for (const entry of fs.readdirSync(cargoBuildDir)) {
+    if (!entry.startsWith("lof-writer-")) continue;
+    const assetsDir = path.join(cargoBuildDir, entry, "out", "tauri-codegen-assets");
+    if (!fs.existsSync(assetsDir)) continue;
+    for (const asset of fs.readdirSync(assetsDir, { withFileTypes: true })) {
+      if (!asset.isFile()) continue;
+      const cachePath = path.join(assetsDir, asset.name);
+      if (fs.statSync(cachePath).size !== 0) continue;
+      assertChildPath(assetsDir, cachePath);
+      console.log(`빈 배포 리소스 캐시를 다시 생성합니다: ${asset.name}`);
+      fs.rmSync(cachePath);
+    }
+  }
+}
 const tauriArgs =
   mode === "msi"
     ? [tauriCli, "build", "--bundles", "msi"]

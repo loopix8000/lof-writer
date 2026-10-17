@@ -3,13 +3,18 @@ import { Table, TableCell, TableHeader, TableRow } from "@tiptap/extension-table
 import { Fragment, Slice } from "@tiptap/pm/model";
 import { Plugin, TextSelection } from "@tiptap/pm/state";
 import { requiresSource } from "../core/text.mjs";
+import { tableStart } from "../core/markdown-table.mjs";
+
+const ManuscriptTable = Table.extend({
+  markdownTokenizer: { ...Table.config.markdownTokenizer!, start: tableStart },
+});
 
 // GFM 표의 셀에는 문단과 인라인 서식을 보관한다.
 export const MarkdownTables = Extension.create({
   name: "markdownTables",
   addExtensions() {
     return [
-      Table.configure({ renderWrapper: true }),
+      ManuscriptTable.configure({ renderWrapper: true }),
       TableRow,
       TableCell.extend({ content: "paragraph+" }),
       TableHeader.extend({ content: "paragraph+" }),

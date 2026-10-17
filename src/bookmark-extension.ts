@@ -30,11 +30,10 @@ function gutterBlock(view: EditorView, event: MouseEvent) {
   const left = el?.getBoundingClientRect().left ?? 0;
   // 리본 바깥쪽은 메모 아이콘 자리이므로 북마크로 받지 않는다.
   if (!el || event.clientX >= left || event.clientX < left - NOTE_GUTTER.to) return -1;
-  let pos = -1;
-  view.state.doc.forEach((node, offset) => {
-    if (pos < 0 && markable(node) && view.nodeDOM(offset) === el) pos = offset;
-  });
-  return pos;
+  const inside = view.state.doc.resolve(view.posAtDOM(el, 0));
+  const pos = inside.depth ? inside.before(1) : inside.pos;
+  const node = view.state.doc.nodeAt(pos);
+  return node && markable(node) ? pos : -1;
 }
 function setHover(view: EditorView, pos: number | null) {
   if (hoverKey.getState(view.state) !== pos)
@@ -46,6 +45,7 @@ export function readBookmarks(state: EditorState): Bookmark[] {
   const set = bookmarkPluginKey.getState(state);
   if (!set) return [];
   const starts = new Set(set.find().map((d) => d.from));
+  if (!starts.size) return [];
   const out: Bookmark[] = [];
   state.doc.forEach((node, offset, index) => {
     if (starts.has(offset)) out.push({ index, text: bookmarkSnippet(node) });
@@ -56,6 +56,7 @@ export function readBookmarks(state: EditorState): Bookmark[] {
 // 저장된 북마크를 지금 본문의 문단 위치로 바꾼다. 앞부분 글이 같은 문단 중 원래 순서에 가장 가까운 것을 고르고,
 // 그런 문단이 없으면 같은 순서의 문단에 붙인다.
 export function resolveBookmarks(doc: PMNode, saved: Bookmark[] = []): number[] {
+  if (!saved.length) return [];
   const blocks: { pos: number; text: string; ok: boolean }[] = [];
   doc.forEach((node, offset) => blocks.push({ pos: offset, text: bookmarkSnippet(node), ok: markable(node) }));
   const used = new Set<number>();

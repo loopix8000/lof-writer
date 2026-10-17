@@ -1,25 +1,26 @@
 import { useState } from "react";
 import { Settings2 } from "lucide-react";
-import { manuscriptStats, countForRule, countForWriting } from "../core/text.mjs";
+import { countForRule } from "../core/text.mjs";
+import type { ManuscriptCounts } from "./manuscript-counts";
 import { platforms } from "../core/platforms.mjs";
 import PlatformPicker from "./PlatformPicker";
 import type { WritingRules } from "./types";
 export default function PlatformCount({
-  body,
+  stats,
   rules,
   onChange,
   documentOnly = false,
 }: {
-  body: string;
+  stats: ManuscriptCounts | null;
   rules: WritingRules;
   onChange: (p: WritingRules) => void;
   documentOnly?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
-  const stats = manuscriptStats(body),
-    unit = documentOnly ? "utf16" : rules.unit,
-    value = documentOnly ? countForRule(stats, "spaces", unit) : countForWriting(stats, rules),
+  const unit = documentOnly ? "utf16" : rules.unit,
     goal = rules.goal;
+  const value = stats ? documentOnly ? countForRule(stats, "spaces", unit) : stats.platformCharacters : 0;
+  const count = (rule: string) => stats ? countForRule(stats, rule, unit).toLocaleString() : "…";
   const name =
     rules.platform === "custom"
       ? rules.customName || "사용자 규칙"
@@ -50,7 +51,7 @@ export default function PlatformCount({
       {editing && <PlatformPicker value={rules} onChange={onChange} compact />}
       </>}
       <div className="word-count" data-testid={documentOnly ? "document-count" : "platform-count"}>
-        {value.toLocaleString()}
+        {stats ? value.toLocaleString() : "…"}
         <small>{documentOnly ? "자" : ` / ${goal.toLocaleString()}자`}</small>
       </div>
       {!documentOnly && <>
@@ -59,30 +60,30 @@ export default function PlatformCount({
       </div>
       <div className="goal-row">
         <span>
-          {value >= goal
+          {!stats ? "계산 중…" : value >= goal
             ? "목표 달성 · " + (value - goal).toLocaleString() + "자 초과"
             : (goal - value).toLocaleString() + "자 남음"}
         </span>
-        <b>{Math.round((value / goal) * 100)}%</b>
+        <b>{stats ? `${Math.round((value / goal) * 100)}%` : "…"}</b>
       </div>
       </>}
       <dl className="count-breakdown">
         <div>
           <dt>공백 제외</dt>
-          <dd>{countForRule(stats,'noSpace',unit).toLocaleString()}</dd>
+          <dd>{count('noSpace')}</dd>
         </div>
         <div>
           <dt>공백 포함 · 줄바꿈 제외</dt>
-          <dd>{countForRule(stats,'spaces',unit).toLocaleString()}</dd>
+          <dd>{count('spaces')}</dd>
         </div>
         <div>
           <dt>줄바꿈까지 포함</dt>
-          <dd>{countForRule(stats,'all',unit).toLocaleString()}</dd>
+          <dd>{count('all')}</dd>
         </div>
         <div>
           <dt>문단 / 줄</dt>
           <dd>
-            {stats.paragraphs} / {stats.lines}
+            {stats?.paragraphs ?? "…"} / {stats?.lines ?? "…"}
           </dd>
         </div>
       </dl>

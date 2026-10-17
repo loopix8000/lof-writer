@@ -1,5 +1,8 @@
-import { marked } from "marked";
+import { Marked } from "marked";
 import { decodeHTMLStrict } from "entities";
+
+// 편집기의 표·이미지 확장이 통계와 원문 보호 검사에 섞이지 않게 별도 파서를 사용한다.
+const textParser = new Marked();
 
 // 웹소설 원고처럼 한 줄바꿈으로만 이어진 줄도 한 줄을 한 문단으로 읽는다. Markdown 규칙대로라면 이런 줄은
 // 한 문단으로 합쳐져 문단 간격·들여쓰기가 첫 줄에만 붙으므로, 읽기 전에 줄 사이를 문단 구분(빈 줄)으로 바꾼다.
@@ -67,7 +70,7 @@ export const characterCount = (markdown, spaces = false) =>
 // 같은 원고를 화면 여러 곳에서 연달아 검사하므로 마지막으로 읽은 토큰을 다시 쓴다.
 let lastLexed = { markdown: "", tokens: [] };
 function lex(markdown) {
-  if (lastLexed.markdown !== markdown) lastLexed = { markdown, tokens: marked.lexer(markdown) };
+  if (lastLexed.markdown !== markdown) lastLexed = { markdown, tokens: textParser.lexer(markdown) };
   return lastLexed.tokens;
 }
 // 토큰을 깊이 우선으로 돌며 test가 참인 토큰이 나오면 바로 멈춘다(marked.walkTokens와 같은 자식 순서).
@@ -91,13 +94,15 @@ export function requiresSource(markdown, { tables = false, links = false, images
     return ["table", "image", "html", "link"].includes(t.type);
   });
 }
+let lastStats;
 export function manuscriptStats(markdown) {
+  if (lastStats?.markdown === markdown) return lastStats.stats;
   const text = plainText(markdown)
     .replace(/\r\n?|\u2028|\u2029/g, "\n")
     .replace(/\u00a0/g, " ");
   const noSpace = text.replace(/\s/g, ""),
     spaces = text.replace(/[\n\r]/g, "");
-  return {
+  const stats = {
     text,
     withoutSpaces: [...noSpace].length,
     withSpaces: [...spaces].length,
@@ -109,6 +114,9 @@ export function manuscriptStats(markdown) {
     lines: text ? text.split("\n").length : 0,
     paragraphs: text ? text.split(/\n+/).filter((p) => p.trim()).length : 0,
   };
+  // 상태줄과 분량 패널 등에서 같은 본문을 연달아 요청하면 계산 결과를 공유한다.
+  lastStats = { markdown, stats };
+  return stats;
 }
 export function countForRule(stats, rule = "noSpace", unit = "utf16") {
   const key =

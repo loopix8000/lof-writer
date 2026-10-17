@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import type { AutoSyncStatus } from "./types";
 
 const methods = [
+  "countManuscript",
   "autoSyncStatus",
   "backupStorage",
   "pinStatus",

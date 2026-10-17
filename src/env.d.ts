@@ -1,4 +1,5 @@
 declare module "*.mjs" {
+  export function tableStart(source: string): number;
   export function plainText(text: string, options?: { preserveParagraphBreaks?: boolean }): string;
   export function splitSoftBreaks(markdown: string, hardBreaks: boolean): string;
   export function characterCount(text: string, spaces?: boolean): number;

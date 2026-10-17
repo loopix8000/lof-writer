@@ -12,10 +12,19 @@ export const notePluginKey = new PluginKey<{ list: NoteMark[]; set: DecorationSe
 export const NOTE_GUTTER = { from: 64, to: 40 };
 
 const squash = (text: string) => text.replace(/\s+/g, " ").trim();
+const blockTexts = new WeakMap<PMNode, string>();
 
 function decorate(doc: PMNode, list: NoteMark[]) {
-  const blocks: { pos: number; node: PMNode; text: string }[] = [];
-  doc.forEach((node, pos) => blocks.push({ pos, node, text: squash(node.textContent) }));
+  if (!list.length) return DecorationSet.empty;
+  const blocks: { pos: number; text: string }[] = [];
+  doc.forEach((node, pos) => {
+    let text = blockTexts.get(node);
+    if (text === undefined) {
+      text = squash(node.textContent);
+      blockTexts.set(node, text);
+    }
+    blocks.push({ pos, text });
+  });
   const byBlock = new Map<number, NoteMark[]>();
   for (const note of list) {
     const text = squash(note.text);
@@ -38,11 +47,8 @@ function gutterNotes(view: EditorView, event: MouseEvent): NoteMark[] | null {
   if (!el?.classList.contains("noted")) return null;
   const left = el.getBoundingClientRect().left;
   if (event.clientX < left - NOTE_GUTTER.from || event.clientX >= left - NOTE_GUTTER.to) return null;
-  let pos = -1;
-  view.state.doc.forEach((_node, offset) => {
-    if (pos < 0 && view.nodeDOM(offset) === el) pos = offset;
-  });
-  if (pos < 0) return null;
+  const inside = view.state.doc.resolve(view.posAtDOM(el, 0));
+  const pos = inside.depth ? inside.before(1) : inside.pos;
   const found = notePluginKey.getState(view.state)?.set.find(pos, pos + 1).find((d) => d.from === pos);
   return (found?.spec.notes as NoteMark[]) ?? null;
 }

@@ -1,4 +1,5 @@
 import { Fragment, useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useManuscriptCounts } from "./useManuscriptCounts";
 import CoverImage, { ImageViewer } from "./CoverImage";
 import { editorDropZone, type EditorDropZone } from "./editor-groups";
 import {
@@ -59,10 +60,7 @@ import {
   type AutoSyncStatus,
 } from "./types";
 import {
-  characterCount,
-  manuscriptStats,
   countForRule,
-  countForWriting,
   requiresSource,
   plainText,
 } from "../core/text.mjs";
@@ -119,6 +117,20 @@ const icons = { episode: BookOpen, plot: FileText, memo: StickyNote };
 const EPISODE_GROUP = 20;
 // 특정 작품에 매이지 않는 화면(서재, 전체 북마크). 이동해도 보던 작품은 그대로 둔다.
 const globalView = (view: string) => view === "library" || view === "bookmarks";
+// 숨겨진 탭의 도구 막대를 준비할 때도 본문을 다시 분석하지 않는다.
+const documentSourceCache = new WeakMap<Doc, { body: string; required: boolean }>();
+function cloneDocument(doc: Doc, patch: Partial<Doc> = {}): Doc {
+  const next = { ...doc, ...patch }, cached = documentSourceCache.get(doc);
+  if (cached && cached.body === next.body) documentSourceCache.set(next, cached);
+  return next;
+}
+function requiresDocumentSource(doc: Doc) {
+  const cached = documentSourceCache.get(doc);
+  if (cached?.body === doc.body) return cached.required;
+  const required = requiresSource(doc.body);
+  documentSourceCache.set(doc, { body: doc.body, required });
+  return required;
+}
 // 저장할 때마다 임시 원고를 먼저 쓰고 저장이 끝나면 지운다. 그 사이에 목록을 새로 읽으면
 // 편집 중인 원고의 임시본이 잡히므로, 앱을 연 뒤 지금 편집 중인 원고에 쓴 임시본은 복구 대상에서 뺀다.
 const appStartedAt = Date.now();
@@ -482,8 +494,8 @@ export default function App() {
           (meta.title !== d.doc.title || meta.path !== d.doc.path || meta.relPath !== d.doc.relPath)) {
         // 본문은 그대로인데 이름만 바뀐 경우(회차 번호가 바뀌어 '003화 …' 이름이 따라 바뀐 경우 등).
         // 편집 중인 원고에도 반영해야 다음 저장 때 예전 이름으로 되돌리지 않는다.
-        d.doc = { ...d.doc, title: meta.title, path: meta.path, relPath: meta.relPath };
-        setActive({ ...d.doc });
+        d.doc = cloneDocument(d.doc, { title: meta.title, path: meta.path, relPath: meta.relPath });
+        setActive(cloneDocument(d.doc));
       }
     }
     return data;
@@ -514,16 +526,15 @@ export default function App() {
           d.saved = seq;
           // 메모는 이름이 바뀌면 파일 경로로 만든 ID도 바뀐다.
           if (saved.id !== d.doc.id) replaceDocId(d.doc.id, saved.id);
-          d.doc = {
-            ...d.doc,
+          d.doc = cloneDocument(d.doc, {
             id: saved.id,
             path: saved.path,
             relPath: saved.relPath,
             revision: saved.revision,
             fingerprint: saved.fingerprint,
             updatedAt: saved.updatedAt,
-          };
-          setActive({ ...d.doc });
+          });
+          setActive(cloneDocument(d.doc));
           setError((e) => (e === composingError ? "" : e));
           setSaveStatus(d.seq === seq ? "저장됨" : "편집 중");
           if (d.seq === seq) await call("clearDraft", { id: d.doc.id });
@@ -607,10 +618,13 @@ export default function App() {
       offAutoSync?.();
     };
   }, [refresh, flush, checkpoint, report]);
-  function edit(patch: Partial<Doc>) {
+  function edit(patch: Partial<Doc>, markdownCopy?: boolean) {
     const d = draft.current;
     if (!d) return;
-    d.doc = { ...d.doc, ...patch };
+    const previousPolicy = documentSourceCache.get(d.doc);
+    d.doc = cloneDocument(d.doc, patch);
+    const required = markdownCopy ?? (patch.body === undefined ? previousPolicy?.required : undefined);
+    if (required !== undefined) documentSourceCache.set(d.doc, { body: d.doc.body, required });
     d.seq++;
     // 본문을 고치면 이력 대상으로 기억하고, 입력이 멈춘 채 설정한 시간이 지나면 이력을 남긴다.
     if (patch.body !== undefined) {
@@ -628,7 +642,9 @@ export default function App() {
         ? placeTab(tabs, d.doc.id, true, "")
         : tabs,
     );
-    setActive({ ...d.doc });
+    const nextActive = { ...d.doc };
+    if (required !== undefined) documentSourceCache.set(nextActive, { body: nextActive.body, required });
+    setActive(nextActive);
     setSaveStatus("편집 중");
     if (timer.current) clearTimeout(timer.current);
     if (!composing.current)
@@ -687,8 +703,6 @@ export default function App() {
       );
       draft.current = { doc, seq: 0, saved: 0 };
       activeId.current = doc.id;
-      if (!sessionStarts.current.has(doc.id))
-        sessionStarts.current.set(doc.id, characterCount(doc.body));
       setActive(doc);
       setSaveStatus("저장됨");
       setConflict(false);
@@ -1100,7 +1114,7 @@ export default function App() {
       { label: "경로 복사", shortcut: "Shift+Alt+C", action: attempt(() => copyPath(d)) },
       {
         label:
-          active?.id === d.id && (source || requiresSource(active.body))
+          active?.id === d.id && (source || requiresDocumentSource(active))
             ? "Markdown 원문 복사"
             : "본문 복사",
         action: attempt(() => copyDocManuscript(d)),
@@ -1907,16 +1921,20 @@ export default function App() {
     }
   }, [active?.id, active?.kind, active?.episodeId]);
   const treeMatch = (text: string, query: string) => text.toLowerCase().includes(query.trim().toLowerCase());
-  const writingRules = normalizeWriting(project?.writing || prefs.defaultWriting);
-  // 글자 수 통계는 원고 전체를 다시 읽으므로, 본문이 바뀔 때만 다시 계산한다.
-  const activeBody = active ? active.body : null;
-  const stats = useMemo(() => (activeBody === null ? null : manuscriptStats(activeBody)), [activeBody]);
+  const writingRules = useMemo(() => normalizeWriting(project?.writing || prefs.defaultWriting), [project?.writing, prefs.defaultWriting]);
+  const counter = useManuscriptCounts({
+    scope: lib.root, id: active?.id, body: active?.body ?? null, rules: writingRules, onError: report,
+    onBaseline: (scope, id, count) => {
+      if (libraryRef.current.root === scope && !sessionStarts.current.has(id)) sessionStarts.current.set(id, count);
+    },
+  });
+  const stats = counter.stats;
   const sessionCount = active && stats
     ? Math.max(0, stats.utf16WithoutSpaces - (sessionStarts.current.get(active.id) ?? stats.utf16WithoutSpaces))
     : 0;
   // 원고 보호: 집필 완료인 회차는 제목과 본문을 고칠 수 없다(상태는 바꿀 수 있다).
   const isProtected = active?.kind === "episode" && normalizeStatus(active.status) === "completed";
-  const platformChars = stats ? countForWriting(stats, writingRules) : 0;
+  const platformChars = stats?.platformCharacters ?? 0;
   const countUnit = active?.kind === "episode" ? writingRules.unit : "utf16";
   const charsWithoutSpaces = stats ? countForRule(stats, "noSpace", countUnit) : 0;
   // 상태줄의 두 번째 값: 공백 포함·줄바꿈 제외(위젯 보드의 같은 항목과 동일한 계산).
@@ -2126,7 +2144,7 @@ export default function App() {
             <button
               aria-label="본문 텍스트 복사"
               title={
-                source || requiresSource(active.body)
+                source || requiresDocumentSource(active)
                   ? "Markdown 원문 복사"
                   : "본문 복사"
               }
@@ -2226,7 +2244,8 @@ export default function App() {
               body={active.body}
               tables={active.kind === "memo" || active.kind === "plot"}
               reveal={focused && reveal?.docId === active.id ? reveal : null}
-              onChange={(body) => { if (focused) edit({ body }); }}
+              countingRules={writingRules}
+              onChange={(body, delta, markdownCopy) => { if (focused) { counter.update(body, delta); edit({ body }, markdownCopy); } }}
               fontSize={activeBox.norm.fontSize}
               lineHeight={activeBox.norm.lineHeight}
               source={source}
@@ -4570,9 +4589,9 @@ export default function App() {
               <footer className="editor-footer" hidden={!isWorkspace}>
                 <span>
                   {active.kind === "episode"
-                    ? <>{writingName(writingRules)} {platformChars.toLocaleString()}자</>
-                    : <>공백 제외 {charsWithoutSpaces.toLocaleString()}자</>}
-                  <i /> 공백 포함 {charsWithSpaces.toLocaleString()}자
+                    ? <>{writingName(writingRules)} {stats ? platformChars.toLocaleString() : "…"}자</>
+                    : <>공백 제외 {stats ? charsWithoutSpaces.toLocaleString() : "…"}자</>}
+                  <i /> 공백 포함 {stats ? charsWithSpaces.toLocaleString() : "…"}자
                   {cursorLine !== null && <><i /> {cursorLine.toLocaleString()}번째 줄</>}
                 </span>
                 {focus && (
@@ -4632,7 +4651,7 @@ export default function App() {
             ) : rightView === "bookmarks" ? bookmarkList() : (
             <>
             <PlatformCount
-              body={active.body}
+              stats={stats}
               rules={writingRules}
               documentOnly={active.kind !== "episode"}
               onChange={(rules) => {

@@ -634,6 +634,10 @@ fn dispatch_method(
     };
 
     match method {
+        "countManuscript" => Ok(crate::text::display_counts(
+            args.get("text").and_then(Value::as_str).unwrap_or(""),
+            &args.get("rules").cloned().unwrap_or_else(|| json!({})),
+        )),
         "autoSyncStatus" => Ok(app.state::<auto_sync::AutoSyncState>().status()),
         "backupStorage" => {
             let guard=state.store.lock().unwrap();
@@ -1564,7 +1568,7 @@ async fn lof_invoke(
     window: WebviewWindow,
 ) -> Result<Value, String> {
     let args_val = args.unwrap_or_else(|| json!({}));
-    let result = if matches!(method.as_str(), "connectGoogleDrive" | "sync" | "pinUnlock" | "pinSave" | "backupStorage") {
+    let result = if matches!(method.as_str(), "connectGoogleDrive" | "sync" | "pinUnlock" | "pinSave" | "backupStorage" | "countManuscript") {
         tauri::async_runtime::spawn_blocking(move || {
             let state = app.state::<AppState>();
             if method == "pinUnlock" || method == "pinSave" {

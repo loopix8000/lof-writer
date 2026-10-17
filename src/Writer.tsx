@@ -1,7 +1,6 @@
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from "react";
 import { useEditor, useEditorState, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
-import { Markdown } from "@tiptap/markdown";
 import Placeholder from "@tiptap/extension-placeholder";
 import {
   Bold,
@@ -33,23 +32,24 @@ import ContextMenu, { type MenuItem } from "./ContextMenu";
 import { BubbleMenu } from "@tiptap/react/menus";
 import { getTextBetween, getTextSerializersFromSchema, type Editor } from "@tiptap/core";
 import { requiresSource, splitSoftBreaks } from "../core/text.mjs";
-import {
-  typingPlan,
-  pairedBackspace,
-  inMarkdownCode,
-} from "../core/typing.mjs";
+import type { SourceEditorHandle } from "./SourceEditor";
+import { needsMarkdownCopy } from "./source-protection";
 import { normalizeEditorStyle } from "../core/typesetting.mjs";
 import { TypingAssist, typesettingPluginKey } from "./typing-extension";
 import { MarkdownTables } from "./table-extension";
 import { Bookmarks, BOOKMARK_LOAD, bookmarkPluginKey, readBookmarks, resolveBookmarks } from "./bookmark-extension";
-import { call, type Bookmark } from "./types";
-import { MarkdownImage, markdownImage } from "./image-extension";
+import { call, type Bookmark, type WritingRules } from "./types";
+import { paragraphCountDelta, type ManuscriptCounts } from "./manuscript-counts";
+import { MarkdownImage } from "./image-extension";
 import { NoteMarks, notePluginKey } from "./note-extension";
 import { NOTE_LINK_PROTOCOL, noteLinkTarget, type NoteMark } from "./note-links";
 import LineBreakControl from "./LineBreakControl";
 import { Fragment, Slice, type Node as PMNode } from "@tiptap/pm/model";
 import { TextSelection } from "@tiptap/pm/state";
 import type { EditorProps, EditorView } from "@tiptap/pm/view";
+import { createCachedMarkdown } from "./cached-markdown";
+
+const SourceEditor = lazy(() => import("./SourceEditor"));
 
 function compactBlankLines<T>(lines: readonly T[], isBlank: (line: T) => boolean): T[] {
   let blankCount = 0;
@@ -145,10 +145,28 @@ function offsetToPos(node: PMNode, pos: number, offset: number) {
   }
   return p;
 }
-// 커서가 있는 줄 번호(1부터). 문단(표 칸·목록 항목 포함)과 구분선을 한 줄로 세고, 문단 안의 강제 줄바꿈도 한 줄로 센다.
+// 바뀌지 않은 문단·목록·표의 줄 수는 다시 세지 않는다.
+const lineCounts = new WeakMap<PMNode, number>();
+function nodeLineCount(node: PMNode): number {
+  const cached = lineCounts.get(node);
+  if (cached !== undefined) return cached;
+  let count = 0;
+  if (node.isTextblock) {
+    count = 1;
+    node.forEach((child) => { if (child.type.name === "hardBreak") count++; });
+  } else if (node.isBlock && node.isLeaf) count = 1;
+  else node.forEach((child) => { count += nodeLineCount(child); });
+  lineCounts.set(node, count);
+  return count;
+}
+// 커서가 있는 줄 번호(1부터). 문단(표 칸·목록 항목 포함)과 구분선을 한 줄로 센다.
 function cursorLineAt(doc: PMNode, pos: number) {
   let line = 0;
   doc.nodesBetween(0, pos, (node, start) => {
+    if (start + node.nodeSize <= pos) {
+      line += nodeLineCount(node);
+      return false;
+    }
     if (!node.isTextblock && !(node.isBlock && node.isLeaf)) return true;
     line++;
     if (node.isTextblock)
@@ -158,11 +176,6 @@ function cursorLineAt(doc: PMNode, pos: number) {
     return false;
   });
   return Math.max(1, line);
-}
-// Markdown 원문에서 커서(선택의 움직이는 끝)가 있는 줄 번호.
-function sourceLineAt(area: HTMLTextAreaElement) {
-  const head = area.selectionDirection === "backward" ? area.selectionStart : area.selectionEnd;
-  return area.value.slice(0, head).split("\n").length;
 }
 // 줄바꿈 방식을 바꿀 때 본문의 실제 빈 줄을 맞춘다. 맨 위 단계에서 글이 있는 블록 사이의 빈 문단 묶음만 바꾼다.
 // 자동 관리로: 붙여 넣기와 같은 규칙으로 빈 줄 n개를 n/2개(내림)로 줄인다. 빈 줄 1개는 단락 간격이 된다.
@@ -280,6 +293,7 @@ export default function Writer({
   id,
   body,
   onChange,
+  countingRules,
   fontSize,
   lineHeight,
   source,
@@ -310,7 +324,8 @@ export default function Writer({
 }: {
   id: string;
   body: string;
-  onChange: (body: string) => void;
+  onChange: (body: string, delta?: ManuscriptCounts | null, markdownCopy?: boolean) => void;
+  countingRules?: WritingRules;
   fontSize: number;
   lineHeight: number;
   source: boolean;
@@ -371,15 +386,37 @@ export default function Writer({
   };
   const optionsRef = useRef(mergedOptions);
   optionsRef.current = mergedOptions;
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const pendingSelection = useRef<number | null>(null);
-  // 편집기에 마지막으로 읽어 들인 원고. 편집기는 줄을 문단으로 나눠 읽으므로(splitSoftBreaks) 저장 형식과
-  // 편집기의 Markdown이 달라도, 같은 원고를 다시 읽어 커서가 튀지 않게 한다.
-  const loadedBody = useRef(body);
+  const countingRulesRef = useRef(countingRules);
+  countingRulesRef.current = countingRules;
+  const sourceRef = useRef<SourceEditorHandle>(null);
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+  const protection = useRef<{ id: string; key: string; body: string; source: boolean; required: boolean } | null>(null);
   const imagesRef = useRef(images);
   imagesRef.current = images;
   const hasImages = !!images;
-  const protectedSource = requiresSource(body, { tables, links, images: hasImages });
+  const protectionKey = `${tables}/${links}/${hasImages}`;
+  const previousProtection = protection.current;
+  // 로컬 입력은 통지할 때 기록한다. 전체 검사는 읽기·외부 변경·원문에서 복귀할 때만 한다.
+  if (!previousProtection || previousProtection.id !== id || previousProtection.key !== protectionKey ||
+      previousProtection.body !== body || (previousProtection.source && !source)) {
+    protection.current = {
+      id, key: protectionKey, body, source,
+      required: source ? previousProtection?.id === id && previousProtection.required || false
+        : requiresSource(body, { tables, links, images: hasImages }),
+    };
+  }
+  protection.current!.source = source;
+  const protectedSource = protection.current!.required;
+  // 원문으로 연 문서는 필요해질 때 서식 편집기를 준비한다. 로컬 입력을 다시 읽지는 않는다.
+  const loadedBody = useRef<string | null>(source || protectedSource ? null : body);
+  function notifyChange(nextBody: string, delta?: ManuscriptCounts | null, markdownCopy = true) {
+    if (protection.current) protection.current.body = nextBody;
+    onChangeRef.current(nextBody, delta, markdownCopy);
+  }
+  // 초기 내용은 편집기를 새로 만들 때만 준비한다. 로컬 입력과 외부 수정은 각각 아래 갱신 경로를 쓴다.
+  const initialContent = useMemo(() => splitSoftBreaks(body, !manualLineBreak), [id, tables, links, hasImages]);
+  const markdown = useMemo(createCachedMarkdown, [id, tables, links, hasImages]);
   const onOpenLinkRef = useRef(onOpenLink),
     onOpenNotesRef = useRef(onOpenNotes);
   onOpenLinkRef.current = onOpenLink;
@@ -404,6 +441,7 @@ export default function Writer({
     {
       extensions: [
         StarterKit.configure({
+          document: false,
           link: links
             ? {
                 openOnClick: false,
@@ -415,7 +453,8 @@ export default function Writer({
             : false,
           underline: false,
         }),
-        Markdown,
+        markdown.document,
+        markdown.extension,
         ...(tables ? [MarkdownTables] : []),
         ...(hasImages
           ? [MarkdownImage.configure({ resolve: (src) => imagesRef.current?.resolve(src) ?? Promise.resolve(null) })]
@@ -430,7 +469,7 @@ export default function Writer({
           showOnlyWhenEditable: false,
         }),
       ],
-      content: splitSoftBreaks(body, !manualLineBreak),
+      content: source || protectedSource ? "" : initialContent,
       contentType: "markdown",
       editable,
       editorProps: {
@@ -489,8 +528,11 @@ export default function Writer({
           },
         },
       },
-      onUpdate: ({ editor }) => {
-        if (editableRef.current) onChange(editor.getMarkdown());
+      onUpdate: ({ editor, transaction }) => {
+        if (!editableRef.current) return;
+        const rules = countingRulesRef.current;
+        const delta = rules ? paragraphCountDelta(transaction.before, editor.state.doc, rules) : null;
+        notifyChange(markdown.serialize(editor), delta, needsMarkdownCopy(editor.state.doc));
       },
       // 북마크를 넣고 빼거나, 본문이 바뀌어 북마크 문단의 순서·글이 달라지면 알린다.
       onTransaction: ({ editor, transaction: tr }) => {
@@ -561,7 +603,7 @@ export default function Writer({
       !source &&
       !protectedSource &&
       body !== loadedBody.current &&
-      editor.getMarkdown() !== body &&
+      markdown.serialize(editor) !== body &&
       !editor.view.composing
     ) {
       loadedBody.current = body;
@@ -606,8 +648,9 @@ export default function Writer({
   // 편집 중인 원고가 되거나 원문 편집으로 바뀌면 지금 줄을 알리고, 편집기에서는 바뀔 때마다 다시 알린다.
   useEffect(() => {
     if (!reportsCursor) return;
-    if (textareaRef.current) {
-      cursorLineRef.current?.(sourceLineAt(textareaRef.current));
+    const sourceView = sourceRef.current?.view;
+    if (sourceView) {
+      cursorLineRef.current?.(sourceView.state.doc.lineAt(sourceView.state.selection.main.head).number);
       return;
     }
     if (!editor || editor.isDestroyed) return;
@@ -624,36 +667,10 @@ export default function Writer({
     if (editableRef.current) compositionRef.current(false);
   }, []);
   useEffect(() => {
-    if (pendingSelection.current !== null && textareaRef.current) {
-      textareaRef.current.setSelectionRange(
-        pendingSelection.current,
-        pendingSelection.current,
-      );
-      pendingSelection.current = null;
-    }
-  }, [body]);
-  useEffect(() => {
     if (!reveal?.query) return;
     const norm = (t: string) => (reveal.caseSensitive ? t : t.toLocaleLowerCase()),
       q = norm(reveal.query);
-    const area = textareaRef.current;
-    if (area) {
-      const text = norm(area.value);
-      let at = -1;
-      for (let i = 0, from = 0; i <= reveal.index; i++) {
-        const next = text.indexOf(q, from);
-        if (next < 0) break;
-        at = next;
-        from = next + q.length;
-      }
-      if (at < 0) return;
-      area.focus();
-      area.setSelectionRange(at, at + q.length);
-      // 선택한 곳이 보이도록 줄 위치만큼 스크롤한다.
-      const lines = area.value.slice(0, at).split("\n").length;
-      area.scrollTop = Math.max(0, (lines - 3) * (parseFloat(getComputedStyle(area).lineHeight) || 24));
-      return;
-    }
+    if (source || protectedSource) return;
     if (!editor || editor.isDestroyed) return;
     const hits: [number, number][] = [];
     editor.state.doc.descendants((node, pos) => {
@@ -759,23 +776,8 @@ export default function Writer({
     if (!editable) return;
     const img = await images?.save?.();
     if (!img) return;
-    const area = textareaRef.current;
-    if (area) insertSourceImage(area, img);
+    if (sourceRef.current) sourceRef.current.insertImage(img);
     else if (editor && !editor.isDestroyed) placeImage(editor.view, img);
-  }
-  // 원문 편집에서는 커서 자리에 Markdown 이미지 문법을 한 줄로 넣는다.
-  function insertSourceImage(area: HTMLTextAreaElement, img: { src: string; alt: string }) {
-    const start = area.selectionStart,
-      end = area.selectionEnd;
-    const before = area.value.slice(0, start),
-      after = area.value.slice(end);
-    const insert =
-      (before && !before.endsWith("\n") ? "\n" : "") + markdownImage(img) + (after.startsWith("\n") ? "" : "\n");
-    area.focus();
-    if (!document.execCommand("insertText", false, insert)) {
-      pendingSelection.current = start + insert.length;
-      onChange(before + insert + after);
-    }
   }
   // 테마 색 변수가 .app에 있으므로 메뉴를 그 안에 띄운다.
   const selectionMenu = menu && createPortal(
@@ -787,120 +789,35 @@ export default function Writer({
     return (
       <div className="source-editor">
         {protectedSource && <div className="source-hint">원문 편집</div>}
-        <textarea
-          ref={textareaRef}
-          readOnly={!editable}
-          aria-label={inactive ? "다른 그룹 Markdown 원문" : "Markdown 원문"}
-          spellCheck={false}
-          value={body}
-          onContextMenu={(e) => {
-            const area = e.currentTarget,
-              { selectionStart: start, selectionEnd: end } = area;
-            const reselect = () => {
-              area.focus();
-              area.setSelectionRange(start, end);
-            };
-            openEditorMenu(e, area.value.slice(start, end), {
-              cut: () => {
-                reselect();
-                if (!document.execCommand("delete")) onChange(area.value.slice(0, start) + area.value.slice(end));
-              },
-              selectAll: () => {
-                area.focus();
-                area.select();
-              },
-              refocus: reselect,
-              pasteText: (text) => {
-                reselect();
-                const insert =
-                  manualLineBreak || inMarkdownCode(area.value.slice(0, start)) ? text : normalizePastedText(text, false);
-                if (!document.execCommand("insertText", false, insert)) {
-                  pendingSelection.current = start + insert.length;
-                  onChange(area.value.slice(0, start) + insert + area.value.slice(end));
-                }
-              },
-              insertImage: (img) => {
-                reselect();
-                insertSourceImage(area, img);
-              },
-            }, start !== end);
-          }}
-          onPaste={(event) => {
-            const target = event.currentTarget;
-            const start = target.selectionStart;
-            // 그림 파일을 붙여 넣으면 assets/에 저장하고 이미지 문법을 넣는다.
-            const files = imageFiles(event.clipboardData);
-            if (files.length && images?.save && editable) {
-              event.preventDefault();
-              void saveImageFiles(files, images.save, (img) => insertSourceImage(target, img));
-              return;
-            }
-            if (manualLineBreak || !editable || inMarkdownCode(body.slice(0, start))) return;
-            const text = event.clipboardData.getData("text/plain");
-            const normalized = normalizePastedText(text, false);
-            if (!text || normalized === text) return;
-            event.preventDefault();
-            const end = target.selectionEnd;
-            if (!document.execCommand("insertText", false, normalized)) {
-              pendingSelection.current = start + normalized.length;
-              onChange(body.slice(0, start) + normalized + body.slice(end));
-            }
-          }}
-          onChange={(e) => onChange(e.target.value)}
-          onSelect={(e) => {
-            if (reportsCursor) cursorLineRef.current?.(sourceLineAt(e.currentTarget));
-          }}
-          onKeyDown={(e) => {
-            if (!editable || e.nativeEvent.isComposing || e.ctrlKey || e.metaKey || e.altKey)
-              return;
-            const target = e.currentTarget,
-              { selectionStart: start, selectionEnd: end } = target,
-              current = target.value;
-            const before = current.slice(0, start),
-              after = current.slice(end),
-              options = { ...typingOptions, inCode: inMarkdownCode(before) };
-            const replace = (
-              from: number,
-              to: number,
-              insert: string,
-              caret: number,
-            ) => {
-              target.setSelectionRange(from, to);
-              pendingSelection.current = caret;
-              if (!document.execCommand("insertText", false, insert))
-                onChange(current.slice(0, from) + insert + current.slice(to));
-              target.setSelectionRange(caret, caret);
-            };
-            if (
-              e.key === "Backspace" &&
-              start === end &&
-              pairedBackspace(before, after, options)
-            ) {
-              e.preventDefault();
-              replace(start - 1, end + 1, "", start - 1);
-              return;
-            }
-            const plan = typingPlan(
-              before,
-              current.slice(start, end),
-              after,
-              e.key,
-              options,
-            );
-            if (!plan) return;
-            e.preventDefault();
-            if (plan.skip) {
-              target.setSelectionRange(start + plan.skip, start + plan.skip);
-              return;
-            }
-            const pos = start - plan.deleteBefore;
-            const endPos = end + (plan.deleteAfter || 0);
-            replace(pos, endPos, plan.insert, pos + plan.caret);
-          }}
-          onCompositionStart={() => { if (editable) compositionRef.current(true); }}
-          onCompositionEnd={() => { if (editable) compositionRef.current(false); }}
-          style={{ fontSize: style.fontSize, lineHeight: style.lineHeight }}
-        />
+        <div onContextMenu={(event) => {
+          const handle = sourceRef.current, view = handle?.view;
+          if (!handle || !view) return;
+          const { from, to } = view.state.selection.main;
+          const reselect = () => { view.dispatch({ selection: { anchor: from, head: to } }); view.focus(); };
+          openEditorMenu(event, view.state.sliceDoc(from, to), {
+            cut: () => { reselect(); handle.replace(from, to, ""); },
+            selectAll: () => { view.dispatch({ selection: { anchor: 0, head: view.state.doc.length } }); view.focus(); },
+            refocus: reselect,
+            pasteText: text => { reselect(); handle.paste(text); },
+            insertImage: image => { reselect(); handle.insertImage(image); },
+          }, from !== to);
+        }}>
+          <Suspense fallback={<div role="status">원문 편집기를 준비하고 있습니다…</div>}>
+          <SourceEditor
+            ref={sourceRef} id={id} body={body} editable={editable} inactive={inactive} visible={visible}
+            manualLineBreak={manualLineBreak} typingOptions={typingOptions} countingRules={countingRules}
+            fontSize={style.fontSize} lineHeight={style.lineHeight} normalizePaste={normalizePastedText}
+            reveal={reveal}
+            onChange={notifyChange} onComposition={value => compositionRef.current(value)}
+            onCursorLine={reportsCursor ? line => cursorLineRef.current?.(line) : undefined}
+            onPasteImage={(event, insert) => {
+              const files = imageFiles(event.clipboardData), save = imagesRef.current?.save;
+              if (!files.length || !save || !editable) return false;
+              event.preventDefault(); void saveImageFiles(files, save, insert); return true;
+            }}
+          />
+          </Suspense>
+        </div>
         {selectionMenu}
       </div>
     );

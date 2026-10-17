@@ -1655,6 +1655,21 @@ body.sidebar-resizing * {
   font-family: "Consolas", "Malgun Gothic", monospace;
   background: transparent;
 }
+.source-editor .cm-editor {
+  min-height: 8em;
+  color: var(--text);
+  background: transparent;
+}
+.source-editor .cm-editor.cm-focused { outline: none; }
+.source-editor .cm-scroller {
+  font-family: "Consolas", "Malgun Gothic", monospace;
+  line-height: inherit;
+  overflow: visible;
+}
+.source-editor .cm-content { padding: 0; caret-color: var(--text); }
+.source-editor .cm-line { padding: 0; }
+.source-editor .cm-selectionBackground { background: var(--selection-bg, #8ca8cf55) !important; }
+.source-editor .cm-cursor { border-left-color: var(--text); }
 .editor-footer {
   height: 32px;
   min-height: 32px;
