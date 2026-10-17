@@ -26,7 +26,7 @@ pub fn ensure_enabled() -> Result<(), LofError> {
 
 pub const CLIENT_ID: &str = match option_env!("LOF_GOOGLE_CLIENT_ID") {
     Some(id) => id,
-    None => "305870018708-n8nvl8s2lds42p89gf45rrc20eeta4bp.apps.googleusercontent.com",
+    None => "838290245582-auh49sh1eh2kvgn0a63pcmd451tmv0e3.apps.googleusercontent.com",
 };
 const DRIVE_SCOPE: &str = "https://www.googleapis.com/auth/drive.file";
 const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
