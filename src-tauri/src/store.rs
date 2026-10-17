@@ -4214,7 +4214,8 @@ impl Store {
         }
         let inner_rel = |rel: &str| -> String {
             for prefix in ["assets/", "doc/", "episodes/", "plot/", "memo/"] {
-                if rel.len() >= prefix.len() && rel[..prefix.len()].eq_ignore_ascii_case(prefix) {
+                // 바이트 위치가 한글 글자 중간일 수 있으므로 get으로 잘라 본다.
+                if rel.get(..prefix.len()).is_some_and(|head| head.eq_ignore_ascii_case(prefix)) {
                     return rel[prefix.len()..].to_string();
                 }
             }
