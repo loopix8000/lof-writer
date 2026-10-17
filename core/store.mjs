@@ -1306,7 +1306,14 @@ export class Store extends EventEmitter {
       (body !== current.body || changed.includes("title"))
     )
       throw fail("집필 완료된 회차는 원고 보호 중이라 제목과 본문을 고칠 수 없습니다. 상태를 바꾼 뒤 편집해 주세요.", "PROTECTED");
-    if (input.forceHistory || changed.length || (await this._historyDue(current.id, current.body)))
+    // 이력은 본문과 제목을 기준으로 남긴다. 상태·태그·북마크 같은 속성만 바뀐 저장은 남기지 않는다.
+    // 북마크는 본문을 고치면 문단 번호가 따라 바뀌어 자동 저장마다 함께 실리므로, 속성 변경으로 남기면
+    // 최소 간격·글자 수 조건을 건너뛰고 저장할 때마다 이력이 쌓인다.
+    if (
+      input.forceHistory ||
+      changed.includes("title") ||
+      (body !== current.body && (await this._historyDue(current.id, current.body)))
+    )
       await this._history(current.id, current);
     // Check again after history I/O: an external editor may have written meanwhile.
     if (hash(await fs.readFile(f.file, "utf8")) !== current.revision)
@@ -1398,8 +1405,9 @@ export class Store extends EventEmitter {
       if (entries.some((d) => !d || d.kind !== "episode")) throw fail("잘못된 순서 목록");
       for (const [i, d] of entries.entries()) {
         if (d.order === i) continue;
+        // 순서만 바뀌고 본문은 그대로이므로 이력을 남기지 않는다. 한 회차를 옮겨도 사이의 회차가
+        // 모두 밀려 회차마다 이력이 쌓이기 때문이다.
         const raw = await fs.readFile(abs(p.dir, d.path), "utf8");
-        await this._history(d.id, docOf(p, d, raw));
         d.order = i;
         await atomic(abs(p.dir, d.path), writeMarkdown(readMarkdown(raw).body, d, raw));
       }

@@ -277,19 +277,20 @@ fn connect_google_drive(args: &Value, state: &AppState, auth: &google_drive::Aut
     Ok(safe_connection(&conn))
 }
 
+// 설정의 '보관 및 이력'. 입력이 멈춘 뒤 이력을 남길 시간(historyIdleMinutes)은 화면이 쓴다.
 fn history_policy_from_settings(settings: &Value) -> HistoryPolicy {
     let prefs = settings.get("preferences");
-    let min_minutes = prefs
-        .and_then(|p| p.get("historyMinMinutes"))
-        .and_then(|v| v.as_f64())
-        .unwrap_or(1.0);
-    let min_chars = prefs
-        .and_then(|p| p.get("historyMinChars"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(200) as usize;
+    let number = |key: &str, default: f64| {
+        prefs
+            .and_then(|p| p.get(key))
+            .and_then(|v| v.as_f64())
+            .unwrap_or(default)
+    };
     HistoryPolicy {
-        min_minutes,
-        min_chars,
+        max_minutes: number("historyMaxMinutes", 30.0).max(1.0),
+        min_chars: number("historyMinChars", 200.0).max(0.0) as usize,
+        keep_count: number("historyKeepCount", 100.0).max(1.0) as usize,
+        keep_days: number("historyKeepDays", 30.0).max(1.0) as i64,
     }
 }
 
@@ -1140,6 +1141,15 @@ fn dispatch_method(
                 .ok_or_else(|| fail_invalid("Store not initialized"))?;
             st.history(id)
         }
+        // 작업의 끝(입력이 멈춤, 문서를 떠남, Ctrl+S)에 지금 원고를 이력으로 남긴다. 남겼으면 true.
+        "checkpointDocument" => {
+            let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            let mut guard = state.store.lock().unwrap();
+            let st = guard
+                .as_mut()
+                .ok_or_else(|| fail_invalid("Store not initialized"))?;
+            Ok(json!(st.checkpoint(id)?))
+        }
         "historyRead" => {
             let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
             let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("");
@@ -1459,10 +1469,17 @@ fn dispatch_method(
                 persist_settings(&state.config_file, &s_guard)?;
                 let policy = history_policy_from_settings(&s_guard);
                 let manual_lb = default_manual_line_break_from_settings(&s_guard);
+                // 보관 규칙을 바꾸면 다음 날까지 기다리지 않고 바로 정리한다.
+                let retention_changed = args
+                    .as_object()
+                    .is_some_and(|o| o.contains_key("historyKeepCount") || o.contains_key("historyKeepDays"));
                 if let Ok(mut st_guard) = state.store.lock() {
                     if let Some(ref mut st) = *st_guard {
                         st.history_policy = policy;
                         st.default_manual_line_break = manual_lb;
+                        if retention_changed {
+                            st.retain_history(true)?;
+                        }
                     }
                 }
                 prefs_val

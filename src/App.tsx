@@ -552,13 +552,40 @@ export default function App() {
         throw Error("원고 저장을 완료한 뒤 다시 시도해 주세요.");
     },
   });
+  // 변경 이력: 자동 저장은 이력을 남기지 않는다. 본문을 고친 문서를 기억해 두었다가 작업의 끝(입력이 멈춤,
+  // 다른 문서로 옮김, Ctrl+S, 앱 종료)에 저장소가 지금 원고를 이력으로 남기게 한다. 남길지는 설정의 규칙으로 저장소가 정한다.
+  const checkpointDue = useRef(new Set<string>());
+  const checkpointTimer = useRef<number | undefined>(undefined);
+  const checkpoint = useCallback(
+    async (ids?: string[]) => {
+      const list = (ids ?? [...checkpointDue.current]).filter((id) => checkpointDue.current.has(id));
+      if (!list.length) return;
+      await flush({ auto: true });
+      for (const id of list) {
+        checkpointDue.current.delete(id);
+        // 그사이 지워졌거나 이름이 바뀌어 ID가 달라진 문서는 건너뛴다.
+        await call("checkpointDocument", { id }).catch(() => {});
+      }
+    },
+    [flush],
+  );
+  // 다른 문서로 옮기거나(분할 편집의 다른 그룹 포함) 문서를 닫으면 떠난 문서의 이력을 남긴다.
+  const leftDocId = useRef("");
+  useEffect(() => {
+    const prev = leftDocId.current;
+    leftDocId.current = active?.id ?? "";
+    if (prev && prev !== leftDocId.current) checkpoint([prev]).catch(report);
+  }, [active?.id, checkpoint, report]);
   useEffect(() => {
     refresh().catch(report);
     const off = window.lof.onChange(() => {
       if (saveChain.current)
         saveChain.current.then(() => refresh()).catch(report);
     });
-    const offFlush = window.lof.onFlush(flush);
+    const offFlush = window.lof.onFlush(async () => {
+      await flush();
+      await checkpoint();
+    });
     const offAutoSync = window.lof.onAutoSync?.(setAutoSync);
     if (window.lof.onAutoSync) call<AutoSyncStatus>("autoSyncStatus").then(setAutoSync).catch(() => {});
     return () => {
@@ -566,12 +593,22 @@ export default function App() {
       offFlush();
       offAutoSync?.();
     };
-  }, [refresh, flush, report]);
+  }, [refresh, flush, checkpoint, report]);
   function edit(patch: Partial<Doc>) {
     const d = draft.current;
     if (!d) return;
     d.doc = { ...d.doc, ...patch };
     d.seq++;
+    // 본문을 고치면 이력 대상으로 기억하고, 입력이 멈춘 채 설정한 시간이 지나면 이력을 남긴다.
+    if (patch.body !== undefined) {
+      const id = d.doc.id;
+      checkpointDue.current.add(id);
+      clearTimeout(checkpointTimer.current);
+      checkpointTimer.current = window.setTimeout(
+        () => checkpoint([id]).catch(report),
+        Math.max(1, Number(prefsRef.current.historyIdleMinutes) || 5) * 60_000,
+      );
+    }
     // VS Code처럼 미리보기 탭을 편집하면 고정 탭이 된다.
     updateTabs((tabs) =>
       tabs.some((t) => t.id === d.doc.id && !t.pinned)
@@ -1404,6 +1441,45 @@ export default function App() {
   useEffect(() => {
     if (view === "workspace" && projectId) loadMemoFolders().catch(() => {});
   }, [view, projectId, lib]);
+  // 설정의 변경 이력 숫자 칸. 입력하는 중간값(예: 50을 치는 중의 5)으로 저장되지 않게 칸을 벗어날 때(Enter 포함)
+  // 저장한다. 보관 규칙(개수·기간)을 줄이면 오래된 이력이 바로 지워지므로 먼저 묻는다.
+  function historyField(label: string, key: string, fallback: number, min: number, max: number, step = 1) {
+    const value = Number(prefs[key] ?? fallback);
+    const commit = (input: HTMLInputElement) => {
+      const next = Math.min(max, Math.max(min, Math.floor(Number(input.value) || min)));
+      input.value = String(next);
+      if (next === value) return;
+      const retention = key === "historyKeepCount" || key === "historyKeepDays";
+      if (
+        retention &&
+        next < value &&
+        !window.confirm("보관 범위를 줄이면 규칙을 넘는 오래된 이력이 바로 지워집니다. 계속할까요?")
+      ) {
+        input.value = String(value);
+        return;
+      }
+      savePrefs({ [key]: next }).catch(report);
+    };
+    return (
+      <label>
+        {label}
+        <input
+          key={value}
+          type="number"
+          min={min}
+          max={max}
+          step={step}
+          aria-label={`변경 이력 ${label}`}
+          defaultValue={value}
+          onBlur={(e) => commit(e.currentTarget)}
+          // Enter는 칸을 벗어나게 해서 한 번만 저장한다.
+          onKeyDown={(e) => {
+            if (e.key === "Enter") e.currentTarget.blur();
+          }}
+        />
+      </label>
+    );
+  }
   async function savePrefs(p: Record<string, any>) {
     let payload = p;
     if (
@@ -1576,7 +1652,9 @@ export default function App() {
       if (document.documentElement.dataset.pinLocked === "true") return;
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
         e.preventDefault();
+        // 직접 저장은 작업의 끝으로 보고 이력도 남긴다.
         flush()
+          .then(() => checkpoint())
           .then(() => message("저장했습니다."))
           .catch(report);
       }
@@ -5442,53 +5520,31 @@ export default function App() {
                     <History size={17} />
                     변경 이력
                   </h3>
+                  {/* 이력을 남기는 때: 자동 저장과 따로, 작업의 끝에만 남긴다(저장소 HistoryPolicy·checkpoint). */}
                   <div className="settings-grid">
-                    <label>
-                      최소 간격(분)
-                      <input
-                        type="number"
-                        min={0}
-                        max={1440}
-                        aria-label="변경 이력 최소 간격(분)"
-                        value={prefs.historyMinMinutes ?? 1}
-                        onChange={(e) =>
-                          savePrefs({
-                            historyMinMinutes: Math.min(
-                              1440,
-                              Math.max(0, Math.floor(Number(e.target.value) || 0)),
-                            ),
-                          }).catch(report)
-                        }
-                      />
-                    </label>
-                    <label>
-                      최소 변경 글자 수
-                      <input
-                        type="number"
-                        min={0}
-                        max={100000}
-                        step={50}
-                        aria-label="변경 이력 최소 변경 글자 수"
-                        value={prefs.historyMinChars ?? 200}
-                        onChange={(e) =>
-                          savePrefs({
-                            historyMinChars: Math.min(
-                              100000,
-                              Math.max(0, Math.floor(Number(e.target.value) || 0)),
-                            ),
-                          }).catch(report)
-                        }
-                      />
-                    </label>
+                    {historyField("입력이 멈춘 뒤(분)", "historyIdleMinutes", 5, 1, 120)}
+                    {historyField("계속 쓸 때 최대 간격(분)", "historyMaxMinutes", 30, 5, 1440)}
+                    {historyField("최소 변경 글자 수", "historyMinChars", 200, 0, 100000, 50)}
                   </div>
                   <p className="muted">
-                    마지막 이력 이후 두 조건을 모두 넘게 고쳤을 때만 저장 직전 원고를
-                    이력으로 남깁니다. 둘 다 0이면 저장할 때마다 남깁니다.
+                    자동 저장은 이력을 남기지 않습니다. 입력이 멈추고 정한 시간이 지나거나, 다른 문서로
+                    옮기거나, Ctrl+S로 저장하거나, 앱을 닫을 때 지금 원고를 이력으로 남깁니다. 쉬지 않고 계속
+                    쓰면 최대 간격마다 하나씩 남깁니다. 마지막 이력보다 바뀐 글자가 최소 변경 글자 수보다
+                    적으면 남기지 않습니다. 제목을 바꾸거나 이력을 복원할 때도 남기고, 상태·태그·북마크 같은
+                    속성만 바꾸거나 회차 순서를 바꾼 것은 남기지 않습니다.
+                  </p>
+                  {/* 보관 규칙: 저장소가 하루 한 번(바꾸면 바로) 정리한다. 최근 10개는 늘 남는다(HISTORY_MINIMUM). */}
+                  <div className="settings-grid">
+                    {historyField("문서당 최대 개수", "historyKeepCount", 100, 10, 1000, 10)}
+                    {historyField("보관 기간(일)", "historyKeepDays", 30, 1, 3650)}
+                  </div>
+                  <p className="muted">
+                    문서마다 최대 개수를 넘거나 보관 기간이 지난 이력을 지우되, 최근 10개는 기간과 상관없이
+                    남깁니다. 오래된 이력은 하루 한 번 정리하며, 보관 규칙을 바꾸면 바로 정리합니다.
                   </p>
                   <p className="muted">
                     수정 이력은 이 PC에만 보관하며 동기화하지 않습니다. 외부에서 수정되거나
-                    동기화로 교체되는 원고도 이전 내용을 남깁니다. 오래된 이력은 하루 한 번 정리하며
-                    문서당 최근 100개·30일을 기준으로 최소 10개를 보존합니다.
+                    동기화로 교체되는 원고도 이전 내용을 남깁니다.
                   </p>
                   <button disabled={busy} onClick={attempt(async () => {
                     setBusy(true);

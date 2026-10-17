@@ -373,6 +373,6 @@ fn run(
             total["cleanedFiles"] = json!(total["cleanedFiles"].as_u64().unwrap_or(0) + 1);
         }
     }
-    with_store(store, root, |st| st.database()?.retain_history())?;
+    with_store(store, root, |st| st.retain_history(false))?;
     Ok(total)
 }
