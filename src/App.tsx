@@ -316,6 +316,8 @@ export default function App() {
   const editorTabsRef = useRef<EditorTab[]>([]),
     renamingRef = useRef<{ id: string; value: string; widget?: boolean } | null>(null);
   const memoFlush = useRef<(() => Promise<void>) | null>(null);
+  // 원고 이미지 경로별로 읽은 data URL(작품·원고 경로·이미지 경로가 키).
+  const imageCache = useRef(new Map<string, Promise<string | null>>());
   // 메모 화면에서 메모를 여는 함수(빠른 열기에서 공용 메모를 고를 때).
   const memoApi = useRef<{ open: (space: string, path: string, pinned?: boolean) => Promise<void> } | null>(null);
   // 전역 단축키에서 늘 최신 검색 함수를 부르도록 한다.
@@ -1617,6 +1619,44 @@ export default function App() {
     if (!quote || activeId.current !== id) return;
     setReveal({ docId: id, query: quote, index: 0, caseSensitive: true, seq: Date.now() });
   }
+  // 원고 이미지: 작품의 assets/에 저장하고, 원고에는 원고 파일 기준 상대 경로(예: ../assets/그림.png)로 쓴다.
+  // 화면에 그릴 data URL은 경로마다 한 번만 읽고, 찾지 못한 경로는 다음에 다시 찾는다.
+  function docImages(doc: Doc, editable: boolean) {
+    const relPath = doc.relPath || libraryRef.current.documents.find((d) => d.id === doc.id)?.relPath || "";
+    const up = "../".repeat(Math.max(0, relPath.split("/").length - 1));
+    return {
+      resolve: (src: string) => {
+        const key = `${doc.projectId}\n${relPath}\n${src}`;
+        let hit = imageCache.current.get(key);
+        if (!hit) {
+          hit = call<string | null>("readImage", { projectId: doc.projectId, docPath: relPath, src })
+            .catch(() => null)
+            .then((url) => {
+              if (!url) imageCache.current.delete(key);
+              return url;
+            });
+          imageCache.current.set(key, hit);
+        }
+        return hit;
+      },
+      save: editable
+        ? async (file?: { name: string; data: string }) => {
+            try {
+              const saved = await call<{ path: string; name: string } | null>("saveImage", {
+                projectId: doc.projectId,
+                ...file,
+              });
+              if (!saved) return null;
+              const stem = saved.name.replace(/\.[^.]+$/, "");
+              return { src: up + saved.path, alt: stem === "image" ? "" : stem };
+            } catch (e) {
+              report(e);
+              return null;
+            }
+          }
+        : undefined,
+    };
+  }
   // 원고 여백의 메모 아이콘: 메모가 하나면 바로 열고, 여럿이면 고를 수 있게 메뉴를 띄운다.
   function openNotes(list: NoteMark[], at: { x: number; y: number }) {
     if (list.length === 1) return attempt(() => openDoc(list[0].id, true))();
@@ -1917,6 +1957,7 @@ export default function App() {
                   bookmarks={doc.bookmarks}
                   links={doc.kind === "memo" || doc.kind === "plot"}
                   onOpenLink={(href, quote) => attempt(() => openNoteLink(href, quote))()}
+                  images={docImages(doc, false)}
                 />
               </article>
             )}
@@ -4307,6 +4348,8 @@ export default function App() {
                     onOpenLink={(href, quote) => attempt(() => openNoteLink(href, quote))()}
                     notes={noteMarks.docId === active.id ? noteMarks.list : undefined}
                     onOpenNotes={openNotes}
+                    contextMenu
+                    images={docImages(active, !isProtected)}
                   />
                 </article>
                 <div className="end-marker">✧</div>

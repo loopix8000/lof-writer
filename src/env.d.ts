@@ -1,7 +1,7 @@
 declare module "*.mjs" {
   export function plainText(text: string): string;
   export function characterCount(text: string, spaces?: boolean): number;
-  export function requiresSource(text: string, options?: { tables?: boolean; links?: boolean }): boolean;
+  export function requiresSource(text: string, options?: { tables?: boolean; links?: boolean; images?: boolean }): boolean;
   export const DEFAULT_TEXT_REPLACEMENTS: {
     id: string;
     from: string;

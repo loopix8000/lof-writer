@@ -5080,6 +5080,34 @@ button.episode-tag[draggable]:active {
 .quick-note-foot button {
   padding: 7px 14px;
 }
+/* 원고 이미지(Markdown 이미지 문법). 본문 폭에 맞춰 줄이고, 고르면 테두리로 표시한다. */
+.editor-content .tiptap .md-image {
+  display: inline-block;
+  max-width: 100%;
+  vertical-align: bottom;
+  line-height: 0;
+}
+.editor-content .tiptap .md-image img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
+}
+.editor-content .tiptap .md-image.ProseMirror-selectednode img {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.editor-content .tiptap .md-image.missing {
+  padding: 10px 12px;
+  border: 1px dashed var(--border-hover);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.editor-content .tiptap .md-image.missing::after {
+  content: attr(data-missing);
+}
 /* 플롯·메모 본문의 링크. 문서 링크(퀵 노트 출처)는 누르면 그 문서의 인용한 문장으로 간다. */
 .editor-content .tiptap a {
   color: var(--accent);

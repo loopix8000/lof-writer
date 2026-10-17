@@ -773,6 +773,71 @@ fn dispatch_method(
             schedule_notify(app, &state.notify_seq);
             Ok(res)
         }
+        // 원고 이미지 저장: data(base64)가 있으면 그 내용을, 없으면 파일 선택 창에서 고른 파일을 작품의 assets/에 둔다.
+        "saveImage" => {
+            let project_id = args.get("projectId").and_then(|v| v.as_str()).unwrap_or("");
+            let (name, bytes) = if let Some(data) = args.get("data").and_then(|v| v.as_str()) {
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(data)
+                    .map_err(|_| fail_invalid("이미지를 읽을 수 없습니다."))?;
+                let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("image");
+                (name.to_string(), bytes)
+            } else {
+                let picked = FileDialog::new()
+                    .set_title("이미지 삽입")
+                    .add_filter("이미지", &["png", "jpg", "jpeg", "gif", "webp"])
+                    .pick_file();
+                let Some(file) = picked else {
+                    return Ok(Value::Null);
+                };
+                if fs::metadata(&file)?.len() > assets::IMAGE_LIMIT {
+                    return Err(fail_invalid("이미지는 20MB 이하만 넣을 수 있습니다."));
+                }
+                let name = file.file_name().and_then(|n| n.to_str()).unwrap_or("image").to_string();
+                (name, fs::read(&file)?)
+            };
+            let dir = {
+                let mut guard = state.store.lock().unwrap();
+                let st = guard
+                    .as_mut()
+                    .ok_or_else(|| fail_invalid("Store not initialized"))?;
+                st.get_project(project_id)?.dir
+            };
+            let path = assets::save_image(&dir, &name, &bytes)?;
+            Ok(json!({ "path": path, "name": name }))
+        }
+        "readImage" => {
+            let project_id = args.get("projectId").and_then(|v| v.as_str()).unwrap_or("");
+            let doc_path = args.get("docPath").and_then(|v| v.as_str()).unwrap_or("");
+            let src = args.get("src").and_then(|v| v.as_str()).unwrap_or("");
+            let dir = {
+                let mut guard = state.store.lock().unwrap();
+                let st = guard
+                    .as_mut()
+                    .ok_or_else(|| fail_invalid("Store not initialized"))?;
+                st.get_project(project_id)?.dir
+            };
+            assets::image_data_url(&dir, doc_path, src)
+        }
+        // 집필 화면 우클릭 메뉴의 붙여넣기. 글이 있으면 글을, 없고 그림이 있으면 PNG(base64)를 돌려준다.
+        "readClipboard" => {
+            let mut cb = arboard::Clipboard::new().map_err(|e| fail_invalid(e.to_string()))?;
+            if let Ok(text) = cb.get_text() {
+                if !text.is_empty() {
+                    return Ok(json!({ "text": text }));
+                }
+            }
+            if let Ok(img) = cb.get_image() {
+                let rgba = image::RgbaImage::from_raw(img.width as u32, img.height as u32, img.bytes.into_owned())
+                    .ok_or_else(|| fail_invalid("클립보드 이미지를 읽을 수 없습니다."))?;
+                let mut png = Vec::new();
+                image::DynamicImage::ImageRgba8(rgba)
+                    .write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
+                    .map_err(|_| fail_invalid("클립보드 이미지를 읽을 수 없습니다."))?;
+                return Ok(json!({ "image": base64::engine::general_purpose::STANDARD.encode(png) }));
+            }
+            Ok(json!({}))
+        }
         "createDocument" => {
             let res = {
                 let mut guard = state.store.lock().unwrap();

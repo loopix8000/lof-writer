@@ -25,6 +25,8 @@ import {
   Copy,
   NotebookPen,
   SquareDashed,
+  ClipboardPaste,
+  ImagePlus,
   Pilcrow,
 } from "lucide-react";
 import { createPortal } from "react-dom";
@@ -41,13 +43,14 @@ import { normalizeEditorStyle } from "../core/typesetting.mjs";
 import { TypingAssist, typesettingPluginKey } from "./typing-extension";
 import { MarkdownTables } from "./table-extension";
 import { Bookmarks, BOOKMARK_LOAD, bookmarkPluginKey, readBookmarks, resolveBookmarks } from "./bookmark-extension";
-import type { Bookmark } from "./types";
+import { call, type Bookmark } from "./types";
+import { MarkdownImage, markdownImage } from "./image-extension";
 import { NoteMarks, notePluginKey } from "./note-extension";
 import { NOTE_LINK_PROTOCOL, noteLinkTarget, type NoteMark } from "./note-links";
 import LineBreakControl from "./LineBreakControl";
 import { Fragment, Slice, type Node as PMNode } from "@tiptap/pm/model";
 import { TextSelection } from "@tiptap/pm/state";
-import type { EditorProps } from "@tiptap/pm/view";
+import type { EditorProps, EditorView } from "@tiptap/pm/view";
 
 function compactBlankLines<T>(lines: readonly T[], isBlank: (line: T) => boolean): T[] {
   let blankCount = 0;
@@ -195,6 +198,57 @@ function convertBlankLines(editor: Editor, toManual: boolean) {
   }
   if (tr.docChanged) editor.view.dispatch(tr);
 }
+type EditorMenuOps = {
+  cut: () => void;
+  selectAll: () => void;
+  refocus: () => void;
+  pasteText: (text: string) => void;
+  insertImage: (img: { src: string; alt: string }) => void;
+};
+type SaveImage = (file?: { name: string; data: string }) => Promise<{ src: string; alt: string } | null>;
+
+const imageFiles = (data: DataTransfer | null) =>
+  [...(data?.files || [])].filter((file) => file.type.startsWith("image/"));
+const fileData = (file: Blob) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(",")[1] || "");
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+// 붙여 넣거나 끌어 놓은 그림 파일을 차례로 assets/에 저장하고 넣는다.
+async function saveImageFiles(files: File[], save: SaveImage, insert: (img: { src: string; alt: string }) => void) {
+  for (const file of files) {
+    const img = await save({ name: file.name || "image.png", data: await fileData(file) });
+    if (img) insert(img);
+  }
+}
+// 이미지를 넣는다. 빈 문단이면 그 자리에, 글이 있는 문단이면 그 문단 다음에 새 문단으로 넣어 그림이 한 줄을 따로 차지하게 한다.
+function placeImage(view: EditorView, img: { src: string; alt: string }, at?: number) {
+  if (view.isDestroyed) return;
+  const { state } = view,
+    image = state.schema.nodes.image;
+  if (!image) return;
+  const node = image.create(img);
+  const $pos = state.doc.resolve(Math.min(at ?? state.selection.from, state.doc.content.size));
+  const tr = state.tr;
+  let end: number;
+  if (
+    $pos.parent.isTextblock &&
+    $pos.parent.content.size === 0 &&
+    $pos.parent.canReplaceWith($pos.index(), $pos.index(), image)
+  ) {
+    tr.insert($pos.pos, node);
+    end = $pos.pos + node.nodeSize;
+  } else {
+    const pos = $pos.depth ? $pos.after(1) : $pos.pos;
+    tr.insert(pos, state.schema.nodes.paragraph.create(null, node));
+    end = pos + node.nodeSize + 1;
+  }
+  tr.setSelection(TextSelection.near(tr.doc.resolve(end)));
+  view.dispatch(tr.scrollIntoView());
+  view.focus();
+}
 // 링크가 있는 문단 뒤의 첫 인용문 첫 문단 글. 퀵 노트에서는 출처 링크 아래의 '선택한 본문'이다.
 function quoteAfter(doc: PMNode, pos: number): string {
   const $pos = doc.resolve(Math.min(pos, doc.content.size)),
@@ -240,6 +294,8 @@ export default function Writer({
   onOpenLink,
   notes,
   onOpenNotes,
+  contextMenu = false,
+  images,
 }: {
   id: string;
   body: string;
@@ -278,6 +334,14 @@ export default function Writer({
   // 이 원고를 인용한 메모. 인용한 문단의 왼쪽 여백에 메모 아이콘을 달고, 누르면 onOpenNotes를 부른다.
   notes?: NoteMark[];
   onOpenNotes?: (notes: NoteMark[], at: { x: number; y: number }) => void;
+  // 기본 우클릭 메뉴 대신 앱 메뉴(잘라내기·복사·붙여넣기·메모 추가·이미지 삽입·전체 선택)를 띄운다.
+  contextMenu?: boolean;
+  // 원고 이미지. resolve는 원고의 이미지 경로를 화면에 그릴 주소로 읽고, save는 이미지를 작품의 assets/에
+  // 저장한 뒤 원고에 쓸 경로를 돌려준다(file이 없으면 파일 선택 창을 띄운다). 없으면 이미지를 넣지 않는다.
+  images?: {
+    resolve: (src: string) => Promise<string | null>;
+    save?: SaveImage;
+  };
 }) {
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
   const style = normalizeEditorStyle({
@@ -298,7 +362,10 @@ export default function Writer({
   // 편집기에 마지막으로 읽어 들인 원고. 편집기는 줄을 문단으로 나눠 읽으므로(splitSoftBreaks) 저장 형식과
   // 편집기의 Markdown이 달라도, 같은 원고를 다시 읽어 커서가 튀지 않게 한다.
   const loadedBody = useRef(body);
-  const protectedSource = requiresSource(body, { tables, links });
+  const imagesRef = useRef(images);
+  imagesRef.current = images;
+  const hasImages = !!images;
+  const protectedSource = requiresSource(body, { tables, links, images: hasImages });
   const onOpenLinkRef = useRef(onOpenLink),
     onOpenNotesRef = useRef(onOpenNotes);
   onOpenLinkRef.current = onOpenLink;
@@ -328,6 +395,9 @@ export default function Writer({
         }),
         Markdown,
         ...(tables ? [MarkdownTables] : []),
+        ...(hasImages
+          ? [MarkdownImage.configure({ resolve: (src) => imagesRef.current?.resolve(src) ?? Promise.resolve(null) })]
+          : []),
         TypingAssist.configure({ getOptions: () => optionsRef.current }),
         Bookmarks.configure({ canToggle: () => !!onBookmarksRef.current }),
         NoteMarks.configure({
@@ -343,6 +413,27 @@ export default function Writer({
       editorProps: {
         clipboardTextParser: manualLineBreak ? parseManualClipboardText : parseAutomaticClipboardText,
         transformPasted: manualLineBreak ? undefined : normalizeAutomaticPaste,
+        // 그림 파일을 붙여 넣거나 끌어 놓으면 작품의 assets/에 저장하고 이미지로 넣는다.
+        handlePaste: (view, event) => {
+          const files = imageFiles(event.clipboardData),
+            save = imagesRef.current?.save;
+          if (!files.length || !save || !view.editable) return false;
+          event.preventDefault();
+          void saveImageFiles(files, save, (img) => placeImage(view, img));
+          return true;
+        },
+        handleDrop: (view, event, _slice, moved) => {
+          const files = moved ? [] : imageFiles(event.dataTransfer),
+            save = imagesRef.current?.save;
+          if (!files.length || !save || !view.editable) return false;
+          event.preventDefault();
+          let at = view.posAtCoords({ left: event.clientX, top: event.clientY })?.pos;
+          void saveImageFiles(files, save, (img) => {
+            placeImage(view, img, at);
+            at = undefined;
+          });
+          return true;
+        },
         attributes: {
           "aria-label": readOnly ? "다른 그룹 원고 본문" : "원고 본문",
           "data-testid": readOnly ? "manuscript-readonly" : "manuscript",
@@ -386,7 +477,7 @@ export default function Writer({
         onBookmarksRef.current?.(list);
       },
     },
-    [id, tables, links],
+    [id, tables, links, hasImages],
   );
   // 이 원고를 인용한 메모 목록이 바뀌면 메모 표시를 다시 단다.
   useEffect(() => {
@@ -544,40 +635,90 @@ export default function Writer({
     ["--editor-divider-padding-y" as any]: `${style.dividerPaddingY}em`,
   };
 
-  // 고른 글에 우클릭하면 앱 메뉴(잘라내기·복사·메모 추가·전체 선택)를 띄운다. 고른 글이 없으면 기본 메뉴를 둔다.
-  function openSelectionMenu(
-    e: MouseEvent,
-    text: string,
-    ops: { cut: () => void; selectAll: () => void; refocus: () => void },
-  ) {
-    if (!onQuickNote || !text.trim()) return;
+  // 집필 화면의 우클릭 메뉴. 기본 메뉴 대신 잘라내기·복사·붙여넣기·메모 추가·이미지 삽입·전체 선택을 띄운다.
+  function openEditorMenu(e: MouseEvent, text: string, ops: EditorMenuOps) {
+    if (!contextMenu) return;
     e.preventDefault();
+    const selected = !!text.trim(),
+      save = images?.save;
+    const addImage = async (file?: { name: string; data: string }) => {
+      const img = await save?.(file);
+      if (img) ops.insertImage(img);
+      else ops.refocus();
+    };
+    // 클립보드에 글이 있으면 붙여 넣기 규칙대로 넣고, 그림만 있으면 assets/에 저장해 이미지로 넣는다.
+    const paste = async () => {
+      const clip = await call<{ text?: string; image?: string }>("readClipboard").catch(() => ({}) as { text?: string; image?: string });
+      if (clip.text) ops.pasteText(clip.text);
+      else if (clip.image && save) await addImage({ name: "image.png", data: clip.image });
+      else ops.refocus();
+    };
+    const items: MenuItem[] = [
+      {
+        label: "잘라내기",
+        shortcut: "Ctrl+X",
+        icon: <Scissors size={15} />,
+        disabled: readOnly || !selected,
+        action: () => void navigator.clipboard.writeText(text).then(ops.cut, ops.refocus),
+      },
+      {
+        label: "복사",
+        shortcut: "Ctrl+C",
+        icon: <Copy size={15} />,
+        disabled: !selected,
+        action: () => void navigator.clipboard.writeText(text).finally(ops.refocus),
+      },
+      {
+        label: "붙여넣기",
+        shortcut: "Ctrl+V",
+        icon: <ClipboardPaste size={15} />,
+        disabled: readOnly,
+        action: () => void paste(),
+      },
+      "separator",
+      ...(onQuickNote
+        ? [
+            {
+              label: "메모 추가",
+              icon: <NotebookPen size={15} />,
+              disabled: !selected,
+              action: () => onQuickNote(text, { x: e.clientX, y: e.clientY }),
+            },
+          ]
+        : []),
+      ...(save
+        ? [{ label: "이미지 삽입", icon: <ImagePlus size={15} />, disabled: readOnly, action: () => void addImage() }]
+        : []),
+      "separator",
+      { label: "전체 선택", shortcut: "Ctrl+A", icon: <SquareDashed size={15} />, action: ops.selectAll },
+    ];
     setMenu({
       x: e.clientX,
       y: e.clientY,
-      items: [
-        {
-          label: "잘라내기",
-          shortcut: "Ctrl+X",
-          icon: <Scissors size={15} />,
-          disabled: readOnly,
-          action: () => void navigator.clipboard.writeText(text).then(ops.cut, ops.refocus),
-        },
-        {
-          label: "복사",
-          shortcut: "Ctrl+C",
-          icon: <Copy size={15} />,
-          action: () => void navigator.clipboard.writeText(text).finally(ops.refocus),
-        },
-        {
-          label: "메모 추가",
-          icon: <NotebookPen size={15} />,
-          action: () => onQuickNote(text, { x: e.clientX, y: e.clientY }),
-        },
-        "separator",
-        { label: "전체 선택", shortcut: "Ctrl+A", icon: <SquareDashed size={15} />, action: ops.selectAll },
-      ],
+      items: items.filter((item, i) => item !== "separator" || (i > 0 && items[i - 1] !== "separator")),
     });
+  }
+  // 도구 막대의 이미지 버튼: 파일을 골라 assets/에 저장하고 지금 커서 자리에 넣는다.
+  async function pickImage() {
+    const img = await images?.save?.();
+    if (!img) return;
+    const area = textareaRef.current;
+    if (area) insertSourceImage(area, img);
+    else if (editor && !editor.isDestroyed) placeImage(editor.view, img);
+  }
+  // 원문 편집에서는 커서 자리에 Markdown 이미지 문법을 한 줄로 넣는다.
+  function insertSourceImage(area: HTMLTextAreaElement, img: { src: string; alt: string }) {
+    const start = area.selectionStart,
+      end = area.selectionEnd;
+    const before = area.value.slice(0, start),
+      after = area.value.slice(end);
+    const insert =
+      (before && !before.endsWith("\n") ? "\n" : "") + markdownImage(img) + (after.startsWith("\n") ? "" : "\n");
+    area.focus();
+    if (!document.execCommand("insertText", false, insert)) {
+      pendingSelection.current = start + insert.length;
+      onChange(before + insert + after);
+    }
   }
   // 테마 색 변수가 .app에 있으므로 메뉴를 그 안에 띄운다.
   const selectionMenu = menu && createPortal(
@@ -602,7 +743,7 @@ export default function Writer({
               area.focus();
               area.setSelectionRange(start, end);
             };
-            openSelectionMenu(e, area.value.slice(start, end), {
+            openEditorMenu(e, area.value.slice(start, end), {
               cut: () => {
                 reselect();
                 if (!document.execCommand("delete")) onChange(area.value.slice(0, start) + area.value.slice(end));
@@ -612,11 +753,31 @@ export default function Writer({
                 area.select();
               },
               refocus: reselect,
+              pasteText: (text) => {
+                reselect();
+                const insert =
+                  manualLineBreak || inMarkdownCode(area.value.slice(0, start)) ? text : normalizePastedText(text, false);
+                if (!document.execCommand("insertText", false, insert)) {
+                  pendingSelection.current = start + insert.length;
+                  onChange(area.value.slice(0, start) + insert + area.value.slice(end));
+                }
+              },
+              insertImage: (img) => {
+                reselect();
+                insertSourceImage(area, img);
+              },
             });
           }}
           onPaste={(event) => {
             const target = event.currentTarget;
             const start = target.selectionStart;
+            // 그림 파일을 붙여 넣으면 assets/에 저장하고 이미지 문법을 넣는다.
+            const files = imageFiles(event.clipboardData);
+            if (files.length && images?.save && !readOnly) {
+              event.preventDefault();
+              void saveImageFiles(files, images.save, (img) => insertSourceImage(target, img));
+              return;
+            }
             if (manualLineBreak || readOnly || inMarkdownCode(body.slice(0, start))) return;
             const text = event.clipboardData.getData("text/plain");
             const normalized = normalizePastedText(text, false);
@@ -779,6 +940,16 @@ export default function Writer({
             <Table2 size={16} />
           </button>
         )}
+        {images?.save && !readOnly && (
+          <button
+            aria-label="이미지 삽입"
+            title="이미지 삽입 (작품의 assets 폴더에 저장)"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => void pickImage()}
+          >
+            <ImagePlus size={16} />
+          </button>
+        )}
         {lineBreak && (
           <>
             <i className="format-divider" />
@@ -869,10 +1040,15 @@ export default function Writer({
         style={contentVars}
         onContextMenu={(e) => {
           const { from, to } = editor.state.selection;
-          openSelectionMenu(e, editor.state.doc.textBetween(from, to, "\n"), {
+          openEditorMenu(e, editor.state.doc.textBetween(from, to, "\n"), {
             cut: () => editor.chain().focus().deleteSelection().run(),
             selectAll: () => editor.chain().focus().selectAll().run(),
             refocus: () => editor.commands.focus(),
+            pasteText: (text) => {
+              editor.commands.focus();
+              editor.view.pasteText(text);
+            },
+            insertImage: (img) => placeImage(editor.view, img),
           });
         }}
       />
