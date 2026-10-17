@@ -298,7 +298,7 @@ export default function App() {
     [bookmarkJump, setBookmarkJump] = useState<{ docId: string; index: number; seq: number } | null>(null);
   const [editorTabs, setEditorTabs] = useState<EditorTab[]>([]),
     [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[]; target?: string } | null>(null),
-    // 이름 바꾸기 입력칸. widget이면 위젯 보드의 '이 회차의 플롯' 목록에서, 아니면 파일 트리에서 받는다.
+    // 이름 바꾸기 입력칸. widget이면 위젯 보드의 연결 문서 목록에서, 아니면 파일 트리에서 받는다.
     [renaming, setRenaming] = useState<{ id: string; value: string; widget?: boolean } | null>(null),
     [dragTab, setDragTab] = useState(""),
     [dropZone, setDropZone] = useState<{ left: number; top: number; width: number } | null>(null);
@@ -2066,24 +2066,24 @@ export default function App() {
     await openDoc(doc.id, true);
     message("메모가 저장되었습니다");
   }
-  // 위젯 보드의 '이 회차의 플롯·메모': 보고 있는 회차(또는 회차에 연결된 플롯)에 연결된 문서를
-  // 플롯과 메모로 나눠 보여 준다. 누르면 열고, 더블클릭·우클릭으로 이름을 바꾼다.
-  function episodePlotsWidget() {
+  // 회차에서는 연결된 플롯·메모를, 플롯·메모에서는 연결된 회차를 보여 준다.
+  // 누르면 미리보기로 열고, 더블클릭하면 탭을 고정하며, 우클릭으로 이름을 바꾼다.
+  function documentLinksWidget() {
     if (!active) return null;
     const ep =
       active.kind === "episode"
         ? active
         : active.episodeId
-          ? lib.documents.find((d) => d.id === active.episodeId)
+          ? lib.documents.find(
+              (d) => d.id === active.episodeId && d.kind === "episode" && d.projectId === active.projectId,
+            )
           : undefined;
-    if (!ep) return null;
-    const linked = lib.documents.filter(
-      (d) => d.kind !== "episode" && d.episodeId === ep.id && !d.archived,
-    );
+    const icon = (d: Doc) =>
+      d.kind === "episode" ? <BookOpen size={15} /> : isPlotMemo(d) ? <StickyNote size={15} /> : <FileText size={15} />;
     const item = (d: Doc) =>
       renaming?.id === d.id && renaming.widget ? (
         <div key={d.id} className="memo-card renaming">
-          {isPlotMemo(d) ? <StickyNote size={15} /> : <FileText size={15} />}
+          {icon(d)}
           <input
             className="tree-rename"
             aria-label="새 이름"
@@ -2111,7 +2111,7 @@ export default function App() {
           key={d.id}
           title={d.relPath}
           onClick={attempt(() => openDoc(d.id))}
-          onDoubleClick={() => startRename(d, true)}
+          onDoubleClick={attempt(() => openDoc(d.id, true))}
           onContextMenu={(e) =>
             openMenu(
               e,
@@ -2120,11 +2120,25 @@ export default function App() {
             )
           }
         >
-          {isPlotMemo(d) ? <StickyNote size={15} /> : <FileText size={15} />}
+          {icon(d)}
           <span>{d.title}</span>
           <ChevronRight size={12} />
         </button>
       );
+    if (active.kind !== "episode") {
+      return (
+        <section className="widget episode-plots">
+          <div className="widget-title">
+            <span>연결된 문서</span>
+            <small>{ep ? 1 : 0}</small>
+          </div>
+          {ep ? item(ep) : <p className="widget-empty">연결된 문서가 없습니다.</p>}
+        </section>
+      );
+    }
+    const linked = lib.documents.filter(
+      (d) => d.kind !== "episode" && d.projectId === active.projectId && d.episodeId === active.id && !d.archived,
+    );
     const plots = linked.filter((d) => !isPlotMemo(d)),
       memos = linked.filter(isPlotMemo);
     // 제목 줄의 + 버튼: 이 회차에 연결된 플롯·메모를 만들고 위젯에서 바로 이름을 받는다.
@@ -2134,7 +2148,7 @@ export default function App() {
         aria-label={kind === "plot" ? "이 회차에 플롯 만들기" : "이 회차에 메모 만들기"}
         title={kind === "plot" ? "이 회차에 플롯 만들기" : "이 회차에 메모 만들기"}
         disabled={archive}
-        onClick={attempt(() => addDocFile("", kind, ep, true))}
+        onClick={attempt(() => addDocFile("", kind, active, true))}
       >
         <Plus size={14} />
       </button>
@@ -3756,7 +3770,7 @@ export default function App() {
                 <small>자</small>
               </strong>
             </section>
-            {episodePlotsWidget()}
+            {documentLinksWidget()}
             </>
             )}
           </aside>
