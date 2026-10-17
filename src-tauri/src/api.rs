@@ -102,7 +102,7 @@ pub fn tool_definitions() -> Value {
                     "expectedRevision": { "type": "string" },
                     "body": { "type": "string" },
                     "title": { "type": "string" },
-                    "status": { "type": "string", "enum": ["planned", "in_progress", "revision", "completed"] },
+                    "status": { "type": "string", "enum": ["in_progress", "revision", "completed"] },
                     "episodeType": { "type": "integer", "enum": [0, 2, 3, 4, 6], "description": "0 일반, 2 프롤로그, 3 에필로그, 4 특별편, 6 단편" },
                     "description": { "type": "string", "description": "회차 요약" },
                     "authorComment": { "type": "string", "description": "작가의 말" },

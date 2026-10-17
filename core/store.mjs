@@ -9,6 +9,7 @@ import { readMarkdown, writeMarkdown, writeProperties, markdownEntry, documentPr
 import { FileIndex } from "./file-index.mjs";
 import {
   STATUSES,
+  LEGACY_STATUSES,
   normalizeStatus,
   statusToken,
   normalizeMeta,
@@ -1182,8 +1183,8 @@ export class Store extends EventEmitter {
       id: fixed.id || randomUUID(),
       kind,
       title,
-      // 뮤블처럼 새 회차는 집필 예정으로 시작한다(본문을 쓰기 시작하면 화면에서 집필 중으로 바꾼다).
-      status: fixed.status ? normalizeStatus(fixed.status) : body.trim() ? "in_progress" : "planned",
+      // 새 회차는 집필 중으로 시작한다.
+      status: fixed.status ? normalizeStatus(fixed.status) : "in_progress",
       ...storedMeta({
         ...input,
         // 뮤블처럼 만들 때의 기본값으로 정해 두고, 나중에 기본값을 바꿔도 이 회차는 그대로 둔다.
@@ -1266,8 +1267,8 @@ export class Store extends EventEmitter {
     if (patch.title !== undefined)
       patch.title = String(patch.title).slice(0, 300);
     if (patch.status !== undefined) {
-      // 예전 상태 이름(초안·진행·완료)도 받아서 바꿔 둔다.
-      if (!STATUSES.includes(patch.status) && !["초안", "진행", "완료"].includes(patch.status))
+      // 예전 상태(초안·진행·완료, 집필 예정)도 받아서 바꿔 둔다.
+      if (!STATUSES.includes(patch.status) && !LEGACY_STATUSES.includes(patch.status))
         throw fail("잘못된 상태");
       patch.status = normalizeStatus(patch.status);
     }

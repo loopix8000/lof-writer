@@ -570,15 +570,6 @@ export default function App() {
   function edit(patch: Partial<Doc>) {
     const d = draft.current;
     if (!d) return;
-    // 집필 예정인 회차에 내용을 쓰기 시작하면 집필 중으로 바꾼다.
-    if (
-      patch.body !== undefined &&
-      patch.status === undefined &&
-      d.doc.kind === "episode" &&
-      normalizeStatus(d.doc.status) === "planned" &&
-      patch.body.trim()
-    )
-      patch = { ...patch, status: "in_progress" };
     d.doc = { ...d.doc, ...patch };
     d.seq++;
     // VS Code처럼 미리보기 탭을 편집하면 고정 탭이 된다.

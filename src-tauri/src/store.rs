@@ -2,7 +2,7 @@ use crate::assets::{normalize_tags, valid_cover, validate_cover};
 use crate::episode::{
     check_meta_patch, custom_properties, line_break_default, normalize_document_meta, normalize_meta,
     normalize_status, normalize_status_val, status_token, stored_document_meta, stored_meta,
-    DOCUMENT_META_FIELDS, META_FIELDS, STATUSES,
+    DOCUMENT_META_FIELDS, LEGACY_STATUSES, META_FIELDS, STATUSES,
 };
 use crate::error::{
     fail, fail_invalid, hash_str, now_iso, slice_utf16, sys_time_to_iso, utf16_len, valid_id,
@@ -3232,13 +3232,8 @@ impl Store {
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string())
             .unwrap_or_else(|| Uuid::new_v4().to_string());
-        let status = if let Some(st) = fixed.get("status").and_then(|v| v.as_str()) {
-            normalize_status(Some(st))
-        } else if !body.trim().is_empty() {
-            "in_progress".to_string()
-        } else {
-            "planned".to_string()
-        };
+        // 새 회차는 집필 중으로 시작한다.
+        let status = normalize_status(fixed.get("status").and_then(|v| v.as_str()));
 
         let manual_lb = input
             .get("manualLineBreak")
@@ -3455,7 +3450,7 @@ impl Store {
         }
         if let Some(st) = patch.get("status").cloned() {
             let s = st.as_str().unwrap_or("");
-            if !STATUSES.contains(&s) && !["초안", "진행", "완료"].contains(&s) {
+            if !STATUSES.contains(&s) && !LEGACY_STATUSES.contains(&s) {
                 return Err(fail_invalid("잘못된 상태"));
             }
             patch.insert("status".to_string(), json!(normalize_status(Some(s))));

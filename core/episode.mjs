@@ -1,17 +1,17 @@
 // 회차의 상태·유형·속성. 값은 뮤블(Muvel)의 에피소드와 같은 키와 값을 쓴다.
 // 뮤블에서 넘어온 사용자가 같은 이름과 선택지를 그대로 보도록 화면 문구도 여기에 둔다.
 
-// 상태: 집필 예정 → 집필 중 → 퇴고 중 → 집필 완료(원고 보호: 제목과 본문을 고칠 수 없다).
-export const STATUSES = ["planned", "in_progress", "revision", "completed"];
+// 상태: 집필 중 → 퇴고 중 → 집필 완료(원고 보호: 제목과 본문을 고칠 수 없다).
+export const STATUSES = ["in_progress", "revision", "completed"];
 export const STATUS_LABELS = {
-  planned: "집필 예정",
   in_progress: "집필 중",
   revision: "퇴고 중",
   completed: "집필 완료",
 };
-export const STATUS_SHORT = { planned: "예정", in_progress: "진행", revision: "퇴고", completed: "완료" };
-// 예전 lof의 상태(초안·진행·완료). 상태가 없던 회차는 쓰던 중으로 본다.
-const LEGACY_STATUS = { 초안: "in_progress", 진행: "in_progress", 완료: "completed" };
+export const STATUS_SHORT = { in_progress: "진행", revision: "퇴고", completed: "완료" };
+// 예전 상태. lof의 초안·진행·완료와, 없앤 집필 예정(planned)은 집필 중으로 본다. 상태가 없던 회차도 집필 중이다.
+export const LEGACY_STATUSES = ["planned", "초안", "진행", "완료"];
+const LEGACY_STATUS = { planned: "in_progress", 초안: "in_progress", 진행: "in_progress", 완료: "completed" };
 export const normalizeStatus = (s) =>
   STATUSES.includes(s) ? s : (LEGACY_STATUS[s] ?? "in_progress");
 // 동기화 지문에 넣는 상태 값. 예전 값과 뜻이 같으면 예전 글자를 그대로 써서 지문이 바뀌지 않게 한다.

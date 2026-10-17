@@ -36,7 +36,6 @@ import {
 // 문서의 기본 속성과 사용자 속성을 함께 편집한다.
 
 export const STATUS_ICONS: Record<string, ReactNode> = {
-  planned: <Clock size={15} />,
   in_progress: <SquarePen size={15} />,
   revision: <Pencil size={15} />,
   completed: <Check size={15} />,

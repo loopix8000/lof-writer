@@ -1,7 +1,9 @@
 use crate::error::slice_utf16;
 use serde_json::{json, Map, Value};
 
-pub const STATUSES: &[&str] = &["planned", "in_progress", "revision", "completed"];
+pub const STATUSES: &[&str] = &["in_progress", "revision", "completed"];
+// 예전 상태. lof의 초안·진행·완료와, 없앤 집필 예정(planned)은 normalize_status가 바꿔 읽는다.
+pub const LEGACY_STATUSES: &[&str] = &["planned", "초안", "진행", "완료"];
 
 pub const EPISODE_TYPES: &[i64] = &[0, 1, 2, 3, 4, 5, 6];
 
@@ -19,7 +21,7 @@ pub const DOCUMENT_META_FIELDS: &[&str] = &["tags", "manualLineBreak", "bookmark
 pub fn normalize_status(s: Option<&str>) -> String {
     match s {
         Some(v) if STATUSES.contains(&v) => v.to_string(),
-        Some("초안") | Some("진행") => "in_progress".to_string(),
+        Some("planned") | Some("초안") | Some("진행") => "in_progress".to_string(),
         Some("완료") => "completed".to_string(),
         _ => "in_progress".to_string(),
     }
