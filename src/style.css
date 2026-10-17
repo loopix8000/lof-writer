@@ -3259,6 +3259,27 @@ select:not([multiple]) {
 .episode-plots .widget-subtitle {
   margin-top: 18px;
 }
+.episode-plots .widget-title-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.episode-plots .widget-title .widget-quick-add {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  color: var(--muted);
+}
+.episode-plots .widget-title .widget-quick-add:hover:not(:disabled) {
+  background: var(--soft);
+  color: var(--text);
+}
+.episode-plots .widget-title .widget-quick-add:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
 .episode-plots .memo-card.current > span {
   font-weight: 600;
 }

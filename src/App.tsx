@@ -2028,8 +2028,8 @@ export default function App() {
   }
   const isPlotMemo = (d: Doc) => d.kind === "memo";
   // 문서 영역(doc/)에 플롯·메모를 만든다. folder가 있으면 그 폴더에, ep가 있으면 그 회차에 연결한다.
-  // 보던 화면은 그대로 두고 트리에서 이름을 받는다.
-  async function addDocFile(folder: string, kind: "plot" | "memo", ep?: Doc) {
+  // 보던 화면은 그대로 두고 트리에서 이름을 받는다. widget이면 위젯 보드에서 바로 이름을 받는다.
+  async function addDocFile(folder: string, kind: "plot" | "memo", ep?: Doc, widget = false) {
     await flush();
     const doc = await call<Doc>("createDocument", {
       projectId: projectRef.current,
@@ -2041,6 +2041,7 @@ export default function App() {
     });
     await refresh();
     await loadMemoFolders();
+    if (widget) return startRename(doc, true);
     if (folder) setMemoOpenFolders((old) => new Set([...old, folder]));
     if (focusRef.current) setFocusTree(true);
     else setSidebar(true);
@@ -2124,17 +2125,35 @@ export default function App() {
       );
     const plots = linked.filter((d) => !isPlotMemo(d)),
       memos = linked.filter(isPlotMemo);
+    // 제목 줄의 + 버튼: 이 회차에 연결된 플롯·메모를 만들고 위젯에서 바로 이름을 받는다.
+    const add = (kind: "plot" | "memo") => (
+      <button
+        className="widget-quick-add"
+        aria-label={kind === "plot" ? "이 회차에 플롯 만들기" : "이 회차에 메모 만들기"}
+        title={kind === "plot" ? "이 회차에 플롯 만들기" : "이 회차에 메모 만들기"}
+        disabled={archive}
+        onClick={attempt(() => addDocFile("", kind, ep, true))}
+      >
+        <Plus size={14} />
+      </button>
+    );
     return (
       <section className="widget episode-plots">
         <div className="widget-title">
           <span>이 회차의 플롯</span>
-          <small>{plots.length}</small>
+          <span className="widget-title-tools">
+            <small>{plots.length}</small>
+            {add("plot")}
+          </span>
         </div>
         {plots.map(item)}
         {!plots.length && <p className="widget-empty">연결된 플롯이 없습니다.</p>}
         <div className="widget-title widget-subtitle">
           <span>이 회차의 메모</span>
-          <small>{memos.length}</small>
+          <span className="widget-title-tools">
+            <small>{memos.length}</small>
+            {add("memo")}
+          </span>
         </div>
         {memos.map(item)}
         {!memos.length && <p className="widget-empty">연결된 메모가 없습니다.</p>}
