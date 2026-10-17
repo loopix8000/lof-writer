@@ -299,8 +299,8 @@ export default function App() {
     [closedDocGroups, setClosedDocGroups] = useState<Set<Kind>>(new Set()),
     // 회차가 많은 작품에서 펼친 회차 묶음(묶음 첫 회차의 목록 위치).
     [openEpisodeGroups, setOpenEpisodeGroups] = useState<Set<number>>(new Set()),
-    // 위젯 보드 자리에 북마크 목록을 펼쳤는지, 목록에서 고른 북마크(문단 순서).
-    [bookmarksOpen, setBookmarksOpen] = useState(false),
+    // 위젯 보드 자리에 펼친 목록(위젯·북마크·조판 설정), 목록에서 고른 북마크(문단 순서).
+    [rightView, setRightView] = useState<"widgets" | "bookmarks" | "typesetting">("widgets"),
     [bookmarkJump, setBookmarkJump] = useState<{ docId: string; index: number; seq: number } | null>(null),
     // 레일의 전체 북마크 화면 검색어.
     [bookmarkQuery, setBookmarkQuery] = useState("");
@@ -373,7 +373,9 @@ export default function App() {
     navigationSeq = useRef(0),
     toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingWriting = useRef(new Map<string, WritingRules>()),
-    writingQueue = useRef(Promise.resolve());
+    writingQueue = useRef(Promise.resolve()),
+    // 조판 설정을 열 때 우측 사이드바가 닫혀 있었으면, 조판 설정을 닫을 때 사이드바도 다시 닫는다.
+    typesettingOpenedRight = useRef(false);
   const project = lib.projects.find((p) => p.id === projectId);
   const prefsRef = useRef(prefs);
   prefsRef.current = prefs;
@@ -2334,6 +2336,414 @@ export default function App() {
       </div>
     );
   }
+  // 편집 도구 막대의 조판 버튼: 위젯 보드 자리에 조판 설정을 펼치거나 접는다.
+  function toggleTypesettingPanel() {
+    if (right && rightView === "typesetting") {
+      setRightView("widgets");
+      if (typesettingOpenedRight.current) setRight(false);
+      typesettingOpenedRight.current = false;
+      return;
+    }
+    typesettingOpenedRight.current = !right;
+    setRight(true);
+    setRightView("typesetting");
+  }
+  // 조판 설정. 설정 창에서는 문서 타입 탭으로 대상을 고르고, 우측 사이드바에서는 열린 문서의 타입을 고친다.
+  function typesettingSettings(targetKind: "episode" | "document", inPanel = false) {
+    const targetKindInfo =
+      TYPESETTING_KINDS.find((k) => k.id === targetKind) || TYPESETTING_KINDS[0];
+    const kindEditorStyle = normalizeEditorStyle(prefs, targetKind);
+    const allWidthItems = WIDTH_PRESETS.flatMap((g) => g.items);
+    const updateTargetPrefs = (patch: Record<string, any>) =>
+      saveKindPrefs(targetKind, patch).catch(report);
+    const resetTargetPrefs = () => {
+      const isNote = targetKind === "document";
+      const defPatch = isNote
+        ? { ...DEFAULT_NOTE_EDITOR_STYLE }
+        : { ...DEFAULT_EDITOR_STYLE };
+      saveKindPrefs(targetKind, defPatch)
+        .then(() =>
+          message(
+            `'${targetKindInfo.label}' 조판을 ${isNote ? "메모장 기본값" : "원고 기본값"}으로 초기화했습니다.`,
+          ),
+        )
+        .catch(report);
+    };
+    const copyFromEpisodePrefs = () => {
+      const epStyle = normalizeEditorStyle(prefs, "episode");
+      saveKindPrefs(targetKind, epStyle)
+        .then(() =>
+          message(`'에피소드 원고'의 조판 설정을 '${targetKindInfo.label}'에 복사했습니다.`),
+        )
+        .catch(report);
+    };
+    return (
+      <>
+        <div className="typesetting-kind-bar">
+          {inPanel ? (
+            <strong className="typesetting-kind-current">{targetKindInfo.label}</strong>
+          ) : (
+            <div className="typesetting-kind-tabs" role="tablist" aria-label="조판 대상 문서 타입">
+              {TYPESETTING_KINDS.map((k) => {
+                const KIcon = k.id === "episode" ? BookOpen : FileText;
+                const selected = targetKind === k.id;
+                return (
+                  <button
+                    key={k.id}
+                    type="button"
+                    role="tab"
+                    aria-selected={selected}
+                    className={`typesetting-kind-tab ${selected ? "active" : ""}`}
+                    onClick={() => setTypesettingKind(k.id)}
+                  >
+                    <KIcon size={15} />
+                    <span>{k.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          <div className="typesetting-kind-meta">
+            <span>{targetKindInfo.description}</span>
+            <div className="row gap">
+              {targetKind !== "episode" && (
+                <button type="button" onClick={copyFromEpisodePrefs}>
+                  에피소드 조판 복사
+                </button>
+              )}
+              <button type="button" onClick={resetTargetPrefs}>
+                {targetKind === "episode" ? "원고 기본값 초기화" : "메모장 기본값 초기화"}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <h3>{targetKindInfo.label} · 플랫폼·환경 조판 프리셋</h3>
+        <p className="settings-description">
+          현재 선택한 <strong>{targetKindInfo.label}</strong> 문서 타입에 조판 프리셋을 한 번에 적용합니다.
+        </p>
+        <div className="preset-grid">
+          {PLATFORM_STYLE_PRESETS.map((preset) => (
+            <button
+              key={preset.id}
+              type="button"
+              className="preset-card"
+              // 사이드바에서는 이름만 보이고 설명은 마우스를 올리면 보여 준다.
+              title={inPanel ? preset.description : undefined}
+              onClick={() => {
+                updateTargetPrefs(preset.style);
+                message(
+                  `'${targetKindInfo.label}'에 '${preset.name} (${preset.environment})' 조판 프리셋을 적용했습니다.`,
+                );
+              }}
+            >
+              <strong>
+                {preset.name} <small>({preset.environment})</small>
+              </strong>
+              {!inPanel && <small>{preset.description}</small>}
+            </button>
+          ))}
+        </div>
+
+        <div className="settings-subsection">
+          <h3>{targetKindInfo.label} · 문단·본문 조판 세부 설정</h3>
+          <p className="settings-description">
+            글꼴, 자간, 단락 간격, 첫 줄 들여쓰기, 정렬, 구분선 모양을 세밀하게 조정합니다.
+          </p>
+          <div className="settings-grid">
+            <label>
+              본문 글꼴
+              <select
+                aria-label="본문 글꼴"
+                value={kindEditorStyle.fontFamily}
+                onChange={(e) =>
+                  updateTargetPrefs({ fontFamily: e.target.value })
+                }
+              >
+                {FONT_FAMILY_PRESETS.map((f) => (
+                  <option key={f.id || "default"} value={f.value}>
+                    {f.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              글자 크기 (px)
+              <input
+                type="number"
+                min={12}
+                max={36}
+                step={1}
+                aria-label="조판 글자 크기"
+                value={kindEditorStyle.fontSize}
+                onChange={(e) =>
+                  updateTargetPrefs({
+                    fontSize: Math.min(36, Math.max(12, Number(e.target.value) || 18)),
+                  })
+                }
+              />
+            </label>
+            <label>
+              글자 굵기
+              <select
+                aria-label="글자 굵기"
+                value={kindEditorStyle.fontWeight}
+                onChange={(e) =>
+                  updateTargetPrefs({ fontWeight: Number(e.target.value) })
+                }
+              >
+                {[300, 400, 500, 600, 700].map((w) => (
+                  <option key={w} value={w}>
+                    {w === 300 ? "300 (가는 글씨)" : w === 400 ? "400 (보통)" : w === 500 ? "500 (중간)" : w === 600 ? "600 (약간 굵게)" : "700 (굵게)"}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              자간 (em)
+              <input
+                type="number"
+                min={-0.1}
+                max={0.25}
+                step={0.01}
+                aria-label="자간"
+                value={kindEditorStyle.letterSpacing}
+                onChange={(e) =>
+                  updateTargetPrefs({
+                    letterSpacing: Number(e.target.value) || 0,
+                  })
+                }
+              />
+            </label>
+            <label>
+              줄 간격 (행간)
+              <input
+                type="number"
+                min={1.2}
+                max={3.5}
+                step={0.05}
+                aria-label="조판 줄 간격"
+                value={kindEditorStyle.lineHeight}
+                onChange={(e) =>
+                  updateTargetPrefs({
+                    lineHeight: Number(e.target.value) || 2,
+                  })
+                }
+              />
+            </label>
+            <label>
+              단락 간격 (em)
+              <input
+                type="number"
+                min={0}
+                max={3.5}
+                step={0.05}
+                aria-label="단락 간격"
+                value={kindEditorStyle.blockGap}
+                onChange={(e) =>
+                  updateTargetPrefs({
+                    blockGap: Math.max(0, Number(e.target.value) || 0),
+                  })
+                }
+              />
+            </label>
+            <label>
+              첫 줄 들여쓰기 (em)
+              <select
+                aria-label="첫 줄 들여쓰기"
+                value={kindEditorStyle.indent}
+                onChange={(e) =>
+                  updateTargetPrefs({ indent: Number(e.target.value) })
+                }
+              >
+                <option value={0}>없음 (0em)</option>
+                <option value={0.5}>반 칸 (0.5em)</option>
+                <option value={1}>한 칸 (1em · 종이책/노벨피아)</option>
+                <option value={1.5}>한 칸 반 (1.5em)</option>
+                <option value={2}>두 칸 (2em)</option>
+              </select>
+            </label>
+            <label>
+              문단 정렬
+              <select
+                aria-label="문단 정렬"
+                value={kindEditorStyle.textAlign}
+                onChange={(e) =>
+                  updateTargetPrefs({ textAlign: e.target.value })
+                }
+              >
+                <option value="left">왼쪽 정렬</option>
+                <option value="justify">양쪽 정렬 (종이책 조판)</option>
+                <option value="center">가운데 정렬</option>
+                <option value="right">오른쪽 정렬</option>
+              </select>
+            </label>
+            <label>
+              구분선 모양
+              <select
+                aria-label="구분선 모양"
+                value={kindEditorStyle.dividerStyle}
+                onChange={(e) =>
+                  updateTargetPrefs({ dividerStyle: e.target.value })
+                }
+              >
+                {DIVIDER_STYLES.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.label} — {d.description}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              구분선 상하 여백 (em)
+              <input
+                type="number"
+                min={0.25}
+                max={5}
+                step={0.25}
+                aria-label="구분선 상하 여백"
+                value={kindEditorStyle.dividerPaddingY}
+                onChange={(e) =>
+                  updateTargetPrefs({
+                    dividerPaddingY: Math.max(0.25, Number(e.target.value) || 1.5),
+                  })
+                }
+              />
+            </label>
+          </div>
+          <div className="settings-toggles" style={{ marginTop: 16 }}>
+            <SettingsToggle
+              label="강제 줄바꿈(Shift+Enter) 뒤 들여쓰기"
+              description="단락 안에서 강제로 줄을 바꾼 다음 줄에도 첫 줄 들여쓰기 폭을 똑같이 적용합니다."
+              checked={kindEditorStyle.hardBreakIndent}
+              onChange={(checked) =>
+                updateTargetPrefs({ hardBreakIndent: checked })
+              }
+            />
+            <SettingsToggle
+              label="동양식 세리프 문장 부호"
+              description="본문이 고딕 글꼴이어도 곡선 따옴표(“ ” ‘ ’), 낫표(「 」 『 』), 말줄임표(…)를 명조 글리프로 조판합니다."
+              checked={kindEditorStyle.serifSymbols}
+              onChange={(checked) =>
+                updateTargetPrefs({ serifSymbols: checked })
+              }
+            />
+          </div>
+        </div>
+
+        <div className="settings-subsection">
+          <h3>{targetKindInfo.label} · 원고지 폭 · 용지 · 쪽 보기</h3>
+          <p className="settings-description">
+            원고 영역의 최대 폭을 종이 규격·모바일·태블릿 단말기에 맞추거나 A4 쪽 보기로 전환합니다.
+          </p>
+          <div className="settings-grid">
+            <label>
+              단말기 / 용지 폭 프리셋
+              <select
+                aria-label="단말기 및 용지 폭 프리셋"
+                value={
+                  allWidthItems.some((w) => w.width === kindEditorStyle.editorMaxWidth)
+                    ? String(kindEditorStyle.editorMaxWidth)
+                    : "custom"
+                }
+                onChange={(e) => {
+                  if (e.target.value !== "custom") {
+                    updateTargetPrefs({ editorMaxWidth: Number(e.target.value) });
+                  }
+                }}
+              >
+                <option value="custom">직접 지정 ({kindEditorStyle.editorMaxWidth}px)</option>
+                {WIDTH_PRESETS.map((group) => (
+                  <optgroup key={group.group} label={group.group}>
+                    {group.items.map((w) => (
+                      <option key={w.id} value={w.width}>
+                        {w.label}
+                      </option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+            </label>
+            <label>
+              원고 최대 너비 (px)
+              <input
+                type="number"
+                min={350}
+                max={3000}
+                step={10}
+                aria-label="원고 최대 너비"
+                value={kindEditorStyle.editorMaxWidth}
+                onChange={(e) =>
+                  updateTargetPrefs({
+                    editorMaxWidth: Math.min(3000, Math.max(350, Number(e.target.value) || 760)),
+                  })
+                }
+              />
+            </label>
+            <label>
+              원고 좌우 여백 (단계)
+              <input
+                type="number"
+                min={0}
+                max={10}
+                step={1}
+                aria-label="원고 좌우 여백"
+                value={kindEditorStyle.editorPaddingX}
+                onChange={(e) =>
+                  updateTargetPrefs({
+                    editorPaddingX: Math.min(10, Math.max(0, Number(e.target.value) || 0)),
+                  })
+                }
+              />
+            </label>
+            <label>
+              원고지 배경색 / 글자색
+              <div className="color-pair-row">
+                <input
+                  type="color"
+                  aria-label="원고지 배경색"
+                  title="원고지 배경색"
+                  value={kindEditorStyle.textareaBgColor || "#ffffff"}
+                  onChange={(e) =>
+                    updateTargetPrefs({ textareaBgColor: e.target.value })
+                  }
+                />
+                <input
+                  type="color"
+                  aria-label="본문 글자색"
+                  title="본문 글자색"
+                  value={kindEditorStyle.editorTextColor || "#222222"}
+                  onChange={(e) =>
+                    updateTargetPrefs({ editorTextColor: e.target.value })
+                  }
+                />
+                {(kindEditorStyle.textareaBgColor || kindEditorStyle.editorTextColor) && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      updateTargetPrefs({ textareaBgColor: "", editorTextColor: "" })
+                    }
+                  >
+                    초기화
+                  </button>
+                )}
+              </div>
+            </label>
+          </div>
+          <div className="settings-toggles" style={{ marginTop: 16 }}>
+            <SettingsToggle
+              label="A4 인쇄 규격 쪽 보기 (210mm × 297mm)"
+              description="원고 영역을 실제 A4 인쇄 시트(여백 20mm·15mm)와 페이지 구분선으로 표시합니다."
+              checked={kindEditorStyle.pageViewEnabled}
+              onChange={(checked) =>
+                updateTargetPrefs({ pageViewEnabled: checked })
+              }
+            />
+          </div>
+        </div>
+      </>
+    );
+  }
   // 확인이 필요한 파일: 파일이 없어진 문서와, 회차·플롯 폴더에 있지만 연결되지 않은 파일.
   // 자동 복구로 이을 수 없었던 것만 남는다. 무엇을 할지는 사용자가 고른다.
   function brokenFiles() {
@@ -3805,6 +4215,10 @@ export default function App() {
                       defaultLabel: active.kind === "episode" ? "새 에피소드 기본값" : "기본값",
                       onChange: (manualLineBreak) => edit({ manualLineBreak }),
                     }}
+                    typesetting={{
+                      open: right && rightView === "typesetting",
+                      onToggle: toggleTypesettingPanel,
+                    }}
                     bookmarks={active.bookmarks}
                     onBookmarksChange={(bookmarks) => edit({ bookmarks })}
                     jumpToBookmark={bookmarkJump?.docId === active.id ? bookmarkJump : null}
@@ -3867,20 +4281,33 @@ export default function App() {
           )}
         </main>
         {isWorkspace && right && (
-          <aside className="widget-sidebar">
+          <aside className={`widget-sidebar${rightView === "typesetting" ? " typesetting-open" : ""}`}>
             <div className="panel-caption">
-              <span>{bookmarksOpen ? "북마크" : "위젯 보드"}</span>
-              <button
-                className={`bookmark-toggle ${bookmarksOpen ? "active" : ""}`}
-                aria-pressed={bookmarksOpen}
-                aria-label="북마크 목록"
-                title={bookmarksOpen ? "위젯 보드로 돌아가기" : "북마크 목록 보기"}
-                onClick={() => setBookmarksOpen((open) => !open)}
-              >
-                <BookmarkIcon size={15} />
-              </button>
+              <span>{rightView === "bookmarks" ? "북마크" : rightView === "typesetting" ? "조판 설정" : "위젯 보드"}</span>
+              <div className="panel-caption-actions">
+                {/* 조판 설정에서는 북마크 대신 닫기 버튼만 둔다. */}
+                {rightView === "typesetting" ? (
+                  <button aria-label="조판 설정 닫기" title="조판 설정 닫기" onClick={toggleTypesettingPanel}>
+                    <X size={15} />
+                  </button>
+                ) : (
+                  <button
+                    className={`bookmark-toggle ${rightView === "bookmarks" ? "active" : ""}`}
+                    aria-pressed={rightView === "bookmarks"}
+                    aria-label="북마크 목록"
+                    title={rightView === "bookmarks" ? "위젯 보드로 돌아가기" : "북마크 목록 보기"}
+                    onClick={() => setRightView((v) => (v === "bookmarks" ? "widgets" : "bookmarks"))}
+                  >
+                    <BookmarkIcon size={15} />
+                  </button>
+                )}
+              </div>
             </div>
-            {bookmarksOpen ? bookmarkList() : (
+            {rightView === "typesetting" ? (
+              <div className="typesetting-panel">
+                {typesettingSettings(active.kind === "episode" ? "episode" : "document", true)}
+              </div>
+            ) : rightView === "bookmarks" ? bookmarkList() : (
             <>
             <PlatformCount
               body={active.body}
@@ -4523,396 +4950,7 @@ export default function App() {
                   <PropertyPresetSettings presets={prefs.propertyPresets} tags={prefs.favoriteTags} onChange={savePrefs} />
                 </section>
                 <section id="settings-typesetting" className="settings-section" hidden={settingsPage !== "typesetting"}>
-                  {(() => {
-                    const targetKind = typesettingKind;
-                    const targetKindInfo =
-                      TYPESETTING_KINDS.find((k) => k.id === targetKind) || TYPESETTING_KINDS[0];
-                    const kindEditorStyle = normalizeEditorStyle(prefs, targetKind);
-                    const allWidthItems = WIDTH_PRESETS.flatMap((g) => g.items);
-                    const updateTargetPrefs = (patch: Record<string, any>) =>
-                      saveKindPrefs(targetKind, patch).catch(report);
-                    const resetTargetPrefs = () => {
-                      const isNote = targetKind === "document";
-                      const defPatch = isNote
-                        ? { ...DEFAULT_NOTE_EDITOR_STYLE }
-                        : { ...DEFAULT_EDITOR_STYLE };
-                      saveKindPrefs(targetKind, defPatch)
-                        .then(() =>
-                          message(
-                            `'${targetKindInfo.label}' 조판을 ${isNote ? "메모장 기본값" : "원고 기본값"}으로 초기화했습니다.`,
-                          ),
-                        )
-                        .catch(report);
-                    };
-                    const copyFromEpisodePrefs = () => {
-                      const epStyle = normalizeEditorStyle(prefs, "episode");
-                      saveKindPrefs(targetKind, epStyle)
-                        .then(() =>
-                          message(`'에피소드 원고'의 조판 설정을 '${targetKindInfo.label}'에 복사했습니다.`),
-                        )
-                        .catch(report);
-                    };
-                    return (
-                      <>
-                        <div className="typesetting-kind-bar">
-                          <div className="typesetting-kind-tabs" role="tablist" aria-label="조판 대상 문서 타입">
-                            {TYPESETTING_KINDS.map((k) => {
-                              const KIcon = k.id === "episode" ? BookOpen : FileText;
-                              const selected = targetKind === k.id;
-                              return (
-                                <button
-                                  key={k.id}
-                                  type="button"
-                                  role="tab"
-                                  aria-selected={selected}
-                                  className={`typesetting-kind-tab ${selected ? "active" : ""}`}
-                                  onClick={() => setTypesettingKind(k.id)}
-                                >
-                                  <KIcon size={15} />
-                                  <span>{k.label}</span>
-                                </button>
-                              );
-                            })}
-                          </div>
-                          <div className="typesetting-kind-meta">
-                            <span>{targetKindInfo.description}</span>
-                            <div className="row gap">
-                              {targetKind !== "episode" && (
-                                <button type="button" onClick={copyFromEpisodePrefs}>
-                                  에피소드 조판 복사
-                                </button>
-                              )}
-                              <button type="button" onClick={resetTargetPrefs}>
-                                {targetKind === "episode" ? "원고 기본값 초기화" : "메모장 기본값 초기화"}
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-
-                        <h3>{targetKindInfo.label} · 플랫폼·환경 조판 프리셋</h3>
-                        <p className="settings-description">
-                          현재 선택한 <strong>{targetKindInfo.label}</strong> 문서 타입에 조판 프리셋을 한 번에 적용합니다.
-                        </p>
-                        <div className="preset-grid">
-                          {PLATFORM_STYLE_PRESETS.map((preset) => (
-                            <button
-                              key={preset.id}
-                              type="button"
-                              className="preset-card"
-                              onClick={() => {
-                                updateTargetPrefs(preset.style);
-                                message(
-                                  `'${targetKindInfo.label}'에 '${preset.name} (${preset.environment})' 조판 프리셋을 적용했습니다.`,
-                                );
-                              }}
-                            >
-                              <strong>
-                                {preset.name} <small>({preset.environment})</small>
-                              </strong>
-                              <small>{preset.description}</small>
-                            </button>
-                          ))}
-                        </div>
-
-                        <div className="settings-subsection">
-                          <h3>{targetKindInfo.label} · 문단·본문 조판 세부 설정</h3>
-                          <p className="settings-description">
-                            글꼴, 자간, 단락 간격, 첫 줄 들여쓰기, 정렬, 구분선 모양을 세밀하게 조정합니다.
-                          </p>
-                          <div className="settings-grid">
-                            <label>
-                              본문 글꼴
-                              <select
-                                aria-label="본문 글꼴"
-                                value={kindEditorStyle.fontFamily}
-                                onChange={(e) =>
-                                  updateTargetPrefs({ fontFamily: e.target.value })
-                                }
-                              >
-                                {FONT_FAMILY_PRESETS.map((f) => (
-                                  <option key={f.id || "default"} value={f.value}>
-                                    {f.label}
-                                  </option>
-                                ))}
-                              </select>
-                            </label>
-                            <label>
-                              글자 크기 (px)
-                              <input
-                                type="number"
-                                min={12}
-                                max={36}
-                                step={1}
-                                aria-label="조판 글자 크기"
-                                value={kindEditorStyle.fontSize}
-                                onChange={(e) =>
-                                  updateTargetPrefs({
-                                    fontSize: Math.min(36, Math.max(12, Number(e.target.value) || 18)),
-                                  })
-                                }
-                              />
-                            </label>
-                            <label>
-                              글자 굵기
-                              <select
-                                aria-label="글자 굵기"
-                                value={kindEditorStyle.fontWeight}
-                                onChange={(e) =>
-                                  updateTargetPrefs({ fontWeight: Number(e.target.value) })
-                                }
-                              >
-                                {[300, 400, 500, 600, 700].map((w) => (
-                                  <option key={w} value={w}>
-                                    {w === 300 ? "300 (가는 글씨)" : w === 400 ? "400 (보통)" : w === 500 ? "500 (중간)" : w === 600 ? "600 (약간 굵게)" : "700 (굵게)"}
-                                  </option>
-                                ))}
-                              </select>
-                            </label>
-                            <label>
-                              자간 (em)
-                              <input
-                                type="number"
-                                min={-0.1}
-                                max={0.25}
-                                step={0.01}
-                                aria-label="자간"
-                                value={kindEditorStyle.letterSpacing}
-                                onChange={(e) =>
-                                  updateTargetPrefs({
-                                    letterSpacing: Number(e.target.value) || 0,
-                                  })
-                                }
-                              />
-                            </label>
-                            <label>
-                              줄 간격 (행간)
-                              <input
-                                type="number"
-                                min={1.2}
-                                max={3.5}
-                                step={0.05}
-                                aria-label="조판 줄 간격"
-                                value={kindEditorStyle.lineHeight}
-                                onChange={(e) =>
-                                  updateTargetPrefs({
-                                    lineHeight: Number(e.target.value) || 2,
-                                  })
-                                }
-                              />
-                            </label>
-                            <label>
-                              단락 간격 (em)
-                              <input
-                                type="number"
-                                min={0}
-                                max={3.5}
-                                step={0.05}
-                                aria-label="단락 간격"
-                                value={kindEditorStyle.blockGap}
-                                onChange={(e) =>
-                                  updateTargetPrefs({
-                                    blockGap: Math.max(0, Number(e.target.value) || 0),
-                                  })
-                                }
-                              />
-                            </label>
-                            <label>
-                              첫 줄 들여쓰기 (em)
-                              <select
-                                aria-label="첫 줄 들여쓰기"
-                                value={kindEditorStyle.indent}
-                                onChange={(e) =>
-                                  updateTargetPrefs({ indent: Number(e.target.value) })
-                                }
-                              >
-                                <option value={0}>없음 (0em)</option>
-                                <option value={0.5}>반 칸 (0.5em)</option>
-                                <option value={1}>한 칸 (1em · 종이책/노벨피아)</option>
-                                <option value={1.5}>한 칸 반 (1.5em)</option>
-                                <option value={2}>두 칸 (2em)</option>
-                              </select>
-                            </label>
-                            <label>
-                              문단 정렬
-                              <select
-                                aria-label="문단 정렬"
-                                value={kindEditorStyle.textAlign}
-                                onChange={(e) =>
-                                  updateTargetPrefs({ textAlign: e.target.value })
-                                }
-                              >
-                                <option value="left">왼쪽 정렬</option>
-                                <option value="justify">양쪽 정렬 (종이책 조판)</option>
-                                <option value="center">가운데 정렬</option>
-                                <option value="right">오른쪽 정렬</option>
-                              </select>
-                            </label>
-                            <label>
-                              구분선 모양
-                              <select
-                                aria-label="구분선 모양"
-                                value={kindEditorStyle.dividerStyle}
-                                onChange={(e) =>
-                                  updateTargetPrefs({ dividerStyle: e.target.value })
-                                }
-                              >
-                                {DIVIDER_STYLES.map((d) => (
-                                  <option key={d.id} value={d.id}>
-                                    {d.label} — {d.description}
-                                  </option>
-                                ))}
-                              </select>
-                            </label>
-                            <label>
-                              구분선 상하 여백 (em)
-                              <input
-                                type="number"
-                                min={0.25}
-                                max={5}
-                                step={0.25}
-                                aria-label="구분선 상하 여백"
-                                value={kindEditorStyle.dividerPaddingY}
-                                onChange={(e) =>
-                                  updateTargetPrefs({
-                                    dividerPaddingY: Math.max(0.25, Number(e.target.value) || 1.5),
-                                  })
-                                }
-                              />
-                            </label>
-                          </div>
-                          <div className="settings-toggles" style={{ marginTop: 16 }}>
-                            <SettingsToggle
-                              label="강제 줄바꿈(Shift+Enter) 뒤 들여쓰기"
-                              description="단락 안에서 강제로 줄을 바꾼 다음 줄에도 첫 줄 들여쓰기 폭을 똑같이 적용합니다."
-                              checked={kindEditorStyle.hardBreakIndent}
-                              onChange={(checked) =>
-                                updateTargetPrefs({ hardBreakIndent: checked })
-                              }
-                            />
-                            <SettingsToggle
-                              label="동양식 세리프 문장 부호"
-                              description="본문이 고딕 글꼴이어도 곡선 따옴표(“ ” ‘ ’), 낫표(「 」 『 』), 말줄임표(…)를 명조 글리프로 조판합니다."
-                              checked={kindEditorStyle.serifSymbols}
-                              onChange={(checked) =>
-                                updateTargetPrefs({ serifSymbols: checked })
-                              }
-                            />
-                          </div>
-                        </div>
-
-                        <div className="settings-subsection">
-                          <h3>{targetKindInfo.label} · 원고지 폭 · 용지 · 쪽 보기</h3>
-                          <p className="settings-description">
-                            원고 영역의 최대 폭을 종이 규격·모바일·태블릿 단말기에 맞추거나 A4 쪽 보기로 전환합니다.
-                          </p>
-                          <div className="settings-grid">
-                            <label>
-                              단말기 / 용지 폭 프리셋
-                              <select
-                                aria-label="단말기 및 용지 폭 프리셋"
-                                value={
-                                  allWidthItems.some((w) => w.width === kindEditorStyle.editorMaxWidth)
-                                    ? String(kindEditorStyle.editorMaxWidth)
-                                    : "custom"
-                                }
-                                onChange={(e) => {
-                                  if (e.target.value !== "custom") {
-                                    updateTargetPrefs({ editorMaxWidth: Number(e.target.value) });
-                                  }
-                                }}
-                              >
-                                <option value="custom">직접 지정 ({kindEditorStyle.editorMaxWidth}px)</option>
-                                {WIDTH_PRESETS.map((group) => (
-                                  <optgroup key={group.group} label={group.group}>
-                                    {group.items.map((w) => (
-                                      <option key={w.id} value={w.width}>
-                                        {w.label}
-                                      </option>
-                                    ))}
-                                  </optgroup>
-                                ))}
-                              </select>
-                            </label>
-                            <label>
-                              원고 최대 너비 (px)
-                              <input
-                                type="number"
-                                min={350}
-                                max={3000}
-                                step={10}
-                                aria-label="원고 최대 너비"
-                                value={kindEditorStyle.editorMaxWidth}
-                                onChange={(e) =>
-                                  updateTargetPrefs({
-                                    editorMaxWidth: Math.min(3000, Math.max(350, Number(e.target.value) || 760)),
-                                  })
-                                }
-                              />
-                            </label>
-                            <label>
-                              원고 좌우 여백 (단계)
-                              <input
-                                type="number"
-                                min={0}
-                                max={10}
-                                step={1}
-                                aria-label="원고 좌우 여백"
-                                value={kindEditorStyle.editorPaddingX}
-                                onChange={(e) =>
-                                  updateTargetPrefs({
-                                    editorPaddingX: Math.min(10, Math.max(0, Number(e.target.value) || 0)),
-                                  })
-                                }
-                              />
-                            </label>
-                            <label>
-                              원고지 배경색 / 글자색
-                              <div className="color-pair-row">
-                                <input
-                                  type="color"
-                                  aria-label="원고지 배경색"
-                                  title="원고지 배경색"
-                                  value={kindEditorStyle.textareaBgColor || "#ffffff"}
-                                  onChange={(e) =>
-                                    updateTargetPrefs({ textareaBgColor: e.target.value })
-                                  }
-                                />
-                                <input
-                                  type="color"
-                                  aria-label="본문 글자색"
-                                  title="본문 글자색"
-                                  value={kindEditorStyle.editorTextColor || "#222222"}
-                                  onChange={(e) =>
-                                    updateTargetPrefs({ editorTextColor: e.target.value })
-                                  }
-                                />
-                                {(kindEditorStyle.textareaBgColor || kindEditorStyle.editorTextColor) && (
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      updateTargetPrefs({ textareaBgColor: "", editorTextColor: "" })
-                                    }
-                                  >
-                                    초기화
-                                  </button>
-                                )}
-                              </div>
-                            </label>
-                          </div>
-                          <div className="settings-toggles" style={{ marginTop: 16 }}>
-                            <SettingsToggle
-                              label="A4 인쇄 규격 쪽 보기 (210mm × 297mm)"
-                              description="원고 영역을 실제 A4 인쇄 시트(여백 20mm·15mm)와 페이지 구분선으로 표시합니다."
-                              checked={kindEditorStyle.pageViewEnabled}
-                              onChange={(checked) =>
-                                updateTargetPrefs({ pageViewEnabled: checked })
-                              }
-                            />
-                          </div>
-                        </div>
-                      </>
-                    );
-                  })()}
+                  {typesettingSettings(typesettingKind)}
                 </section>
                 <section id="settings-autocomplete" className="settings-section" hidden={settingsPage !== "autocomplete"}>
                   {(() => {

@@ -25,6 +25,7 @@ import {
   Copy,
   NotebookPen,
   SquareDashed,
+  Pilcrow,
 } from "lucide-react";
 import { createPortal } from "react-dom";
 import ContextMenu, { type MenuItem } from "./ContextMenu";
@@ -218,6 +219,7 @@ export default function Writer({
   onReplaceSymbols,
   tables = false,
   lineBreak,
+  typesetting,
   bookmarks,
   onBookmarksChange,
   jumpToBookmark = null,
@@ -243,6 +245,8 @@ export default function Writer({
   tables?: boolean;
   // 도구 막대의 줄바꿈 방식 버튼. 현재 방식은 manualLineBreak를 쓰고, def는 새 문서 기본값이다.
   lineBreak?: { def: boolean; defaultLabel: string; onChange: (manual: boolean) => void };
+  // 도구 막대의 조판 버튼. 우측 사이드바에 조판 설정을 펼쳐 본문을 보며 고친다.
+  typesetting?: { open: boolean; onToggle: () => void };
   // 원고 북마크. onBookmarksChange가 있을 때만 왼쪽 여백을 눌러 넣고 뺄 수 있다.
   bookmarks?: Bookmark[];
   onBookmarksChange?: (bookmarks: Bookmark[]) => void;
@@ -725,6 +729,23 @@ export default function Writer({
                 lineBreak.onChange(manual);
               }}
             />
+          </>
+        )}
+        {typesetting && (
+          <>
+            {!lineBreak && <i className="format-divider" />}
+            <button
+              type="button"
+              className={`typesetting-button${typesetting.open ? " active" : ""}`}
+              aria-label="조판 설정"
+              aria-pressed={typesetting.open}
+              title={typesetting.open ? "조판 설정 닫기" : "조판 설정 (본문을 보며 고치기)"}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={typesetting.onToggle}
+            >
+              <Pilcrow size={16} />
+              <span>조판</span>
+            </button>
           </>
         )}
         <span>본문</span>

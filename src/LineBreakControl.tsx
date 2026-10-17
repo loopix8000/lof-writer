@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Info, WrapText } from "lucide-react";
+import { WrapText } from "lucide-react";
 import { lineBreakLabel } from "../core/episode.mjs";
 
 // 편집 도구 막대의 줄바꿈 방식 버튼. 누르면 바꿀지 묻는 작은 창을 띄운다. 바꾸면 본문의 빈 줄도 그 방식에 맞게 바뀐다.
@@ -62,7 +62,6 @@ export default function LineBreakControl({
       >
         <WrapText size={16} />
         <span>{label}</span>
-        {differs && <Info size={12} />}
       </button>
       {anchor && createPortal(
         <div
