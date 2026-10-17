@@ -125,14 +125,6 @@ Tauri 2, Rust, React, TypeScript, Tiptap을 사용합니다.
 
 파일 중심 저장, 로컬 SQLite 이력, 최신 문서만 교환하는 동기화 규격과 마이그레이션은 [저장·이력·동기화 설계](planning/design/STORAGE_SYNC.md)에 정리했습니다.
 
-에이전트용 MCP 사용 지침과 입력 검증 보강 작업은 [MCP TODO](planning/todo/MCP.md)에 정리했습니다.
-
-긴 회차 목록과 본문 탐색, 우측 위젯과 책갈피·조판 아이콘에 대한 개선 작업은 [UX TODO](planning/todo/UX.md)에 정리했습니다.
-
-전체 기획 자료는 [문서 목록](planning/README.md)에서, 이미지 시안은 [시안 목록](planning/mockups/README.md)에서 확인할 수 있습니다.
-
-소개 화면을 다시 촬영하고 README와 소개 사이트 파일을 만드는 방법은 [데모 스냅샷 파이프라인](SNAPSHOTS.md)에 정리했습니다.
-
 Node.js 24 이상과 Rust, Tauri 2용 Windows 빌드 환경이 필요합니다.
 
 ```powershell
