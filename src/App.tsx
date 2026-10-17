@@ -111,6 +111,8 @@ const composingError = "한글 입력 조합이 끝난 뒤 다시 저장해 주�
 const autoSyncLabels = { idle: "동기화 완료", pending: "동기화 대기", syncing: "동기화 중", error: "동기화 재시도 대기" };
 const labels = { episode: "에피소드", plot: "플롯", memo: "메모" };
 const icons = { episode: BookOpen, plot: FileText, memo: StickyNote };
+// 파일 트리에서 회차가 이보다 많으면 이 단위로 묶어 접는다.
+const EPISODE_GROUP = 20;
 const empty: Library = {
   root: "",
   projects: [],
@@ -277,7 +279,16 @@ export default function App() {
     // 메모 영역의 memo/ 폴더 목록, 펼친 폴더, 이름을 바꾸는 폴더.
     [memoEntries, setMemoEntries] = useState<{ path: string; name: string; type: string }[]>([]),
     [memoOpenFolders, setMemoOpenFolders] = useState<Set<string>>(new Set()),
-    [folderRenaming, setFolderRenaming] = useState<{ path: string; value: string } | null>(null);
+    [folderRenaming, setFolderRenaming] = useState<{ path: string; value: string } | null>(null),
+    // 파일 트리의 탭(에피소드·문서. 문서 탭에 'memo' 키를 쓴다)과 탭마다의 검색어.
+    [treeTab, setTreeTab] = useState<"episode" | "memo">("episode"),
+    [treeQuery, setTreeQuery] = useState({ episode: "", memo: "" }),
+    // 문서 탭의 보기 범위(전체 문서·현재 회차만), 현재 회차, 현재 회차 보기에서 접어 둔 묶음.
+    [docScope, setDocScope] = useState<"all" | "episode">("all"),
+    [treeEpisodeId, setTreeEpisodeId] = useState(""),
+    [closedDocGroups, setClosedDocGroups] = useState<Set<Kind>>(new Set()),
+    // 회차가 많은 작품에서 펼친 회차 묶음(묶음 첫 회차의 목록 위치).
+    [openEpisodeGroups, setOpenEpisodeGroups] = useState<Set<number>>(new Set());
   const [editorTabs, setEditorTabs] = useState<EditorTab[]>([]),
     [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[]; target?: string } | null>(null),
     // 이름 바꾸기 입력칸. widget이면 위젯 보드의 '이 회차의 플롯' 목록에서, 아니면 파일 트리에서 받는다.
@@ -1573,6 +1584,21 @@ export default function App() {
     d.kind === "episode"
       ? (episodeNo.get(d.id) ?? "")
       : String(docs.filter((x) => x.kind === d.kind).findIndex((x) => x.id === d.id) + 1).padStart(3, "0");
+  // 다른 곳(검색, 탭, 회차 우클릭으로 만든 플롯 등)에서 문서를 열면 그 문서가 있는 탭으로 옮긴다.
+  // 현재 회차는 마지막으로 연 회차이거나, 연 문서가 연결된 회차다.
+  useEffect(() => {
+    if (!active) return;
+    setTreeTab(active.kind === "episode" ? "episode" : "memo");
+    const episodeId = active.kind === "episode" ? active.id : active.episodeId;
+    if (episodeId) setTreeEpisodeId(episodeId);
+    // 연 회차가 접힌 묶음 안에 있으면 그 묶음을 펼친다.
+    const at = docs.filter((d) => d.kind === "episode").findIndex((d) => d.id === active.id);
+    if (at >= 0) {
+      const start = at - (at % EPISODE_GROUP);
+      setOpenEpisodeGroups((old) => (old.has(start) ? old : new Set([...old, start])));
+    }
+  }, [active?.id, active?.kind, active?.episodeId]);
+  const treeMatch = (text: string, query: string) => text.toLowerCase().includes(query.trim().toLowerCase());
   const writingRules = normalizeWriting(project?.writing || prefs.defaultWriting);
   const stats = active ? manuscriptStats(active.body) : null;
   // 원고 보호: 집필 완료인 회차는 제목과 본문을 고칠 수 없다(상태는 바꿀 수 있다).
@@ -2235,9 +2261,14 @@ export default function App() {
     await refresh();
     await loadMemoFolders();
   }
-  function memoFolderTree() {
-    const files = docs.filter((d) => d.kind !== "episode"),
-      folders = memoEntries.filter((e) => e.type === "folder");
+  // 검색어가 있으면 제목이 맞는 문서와 그 문서를 담은 폴더만 펼쳐서 보여 준다.
+  function memoFolderTree(query = "") {
+    const files = docs.filter((d) => d.kind !== "episode" && (!query.trim() || treeMatch(d.title, query))),
+      folders = memoEntries.filter(
+        (e) =>
+          e.type === "folder" &&
+          (!query.trim() || files.some((d) => (d.relPath || "").startsWith("doc/" + e.path + "/"))),
+      );
     const parentOf = (p: string) => p.slice(0, Math.max(0, p.lastIndexOf("/")));
     const level = (parent: string, depth: number): React.ReactNode => {
       const subFolders = folders
@@ -2247,7 +2278,7 @@ export default function App() {
       return (
         <>
           {subFolders.map((f) => {
-            const open = memoOpenFolders.has(f.path),
+            const open = !!query.trim() || memoOpenFolders.has(f.path),
               style = { paddingLeft: 8 + depth * 16 };
             if (folderRenaming?.path === f.path)
               return (
@@ -2393,6 +2424,67 @@ export default function App() {
     };
     return level("", 0);
   }
+  // 문서 탭의 '현재 회차만' 보기: 현재 회차에 연결된 플롯·메모를 유형별로 묶는다.
+  function episodeDocList(query: string) {
+    const ep = docs.find((d) => d.id === treeEpisodeId && d.kind === "episode");
+    if (!ep) return <div className="tree-empty">에피소드를 열면 연결된 문서가 여기에 보입니다</div>;
+    const bound = docs.filter((d) => d.kind !== "episode" && d.episodeId === ep.id),
+      shown = bound.filter((d) => !query.trim() || treeMatch(d.title, query));
+    return (
+      <>
+        <div className="episode-doc-caption">
+          <span title={ep.title}>
+            {numberOf(ep)} {ep.title}에 연결된 문서
+          </span>
+          <small>연결 문서 {bound.length}개</small>
+        </div>
+        {(["plot", "memo"] as const).map((kind) => {
+          const items = shown.filter((d) => d.kind === kind),
+            open = !closedDocGroups.has(kind);
+          if (query.trim() && !items.length) return null;
+          return (
+            <Fragment key={kind}>
+              <button
+                className={`tree-item doc-group ${menu?.target === "group-" + kind ? "context-target" : ""}`}
+                aria-expanded={open}
+                onClick={() =>
+                  setClosedDocGroups((old) => {
+                    const next = new Set(old);
+                    if (next.has(kind)) next.delete(kind);
+                    else next.add(kind);
+                    return next;
+                  })
+                }
+                onContextMenu={(e) =>
+                  openMenu(
+                    e,
+                    [{ label: `이 회차에 ${labels[kind]} 만들기`, disabled: archive, action: attempt(() => addDocFile("", kind, ep)) }],
+                    "group-" + kind,
+                  )
+                }
+              >
+                {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                <b>{labels[kind]}</b>
+                <small>{items.length}</small>
+              </button>
+              {open && items.map((d) => treeRow(d, docIcon(d), { depth: 1, remove: true, plot: true }))}
+            </Fragment>
+          );
+        })}
+        {query.trim() && !shown.length && <div className="tree-empty">검색 결과가 없습니다</div>}
+      </>
+    );
+  }
+  // 파일 트리 검색어에 맞는 에피소드(번호나 제목)와 문서(제목). Enter를 누르면 첫 번째 것을 연다.
+  const treeEpisodes = docs.filter(
+      (d) => d.kind === "episode" && (!treeQuery.episode.trim() || treeMatch(`${numberOf(d)} ${d.title}`, treeQuery.episode)),
+    ),
+    treeDocs = docs.filter(
+      (d) =>
+        d.kind !== "episode" &&
+        (docScope === "all" || d.episodeId === treeEpisodeId) &&
+        (!treeQuery.memo.trim() || treeMatch(d.title, treeQuery.memo)),
+    );
   const [winMaximized, setWinMaximized] = useState(false);
   useEffect(() => {
     const syncMax = () => {
@@ -2675,7 +2767,7 @@ export default function App() {
           </ResizableSidebar>
         )}
         {isWorkspace && treeOpen && !searchOpen && (
-          <ResizableSidebar label="파일 트리" width={prefs.leftSidebarWidth}
+          <ResizableSidebar label="파일 트리" className="file-tree" width={prefs.leftSidebarWidth}
             onResize={(width) => savePrefs({ leftSidebarWidth: width }).catch(report)}>
             <div className="panel-caption">
               <span>
@@ -2729,84 +2821,185 @@ export default function App() {
               </span>
               <ChevronDown size={15} />
             </button>
-            {/* 에피소드와 문서(doc/ 폴더: 플롯·메모) 두 영역. 문서 영역에 'memo' 키를 쓴다. */}
-            {(["episode", "memo"] as Kind[]).map((kind) => {
-              const Icon = icons[kind];
-              const newDoc = attempt(() => createDoc(kind));
-              return (
-                <section
-                  className={`tree-section ${kind === "memo" && plotDrop === "folder:" ? "drop-target" : ""}`}
-                  key={kind}
-                  onContextMenu={(e) =>
-                    openMenu(
-                      e,
-                      kind === "memo"
-                        ? memoCreateMenu("")
-                        : [{ label: `새 ${labels[kind]}`, disabled: archive, action: newDoc }],
-                    )
-                  }
-                  {...(kind === "memo" ? folderDropProps("") : {})}
+            {/* 에피소드와 문서(doc/ 폴더: 플롯·메모)를 탭으로 나눈다. 문서 탭에 'memo' 키를 쓴다. */}
+            <div className="tree-tabs" role="tablist" aria-label="파일 트리 보기">
+              {(["episode", "memo"] as const).map((tab) => (
+                <button
+                  key={tab}
+                  role="tab"
+                  aria-selected={treeTab === tab}
+                  className={treeTab === tab ? "active" : ""}
+                  onClick={() => setTreeTab(tab)}
+                  // 문서를 끌어 에피소드 탭에 올리면 탭을 바꿔 회차 위에 놓을 수 있게 한다.
+                  onDragEnter={() => {
+                    if (tab === "episode" && dragPlot.current) setTreeTab("episode");
+                  }}
                 >
-                  <div className="tree-heading">
-                    <span>{kind === "memo" ? "문서" : labels[kind]}</span>
-                    <small>{kind === "memo" ? count("plot") + count("memo") : count(kind)}</small>
-                    {kind === "memo" ? (
-                      // 문서 영역은 문서 추가(플롯·메모를 고름)와 폴더 추가를 따로 둔다(doc/ 바로 아래에 만든다).
-                      <>
-                        <button
-                          aria-label="문서 추가"
-                          title="문서 추가"
-                          disabled={archive}
-                          onClick={(e) => openMenu(e, docCreateMenu(""), "doc-add")}
-                        >
-                          <FilePlus size={16} />
-                        </button>
-                        <button
-                          className="heading-extra"
-                          aria-label="폴더 추가"
-                          title="폴더 추가"
-                          disabled={archive}
-                          onClick={attempt(() => addMemoFolder(""))}
-                        >
-                          <FolderPlus size={16} />
-                        </button>
-                      </>
-                    ) : (
-                      <button aria-label={`${labels[kind]} 추가`} onClick={newDoc}>
-                        <Plus size={17} />
-                      </button>
+                  {tab === "memo" ? "문서" : labels.episode}
+                  <small>{tab === "memo" ? count("plot") + count("memo") : count("episode")}</small>
+                </button>
+              ))}
+            </div>
+            {treeTab === "memo" && (
+              <div className="doc-scope" role="radiogroup" aria-label="문서 보기 범위">
+                {([["all", "전체 문서"], ["episode", "현재 회차만"]] as const).map(([scope, label]) => (
+                  <button
+                    key={scope}
+                    role="radio"
+                    aria-checked={docScope === scope}
+                    className={docScope === scope ? "active" : ""}
+                    onClick={() => setDocScope(scope)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
+            <div className="tree-search-row">
+              <label className="tree-search">
+                <Search size={14} />
+                <input
+                  value={treeQuery[treeTab]}
+                  placeholder={treeTab === "memo" ? "문서 검색" : "에피소드 검색"}
+                  aria-label={treeTab === "memo" ? "문서 검색" : "에피소드 검색"}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setTreeQuery((q) => ({ ...q, [treeTab]: value }));
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape" && treeQuery[treeTab]) {
+                      e.stopPropagation();
+                      setTreeQuery((q) => ({ ...q, [treeTab]: "" }));
+                    } else if (e.key === "Enter" && treeQuery[treeTab].trim()) {
+                      const first = (treeTab === "memo" ? treeDocs : treeEpisodes)[0];
+                      if (first) attempt(() => openDoc(first.id, false))();
+                    }
+                  }}
+                />
+                {treeQuery[treeTab] && (
+                  <button
+                    aria-label="검색어 지우기"
+                    title="검색어 지우기"
+                    onClick={() => setTreeQuery((q) => ({ ...q, [treeTab]: "" }))}
+                  >
+                    <X size={13} />
+                  </button>
+                )}
+              </label>
+              {treeTab === "memo" && docScope === "all" && (
+                // 문서 추가(플롯·메모를 고름)와 폴더 추가는 doc/ 바로 아래에 만든다.
+                <>
+                  <button
+                    className="tree-search-action"
+                    aria-label="문서 추가"
+                    title="문서 추가"
+                    disabled={archive}
+                    onClick={(e) => openMenu(e, docCreateMenu(""), "doc-add")}
+                  >
+                    <FilePlus size={16} />
+                  </button>
+                  <button
+                    className="tree-search-action"
+                    aria-label="폴더 추가"
+                    title="폴더 추가"
+                    disabled={archive}
+                    onClick={attempt(() => addMemoFolder(""))}
+                  >
+                    <FolderPlus size={16} />
+                  </button>
+                </>
+              )}
+            </div>
+            {/* 탭을 바꿔도 끌던 문서가 이어지도록 두 탭 모두 그려 두고 숨긴다. */}
+            <div className="tree-scroll">
+              <section
+                className="tree-section tree-panel"
+                hidden={treeTab !== "episode"}
+                onContextMenu={(e) =>
+                  openMenu(e, [{ label: "새 에피소드", disabled: archive, action: attempt(() => createDoc("episode")) }])
+                }
+              >
+                {!treeQuery.episode.trim() && treeEpisodes.length > EPISODE_GROUP
+                  ? Array.from({ length: Math.ceil(treeEpisodes.length / EPISODE_GROUP) }, (_, g) => {
+                      const start = g * EPISODE_GROUP,
+                        items = treeEpisodes.slice(start, start + EPISODE_GROUP),
+                        open = openEpisodeGroups.has(start);
+                      const toggle = (next: boolean) =>
+                        setOpenEpisodeGroups((old) => {
+                          const set = new Set(old);
+                          if (next) set.add(start);
+                          else set.delete(start);
+                          return set;
+                        });
+                      return (
+                        <Fragment key={start}>
+                          <button
+                            className="tree-item episode-group"
+                            aria-expanded={open}
+                            onClick={() => toggle(!open)}
+                            // 문서를 끌어 접힌 묶음에 올리면 펼쳐서 회차 위에 놓을 수 있게 한다.
+                            onDragEnter={() => {
+                              if (dragPlot.current && !open) toggle(true);
+                            }}
+                          >
+                            {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                            <span>
+                              {start + 1} - {start + items.length}화
+                            </span>
+                          </button>
+                          {open &&
+                            items.map((d) =>
+                              treeRow(d, <span className="episode-number">{numberOf(d)}</span>, { episode: true }),
+                            )}
+                        </Fragment>
+                      );
+                    })
+                  : treeEpisodes.map((d) =>
+                      treeRow(d, <span className="episode-number">{numberOf(d)}</span>, { episode: true }),
                     )}
+                {!treeEpisodes.length && (
+                  <div className="tree-empty">
+                    {treeQuery.episode.trim() ? "검색 결과가 없습니다" : "아직 에피소드가 없습니다"}
                   </div>
-                  {kind === "memo"
-                    ? memoFolderTree()
-                    : docs
-                        .filter((d) => d.kind === kind)
-                        .map((d, i) =>
-                          treeRow(
-                            d,
-                            kind === "episode" ? (
-                              <span className="episode-number">{numberOf(d)}</span>
-                            ) : (
-                              <Icon size={15} />
-                            ),
-                            { episode: kind === "episode" },
-                          ),
+                )}
+              </section>
+              <section
+                className={`tree-section tree-panel ${docScope === "all" && plotDrop === "folder:" ? "drop-target" : ""}`}
+                hidden={treeTab !== "memo"}
+                onContextMenu={(e) => docScope === "all" && openMenu(e, memoCreateMenu(""))}
+                {...(docScope === "all" ? folderDropProps("") : {})}
+              >
+                {docScope === "all" ? (
+                  <>
+                    {memoFolderTree(treeQuery.memo)}
+                    {treeQuery.memo.trim()
+                      ? !treeDocs.length && <div className="tree-empty">검색 결과가 없습니다</div>
+                      : count("plot") + count("memo") === 0 &&
+                        !memoEntries.some((e) => e.type === "folder") && (
+                          <div className="tree-empty">아직 문서가 없습니다</div>
                         )}
-                  {(kind === "memo" ? count("plot") + count("memo") : count(kind)) === 0 &&
-                    !(kind === "memo" && memoEntries.some((e) => e.type === "folder")) && (
-                      <div className="tree-empty">아직 문서가 없습니다</div>
-                    )}
-                </section>
-              );
-            })}
-            {brokenFiles()}
-            <button
-              className="archive-toggle"
-              onClick={() => setArchive((a) => !a)}
-            >
-              <Archive size={14} />
-              {archive ? "현재 문서 보기" : "보관함 보기"}
-            </button>
+                  </>
+                ) : (
+                  episodeDocList(treeQuery.memo)
+                )}
+              </section>
+              {brokenFiles()}
+            </div>
+            <div className="tree-footer">
+              {treeTab === "episode" && !archive && (
+                <button className="episode-add" onClick={attempt(() => createDoc("episode"))}>
+                  <Plus size={16} />
+                  새 에피소드
+                </button>
+              )}
+              <button
+                className="archive-toggle"
+                onClick={() => setArchive((a) => !a)}
+              >
+                <Archive size={14} />
+                {archive ? "현재 문서 보기" : "보관함 보기"}
+              </button>
+            </div>
           </ResizableSidebar>
         )}
         <main className={isWorkspace ? "workspace" : "main-page"}>
