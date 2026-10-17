@@ -48,6 +48,7 @@ import { Fragment, Slice, type Node as PMNode } from "@tiptap/pm/model";
 import { TextSelection } from "@tiptap/pm/state";
 import type { EditorProps, EditorView } from "@tiptap/pm/view";
 import { createCachedMarkdown } from "./cached-markdown";
+import EditorFind, { FindHighlights } from "./EditorFind";
 
 const SourceEditor = lazy(() => import("./SourceEditor"));
 
@@ -455,6 +456,7 @@ export default function Writer({
         }),
         markdown.document,
         markdown.extension,
+        FindHighlights,
         ...(tables ? [MarkdownTables] : []),
         ...(hasImages
           ? [MarkdownImage.configure({ resolve: (src) => imagesRef.current?.resolve(src) ?? Promise.resolve(null) })]
@@ -788,6 +790,7 @@ export default function Writer({
   if (source || protectedSource)
     return (
       <div className="source-editor">
+        <EditorFind sourceRef={sourceRef} body={body} enabled={visible && !inactive} />
         {protectedSource && <div className="source-hint">원문 편집</div>}
         <div onContextMenu={(event) => {
           const handle = sourceRef.current, view = handle?.view;
@@ -893,6 +896,7 @@ export default function Writer({
   ];
   return (
     <>
+      <EditorFind editor={editor} enabled={visible && !inactive} />
       {/* 다른 그룹의 원고는 도구를 흐리게만 하고 클릭은 막대로 넘긴다. 막대를 누르면 그 그룹으로 옮겨 간다. */}
       <div className={`format-bar${inactive ? " inactive" : ""}`} aria-disabled={inactive || undefined}>
         {tools.map((t) => (

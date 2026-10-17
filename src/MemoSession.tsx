@@ -1083,6 +1083,7 @@ export default function MemoSession({
                 <input
                   className="document-title"
                   aria-label="메모 제목"
+                  spellCheck={false}
                   readOnly={!focused}
                   value={focused ? title : memo.title}
                   placeholder="제목"

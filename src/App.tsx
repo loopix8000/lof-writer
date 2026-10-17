@@ -294,6 +294,7 @@ export default function App() {
     [connectionType, setConnectionType] = useState("folder"),
     [googleDriveEnabled, setGoogleDriveEnabled] = useState(false),
     [googleConnecting, setGoogleConnecting] = useState(false),
+    [skillDownloading, setSkillDownloading] = useState(false),
     [busy, setBusy] = useState(false),
     // 메모 세션(레일의 메모 버튼). 열려 있는 동안 집필 화면은 그대로 두고 가린다.
     [memoOpen, setMemoOpen] = useState(false),
@@ -2212,6 +2213,7 @@ export default function App() {
             <input
               className="document-title"
               aria-label="문서 제목"
+              spellCheck={false}
               value={active.title}
               placeholder="제목을 입력해 주세요"
               readOnly={isProtected || !focused}
@@ -5903,6 +5905,30 @@ export default function App() {
                       <Copy size={15} />
                       API 연결 정보 복사
                     </button>
+                  </div>
+                  <div className="settings-subsection">
+                    <h3><Sparkles size={18} />AI 스킬</h3>
+                    <p className="settings-description">
+                      AI가 Lof Writer의 작품과 원고를 다룰 때 사용하는 스킬입니다.
+                      문서 조회·수정 방법과 API 안내를 함께 제공합니다.
+                    </p>
+                    <button disabled={skillDownloading} onClick={attempt(async () => {
+                      if (skillDownloading) return;
+                      setSkillDownloading(true);
+                      try {
+                        const path = await call<string | null>("downloadSkill");
+                        if (path) message("Lof Writer 스킬을 저장했습니다.");
+                      } finally {
+                        setSkillDownloading(false);
+                      }
+                    })}>
+                      <Download size={15} />
+                      {skillDownloading ? "저장 중…" : "스킬 다운로드"}
+                    </button>
+                    <p className="muted">
+                      ZIP 압축을 풀어 lof-writer 폴더를 사용하는 AI 도구의 스킬 폴더에 추가하세요.
+                      MCP 연결은 위의 설정으로 별도로 등록해 주세요.
+                    </p>
                   </div>
                 </section>
                   </div>

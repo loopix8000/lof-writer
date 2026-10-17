@@ -44,6 +44,7 @@ const methods = [
   "readClipboard",
   "mcpConfig",
   "copyApi",
+  "downloadSkill",
   "setPreferences",
   "setTitleBarDimmed",
   "setCompactWindow",

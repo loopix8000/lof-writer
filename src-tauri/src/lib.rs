@@ -12,6 +12,7 @@ pub mod memo;
 pub mod platforms;
 mod pin;
 mod single_instance;
+mod skills;
 pub mod store;
 pub mod sync;
 pub mod text;
@@ -1555,6 +1556,7 @@ fn dispatch_method(
             set_clipboard_text(&text)?;
             Ok(json!(true))
         }
+        "downloadSkill" => Ok(json!(skills::download(window)?)),
         _ => Err(fail_invalid(format!("알 수 없는 요청: {}", method))),
     }
 }
@@ -1568,7 +1570,7 @@ async fn lof_invoke(
     window: WebviewWindow,
 ) -> Result<Value, String> {
     let args_val = args.unwrap_or_else(|| json!({}));
-    let result = if matches!(method.as_str(), "connectGoogleDrive" | "sync" | "pinUnlock" | "pinSave" | "backupStorage" | "countManuscript") {
+    let result = if matches!(method.as_str(), "connectGoogleDrive" | "sync" | "pinUnlock" | "pinSave" | "backupStorage" | "countManuscript" | "downloadSkill") {
         tauri::async_runtime::spawn_blocking(move || {
             let state = app.state::<AppState>();
             if method == "pinUnlock" || method == "pinSave" {

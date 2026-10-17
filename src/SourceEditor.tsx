@@ -1,6 +1,6 @@
 import { forwardRef, useImperativeHandle, useLayoutEffect, useRef } from "react";
-import { Annotation, Compartment, EditorState, Transaction } from "@codemirror/state";
-import { EditorView, keymap, type ViewUpdate } from "@codemirror/view";
+import { Annotation, Compartment, EditorState, StateEffect, StateField, Transaction } from "@codemirror/state";
+import { Decoration, EditorView, keymap, type DecorationSet, type ViewUpdate } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { markdown } from "@codemirror/lang-markdown";
 import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
@@ -10,11 +10,26 @@ import { pairedBackspace, typingPlan } from "../core/typing.mjs";
 import { markdownImage } from "./image-extension";
 import { textCounts, type ManuscriptCounts } from "./manuscript-counts";
 import type { WritingRules } from "./types";
+import type { FindRange } from "./EditorFind";
 
 type Image = { src: string; alt: string };
 const externalChange = Annotation.define<boolean>();
 const editableConfig = new Compartment();
 const contentConfig = new Compartment();
+const findMarks = StateEffect.define<{ hits: FindRange[]; active: number }>();
+const findHighlights = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(marks, tr) {
+    marks = marks.map(tr.changes);
+    for (const effect of tr.effects) if (effect.is(findMarks)) {
+      marks = Decoration.set(effect.value.hits.map((hit, index) => Decoration.mark({
+        class: `editor-find-hit${index === effect.value.active ? " current" : ""}`,
+      }).range(hit.from, hit.to)), true);
+    }
+    return marks;
+  },
+  provide: field => EditorView.decorations.from(field),
+});
 
 function inCode(state: EditorState, position = state.selection.main.from): boolean {
   const tree = ensureSyntaxTree(state, position, 2) ?? syntaxTree(state);
@@ -52,6 +67,8 @@ export type SourceEditorHandle = {
   paste: (text: string) => void;
   insertImage: (image: Image) => void;
   reveal: (query: string, index: number, caseSensitive?: boolean) => void;
+  highlight: (hits: FindRange[], active: number) => void;
+  revealRange: (hit: FindRange) => void;
 };
 
 type Props = {
@@ -72,6 +89,13 @@ const SourceEditor = forwardRef<SourceEditorHandle, Props>(function SourceEditor
   const lastBody = useRef(props.body);
   const handle = useRef<SourceEditorHandle>({
     get view() { return viewRef.current; },
+    highlight(hits, active) {
+      viewRef.current?.dispatch({ effects: findMarks.of({ hits, active }) });
+    },
+    revealRange(hit) {
+      viewRef.current?.dispatch({ selection: { anchor: hit.from, head: hit.to },
+        effects: EditorView.scrollIntoView(hit.from, { y: "center" }) });
+    },
     replace(from, to, text, caret = from + text.length) {
       const view = viewRef.current;
       if (!view || view.state.readOnly) return;
@@ -125,6 +149,7 @@ const SourceEditor = forwardRef<SourceEditorHandle, Props>(function SourceEditor
       state: EditorState.create({ doc: latest.current.body, extensions: [
         markdown({ extensions: GFM, addKeymap: false, completeHTMLTags: false, pasteURLAsLink: false }),
         history(), keymap.of([...historyKeymap, ...defaultKeymap]), EditorView.lineWrapping,
+        findHighlights,
         editableConfig.of(editable()), contentConfig.of(attributes()),
         EditorView.clipboardInputFilter.of((text, state) => latest.current.manualLineBreak || inCode(state)
           ? text : latest.current.normalizePaste(text, false)),
