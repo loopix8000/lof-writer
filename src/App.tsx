@@ -513,6 +513,8 @@ export default function App() {
           view: here.view,
           projectId: here.projectId,
           documentId: here.documentId,
+          tab,
+          archive,
           tabs: editorTabs,
           split,
           focusedSide,
@@ -762,7 +764,12 @@ export default function App() {
       }
       await openDoc(saved.documentId);
     } else if (saved?.view === "project" && hasProject(saved.projectId))
-      await goView("project", saved.projectId);
+      await navigate({
+        view: "project",
+        projectId: saved.projectId,
+        tab: ["episode", "plot", "memo"].includes(saved.tab) ? saved.tab : "episode",
+        archive: saved.archive === true,
+      });
     if (saved?.memoOpen) setMemoOpen(true);
   }
   // 문서 ID가 바뀌었을 때(메모 이름 바꾸기) 탭·분할 보기·이동 기록이 새 ID를 가리키게 한다.
@@ -1105,10 +1112,12 @@ export default function App() {
     else return;
     e.preventDefault();
   }
+  // 작품 페이지로 새로 들어올 때는 항상 에피소드 목록에서 시작한다.
+  // 뒤로/앞으로 이동과 앱 재시작 복원은 navigate에 저장된 탭을 그대로 넘긴다.
   async function goView(next: "library" | "project", id = projectId) {
-    const sameProject = id === projectId;
+    const keep = next !== "project" && id === projectId;
     await navigate({ view: next, projectId: id,
-      tab: sameProject ? tab : "episode", archive: sameProject ? archive : false });
+      tab: keep ? tab : "episode", archive: keep ? archive : false });
   }
   async function travel(direction: number) {
     const current = navigationRef.current;
@@ -1311,6 +1320,8 @@ export default function App() {
           view: here.view,
           projectId: here.projectId,
           documentId: here.documentId,
+          tab,
+          archive,
           tabs: editorTabs,
           split,
           focusedSide,
@@ -1320,7 +1331,7 @@ export default function App() {
       }).catch(() => {});
     }, 500);
     return () => clearTimeout(t);
-  }, [here, editorTabs, split, focusedSide, splitRatio, memoOpen]);
+  }, [here, tab, archive, editorTabs, split, focusedSide, splitRatio, memoOpen]);
   async function savePrefs(p: Record<string, any>) {
     let payload = p;
     if (
