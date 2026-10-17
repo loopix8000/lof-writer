@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { EditorContent, useEditor } from "@tiptap/react";
 import { EditorState } from "@tiptap/pm/state";
 import { EditorView } from "@tiptap/pm/view";
+import { closeHistory } from "@tiptap/pm/history";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
 import Writer from "../../src/Writer";
@@ -121,26 +122,47 @@ function SmallEngine({ changed }: { changed: (body?: string) => void }) {
 function App() {
   const [body, setBody] = useState(corpus), [version, setVersion] = useState(0);
   const [line, setLine] = useState(1);
+  const [documentId, setDocumentId] = useState("lab");
+  const [sourceMode, setSourceMode] = useState(source);
+  const [reveal, setReveal] = useState<{ query: string; index: number; caseSensitive: boolean; seq: number } | null>(null);
+  const [gutters, setGutters] = useState(false), [bookmarks, setBookmarks] = useState<any[]>([]), [notes, setNotes] = useState<any[]>([]);
   useLayoutEffect(() => { if (lab.active) lab.renders++; });
   const changed = (next?: string) => {
     if (next !== undefined) setBody(next);
     setVersion(value => value + 1);
   };
   useEffect(() => { lab.mounted = true; }, []);
-  return <div className={`app lab-app ${["content-visibility", "visibility-engine"].includes(mode) ? "lab-windowed" : ""}`}>
+  useEffect(() => {
+    lab.documentId = documentId;
+    lab.sourceMode = sourceMode;
+    lab.controls = {
+      reveal(query: string, index: number) { setReveal(previous => ({ query, index, caseSensitive: true, seq: (previous?.seq || 0) + 1 })); },
+      setSource: setSourceMode,
+      open(id: string, text: string) { setDocumentId(id); setBody(text); setReveal(null); },
+      gutters(enabled: boolean, index = 0, text = "") {
+        setGutters(enabled);
+        setBookmarks(enabled ? [{ index, text: text.slice(0, 80) }] : []);
+        setNotes(enabled ? [{ id: "lab-note", title: "검증 메모", text }] : []);
+      },
+    };
+  }, [documentId, sourceMode]);
+  return <div className={`app lab-app ${["content-visibility", "visibility-engine", "writer-visibility"].includes(mode) ? "lab-windowed" : ""}`}>
     <header>긴 원고 입력 실험 · {mode} · 변경 {version} · {line}행</header>
     <div className="editor-scroll"><main className="manuscript">
-      {["writer", "writer-no-cursor", "source"].includes(mode) ? <Writer
-        id="lab" body={body} onChange={next => { if (lab.active) lab.updates++; changed(next); }}
-        fontSize={18} lineHeight={2} source={source} onComposition={() => {}}
-        typingOptions={options} countingRules={rules} revision="lab" tables
-        images={{ resolve: async () => null }} onCursorLine={mode === "writer-no-cursor" ? undefined : setLine}
+      {["writer", "writer-no-cursor", "writer-visibility", "source"].includes(mode) ? <Writer
+        id={documentId} body={body} onChange={next => { if (lab.active) lab.updates++; changed(next); }}
+        fontSize={18} lineHeight={2} source={sourceMode} onComposition={() => {}}
+        typingOptions={options} countingRules={rules} revision={documentId} reveal={reveal} tables
+        images={{ resolve: async () => null }} onCursorLine={["writer-no-cursor", "writer-visibility"].includes(mode) ? undefined : setLine}
+        bookmarks={bookmarks} onBookmarksChange={gutters ? setBookmarks : undefined}
+        notes={notes} onOpenNotes={() => { lab.noteOpens = (lab.noteOpens || 0) + 1; }}
       /> : <SmallEngine changed={changed} />}
     </main></div>
   </div>;
 }
 createRoot(document.getElementById("root")!).render(<App />);
 lab.instrument = () => { if (window.__labEditor) instrumentEditor(window.__labEditor); };
+lab.historyBoundary = () => window.__labEditor.view.dispatch(closeHistory(window.__labEditor.state.tr));
 lab.reset = () => {
   lab.stages = {}; lab.keys = []; lab.frames = []; lab.renders = 0;
   lab.inputs = 0; lab.updates = 0; lab.longTasks = []; lab.active = true;

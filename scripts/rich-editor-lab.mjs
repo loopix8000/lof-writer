@@ -9,6 +9,7 @@ import { chromium } from "@playwright/test";
 import { readMarkdown } from "../core/markdown.mjs";
 import { requiresSource } from "../core/text.mjs";
 import { writeLabSummary } from "./summarize-rich-editor-lab.mjs";
+import { checkRichEditorStability } from "./rich-editor-lab-stability.mjs";
 
 // 제품 실행 파일·설정·서재와 분리한 정적 페이지에서만 입력한다.
 const root = path.resolve(import.meta.dirname, "..");
@@ -23,12 +24,14 @@ const samples = Number(option("--samples", "60"));
 const interval = Number(option("--interval", "20"));
 const position = option("--position", "end");
 const profile = args.includes("--profile");
+const stability = args.includes("--stability");
 const layout = option("--layout", "original");
 const channel = option("--browser", "msedge");
 if (sizes.some(size => !Number.isInteger(size) || size < 1000) ||
     !Number.isInteger(repetitions) || repetitions < 1 || !Number.isInteger(samples) || samples < 1 || !Number.isFinite(interval) || interval < 1 ||
     !["start", "middle", "end"].includes(position) || !["original", "long-paragraphs"].includes(layout) ||
-    modes.some(mode => !["writer", "writer-no-cursor", "full", "no-serialize", "no-react", "engine-only", "minimal", "source", "content-visibility", "visibility-engine"].includes(mode)))
+    (stability && modes.includes("source")) ||
+    modes.some(mode => !["writer", "writer-no-cursor", "writer-visibility", "full", "no-serialize", "no-react", "engine-only", "minimal", "source", "content-visibility", "visibility-engine"].includes(mode)))
   throw Error("실험 인수를 확인해 주세요.");
 const bytes = await fs.readFile(fixture);
 const initialHash = createHash("sha256").update(bytes).digest("hex");
@@ -46,6 +49,9 @@ for (const [size, text] of fixtures) {
 }
 await fs.mkdir(output, { recursive: true });
 const frontend = path.join(output, "frontend");
+const harnessHash = createHash("sha256");
+for (const file of ["tests/rich-editor-lab/engine.tsx", "tests/rich-editor-lab/lab.css", "scripts/rich-editor-lab-stability.mjs"])
+  harnessHash.update(await fs.readFile(path.join(root, file)));
 const wrappers = {
   "/src/Writer.tsx": ["cursorLineAt"],
   "/src/manuscript-counts.ts": ["paragraphCountDelta"],
@@ -90,7 +96,8 @@ const server = http.createServer(async (req, res) => {
 });
 await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
 let browser;
-const report = { fixture, initialHash, frontend, sizes, modes, repetitions, samples, interval, position, layout,
+const report = { fixture, initialHash, frontend, sizes, modes, repetitions, samples, interval, position, layout, stability,
+  harnessSha256: harnessHash.digest("hex"), candidate: "content-visibility:auto + overflow-clip-margin:64px",
   environment: { platform: process.platform, node: process.version }, results: [], errors: [] };
 const quantile = (values, q) => [...values].sort((a, b) => a - b)[Math.min(values.length - 1, Math.floor(values.length * q))] ?? 0;
 const summarize = values => ({ median: quantile(values, .5), p95: quantile(values, .95), max: Math.max(0, ...values), total: values.reduce((a, b) => a + b, 0), calls: values.length });
@@ -187,6 +194,10 @@ try {
         ackMs: summarize(acknowledgements.map((at, i) => at - sendTimes[i])),
         metrics: Object.fromEntries(["TaskDuration", "ScriptDuration", "LayoutDuration", "RecalcStyleDuration", "LayoutCount", "RecalcStyleCount"].map(key => [key, lastMetrics[key] - firstMetrics[key]])),
       };
+      if (stability) {
+        result.stability = await checkRichEditorStability(page, cdp);
+        if (!result.stability.ok) report.errors.push({ size, mode, repeat, message: "편집 동작 안정성 검증에 실패했습니다.", checks: result.stability.checks.filter(check => !check.ok) });
+      }
       report.results.push(result);
       await fs.writeFile(path.join(output, "report.json"), JSON.stringify(report, null, 2));
       console.log(`${repeat + 1}/${repetitions} · ${size}자 · ${mode}: 다음 프레임 p95 ${result.nextFrameMs.p95.toFixed(1)}ms / 대기 p95 ${result.queueMs.p95.toFixed(1)}ms / 처리 ${result.stages["dispatch.total"]?.total.toFixed(1) ?? "-"}ms`);

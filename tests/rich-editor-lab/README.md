@@ -14,6 +14,7 @@ node scripts/rich-editor-lab.mjs --fixture "D:/문서/큰 원고.md"
 |---|---|
 | writer | 실제 Writer 컴포넌트 + 작은 React 부모 |
 | writer-no-cursor | 실제 Writer에서 부모 커서 줄 번호 통지만 제외한 기본 대조군 |
+| writer-visibility | writer-no-cursor에 화면 밖 문단 배치 생략과 바깥 클릭 여유 64px를 적용한 실험군 |
 | full | 같은 핵심 확장·Markdown 변환·문단 집계·React 본문 반영을 둔 작은 엔진 |
 | no-serialize | full에서 전체 Markdown 문자열 생성만 제외. React 갱신은 유지 |
 | no-react | full에서 입력 후 부모 React 갱신만 제외. Markdown 변환은 유지 |
@@ -27,6 +28,12 @@ node scripts/rich-editor-lab.mjs --fixture "D:/문서/큰 원고.md"
 
 기본 비교는 `writer-no-cursor`를 사용한다. `writer`를 20만·30만 자에서 60회 연속 입력하면 실험 부모의 커서 줄 번호 상태 반영 경로에서 React #185 오류가 관찰됐다. 오류가 있는 비교군은 요약 수치에서 제외하고 실행도 실패 처리한다. 오류 스택은 `report.json`에 보존한다. 이 결과만으로 전체 앱에서 같은 오류가 발생한다고 단정하지 않는다.
 
+실험 CSS는 `overflow-clip-margin:64px`로 문단 밖 북마크·메모 아이콘 영역을 보존한다. 단순 `content-visibility:auto`만 쓴 후보에서는 여백 아이콘 클릭 차단이 재현됐다. 이 여유를 둔 버전과 이전 단순 CSS 버전의 수치는 구분해야 한다. `report.json`의 `candidate`, `harnessSha256`에 실험 후보와 실행 소스 식별값을 남긴다.
+
+제품의 일반 편집에도 같은 최적화가 적용됐다. 실험의 비최적화 비교군은 별도 CSS로 배치 생략을 해제해 기존 기준을 유지한다. 제품의 쪽 보기는 적용 대상에서 제외한다.
+
+`--stability`를 주면 성능 측정이 끝난 같은 메모리 사본에서 커서·스크롤 좌표, 전체 선택·복사, 검색 이동, 입력·되돌리기·다시 실행, 여러 줄 붙여넣기, 한글 조합 이벤트, 북마크·메모 아이콘 클릭, 원문 모드 전환·복귀, 문서 재개방과 전체 본문 보존을 추가 검증한다. 현재 일반 편집 대상이며 source 비교군과 함께 쓸 수 없다. 조합 이벤트는 CDP 모의 검증이고 Windows 실제 IME 실사용 검증은 아니다. 디스크 자동 저장·복원도 포함하지 않는다.
+
 측정 항목:
 
 - 키 전송부터 브라우저 핸들러 시작까지의 대기 시간
@@ -39,6 +46,9 @@ node scripts/rich-editor-lab.mjs --fixture "D:/문서/큰 원고.md"
 포함 시간끼리는 합산하지 않는다. p95는 개별 반복 내 입력별 값이며 최종 표는 세 반복의 p95 중앙값이다. `report.json`에는 원시 입력별 시각, 각 반복과 단계별 결과를 모두 보관한다.
 
 ```powershell
+# 실제 Writer를 가져와 기존/후보의 입력 속도와 편집 동작을 함께 비교
+node scripts/rich-editor-lab.mjs --modes writer-no-cursor,writer-visibility --stability --output .test-data/rich-editor-lab/stability
+
 # CPU 프로파일: 계측 오버헤드가 추가되므로 기본 지연 결과와 구분
 node scripts/rich-editor-lab.mjs --sizes 300000 --modes full,no-serialize,no-react,engine-only --repetitions 1 --profile --output .test-data/rich-editor-lab-profile
 node scripts/summarize-input-profile.mjs .test-data/rich-editor-lab-profile

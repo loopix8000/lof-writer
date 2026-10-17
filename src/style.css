@@ -4521,6 +4521,14 @@ button.episode-tag[draggable]:active {
   text-align: var(--editor-text-align, left);
 }
 
+/* 일반 편집은 화면 밖 블록의 배치를 생략하고, 읽은 높이는 다시 사용한다. */
+.editor-content:not(.page-view) .tiptap > * {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 36px;
+  /* 문단 왼쪽에 있는 북마크·메모 아이콘의 표시와 클릭 영역을 보존한다. */
+  overflow-clip-margin: 64px;
+}
+
 .manual-break .tiptap p {
   margin: 0;
 }
