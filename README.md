@@ -123,8 +123,6 @@
 
 Tauri 2, Rust, React, TypeScript, Tiptap을 사용합니다.
 
-파일 중심 저장, 로컬 SQLite 이력, 최신 문서만 교환하는 동기화 규격과 마이그레이션은 [저장·이력·동기화 설계](planning/design/STORAGE_SYNC.md)에 정리했습니다.
-
 Node.js 24 이상과 Rust, Tauri 2용 Windows 빌드 환경이 필요합니다.
 
 ```powershell
