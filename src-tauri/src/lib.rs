@@ -1243,7 +1243,7 @@ fn dispatch_method(
             let conns: Vec<Value> = s_guard
                 .get("connections")
                 .and_then(|v| v.as_array())
-                .map(|arr| arr.iter().map(safe_connection).collect())
+                .map(|arr| arr.iter().filter(|c| google_drive::connection_enabled(c)).map(safe_connection).collect())
                 .unwrap_or_default();
             let prefs = s_guard
                 .get("preferences")
@@ -1258,6 +1258,7 @@ fn dispatch_method(
                 "syncing": state.syncing.load(Ordering::SeqCst),
                 "autoSync": app.state::<auto_sync::AutoSyncState>().status(),
                 "storage": storage,
+                "googleDriveEnabled": google_drive::ENABLED,
             }))
         }
         "saveConnection" => {

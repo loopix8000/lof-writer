@@ -10,6 +10,20 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
+pub const ENABLED: bool = false;
+
+pub fn connection_enabled(connection: &Value) -> bool {
+    ENABLED || connection.get("type").and_then(Value::as_str) != Some("google-drive")
+}
+
+pub fn ensure_enabled() -> Result<(), LofError> {
+    if ENABLED {
+        Ok(())
+    } else {
+        Err(fail("Google Drive 동기화 기능은 현재 비활성화되어 있습니다.", "FEATURE_DISABLED"))
+    }
+}
+
 pub const CLIENT_ID: &str = match option_env!("LOF_GOOGLE_CLIENT_ID") {
     Some(id) => id,
     None => "305870018708-n8nvl8s2lds42p89gf45rrc20eeta4bp.apps.googleusercontent.com",
@@ -52,6 +66,7 @@ pub struct Authorization {
 }
 
 pub fn http_client() -> Result<Client, LofError> {
+    ensure_enabled()?;
     Client::builder()
         .connect_timeout(Duration::from_secs(15))
         .timeout(Duration::from_secs(120))
@@ -307,6 +322,7 @@ fn open_browser(url: &str) -> Result<(), LofError> {
 }
 
 pub fn authorize(auth: &AuthState) -> Result<Authorization, LofError> {
+    ensure_enabled()?;
     if auth
         .pending
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)

@@ -263,6 +263,7 @@ export default function App() {
     [connections, setConnections] = useState<any[]>([]),
     [autoSync, setAutoSync] = useState<AutoSyncStatus>({ phase: "idle", message: "" }),
     [connectionType, setConnectionType] = useState("folder"),
+    [googleDriveEnabled, setGoogleDriveEnabled] = useState(false),
     [googleConnecting, setGoogleConnecting] = useState(false),
     [busy, setBusy] = useState(false),
     [sessionCount, setSessionCount] = useState(0),
@@ -1358,6 +1359,8 @@ export default function App() {
     await flush();
     const s = await call("settings");
     setConnections(s.connections);
+    setGoogleDriveEnabled(s.googleDriveEnabled === true);
+    if (!s.googleDriveEnabled && connectionType === "google-drive") setConnectionType("folder");
     if (s.autoSync) setAutoSync(s.autoSync);
     setCommonMemoPath(s.commonMemoPath || "");
     if (active?.kind) setTypesettingKind(active.kind === "episode" ? "episode" : "document");
@@ -1384,6 +1387,7 @@ export default function App() {
     }
   }
   async function connectGoogleDrive(args: { id?: string; name?: string }) {
+    if (!googleDriveEnabled) return;
     setBusy(true);
     try {
       await flush();
@@ -4852,7 +4856,7 @@ export default function App() {
                   {connections.length > 0 && <p role="status" className={autoSync.phase === "error" ? "pin-error" : "muted"}>
                     {autoSyncLabels[autoSync.phase]}{autoSync.message && ` · ${autoSync.message}`}
                   </p>}
-                  {googleConnecting && <div className="connection" role="status">
+                  {googleDriveEnabled && googleConnecting && <div className="connection" role="status">
                     <div><b>Google 계정 연결 중</b><small>브라우저에서 로그인하고 접근을 허용해 주세요.</small></div>
                     <button type="button" onClick={attempt(async () => { await call("cancelGoogleDrive"); })}>취소</button>
                   </div>}
@@ -4869,7 +4873,7 @@ export default function App() {
                         <RefreshCw size={15} />
                         {busy ? "진행 중" : "동기화"}
                       </button>
-                      {c.type === "google-drive" && <button disabled={busy}
+                      {googleDriveEnabled && c.type === "google-drive" && <button disabled={busy}
                         onClick={() => void connectGoogleDrive({ id: c.id })}>계정 다시 연결</button>}
                       <button
                         disabled={busy}
@@ -4921,7 +4925,7 @@ export default function App() {
                         onChange={(e) => setConnectionType(e.target.value)}
                       >
                         <option value="folder">로컬 폴더</option>
-                        <option value="google-drive">Google Drive</option>
+                        {googleDriveEnabled && <option value="google-drive">Google Drive</option>}
                         <option value="webdav">WebDAV</option>
                         <option value="ftp">FTP / FTPS</option>
                       </select>
@@ -4932,7 +4936,7 @@ export default function App() {
                         disabled={busy}
                       />
                     </div>
-                    {connectionType === "google-drive" && <p className="muted">
+                    {googleDriveEnabled && connectionType === "google-drive" && <p className="muted">
                       내 Google 계정으로 로그인해 Drive의 Lof Writer 폴더에 동기화합니다.
                       다른 PC에서도 같은 계정을 연결하세요.
                     </p>}

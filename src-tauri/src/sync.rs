@@ -383,6 +383,7 @@ impl RemoteAdapter for FtpAdapter {
 
 pub fn prepare_connection(config: &Value) -> Result<Value, LofError> {
     if config.get("type").and_then(Value::as_str) == Some("google-drive") {
+        crate::google_drive::ensure_enabled()?;
         google_drive::prepare_connection(config)
     } else {
         Ok(config.clone())

@@ -61,6 +61,7 @@ fn destinations(app: &AppHandle) -> (PathBuf, Vec<(String, String)>) {
         .map(|connections| {
             connections
                 .iter()
+                .filter(|connection| crate::google_drive::connection_enabled(connection))
                 .filter_map(|connection| {
                     let id = connection.get("id").and_then(Value::as_str)?.to_string();
                     let name = connection
