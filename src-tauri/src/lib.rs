@@ -1141,14 +1141,26 @@ fn dispatch_method(
                 .ok_or_else(|| fail_invalid("Store not initialized"))?;
             st.history(id)
         }
-        // 작업의 끝(입력이 멈춤, 문서를 떠남, Ctrl+S)에 지금 원고를 이력으로 남긴다. 남겼으면 true.
-        "checkpointDocument" => {
-            let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        // 이력 지우기: id와 name이면 그 이력 하나, id만 있으면 그 문서의 이력 전부, 둘 다 없으면 모든 이력. 지운 개수를 돌려준다.
+        "deleteHistory" => {
+            let id = args.get("id").and_then(|v| v.as_str());
+            let name = args.get("name").and_then(|v| v.as_str());
             let mut guard = state.store.lock().unwrap();
             let st = guard
                 .as_mut()
                 .ok_or_else(|| fail_invalid("Store not initialized"))?;
-            Ok(json!(st.checkpoint(id)?))
+            Ok(json!(st.history_delete(id, name)?))
+        }
+        // 작업의 끝(입력이 멈춤, 문서를 떠남, Ctrl+S)에 지금 원고를 이력으로 남긴다. 남겼으면 true.
+        // force면 최소 변경 글자 수와 상관없이 남긴다(직접 저장).
+        "checkpointDocument" => {
+            let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            let force = args.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
+            let mut guard = state.store.lock().unwrap();
+            let st = guard
+                .as_mut()
+                .ok_or_else(|| fail_invalid("Store not initialized"))?;
+            Ok(json!(st.checkpoint(id, force)?))
         }
         "historyRead" => {
             let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");

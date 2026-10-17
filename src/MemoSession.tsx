@@ -10,6 +10,7 @@ import {
   HardDrive,
   StickyNote,
   BookOpen,
+  Trash2,
   X,
 } from "lucide-react";
 import Writer from "./Writer";
@@ -17,6 +18,7 @@ import EditorScroll, { type EditorScrollPositions } from "./EditorScroll";
 import RetainedTab from "./RetainedTab";
 import { editorDropZone, type EditorDropZone } from "./editor-groups";
 import ContextMenu, { type MenuItem } from "./ContextMenu";
+import { useConfirm } from "./ConfirmDialog";
 import { call, type Doc, type Kind } from "./types";
 import { normalizeEditorStyle, resolveKindPrefs } from "../core/typesetting.mjs";
 import ResizableSidebar from "./ResizableSidebar";
@@ -196,6 +198,7 @@ export default function MemoSession({
     groupsRef = useRef<HTMLDivElement>(null);
   spaceRef.current = space;
   conflictRef.current = conflict;
+  const [confirm, confirmDialog] = useConfirm();
   const setCurrent = (m: Memo | null) => {
     if (m) retainedMemos.current.set(`${m.space}\n${m.path}`, m);
     memoRef.current = m;
@@ -724,11 +727,18 @@ export default function MemoSession({
   async function remove(targets: Entry[]) {
     const top = outermost(targets);
     if (!top.length) return;
-    const question =
-      top.length > 1
-        ? `고른 항목 ${top.length}개를 휴지통으로 옮길까요?${top.some((x) => x.type === "folder") ? " 폴더 안의 메모도 함께 옮겨집니다." : ""}`
-        : `'${top[0].name}' ${top[0].type === "folder" ? "폴더와 그 안의 메모를" : "메모를"} 휴지통으로 옮길까요?`;
-    if (!window.confirm(question)) return;
+    const ok = await confirm({
+      title: "삭제",
+      message:
+        top.length > 1
+          ? `고른 항목 ${top.length}개를 휴지통으로 옮길까요?`
+          : `'${top[0].name}' ${top[0].type === "folder" ? "폴더와 그 안의 메모를" : "메모를"} 휴지통으로 옮길까요?`,
+      detail: top.length > 1 && top.some((x) => x.type === "folder") ? "폴더 안의 메모도 함께 옮겨집니다." : undefined,
+      confirmLabel: "휴지통으로 옮기기",
+      danger: true,
+      icon: <Trash2 size={15} />,
+    });
+    if (!ok) return;
     for (const entry of top) {
       const gone = (t: MemoTab) =>
         t.space === space && (t.path === entry.path || t.path.startsWith(entry.path + "/"));
@@ -1108,7 +1118,7 @@ export default function MemoSession({
                   body={memo.body}
                   tables={kindOf(memo) !== "episode"}
                   manualLineBreak={!!memo.manualLineBreak}
-                  copyWithBlankLines={prefs.copyWithBlankLines !== false}
+                  copyWithBlankLines={prefs.copyWithBlankLines === true}
                   onChange={(body) => { if (focused) edit(body); }}
                   fontSize={mainBox.norm.fontSize}
                   lineHeight={mainBox.norm.lineHeight}
@@ -1429,6 +1439,7 @@ export default function MemoSession({
   const projectSpaces = spaces.filter((s) => s.id !== COMMON);
   return (
     <div className="memo-session" style={active ? undefined : { display: "none" }}>
+      {confirmDialog}
       <ResizableSidebar className="memo-sidebar" label="메모" width={prefs.leftSidebarWidth}
         onResize={onSidebarResize} active={active}>
         <div className="panel-caption">

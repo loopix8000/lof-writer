@@ -291,7 +291,7 @@ export default function Writer({
   visible = true,
   reveal = null,
   manualLineBreak = false,
-  copyWithBlankLines = true,
+  copyWithBlankLines = false,
   editorStyle,
   onReplaceSymbols,
   tables = false,

@@ -1990,6 +1990,27 @@ body.sidebar-resizing * {
   gap: 9px;
   margin-top: 28px;
 }
+/* 확인 창(ConfirmDialog): 설정·이력 창 위에도 겹쳐 뜨도록 그보다 위에 둔다. */
+.confirm-backdrop {
+  z-index: 70;
+}
+/* 아래에 이미 열린 대화상자가 배경을 어둡게 했으면 확인 창은 다시 어둡게 하지 않는다(겹치면 너무 어두워진다). */
+.app:has(.modal-backdrop:not(.confirm-backdrop)) .confirm-backdrop:not(.plain-backdrop) {
+  background: transparent;
+}
+/* 삭제를 묻는 창(plain-backdrop)은 배경을 아주 옅게만 깔아, 흰 창이 뒤 화면과 구분되게만 한다. */
+.modal-backdrop.plain-backdrop {
+  background: #0000001f;
+}
+.modal.confirm-modal {
+  width: 400px;
+}
+.confirm-modal .modal-header {
+  margin-bottom: 12px;
+}
+.confirm-modal p {
+  margin: 0 0 6px;
+}
 .modal p {
   line-height: 1.8;
 }
@@ -2678,6 +2699,15 @@ body.sidebar-resizing * {
 .history-list button.selected {
   color: var(--text);
   background: var(--soft);
+}
+/* 이력 목록 맨 아래의 '모든 이력 삭제'. */
+.history-list button.history-clear {
+  margin: 8px 0 0;
+}
+/* 이력 미리보기 아래의 복원·삭제 단추, 설정의 이력 백업·초기화 단추. */
+.history-actions {
+  display: flex;
+  gap: 8px;
 }
 .history-preview {
   flex: 1;

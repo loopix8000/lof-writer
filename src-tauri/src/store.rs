@@ -739,6 +739,26 @@ fn prune_empty(dir: &Path) {
     let _ = fs::remove_dir(dir);
 }
 
+// 관리 DB가 없던 예전 보관함의 이력 폴더를 지우고, 지운 이력 파일 수를 돌려준다.
+fn remove_history_dir(dir: &Path) -> Result<usize, LofError> {
+    if !dir.exists() {
+        return Ok(0);
+    }
+    let count = walkdir_count(dir);
+    fs::remove_dir_all(dir)?;
+    Ok(count)
+}
+
+fn walkdir_count(dir: &Path) -> usize {
+    fs::read_dir(dir)
+        .map(|rd| {
+            rd.filter_map(|e| e.ok())
+                .map(|e| if e.path().is_dir() { walkdir_count(&e.path()) } else { 1 })
+                .sum()
+        })
+        .unwrap_or(0)
+}
+
 const RENAME_FAILED: &str =
     "파일 이름을 바꾸지 못했습니다. 다른 프로그램에서 작품 폴더의 파일을 열고 있는지 확인해 주세요.";
 
@@ -3873,8 +3893,9 @@ impl Store {
     }
 
     // 작업의 끝(입력이 멈춤, 문서를 떠남, Ctrl+S)에 지금 저장된 원고를 이력으로 남긴다.
-    // 마지막 이력과 같거나 바뀐 글자가 min_chars보다 적으면 남기지 않는다.
-    pub fn checkpoint(&mut self, id: &str) -> Result<bool, LofError> {
+    // 마지막 이력과 같거나 바뀐 글자가 min_chars보다 적으면 남기지 않는다. force(직접 저장)면 글자 수와 상관없이
+    // 남기되, 마지막 이력과 본문이 똑같으면 남길 것이 없으므로 남기지 않는다.
+    pub fn checkpoint(&mut self, id: &str, force: bool) -> Result<bool, LofError> {
         if !valid_id(id) {
             return Err(fail_invalid("잘못된 ID"));
         }
@@ -3890,7 +3911,7 @@ impl Store {
         let body = current.get("body").and_then(|v| v.as_str()).unwrap_or("");
         let latest = self.latest_snapshot(id);
         let prev_body = latest.as_ref().map(|l| l.body.as_str()).unwrap_or("");
-        if body == prev_body || changed_chars(prev_body, body) < self.history_policy.min_chars {
+        if body == prev_body || (!force && changed_chars(prev_body, body) < self.history_policy.min_chars) {
             return Ok(false);
         }
         self.write_history(id, &current, &raw)?;
@@ -3916,6 +3937,41 @@ impl Store {
         names.truncate(100);
         let out: Vec<Value> = names.into_iter().map(|name| json!({ "name": name })).collect();
         Ok(Value::Array(out))
+    }
+
+    // 이력을 지운다. id가 있으면 그 문서의 이력만(name이 있으면 그 하나만), 없으면 모든 문서의 이력을 지운다.
+    // 지운 뒤에는 마지막 이력 기억을 버려 다음 이력 판단을 남은 이력으로 다시 한다. 지운 개수를 돌려준다.
+    pub fn history_delete(&mut self, id: Option<&str>, name: Option<&str>) -> Result<usize, LofError> {
+        static HIST_RE: OnceLock<Regex> = OnceLock::new();
+        let re = HIST_RE.get_or_init(|| Regex::new(r"^\d+-[a-f0-9-]+\.(json|md)$").unwrap());
+        if id.is_some_and(|id| !valid_id(id)) || name.is_some_and(|n| id.is_none() || !re.is_match(n)) {
+            return Err(fail_invalid("잘못된 이력"));
+        }
+        let removed = if let Some(db) = &self.index.database {
+            db.delete_history(id, name)?
+        } else {
+            let base = self.root.join(".lof").join("history");
+            match (id, name) {
+                (Some(id), Some(name)) => {
+                    let file = base.join(id).join(name);
+                    if file.exists() {
+                        fs::remove_file(file)?;
+                        1
+                    } else {
+                        0
+                    }
+                }
+                (Some(id), None) => remove_history_dir(&base.join(id))?,
+                (None, _) => remove_history_dir(&base)?,
+            }
+        };
+        match id {
+            Some(id) => {
+                self.last_snapshot.remove(id);
+            }
+            None => self.last_snapshot.clear(),
+        }
+        Ok(removed)
     }
 
     pub fn history_read(&self, id: &str, name: &str) -> Result<Value, LofError> {

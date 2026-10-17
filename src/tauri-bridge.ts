@@ -20,6 +20,8 @@ const methods = [
   "searchText",
   "history",
   "historyRead",
+  "deleteHistory",
+  "checkpointDocument",
   "restore",
   "saveDraft",
   "clearDraft",

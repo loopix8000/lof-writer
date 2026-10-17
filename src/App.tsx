@@ -90,6 +90,7 @@ import TagInput from "./TagInput";
 import PropertyPresetSettings from "./PropertyPresetSettings";
 import PinSettings from "./PinSettings";
 import ContextMenu, { type MenuItem } from "./ContextMenu";
+import { useConfirm } from "./ConfirmDialog";
 import EpisodeProperties, { statusItems } from "./EpisodeProperties";
 import EpisodeBindingPicker from "./EpisodeBindingPicker";
 import {
@@ -268,7 +269,7 @@ export default function App() {
       goal: 3000,
       theme: "light",
       colorTheme: "modern",
-      copyWithBlankLines: true,
+      copyWithBlankLines: false,
       autoCloseQuotes: true,
       autoCloseBrackets: true,
       smartBrackets: true,
@@ -554,6 +555,7 @@ export default function App() {
   });
   // 변경 이력: 자동 저장은 이력을 남기지 않는다. 본문을 고친 문서를 기억해 두었다가 작업의 끝(입력이 멈춤,
   // 다른 문서로 옮김, Ctrl+S, 앱 종료)에 저장소가 지금 원고를 이력으로 남기게 한다. 남길지는 설정의 규칙으로 저장소가 정한다.
+  const [confirm, confirmDialog] = useConfirm();
   const checkpointDue = useRef(new Set<string>());
   const checkpointTimer = useRef<number | undefined>(undefined);
   const checkpoint = useCallback(
@@ -569,6 +571,17 @@ export default function App() {
     },
     [flush],
   );
+  // 직접 저장(Ctrl+S, 저장 단추). 설정에서 켜 두면(기본) 최소 변경 글자 수와 상관없이 지금 원고를 이력으로 남기고,
+  // 끄면 다른 작업의 끝처럼 규칙에 맞을 때만 남긴다.
+  const manualSave = useCallback(async () => {
+    await flush();
+    const id = draft.current?.doc.id;
+    if (id && prefsRef.current.historyOnManualSave !== false) {
+      checkpointDue.current.delete(id);
+      await call("checkpointDocument", { id, force: true });
+    }
+    await checkpoint();
+  }, [flush, checkpoint]);
   // 다른 문서로 옮기거나(분할 편집의 다른 그룹 포함) 문서를 닫으면 떠난 문서의 이력을 남긴다.
   const leftDocId = useRef("");
   useEffect(() => {
@@ -981,7 +994,7 @@ export default function App() {
     await call("copyManuscript", {
       id: latest.id,
       text: plainText(latest.body, {
-        preserveParagraphBreaks: !latest.manualLineBreak && prefs.copyWithBlankLines !== false,
+        preserveParagraphBreaks: !latest.manualLineBreak && prefs.copyWithBlankLines === true,
       }),
     });
     message("본문을 복사했습니다.");
@@ -1445,7 +1458,7 @@ export default function App() {
   // 저장한다. 보관 규칙(개수·기간)을 줄이면 오래된 이력이 바로 지워지므로 먼저 묻는다.
   function historyField(label: string, key: string, fallback: number, min: number, max: number, step = 1) {
     const value = Number(prefs[key] ?? fallback);
-    const commit = (input: HTMLInputElement) => {
+    const commit = async (input: HTMLInputElement) => {
       const next = Math.min(max, Math.max(min, Math.floor(Number(input.value) || min)));
       input.value = String(next);
       if (next === value) return;
@@ -1453,12 +1466,18 @@ export default function App() {
       if (
         retention &&
         next < value &&
-        !window.confirm("보관 범위를 줄이면 규칙을 넘는 오래된 이력이 바로 지워집니다. 계속할까요?")
+        !(await confirm({
+          title: "보관 범위 줄이기",
+          message: `${label}: ${value} → ${next}`,
+          detail: "규칙을 넘는 오래된 이력이 바로 지워지며, 되돌릴 수 없습니다.",
+          confirmLabel: "줄이기",
+          danger: true,
+        }))
       ) {
         input.value = String(value);
         return;
       }
-      savePrefs({ [key]: next }).catch(report);
+      await savePrefs({ [key]: next });
     };
     return (
       <label>
@@ -1471,7 +1490,7 @@ export default function App() {
           step={step}
           aria-label={`변경 이력 ${label}`}
           defaultValue={value}
-          onBlur={(e) => commit(e.currentTarget)}
+          onBlur={(e) => commit(e.currentTarget).catch(report)}
           // Enter는 칸을 벗어나게 해서 한 번만 저장한다.
           onKeyDown={(e) => {
             if (e.key === "Enter") e.currentTarget.blur();
@@ -1608,6 +1627,25 @@ export default function App() {
     setPreview(null);
     setDialog({ type: "history" });
   }
+  // 이력 창에서 이력 하나(name)나 이 문서의 이력 전부(name 없음)를 지운다. 되돌릴 수 없으므로 먼저 묻는다.
+  async function deleteHistory(name?: string) {
+    if (!active) return;
+    const ok = await confirm({
+      title: "이력 삭제",
+      message: name
+        ? `${new Date(Number(name.split("-")[0])).toLocaleString("ko-KR")} 이력을 삭제할까요?`
+        : `이 문서의 이력 ${history.length}개를 모두 삭제할까요?`,
+      detail: "삭제한 이력은 되돌릴 수 없습니다.",
+      confirmLabel: "삭제",
+      danger: true,
+      icon: <Trash2 size={15} />,
+    });
+    if (!ok) return;
+    const removed = await call<number>("deleteHistory", { id: active.id, name });
+    setHistory(await call("history", { id: active.id }));
+    if (!name || preview?.name === name) setPreview(null);
+    message(name ? "이력을 삭제했습니다." : `이력 ${removed}개를 삭제했습니다.`);
+  }
   async function resolveConflict() {
     const d = draft.current;
     if (!d) return;
@@ -1652,9 +1690,7 @@ export default function App() {
       if (document.documentElement.dataset.pinLocked === "true") return;
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
         e.preventDefault();
-        // 직접 저장은 작업의 끝으로 보고 이력도 남긴다.
-        flush()
-          .then(() => checkpoint())
+        manualSave()
           .then(() => message("저장했습니다."))
           .catch(report);
       }
@@ -1676,7 +1712,7 @@ export default function App() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [flush, message, report]);
+  }, [manualSave, message, report]);
   // 대화상자가 열린 동안 네이티브 창 버튼도 배경막처럼 어둡게 한다.
   const dimmed = !!dialog;
   useEffect(() => {
@@ -2063,7 +2099,7 @@ export default function App() {
             <button
               aria-label="저장"
               title="저장 (Ctrl+S)"
-              onClick={attempt(flush)}
+              onClick={attempt(manualSave)}
             >
               <Check size={17} />
             </button>
@@ -2182,7 +2218,7 @@ export default function App() {
               inactive={!focused}
               visible={visible}
               manualLineBreak={!!active.manualLineBreak}
-              copyWithBlankLines={prefs.copyWithBlankLines !== false}
+              copyWithBlankLines={prefs.copyWithBlankLines === true}
               id={active.id}
               revision={active.revision}
               body={active.body}
@@ -3320,12 +3356,14 @@ export default function App() {
         (d) => d.projectId === projectRef.current && d.relPath?.startsWith(prefix),
       );
     const name = path.slice(path.lastIndexOf("/") + 1);
-    if (
-      !window.confirm(
-        `'${name}' 폴더${inside.length ? `와 안의 문서 ${inside.length}개` : ""}를 휴지통으로 옮길까요?`,
-      )
-    )
-      return;
+    const ok = await confirm({
+      title: "폴더 삭제",
+      message: `'${name}' 폴더${inside.length ? `와 안의 문서 ${inside.length}개` : ""}를 휴지통으로 옮길까요?`,
+      confirmLabel: "휴지통으로 옮기기",
+      danger: true,
+      icon: <Trash2 size={15} />,
+    });
+    if (!ok) return;
     await flush();
     for (const d of inside) await closeTab(d.id);
     for (const d of inside) closeSideTab(d.id);
@@ -4686,9 +4724,11 @@ export default function App() {
           집중 모드 종료 · F11
         </button>
       )}
+      {confirmDialog}
       {dialog && (
         <div
-          className="modal-backdrop"
+          // 삭제를 묻는 창은 배경을 어둡게 하지 않는다.
+          className={`modal-backdrop${["deleteDoc", "deleteProject"].includes(dialog.type) ? " plain-backdrop" : ""}`}
           onMouseDown={(e) => {
             if (e.target === e.currentTarget && dialog.type !== "setup")
               setDialog(null);
@@ -4946,6 +4986,11 @@ export default function App() {
                           name: h.name,
                         }),
                       )}
+                      onContextMenu={(e) =>
+                        openMenu(e, [
+                          { label: "이력 삭제", danger: true, action: attempt(() => deleteHistory(h.name)) },
+                        ])
+                      }
                     >
                       {new Date(Number(h.name.split("-")[0])).toLocaleString(
                         "ko-KR",
@@ -4953,12 +4998,19 @@ export default function App() {
                     </button>
                   ))}
                   {!history.length && <p>아직 저장 이력이 없습니다.</p>}
+                  {history.length > 0 && (
+                    <button className="danger-outline history-clear" onClick={attempt(() => deleteHistory())}>
+                      <Trash2 size={14} />
+                      모든 이력 삭제
+                    </button>
+                  )}
                 </div>
                 <div className="history-preview">
                   {preview ? (
                     <>
                       <b>{preview.title}</b>
                       <pre>{preview.body}</pre>
+                      <div className="history-actions">
                       <button
                         className="primary"
                         onClick={attempt(async () => {
@@ -4979,6 +5031,14 @@ export default function App() {
                       >
                         이 버전으로 복원
                       </button>
+                      <button
+                        className="danger-outline"
+                        onClick={attempt(() => deleteHistory(preview.name))}
+                      >
+                        <Trash2 size={14} />
+                        이 이력 삭제
+                      </button>
+                      </div>
                     </>
                   ) : (
                     <p>왼쪽에서 저장 이력을 선택하세요.</p>
@@ -5527,25 +5587,23 @@ export default function App() {
                     {historyField("최소 변경 글자 수", "historyMinChars", 200, 0, 100000, 50)}
                   </div>
                   <p className="muted">
-                    자동 저장은 이력을 남기지 않습니다. 입력이 멈추고 정한 시간이 지나거나, 다른 문서로
-                    옮기거나, Ctrl+S로 저장하거나, 앱을 닫을 때 지금 원고를 이력으로 남깁니다. 쉬지 않고 계속
-                    쓰면 최대 간격마다 하나씩 남깁니다. 마지막 이력보다 바뀐 글자가 최소 변경 글자 수보다
-                    적으면 남기지 않습니다. 제목을 바꾸거나 이력을 복원할 때도 남기고, 상태·태그·북마크 같은
-                    속성만 바꾸거나 회차 순서를 바꾼 것은 남기지 않습니다.
+                    쓰다가 멈추거나 다른 문서로 옮길 때 이력을 남깁니다. 계속 쓰는 중에는 최대 간격마다 남깁니다.
                   </p>
+                  <SettingsToggle
+                    label="직접 저장하면 항상 이력 남기기"
+                    description="Ctrl+S나 저장 단추로 저장하면 최소 변경 글자 수와 상관없이 이력을 남깁니다."
+                    checked={prefs.historyOnManualSave !== false}
+                    onChange={(checked) => savePrefs({ historyOnManualSave: checked }).catch(report)}
+                  />
                   {/* 보관 규칙: 저장소가 하루 한 번(바꾸면 바로) 정리한다. 최근 10개는 늘 남는다(HISTORY_MINIMUM). */}
                   <div className="settings-grid">
                     {historyField("문서당 최대 개수", "historyKeepCount", 100, 10, 1000, 10)}
                     {historyField("보관 기간(일)", "historyKeepDays", 30, 1, 3650)}
                   </div>
                   <p className="muted">
-                    문서마다 최대 개수를 넘거나 보관 기간이 지난 이력을 지우되, 최근 10개는 기간과 상관없이
-                    남깁니다. 오래된 이력은 하루 한 번 정리하며, 보관 규칙을 바꾸면 바로 정리합니다.
+                    개수나 기간을 넘은 이력은 지우고, 최근 10개는 항상 남깁니다. 이력은 이 PC에만 보관합니다.
                   </p>
-                  <p className="muted">
-                    수정 이력은 이 PC에만 보관하며 동기화하지 않습니다. 외부에서 수정되거나
-                    동기화로 교체되는 원고도 이전 내용을 남깁니다.
-                  </p>
+                  <div className="history-actions">
                   <button disabled={busy} onClick={attempt(async () => {
                     setBusy(true);
                     try {
@@ -5558,6 +5616,27 @@ export default function App() {
                   })}>
                     <HardDrive size={16} /> 로컬 이력 백업
                   </button>
+                  {/* 모든 문서의 이력을 지운다. 되돌릴 수 없으므로 먼저 묻는다. */}
+                  <button
+                    className="danger-outline"
+                    disabled={busy}
+                    onClick={attempt(async () => {
+                      const ok = await confirm({
+                        title: "모든 이력 초기화",
+                        message: "모든 문서의 변경 이력을 삭제할까요?",
+                        detail: "삭제한 이력은 되돌릴 수 없습니다. 필요하면 먼저 로컬 이력 백업을 해 두세요.",
+                        confirmLabel: "초기화",
+                        danger: true,
+                        icon: <Trash2 size={15} />,
+                      });
+                      if (!ok) return;
+                      const removed = await call<number>("deleteHistory", {});
+                      message(`이력 ${removed}개를 삭제했습니다.`);
+                    })}
+                  >
+                    <Trash2 size={16} /> 모든 이력 초기화
+                  </button>
+                  </div>
                 </section>
                 <section id="settings-defaults" className="settings-section" hidden={settingsPage !== "defaults"}>
                   <h3>새 작품의 기본 설정</h3>
@@ -5597,12 +5676,12 @@ export default function App() {
                     <p className="settings-description">자동 관리 중인 본문을 복사할 때 문단 사이에 빈 줄을 넣을지 선택합니다.</p>
                     <div className="linebreak-choices">
                       {[false, true].map((blankLines) => (
-                        <label key={String(blankLines)} className={`linebreak-choice${(prefs.copyWithBlankLines !== false) === blankLines ? " selected" : ""}`}>
+                        <label key={String(blankLines)} className={`linebreak-choice${(prefs.copyWithBlankLines === true) === blankLines ? " selected" : ""}`}>
                           <input type="radio" name="copyWithBlankLines" value={String(blankLines)}
-                            checked={(prefs.copyWithBlankLines !== false) === blankLines}
+                            checked={(prefs.copyWithBlankLines === true) === blankLines}
                             onChange={() => savePrefs({ copyWithBlankLines: blankLines }).catch(report)} />
                           <span>
-                            <strong>{blankLines ? "빈 줄을 추가해 복사" : "기존 방식으로 복사"}{blankLines && <small>기본</small>}</strong>
+                            <strong>{blankLines ? "빈 줄을 추가해 복사" : "기존 방식으로 복사"}{!blankLines && <small>기본</small>}</strong>
                             <span>{blankLines ? "문단 사이에 빈 줄 한 줄을 넣어 복사합니다." : "문단 사이에 빈 줄을 추가하지 않고 복사합니다."}</span>
                           </span>
                         </label>
