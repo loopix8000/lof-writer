@@ -37,6 +37,8 @@ const methods = [
   "cancelGoogleDrive",
   "removeConnection",
   "sync",
+  "checkSyncUpdates",
+  "setSyncConflictPolicy",
   "chooseCover",
   "removeCover",
   "saveImage",

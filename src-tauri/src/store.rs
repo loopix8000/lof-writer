@@ -15,6 +15,7 @@ use crate::markdown::{
 use crate::platforms::normalize_writing;
 use crate::text::{character_count, count_for_writing, manuscript_stats};
 use base64::Engine;
+use chrono::DateTime;
 use regex::Regex;
 use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
@@ -31,6 +32,19 @@ use uuid::Uuid;
 pub const FORMAT: i64 = 2;
 pub const FOLDERS: &[&str] = &["assets", "doc", "episodes"];
 pub const KINDS: &[&str] = &["episode", "plot", "memo"];
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum SyncConflictPolicy {
+    KeepBoth,
+    Latest,
+}
+
+fn sync_remote_is_newer(remote: &Value, local: &Value, remote_hash: &str, local_hash: &str) -> bool {
+    let modified = |value: &Value| value.get("updatedAt").and_then(Value::as_str)
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok());
+    // 수정 시각이 같으면 내용 해시로 순서를 고정해 기기마다 다른 본문을 고르지 않는다.
+    (modified(remote), remote_hash) > (modified(local), local_hash)
+}
 
 static CHANGE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static CHANGED_PATHS: OnceLock<Mutex<HashMap<PathBuf, u64>>> = OnceLock::new();
@@ -4856,6 +4870,7 @@ impl Store {
         &mut self,
         snapshot: &Value,
         base: &HashMap<String, String>,
+        conflict_policy: SyncConflictPolicy,
     ) -> Result<Value, LofError> {
         let Some(snap_projects) = snapshot.get("projects").and_then(|v| v.as_array()) else {
             return Err(fail_invalid("지원하지 않는 동기화 형식"));
@@ -5089,6 +5104,8 @@ impl Store {
         let mut imported = Vec::new();
         let mut conflicts = Vec::new();
         let mut project_conflicts = Vec::new();
+        let mut projects_updated = Vec::new();
+        let mut assets_updated = Vec::new();
 
         for p in snap_projects {
             let pid = p.get("id").and_then(|v| v.as_str()).unwrap_or("");
@@ -5115,6 +5132,7 @@ impl Store {
                         "updatedAt": p.get("updatedAt"),
                     }),
                 )?;
+                projects_updated.push(pid.to_string());
             } else if let Some(ex) = existing {
                 let mine = project_fields(&ex);
                 let mine_json = serde_json::to_string(&mine).unwrap_or_default();
@@ -5125,7 +5143,10 @@ impl Store {
                 let old_hash = hash_str(&mine_json);
                 let remote_hash = hash_str(&fields_json);
                 let base_proj = base.get(&format!("project:{}", pid));
-                if base_proj == Some(&old_hash) {
+                let conflicting = base_proj != Some(&old_hash) && base_proj != Some(&remote_hash);
+                let latest_remote = conflict_policy == SyncConflictPolicy::Latest && conflicting
+                    && sync_remote_is_newer(p, &ex, &remote_hash, &old_hash);
+                if base_proj == Some(&old_hash) || latest_remote {
                     let mut upd = fields.as_object().cloned().unwrap_or_default();
                     upd.insert(
                         "manualLineBreak".to_string(),
@@ -5136,15 +5157,18 @@ impl Store {
                         p.get("cover").cloned().unwrap_or(Value::Null),
                     );
                     self.update_project_inner(&Value::Object(upd), true)?;
-                } else if base_proj != Some(&remote_hash) {
+                    projects_updated.push(pid.to_string());
+                } else if base_proj != Some(&remote_hash) && conflict_policy == SyncConflictPolicy::KeepBoth {
                     let cfile = self
                         .root
                         .join(".lof")
                         .join("project-conflicts")
                         .join(format!("{}-{}.json", pid, remote_hash));
                     let pretty = serde_json::to_string_pretty(p).unwrap_or_default();
-                    atomic_write_str(&cfile, &pretty)?;
-                    project_conflicts.push(pid.to_string());
+                    if fs::read_to_string(&cfile).ok().as_deref() != Some(pretty.as_str()) {
+                        atomic_write_str(&cfile, &pretty)?;
+                        project_conflicts.push(pid.to_string());
+                    }
                 }
             }
         }
@@ -5167,7 +5191,11 @@ impl Store {
             let bytes = base64::engine::general_purpose::STANDARD
                 .decode(data_str)
                 .unwrap_or_default();
-            atomic_write_bytes(&p.dir.join("assets").join(afn), &bytes)?;
+            let asset_path = p.dir.join("assets").join(afn);
+            if fs::read(&asset_path).ok().as_deref() != Some(bytes.as_slice()) {
+                atomic_write_bytes(&asset_path, &bytes)?;
+                assets_updated.push(format!("{apid}/{afn}"));
+            }
         }
 
         let mut sorted_docs = snap_docs.clone();
@@ -5220,7 +5248,10 @@ impl Store {
                 if lfp != rrev {
                     let kind_compat =
                         lkind == rkind || (lkind != "episode" && rkind != "episode");
-                    if base.get(rid).map(|s| s.as_str()) == Some(lfp)
+                    let remote_changed = base.get(rid).map(|s| s.as_str()) != Some(rrev);
+                    let latest_remote = conflict_policy == SyncConflictPolicy::Latest && remote_changed
+                        && sync_remote_is_newer(remote, &lm_val, rrev, lfp);
+                    if (base.get(rid).map(|s| s.as_str()) == Some(lfp) || latest_remote)
                         && lpid == rpid
                         && kind_compat
                     {
@@ -5236,7 +5267,8 @@ impl Store {
                         let received = self.read(rid)?;
                         self.database()?.finish_write(&received)?;
                         imported.push(rid.to_string());
-                    } else if base.get(rid).map(|s| s.as_str()) != Some(rrev) {
+                    } else if remote_changed && (conflict_policy == SyncConflictPolicy::KeepBoth
+                        || lpid != rpid || !kind_compat) {
                         let key = format!("{}:{}", rid, rrev);
                         let already_has_conflict = local
                             .get("documents")
@@ -5309,6 +5341,8 @@ impl Store {
             "imported": imported,
             "conflicts": conflicts,
             "projectConflicts": project_conflicts,
+            "projectsUpdated": projects_updated,
+            "assetsUpdated": assets_updated,
             "removed": removed,
         }))
     }

@@ -197,6 +197,7 @@ fn dpapi_decrypt(b64: &str) -> Result<String, LofError> {
 
 fn safe_connection(c: &Value) -> Value {
     let mut obj = c.as_object().cloned().unwrap_or_default();
+    obj.entry("conflictPolicy").or_insert(json!("keepBoth"));
     let has_pw = obj
         .remove("password")
         .and_then(|v| v.as_str().map(|s| !s.is_empty()))
@@ -259,6 +260,8 @@ fn connect_google_drive(args: &Value, state: &AppState, auth: &google_drive::Aut
     if let Some(folder) = old.as_ref().and_then(|c| c.get("folderId")) {
         conn["folderId"] = folder.clone();
     }
+    conn["conflictPolicy"] = old.as_ref().and_then(|c| c.get("conflictPolicy"))
+        .cloned().unwrap_or(json!("keepBoth"));
     let conn = sync::prepare_connection(&conn)?;
     let encrypted = encrypt_connection(&conn)?;
     auth.check_cancelled()?;
@@ -355,7 +358,7 @@ fn schedule_index_refresh(store: &Arc<Mutex<Option<Store>>>, seq: &Arc<AtomicU64
             })();
             if changed.unwrap_or(false) {
                 if let Some(state)=app.try_state::<AppState>(){schedule_notify(&app,&state.notify_seq);}
-                auto_sync::request(&app);
+                auto_sync::request_now(&app);
             }
         }
     });
@@ -403,6 +406,7 @@ fn setup_vault_watcher(
                 relevant = true;
             }
             if relevant {
+                auto_sync::request_now(&app_clone);
                 schedule_notify(&app_clone, &n_seq);
                 schedule_index_refresh(&store_clone, &r_seq, &app_clone);
             }
@@ -411,7 +415,10 @@ fn setup_vault_watcher(
     )
     .ok()?;
 
-    let _ = watcher.watch(root, RecursiveMode::Recursive);
+    if let Err(error) = watcher.watch(root, RecursiveMode::Recursive) {
+        eprintln!("서재 폴더 감시를 시작하지 못했습니다: {}: {error}", root.display());
+        return None;
+    }
     Some(watcher)
 }
 
@@ -1355,6 +1362,10 @@ fn dispatch_method(
             }))
         }
         "saveConnection" => {
+            let policy = args.get("conflictPolicy").and_then(Value::as_str).unwrap_or("keepBoth");
+            if !matches!(policy, "keepBoth" | "latest") {
+                return Err(fail_invalid("충돌 사본 처리 방식을 확인해 주세요."));
+            }
             let ctype = args.get("type").and_then(|v| v.as_str()).unwrap_or("");
             if !matches!(ctype, "folder" | "ftp" | "webdav") {
                 return Err(fail_invalid("지원하지 않는 연결"));
@@ -1372,6 +1383,7 @@ fn dispatch_method(
             conn.insert("id".to_string(), json!(Uuid::new_v4().to_string()));
             conn.insert("name".to_string(), json!(name));
             conn.insert("type".to_string(), json!(ctype));
+            conn.insert("conflictPolicy".to_string(), json!(policy));
 
             if ctype == "folder" {
                 let picked = FileDialog::new()
@@ -1435,6 +1447,24 @@ fn dispatch_method(
             }
             Ok(safe_connection(&conn_val))
         }
+        "setSyncConflictPolicy" => {
+            let id = args.get("id").and_then(Value::as_str).unwrap_or("");
+            let policy = args.get("conflictPolicy").and_then(Value::as_str).unwrap_or("");
+            if !matches!(policy, "keepBoth" | "latest") {
+                return Err(fail_invalid("충돌 사본 처리 방식을 확인해 주세요."));
+            }
+            let mut settings = state.settings.lock().unwrap();
+            let mut next = settings.clone();
+            let connection = next.get_mut("connections").and_then(Value::as_array_mut)
+                .and_then(|connections| connections.iter_mut().find(|c| c["id"].as_str() == Some(id)))
+                .ok_or_else(|| fail_invalid("외부 저장소 연결을 찾을 수 없습니다."))?;
+            connection["conflictPolicy"] = json!(policy);
+            let safe = safe_connection(connection);
+            persist_settings(&state.config_file, &next)?;
+            *settings = next;
+            Ok(safe)
+        }
+        "checkSyncUpdates" => auto_sync::check_now(app),
         "cancelGoogleDrive" => {
             app.state::<google_drive::AuthState>().cancel();
             Ok(json!(true))
@@ -1570,7 +1600,7 @@ async fn lof_invoke(
     window: WebviewWindow,
 ) -> Result<Value, String> {
     let args_val = args.unwrap_or_else(|| json!({}));
-    let result = if matches!(method.as_str(), "connectGoogleDrive" | "sync" | "pinUnlock" | "pinSave" | "backupStorage" | "countManuscript" | "downloadSkill") {
+    let result = if matches!(method.as_str(), "connectGoogleDrive" | "sync" | "pinUnlock" | "pinSave" | "backupStorage" | "countManuscript" | "downloadSkill" | "checkSyncUpdates") {
         tauri::async_runtime::spawn_blocking(move || {
             let state = app.state::<AppState>();
             if method == "pinUnlock" || method == "pinSave" {
@@ -2134,7 +2164,7 @@ pub fn run() {
                 let mut cw = st.common_watcher.lock().unwrap();
                 *cw = setup_common_watcher(&clean_vault_root, &common_root, &handle, &st.notify_seq);
             }
-            auto_sync::request(&handle);
+            auto_sync::start(&handle);
             app.state::<single_instance::SingleInstance>().listen(&handle);
             Ok(())
         })
@@ -2226,8 +2256,9 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(move |_app_handle, event| {
+        .run(move |app_handle, event| {
             if let tauri::RunEvent::Exit = event {
+                auto_sync::stop(app_handle);
                 let _ = fs::remove_file(user_dir_for_exit.join("runtime.json"));
             }
         });

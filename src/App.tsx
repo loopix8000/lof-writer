@@ -89,6 +89,8 @@ import PropertyPresetSettings from "./PropertyPresetSettings";
 import PinSettings from "./PinSettings";
 import ContextMenu, { type MenuItem } from "./ContextMenu";
 import { useConfirm } from "./ConfirmDialog";
+import { useProjectSyncUpdates, useSyncFileUpdates } from "./useSyncFileUpdates";
+import SyncStatus from "./SyncStatus";
 import EpisodeProperties, { statusItems } from "./EpisodeProperties";
 import EpisodeBindingPicker from "./EpisodeBindingPicker";
 import {
@@ -291,6 +293,8 @@ export default function App() {
     }),
     [connections, setConnections] = useState<any[]>([]),
     [autoSync, setAutoSync] = useState<AutoSyncStatus>({ phase: "idle", message: "" }),
+    [syncChecking, setSyncChecking] = useState(false),
+    [syncAvailable, setSyncAvailable] = useState(false),
     [connectionType, setConnectionType] = useState("folder"),
     [googleDriveEnabled, setGoogleDriveEnabled] = useState(false),
     [googleConnecting, setGoogleConnecting] = useState(false),
@@ -427,6 +431,7 @@ export default function App() {
     typesettingOpenedRight = useRef(false);
   const project = lib.projects.find((p) => p.id === projectId);
   const prefsRef = useRef(prefs);
+  const checkOpenDocRef = useRef<((askAgain?: boolean) => Promise<void>) | null>(null);
   prefsRef.current = prefs;
   const message = useCallback((text: string, action?: { label: string; run: () => void }) => {
     setToast(text);
@@ -440,6 +445,11 @@ export default function App() {
   const report = useCallback((e: any) => {
     setError(e.message || String(e));
   }, []);
+  useProjectSyncUpdates(loaded && projectId && (view === "project" || view === "workspace") ? `${projectId}:${view}` : "", report,
+    (checking, available) => {
+      setSyncChecking(checking);
+      if (available !== undefined) setSyncAvailable(available);
+    });
   const refresh = useCallback(async () => {
     const seq = ++refreshSeq.current;
     const data = await call<Library>("bootstrap");
@@ -480,17 +490,7 @@ export default function App() {
       const meta = data.documents.find((x) => x.id === d.doc.id);
       if (meta && (meta.revision !== d.doc.revision ||
           (meta.fingerprint !== d.doc.fingerprint && d.seq === d.saved))) {
-        if (d.seq !== d.saved || composing.current) {
-          conflictRef.current = true;
-          setConflict(true);
-          setSaveStatus("변경 충돌");
-        } else {
-          const latest = await call<Doc>("readDocument", { id: d.doc.id });
-          if (draft.current === d && d.seq === d.saved) {
-            draft.current = { doc: latest, seq: 0, saved: 0 };
-            setActive(latest);
-          }
-        }
+        void checkOpenDocRef.current?.().catch(report);
       } else if (meta && d.seq === d.saved &&
           (meta.title !== d.doc.title || meta.path !== d.doc.path || meta.relPath !== d.doc.relPath)) {
         // 본문은 그대로인데 이름만 바뀐 경우(회차 번호가 바뀌어 '003화 …' 이름이 따라 바뀐 경우 등).
@@ -511,10 +511,12 @@ export default function App() {
       const seq = d.seq,
         payload = { ...d.doc, expectedRevision: d.doc.revision };
       await call("saveDraft", payload);
-      if (conflictRef.current)
+      if (conflictRef.current) {
+        if (auto) return;
         throw Error(
           "변경 충돌을 해결해 주세요. 입력한 원고는 임시 저장되어 있습니다.",
         );
+      }
       if (composing.current) {
         // Autosave waits for compositionend, which schedules the next flush.
         if (auto) return;
@@ -568,6 +570,47 @@ export default function App() {
   // 변경 이력: 자동 저장은 이력을 남기지 않는다. 본문을 고친 문서를 기억해 두었다가 작업의 끝(입력이 멈춤,
   // 다른 문서로 옮김, Ctrl+S, 앱 종료)에 저장소가 지금 원고를 이력으로 남기게 한다. 남길지는 설정의 규칙으로 저장소가 정한다.
   const [confirm, confirmDialog] = useConfirm();
+  const checkOpenDocument = useSyncFileUpdates({
+    fileKey: active?.id ?? "",
+    enabled: loaded && !!active,
+    canCheck: () => view === "workspace" && !memoOpen && !composing.current,
+    current: () => {
+      const d = draft.current;
+      return d ? { doc: d.doc, version: `${d.seq}:${d.doc.revision}`, dirty: d.seq !== d.saved } : null;
+    },
+    beforeRead: () => saveChain.current,
+    read: (doc: Doc) => call<Doc>("readDocument", { id: doc.id }),
+    pending: () => {
+      if (timer.current) clearTimeout(timer.current);
+      conflictRef.current = true;
+      setConflict(true);
+      setSaveStatus("새 동기화 내용 확인 중");
+    },
+    decline: () => {
+      const d = draft.current;
+      if (d) {
+        if (d.seq === d.saved) d.seq++;
+        void call("saveDraft", { ...d.doc, expectedRevision: d.doc.revision }).catch(report);
+      }
+      setSaveStatus("외부 변경 있음");
+    },
+    apply: async (doc) => {
+      const previous = draft.current;
+      if (previous?.doc.id !== doc.id) return;
+      const previousSeq = previous.seq;
+      await call("clearDraft", { id: doc.id });
+      if (draft.current !== previous || previous.seq !== previousSeq) return;
+      draft.current = { doc, seq: 0, saved: 0 };
+      conflictRef.current = false;
+      setActive(doc);
+      setConflict(false);
+      setSaveStatus("저장됨");
+      message("동기화된 새 내용을 불러왔습니다.");
+    },
+    confirm,
+    report,
+  });
+  checkOpenDocRef.current = checkOpenDocument;
   const checkpointDue = useRef(new Set<string>());
   const checkpointTimer = useRef<number | undefined>(undefined);
   const checkpoint = useCallback(
@@ -611,8 +654,13 @@ export default function App() {
       await flush();
       await checkpoint();
     });
-    const offAutoSync = window.lof.onAutoSync?.(setAutoSync);
-    if (window.lof.onAutoSync) call<AutoSyncStatus>("autoSyncStatus").then(setAutoSync).catch(() => {});
+    const updateAutoSync = (status: AutoSyncStatus) => {
+      setAutoSync(previous => previous.phase === status.phase && previous.message === status.message &&
+        previous.hasConnections === status.hasConnections ? previous : status);
+      if (status.hasConnections !== undefined) setSyncAvailable(status.hasConnections);
+    };
+    const offAutoSync = window.lof.onAutoSync?.(updateAutoSync);
+    if (window.lof.onAutoSync) call<AutoSyncStatus>("autoSyncStatus").then(updateAutoSync).catch(() => {});
     return () => {
       off();
       offFlush();
@@ -662,9 +710,13 @@ export default function App() {
     const seq = ++navigationSeq.current;
     await flush();
     if (seq !== navigationSeq.current) return;
-    const doc = destination.view === "workspace"
+    const fresh = destination.view === "workspace"
       ? await call<Doc>("readDocument", { id: destination.documentId }) : null;
     if (seq !== navigationSeq.current) return;
+    const retained = fresh ? retainedDocuments.current.get(fresh.id) : undefined;
+    // 이미 열어 둔 탭의 본문은 유지하고, 새 본문 반영은 확인 창이 맡는다.
+    const keepOlder = !!(fresh && retained && retained.revision !== fresh.revision);
+    const doc = keepOlder ? retained! : fresh;
     const next: Destination = doc
       ? { view: "workspace", projectId: doc.projectId, documentId: doc.id, tab: doc.kind, archive: doc.archived }
       : { ...destination, projectId: globalView(destination.view) ? "" : destination.projectId };
@@ -702,12 +754,13 @@ export default function App() {
           activeId.current,
         ),
       );
-      draft.current = { doc, seq: 0, saved: 0 };
+      draft.current = { doc, seq: keepOlder ? 1 : 0, saved: 0 };
+      if (keepOlder) void call("saveDraft", { ...doc, expectedRevision: doc.revision }).catch(report);
       activeId.current = doc.id;
       setActive(doc);
-      setSaveStatus("저장됨");
-      setConflict(false);
-      conflictRef.current = false;
+      setSaveStatus(keepOlder ? "외부 변경 있음" : "저장됨");
+      setConflict(keepOlder);
+      conflictRef.current = keepOlder;
     }
     const id = globalView(next.view) ? projectRef.current : next.projectId;
     setProjectId(id);
@@ -1973,8 +2026,24 @@ export default function App() {
   // 포커스되지 않은 그룹의 문서는 저장될 때마다(리비전이 바뀔 때) 다시 읽는다.
   const sideId = split?.docId || "",
     sideRevision = lib.documents.find((d) => d.id === sideId)?.revision;
+  const checkSideDocument = useSyncFileUpdates({
+    fileKey: sideDoc?.id ?? "",
+    enabled: !!sideId && sideDoc?.id === sideId && sideId !== active?.id,
+    canCheck: () => view === "workspace" && !memoOpen,
+    current: () => sideDoc ? { doc: sideDoc, version: sideDoc.revision, dirty: false } : null,
+    read: (doc: Doc) => call<Doc>("readDocument", { id: doc.id }),
+    apply: setSideDoc,
+    confirm,
+    report,
+  });
   useEffect(() => {
     if (!sideId || sideId === active?.id) return;
+    if (sideDoc?.id === sideId) {
+      void checkSideDocument().catch(report);
+      return;
+    }
+    const retained = retainedDocuments.current.get(sideId);
+    if (retained) { setSideDoc(retained); return; }
     let canceled = false;
     call<Doc>("readDocument", { id: sideId })
       .then((d) => {
@@ -1984,7 +2053,7 @@ export default function App() {
     return () => {
       canceled = true;
     };
-  }, [sideId, sideRevision, active?.id, report]);
+  }, [sideId, sideRevision, sideDoc?.id, active?.id, report, checkSideDocument]);
   const shownSide = !split
     ? null
     : split.docId === active?.id
@@ -2114,16 +2183,15 @@ export default function App() {
         }}
       >
         <div className="editor-actions">
+          <div className="save-status-group">
           <span
             className={`save-indicator ${groupSaveStatus !== "저장됨" ? "pending" : ""}`}
           >
             <span />
             {groupSaveStatus}
           </span>
-          {autoSync.phase !== "idle" && <span className={`auto-sync-status ${autoSync.phase === "error" ? "error" : ""}`}
-            role="status" title={autoSync.message || "저장한 변경 사항을 외부 저장소에 동기화합니다."}>
-            <Cloud size={13} />{autoSyncLabels[autoSync.phase]}
-          </span>}
+          <SyncStatus status={autoSync} checking={syncChecking} available={syncAvailable} />
+          </div>
           <div className="editor-action-buttons" aria-hidden={!focused}>
             <button
               aria-label="저장"
@@ -2203,6 +2271,7 @@ export default function App() {
             <button onClick={attempt(resolveConflict)}>
               내 편집 사본 만들기
             </button>
+            <button onClick={attempt(() => checkOpenDocument(true))}>바뀐 내용 불러오기</button>
           </div>
         )}
         <EditorScroll key={active.id} documentId={active.id} positions={scrollPositions.current} visible={visible}>
@@ -3864,6 +3933,10 @@ export default function App() {
           {/* 닫아도 열린 메모 탭이 남도록 숨기기만 한다. */}
           <MemoSession
             active={memoOpen}
+            syncConfirm={confirm}
+            syncStatus={autoSync}
+            syncChecking={syncChecking}
+            syncAvailable={syncAvailable}
             apiRef={memoApi}
             documents={lib.documents}
             onOpenDoc={(id) =>
@@ -5726,14 +5799,14 @@ export default function App() {
                     <Cloud size={18} />
                     외부 저장소
                   </h3>
-                  <p className="settings-description">자동 저장과 수동 저장이 끝나면 2초 뒤 등록된 저장소에 자동으로 동기화합니다. 연속 수정은 모아서 처리하며, 트레이에서도 계속됩니다.</p>
+                  <p className="settings-description">작품·작문 페이지에 들어가면 즉시 동기화하고, 해당 화면에서는 3초마다 확인합니다. 다른 페이지나 트레이 상태에서도 1분마다 동기화합니다. 서재 파일의 변경이 감지되면 즉시 전송하며, 열린 본문은 확인 후 바꿉니다.</p>
                   <aside className="sync-notice" aria-label="동기화 이용 안내">
                     <strong>동기화는 아직 불안정할 수 있습니다.</strong>
                     <p>중요한 원고는 별도로 백업해 주세요.</p>
                     <p>동기화하려면 사용하는 모든 기기의 Lof Writer를 최신 버전으로 업데이트해야 합니다. 구버전 앱은 새 동기화 데이터를 받을 수 없습니다.</p>
                     <p>최신 문서만 동기화하며, 수정 이력은 각 기기에 별도로 보관합니다.</p>
                   </aside>
-                  {connections.length > 0 && <p role="status" className={autoSync.phase === "error" ? "pin-error" : "muted"}>
+                  {connections.length > 0 && <p role="status" aria-live="off" className={autoSync.phase === "error" ? "pin-error" : "muted"}>
                     {autoSyncLabels[autoSync.phase]}{autoSync.message && ` · ${autoSync.message}`}
                   </p>}
                   {googleDriveEnabled && googleConnecting && <div className="connection" role="status">
@@ -5748,6 +5821,24 @@ export default function App() {
                           {c.type === "google-drive" ? `${c.email} · Google Drive / Lof Writer`
                             : c.type === "folder" ? c.folder : c.url || c.host}
                         </small>
+                        <label className="connection-conflict-policy">
+                          충돌 사본 처리
+                          <select aria-label={`${c.name} 충돌 사본 처리`} value={c.conflictPolicy ?? "keepBoth"}
+                            disabled={busy || autoSync.phase === "syncing"}
+                            onChange={(event) => {
+                              const conflictPolicy = event.target.value;
+                              attempt(async () => {
+                                setBusy(true);
+                                try {
+                                  const updated = await call("setSyncConflictPolicy", { id: c.id, conflictPolicy });
+                                  setConnections((current) => current.map((connection) => connection.id === c.id ? updated : connection));
+                                } finally { setBusy(false); }
+                              })();
+                            }}>
+                            <option value="latest">최신본으로 덮어쓰기</option>
+                            <option value="keepBoth">파일명을 바꿔 둘 다 보존</option>
+                          </select>
+                        </label>
                       </div>
                       <button disabled={busy || autoSync.phase === "syncing"} onClick={() => doSync(c.id)}>
                         <RefreshCw size={15} />
