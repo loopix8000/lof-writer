@@ -18,7 +18,7 @@ import EditorScroll, { type EditorScrollPositions } from "./EditorScroll";
 import RetainedTab from "./RetainedTab";
 import { editorDropZone, type EditorDropZone } from "./editor-groups";
 import ContextMenu, { type MenuItem } from "./ContextMenu";
-import { useConfirm, type ConfirmOptions } from "./ConfirmDialog";
+import { useConfirm } from "./ConfirmDialog";
 import { useSyncFileUpdates } from "./useSyncFileUpdates";
 import { call, type AutoSyncStatus, type Doc, type Kind } from "./types";
 import SyncStatus from "./SyncStatus";
@@ -116,7 +116,6 @@ const ancestors = (p: string) => {
 // 왼쪽은 폴더 트리(만들기·이름 바꾸기·끌어서 옮기기·삭제), 오른쪽은 메모 편집기다.
 export default function MemoSession({
   active,
-  syncConfirm,
   syncStatus,
   syncChecking,
   syncAvailable,
@@ -137,7 +136,6 @@ export default function MemoSession({
   apiRef?: React.MutableRefObject<{ open: (space: string, path: string, pinned?: boolean) => Promise<void> } | null>;
   // 메모 화면이 보이는지. 숨겨져 있어도 탭과 편집 상태는 그대로 둔다.
   active: boolean;
-  syncConfirm: (options: ConfirmOptions) => Promise<boolean>;
   syncStatus: AutoSyncStatus;
   syncChecking: boolean;
   syncAvailable: boolean;
@@ -332,8 +330,7 @@ export default function MemoSession({
     canCheck: () => active && !composing.current,
     current: () => {
       const m = memoRef.current;
-      return m ? { doc: m, version: `${dirty.current.seq}:${m.revision}:${titleRef.current}`,
-        dirty: dirty.current.seq !== dirty.current.saved || titleRef.current !== m.title } : null;
+      return m ? { doc: m, version: `${dirty.current.seq}:${m.revision}:${titleRef.current}` } : null;
     },
     beforeRead: () => chain.current,
     read: (m: Memo) => readItem(m.space, m.path),
@@ -341,9 +338,6 @@ export default function MemoSession({
       clearTimeout(timer.current);
       conflictRef.current = true;
       setConflict(true);
-      setStatus("새 동기화 내용 확인 중");
-    },
-    decline: () => {
       if (dirty.current.seq === dirty.current.saved) dirty.current.seq++;
       setStatus("외부 변경 있음");
     },
@@ -355,7 +349,6 @@ export default function MemoSession({
       setTitle(fresh.title);
       setCurrent(fresh);
     },
-    confirm: syncConfirm,
     report,
   });
   checkMemoRef.current = checkOpenMemo;
@@ -544,14 +537,15 @@ export default function MemoSession({
   const closeSideTab = (t: MemoTab) => setSplit((g) => withoutMemoTab(g, t));
   // 다른 그룹의 읽기 전용 메모도 새 본문을 반영하기 전에 확인한다.
   const sideKey = split?.current ? `${split.current.space}\n${split.current.path}` : "";
+  const [sideSyncKey, setSideSyncKey] = useState("");
   const checkSideMemo = useSyncFileUpdates({
     fileKey: sideKey,
     enabled: !!sideMemo && !!split?.current && sameTab(split.current, sideMemo) && !sameTab(sideMemo, memo),
     canCheck: () => active,
-    current: () => sideMemo ? { doc: sideMemo, version: sideMemo.revision, dirty: false } : null,
+    current: () => sideMemo ? { doc: sideMemo, version: sideMemo.revision } : null,
     read: (m: Memo) => readItem(m.space, m.path),
-    apply: setSideMemo,
-    confirm: syncConfirm,
+    pending: () => setSideSyncKey(`${sideKey}\n${sideMemo?.revision}`),
+    apply: (fresh) => { setSideMemo(fresh); setSideSyncKey(""); },
     report,
   });
   useEffect(() => {
@@ -823,15 +817,7 @@ export default function MemoSession({
     await loadTree();
   }
   async function reloadFromDisk() {
-    const m = memoRef.current;
-    if (!m) return;
-    clearTimeout(timer.current);
-    await chain.current;
-    const fresh = await readItem(m.space, m.path);
-    dirty.current = { seq: 0, saved: 0 };
-    setConflict(false);
-    setStatus("저장됨");
-    setCurrent(fresh);
+    await checkOpenMemo(true);
   }
   async function keepMine() {
     const m = memoRef.current;
@@ -1101,13 +1087,13 @@ export default function MemoSession({
       <div
         className="group-body"
         onMouseDownCapture={(e) => {
-          if (!focused && e.button === 0) {
+          if (!focused && e.button === 0 && !(e.target as Element).closest("[data-sync-actions]")) {
             e.stopPropagation();
             attempt(() => focusOther())();
           }
         }}
         onClickCapture={(e) => {
-          if (!focused) {
+          if (!focused && !(e.target as Element).closest("[data-sync-actions]")) {
             e.preventDefault();
             e.stopPropagation();
           }
@@ -1120,7 +1106,7 @@ export default function MemoSession({
           }
         }}
         onKeyDownCapture={(e) => {
-          if (!focused && e.key !== "Tab") {
+          if (!focused && e.key !== "Tab" && !(e.target as Element).closest("[data-sync-actions]")) {
             e.preventDefault();
             e.stopPropagation();
             attempt(() => focusOther())();
@@ -1141,6 +1127,12 @@ export default function MemoSession({
             <span>다른 곳에서 이 메모가 바뀌었습니다.</span>
             <button onClick={attempt(reloadFromDisk)}>바뀐 내용 불러오기</button>
             <button onClick={attempt(keepMine)}>내 내용으로 덮어쓰기</button>
+          </div>
+        )}
+        {!focused && sideSyncKey === `${memo.space}\n${memo.path}\n${memo.revision}` && (
+          <div className="memo-conflict" data-sync-actions>
+            <span>다른 곳에서 이 메모가 바뀌었습니다. 현재 내용은 유지됩니다.</span>
+            <button onClick={attempt(() => checkSideMemo(true))}>바뀐 내용 불러오기</button>
           </div>
         )}
         <EditorScroll key={`${memo.space}\n${memo.path}`} documentId={`${memo.space}\n${memo.path}`} positions={scrollPositions.current} visible={visible}>

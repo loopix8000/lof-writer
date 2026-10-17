@@ -576,7 +576,7 @@ export default function App() {
     canCheck: () => view === "workspace" && !memoOpen && !composing.current,
     current: () => {
       const d = draft.current;
-      return d ? { doc: d.doc, version: `${d.seq}:${d.doc.revision}`, dirty: d.seq !== d.saved } : null;
+      return d ? { doc: d.doc, version: `${d.seq}:${d.doc.revision}` } : null;
     },
     beforeRead: () => saveChain.current,
     read: (doc: Doc) => call<Doc>("readDocument", { id: doc.id }),
@@ -584,9 +584,6 @@ export default function App() {
       if (timer.current) clearTimeout(timer.current);
       conflictRef.current = true;
       setConflict(true);
-      setSaveStatus("새 동기화 내용 확인 중");
-    },
-    decline: () => {
       const d = draft.current;
       if (d) {
         if (d.seq === d.saved) d.seq++;
@@ -607,7 +604,6 @@ export default function App() {
       setSaveStatus("저장됨");
       message("동기화된 새 내용을 불러왔습니다.");
     },
-    confirm,
     report,
   });
   checkOpenDocRef.current = checkOpenDocument;
@@ -714,7 +710,7 @@ export default function App() {
       ? await call<Doc>("readDocument", { id: destination.documentId }) : null;
     if (seq !== navigationSeq.current) return;
     const retained = fresh ? retainedDocuments.current.get(fresh.id) : undefined;
-    // 이미 열어 둔 탭의 본문은 유지하고, 새 본문 반영은 확인 창이 맡는다.
+    // 이미 열어 둔 탭의 본문은 유지하고, 안내줄에서 새 내용을 불러온다.
     const keepOlder = !!(fresh && retained && retained.revision !== fresh.revision);
     const doc = keepOlder ? retained! : fresh;
     const next: Destination = doc
@@ -2023,17 +2019,18 @@ export default function App() {
       .querySelector<HTMLElement>(".editor-group.focused .editor-tab.current, .editor-groups:not(.split) .editor-tab.current")
       ?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [currentTabId, editorTabs.length]);
-  // 포커스되지 않은 그룹의 문서는 저장될 때마다(리비전이 바뀔 때) 다시 읽는다.
+  // 포커스되지 않은 그룹의 문서도 외부 변경을 안내하고, 불러오기를 눌렀을 때 반영한다.
   const sideId = split?.docId || "",
     sideRevision = lib.documents.find((d) => d.id === sideId)?.revision;
+  const [sideSyncKey, setSideSyncKey] = useState("");
   const checkSideDocument = useSyncFileUpdates({
     fileKey: sideDoc?.id ?? "",
     enabled: !!sideId && sideDoc?.id === sideId && sideId !== active?.id,
     canCheck: () => view === "workspace" && !memoOpen,
-    current: () => sideDoc ? { doc: sideDoc, version: sideDoc.revision, dirty: false } : null,
+    current: () => sideDoc ? { doc: sideDoc, version: sideDoc.revision } : null,
     read: (doc: Doc) => call<Doc>("readDocument", { id: doc.id }),
-    apply: setSideDoc,
-    confirm,
+    pending: () => setSideSyncKey(sideDoc ? `${sideDoc.id}:${sideDoc.revision}` : ""),
+    apply: (doc) => { setSideDoc(doc); setSideSyncKey(""); },
     report,
   });
   useEffect(() => {
@@ -2156,13 +2153,13 @@ export default function App() {
       <div
         className="group-body"
         onMouseDownCapture={(e) => {
-          if (!focused && e.button === 0) {
+          if (!focused && e.button === 0 && !(e.target as Element).closest("[data-sync-actions]")) {
             e.stopPropagation();
             attempt(() => focusOther())();
           }
         }}
         onClickCapture={(e) => {
-          if (!focused) {
+          if (!focused && !(e.target as Element).closest("[data-sync-actions]")) {
             e.preventDefault();
             e.stopPropagation();
           }
@@ -2175,7 +2172,7 @@ export default function App() {
           }
         }}
         onKeyDownCapture={(e) => {
-          if (!focused && e.key !== "Tab") {
+          if (!focused && e.key !== "Tab" && !(e.target as Element).closest("[data-sync-actions]")) {
             e.preventDefault();
             e.stopPropagation();
             attempt(() => focusOther())();
@@ -2272,6 +2269,12 @@ export default function App() {
               내 편집 사본 만들기
             </button>
             <button onClick={attempt(() => checkOpenDocument(true))}>바뀐 내용 불러오기</button>
+          </div>
+        )}
+        {!focused && sideSyncKey === `${active.id}:${active.revision}` && (
+          <div className="conflict-banner" data-sync-actions>
+            <span>다른 곳에서 이 원고가 바뀌었습니다. 현재 내용은 유지됩니다.</span>
+            <button onClick={attempt(() => checkSideDocument(true))}>바뀐 내용 불러오기</button>
           </div>
         )}
         <EditorScroll key={active.id} documentId={active.id} positions={scrollPositions.current} visible={visible}>
@@ -3933,7 +3936,6 @@ export default function App() {
           {/* 닫아도 열린 메모 탭이 남도록 숨기기만 한다. */}
           <MemoSession
             active={memoOpen}
-            syncConfirm={confirm}
             syncStatus={autoSync}
             syncChecking={syncChecking}
             syncAvailable={syncAvailable}
