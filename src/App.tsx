@@ -2565,7 +2565,8 @@ export default function App() {
     else setSidebar(true);
     startRename(doc);
   }
-  // 퀵 노트: 고른 문장과 메모를 문서 영역 맨 위에 메모 문서로 만들고 바로 연다.
+  // 퀵 노트: 고른 문장과 메모를 문서 영역 맨 위에 메모 문서로 만든다. 쓰던 원고에서 벗어나지 않도록 메모는 열지 않고,
+  // 알림의 '열기'로 열 수 있게 한다.
   async function saveQuickNote(note: QuickNoteSource, memo: string, title: string) {
     await flush();
     const doc = await call<Doc>("createDocument", {
@@ -2579,8 +2580,7 @@ export default function App() {
     setQuickNote(null);
     await refresh();
     await loadMemoFolders();
-    await openDoc(doc.id, true);
-    message("메모가 저장되었습니다");
+    message("메모가 저장되었습니다", { label: "열기", run: attempt(() => openDoc(doc.id, true)) });
   }
   // 회차에서는 연결된 플롯·메모를, 플롯·메모에서는 연결된 회차를 보여 준다.
   // 누르면 미리보기로 열고, 더블클릭하면 탭을 고정하며, 우클릭으로 이름을 바꾼다.
