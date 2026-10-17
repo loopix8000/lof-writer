@@ -19,7 +19,7 @@ try {
   await page.getByRole("button", { name: "첫 프로젝트 만들기" }).click();
   await page.getByRole("textbox", { name: "새 제목" }).fill("충돌 검증");
   await page.getByRole("button", { name: "만들기", exact: true }).click();
-  await page.getByRole("button", { name: "새 편 쓰기", exact: true }).click();
+  await page.getByRole("button", { name: "새 에피소드 쓰기", exact: true }).click();
   await page.getByRole("button", { name: "만들기", exact: true }).click();
   const editor = page.locator('[data-testid="manuscript"]');
   await editor.fill("첫 문단");

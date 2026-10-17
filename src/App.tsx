@@ -1162,7 +1162,7 @@ export default function App() {
       episodeId: opts.episodeId,
       ...(kind !== "episode"
         ? {
-            manualLineBreak: true,
+            manualLineBreak: false,
           }
         : {}),
     });
@@ -1733,8 +1733,10 @@ export default function App() {
   // 원고 보호: 집필 완료인 회차는 제목과 본문을 고칠 수 없다(상태는 바꿀 수 있다).
   const isProtected = active?.kind === "episode" && normalizeStatus(active.status) === "completed";
   const platformChars = stats ? countForWriting(stats, writingRules) : 0;
+  const countUnit = active?.kind === "episode" ? writingRules.unit : "utf16";
+  const charsWithoutSpaces = stats ? countForRule(stats, "noSpace", countUnit) : 0;
   // 상태줄의 두 번째 값: 공백 포함·줄바꿈 제외(위젯 보드의 같은 항목과 동일한 계산).
-  const charsWithSpaces = stats ? countForRule(stats, "spaces", writingRules.unit) : 0;
+  const charsWithSpaces = stats ? countForRule(stats, "spaces", countUnit) : 0;
   const goal = Number(writingRules.goal) || 0;
   const isWorkspace = view === "workspace" && !!active && !memoOpen;
   // 문서를 연 집중 모드에서만 창을 작게 줄일 수 있다. 끄면 원래 최소 크기로 돌아간다.
@@ -2163,7 +2165,7 @@ export default function App() {
       folder: folder || undefined,
       title: kind === "plot" ? "새 플롯" : "새 메모",
       episodeId: ep?.id,
-      manualLineBreak: true,
+      manualLineBreak: false,
     });
     await refresh();
     await loadMemoFolders();
@@ -2182,7 +2184,7 @@ export default function App() {
       title: quickNoteTitle(note, memo, title),
       body: quickNoteMarkdown(note, memo),
       episodeId: note.episodeId,
-      manualLineBreak: true,
+      manualLineBreak: false,
     });
     setQuickNote(null);
     await refresh();
@@ -4011,7 +4013,7 @@ export default function App() {
                     onClick={attempt(() => createDoc(tab))}
                   >
                     <Plus size={16} />
-                    {tab === "episode" ? "새 편 쓰기" : `${labels[tab]} 추가`}
+                    {tab === "episode" ? "새 에피소드 쓰기" : `${labels[tab]} 추가`}
                   </button>
                 </div>
               </div>
@@ -4378,7 +4380,10 @@ export default function App() {
               </div>
               <footer className="editor-footer">
                 <span>
-                  {writingName(writingRules)} {platformChars.toLocaleString()}자 <i /> 공백 포함 {charsWithSpaces.toLocaleString()}자
+                  {active.kind === "episode"
+                    ? <>{writingName(writingRules)} {platformChars.toLocaleString()}자</>
+                    : <>공백 제외 {charsWithoutSpaces.toLocaleString()}자</>}
+                  <i /> 공백 포함 {charsWithSpaces.toLocaleString()}자
                 </span>
                 {focus && (
                   <button className="footer-exit-focus" onClick={() => setFocus(false)}>
@@ -4427,6 +4432,7 @@ export default function App() {
             <PlatformCount
               body={active.body}
               rules={writingRules}
+              documentOnly={active.kind !== "episode"}
               onChange={(rules) => {
                 const id = projectId;
                 pendingWriting.current.set(id, rules);
@@ -4447,7 +4453,7 @@ export default function App() {
               }}
             />
             <section className="widget session-widget">
-              <span>이번 회차에서 새로 쓴 글</span>
+              <span>{active.kind === "episode" ? "이번 회차에서 새로 쓴 글" : "이번 문서에서 새로 쓴 글"}</span>
               <strong>
                 +{sessionCount.toLocaleString()}
                 <small>자</small>
