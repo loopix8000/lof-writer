@@ -5,6 +5,17 @@ import { atomic, validId, hash } from "./store.mjs";
 
 const nameOK = (n) => /^device-[a-zA-Z0-9_-]+\.json$/.test(n);
 const MAX = 50_000_000;
+// 조회 순서나 객체 키 순서만 달라진 경우에는 재전송하지 않는다.
+function snapshotHash(snapshot) {
+  const ordered = (value) => Array.isArray(value) ? value.map(ordered)
+    : value && typeof value === "object"
+      ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, ordered(value[key])]))
+      : value;
+  const value = ordered(snapshot);
+  for (const [field, key] of [["projects", "id"], ["documents", "id"], ["assets", "projectId"]])
+    value[field]?.sort((a, b) => String(a[key]).localeCompare(String(b[key])));
+  return hash(JSON.stringify(value));
+}
 export async function adapter(config) {
   const prefix = "lof-writer-sync-v1";
   if (config.type === "folder") {
@@ -145,15 +156,24 @@ export async function syncOnce(store, config, deviceId) {
       ]);
     }
     const snapshot = await store.snapshot();
-    const raw = JSON.stringify({
-      ...snapshot,
-      deviceId,
-      at: new Date().toISOString(),
-    });
-    if (Buffer.byteLength(raw) > MAX)
-      throw Error("알파 동기화는 도서관당 50MB까지 지원합니다.");
-    await remote.write(`device-${deviceId}.json`, raw);
-    result.uploaded = snapshot.documents.length;
+    const outboundHash = snapshotHash(snapshot);
+    const ownFile = `device-${deviceId}.json`;
+    if (state.outboundHash !== outboundHash || !peers.includes(ownFile)) {
+      const raw = JSON.stringify({
+        ...snapshot,
+        deviceId,
+        at: new Date().toISOString(),
+      });
+      if (Buffer.byteLength(raw) > MAX)
+        throw Error("알파 동기화는 도서관당 50MB까지 지원합니다.");
+      // 원격 교체 후 로컬 상태 저장이 실패해도 다음 실행에서 전송을 다시 확인한다.
+      delete state.outboundHash;
+      await atomic(stateFile, JSON.stringify(state, null, 2));
+      await remote.write(ownFile, raw);
+      result.uploaded = snapshot.documents.length;
+      // 업로드에 성공한 내용만 다음 자동 동기화의 기준으로 저장한다.
+      state.outboundHash = outboundHash;
+    }
     state.published = Object.fromEntries([
       ...snapshot.documents.map((d) => [d.id, d.revision]),
       ...snapshot.projects.map((p) => [

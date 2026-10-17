@@ -126,6 +126,28 @@ fn parse(raw: &str) -> Result<Value, LofError> {
     serde_json::from_str(raw).map_err(|e| fail_invalid(format!("동기화 데이터 형식 오류: {e}")))
 }
 
+// 객체 키와 목록 조회 순서가 바뀌어도 같은 서재는 같은 해시로 비교한다.
+fn snapshot_hash(snapshot: &Value) -> String {
+    fn ordered(value: &Value) -> Value {
+        match value {
+            Value::Object(object) => {
+                let mut keys: Vec<_> = object.keys().collect();
+                keys.sort();
+                Value::Object(keys.into_iter().map(|key| (key.clone(), ordered(&object[key]))).collect())
+            }
+            Value::Array(items) => Value::Array(items.iter().map(ordered).collect()),
+            _ => value.clone(),
+        }
+    }
+    let mut snapshot = ordered(snapshot);
+    for (field, key) in [("projects", "id"), ("documents", "id"), ("assets", "projectId")] {
+        if let Some(items) = snapshot[field].as_array_mut() {
+            items.sort_by(|a, b| a[key].as_str().cmp(&b[key].as_str()));
+        }
+    }
+    hash_str(&snapshot.to_string())
+}
+
 pub(super) fn sync(
     store: &Mutex<Option<Store>>,
     root: &Path,
@@ -280,6 +302,24 @@ fn run(
     }
 
     let snapshot = with_store(store, root, Store::snapshot)?;
+    let outbound_hash = snapshot_hash(&snapshot);
+    let previous_files = state["files"].as_object();
+    // 수신 확인은 계속하되, 마지막 전송 내용과 같으면 업로드 단계 자체를 건너뛴다.
+    // 원격에서 사라진 파일의 복구와 남은 구형 파일 정리는 기존 경로에서 처리한다.
+    let unchanged = state["outboundHash"].as_str() == Some(outbound_hash.as_str())
+        && state["ownIndexHash"].as_str().is_some()
+        && names.contains(&own_index)
+        && previous_files.is_some_and(|files| {
+            files.keys().all(|name| names.contains(name))
+                && !names.iter().any(|name| owned_latest(device, name) && !files.contains_key(name))
+        });
+    if unchanged {
+        with_store(store, root, |st| st.retain_history(false))?;
+        return Ok(total);
+    }
+    // 전송 도중 실패하거나 원고가 이전 내용으로 돌아가도, 미완료 전송을 완료 상태로 오인하지 않는다.
+    state.as_object_mut().unwrap().remove("outboundHash");
+    with_store(store, root, |st| st.database()?.set(state_key, state))?;
     let mut entries = Vec::new();
     let mut files = state["files"].as_object().cloned().unwrap_or_default();
     let mut payloads = Vec::new();
@@ -360,6 +400,7 @@ fn run(
     }
     state["published"] = json!(revisions(&snapshot));
     state["ownIndexHash"] = json!(index_hash);
+    state["outboundHash"] = json!(outbound_hash);
     applied.insert(own_index, json!(index_hash));
     state["applied"] = json!(applied);
     let keep: HashSet<_> = index

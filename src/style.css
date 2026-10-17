@@ -3290,8 +3290,33 @@ select:not([multiple]) {
   color: var(--warning-text);
   font-size: 13px;
 }
-.memo-conflict span {
-  margin-right: auto;
+.conflict-banner,
+.memo-conflict {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: 8px 16px;
+}
+.conflict-banner > span,
+.memo-conflict > span {
+  flex: 1 1 320px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+/* 충돌 해결 버튼은 한 묶음으로 두고, 그룹 폭이 좁아지면 함께 다음 줄로 옮긴다. */
+.conflict-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  max-width: 100%;
+  margin-left: auto;
+}
+.conflict-actions button {
+  max-width: 100%;
+  padding: 6px 10px;
+  white-space: normal;
+  color: var(--warning-text);
+  border-color: var(--warning-border);
 }
 .memo-blank {
   flex: 1;

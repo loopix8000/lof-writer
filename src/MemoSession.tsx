@@ -1125,14 +1125,18 @@ export default function MemoSession({
         {focused && conflict && (
           <div className="memo-conflict" role="alert">
             <span>다른 곳에서 이 메모가 바뀌었습니다.</span>
-            <button onClick={attempt(reloadFromDisk)}>바뀐 내용 불러오기</button>
-            <button onClick={attempt(keepMine)}>내 내용으로 덮어쓰기</button>
+            <div className="conflict-actions">
+              <button onClick={attempt(reloadFromDisk)}>바뀐 내용 불러오기</button>
+              <button onClick={attempt(keepMine)}>내 내용으로 덮어쓰기</button>
+            </div>
           </div>
         )}
         {!focused && sideSyncKey === `${memo.space}\n${memo.path}\n${memo.revision}` && (
           <div className="memo-conflict" data-sync-actions>
             <span>다른 곳에서 이 메모가 바뀌었습니다. 현재 내용은 유지됩니다.</span>
-            <button onClick={attempt(() => checkSideMemo(true))}>바뀐 내용 불러오기</button>
+            <div className="conflict-actions">
+              <button onClick={attempt(() => checkSideMemo(true))}>바뀐 내용 불러오기</button>
+            </div>
           </div>
         )}
         <EditorScroll key={`${memo.space}\n${memo.path}`} documentId={`${memo.space}\n${memo.path}`} positions={scrollPositions.current} visible={visible}>

@@ -2265,16 +2265,20 @@ export default function App() {
               다른 편집 내용이 있습니다. 내 원고를 사본으로 보존한 뒤
               계속할 수 있습니다.
             </span>
-            <button onClick={attempt(resolveConflict)}>
-              내 편집 사본 만들기
-            </button>
-            <button onClick={attempt(() => checkOpenDocument(true))}>바뀐 내용 불러오기</button>
+            <div className="conflict-actions">
+              <button onClick={attempt(resolveConflict)}>
+                내 편집 사본 만들기
+              </button>
+              <button onClick={attempt(() => checkOpenDocument(true))}>바뀐 내용 불러오기</button>
+            </div>
           </div>
         )}
         {!focused && sideSyncKey === `${active.id}:${active.revision}` && (
           <div className="conflict-banner" data-sync-actions>
             <span>다른 곳에서 이 원고가 바뀌었습니다. 현재 내용은 유지됩니다.</span>
-            <button onClick={attempt(() => checkSideDocument(true))}>바뀐 내용 불러오기</button>
+            <div className="conflict-actions">
+              <button onClick={attempt(() => checkSideDocument(true))}>바뀐 내용 불러오기</button>
+            </div>
           </div>
         )}
         <EditorScroll key={active.id} documentId={active.id} positions={scrollPositions.current} visible={visible}>
