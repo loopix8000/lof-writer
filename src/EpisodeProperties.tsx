@@ -14,8 +14,6 @@ import {
   SquarePen,
   Tags,
   X,
-  WrapText,
-  Info,
   Link2,
   Unlink,
   ArrowUpRight,
@@ -33,7 +31,6 @@ import {
   TYPE_ACTIONS,
   normalizeStatus,
   normalizeType,
-  lineBreakLabel,
 } from "../core/episode.mjs";
 
 // 문서의 기본 속성과 사용자 속성을 함께 편집한다.
@@ -71,9 +68,9 @@ type Prop = {
   optional: boolean;
   fullWidth?: boolean;
   icon: ReactNode;
-  present: (d: Doc, defaultManual: boolean) => boolean;
+  present: (d: Doc) => boolean;
   // 속성을 뺄 때 기본값으로 되돌리는 패치와, 실행 취소로 되돌리는 패치.
-  clear?: (d: Doc, defaultManual: boolean) => { next: Patch; restore: Patch };
+  clear?: (d: Doc) => { next: Patch; restore: Patch };
 };
 const clearField = (k: keyof Doc, empty: any) => (d: Doc) => ({
   next: { [k]: empty } as Patch,
@@ -105,17 +102,6 @@ const PROPS: Prop[] = [
     clear: clearField("authorComment", ""),
   },
   { id: "type", label: "유형", order: 10, optional: false, icon: <Bookmark size={14} />, present: () => true },
-  {
-    id: "line-break",
-    label: "줄바꿈",
-    description: "문서의 줄바꿈 관리 방식을 설정합니다.",
-    order: 20,
-    optional: true,
-    icon: <WrapText size={14} />,
-    // 뮤블처럼 새 에피소드 기본값과 다를 때만 보이고, 빼면 기본값으로 되돌린다.
-    present: (d, def) => !!d.manualLineBreak !== def,
-    clear: (d, def) => ({ next: { manualLineBreak: def }, restore: { manualLineBreak: !!d.manualLineBreak } }),
-  },
   { id: "status", label: "상태", order: 30, optional: false, icon: <Clock size={14} />, present: () => true },
   {
     id: "tags",
@@ -138,7 +124,6 @@ export default function EpisodeProperties({
   onEdit,
   onMenu,
   onNotice,
-  defaultManualLineBreak = false,
   boundEpisode,
   onBind,
   onUnbind,
@@ -148,8 +133,6 @@ export default function EpisodeProperties({
   favoriteTags,
 }: {
   doc: Doc;
-  // 이 작품의 새 에피소드 줄바꿈 기본값(작품 설정, 없으면 공통 설정).
-  defaultManualLineBreak?: boolean;
   boundEpisode?: Doc;
   onBind?: () => void;
   onUnbind?: () => void;
@@ -177,7 +160,7 @@ export default function EpisodeProperties({
   useEffect(() => {
     setShown((s) => {
       const next = new Set(s);
-      for (const p of PROPS) if (p.optional && p.present(doc, defaultManualLineBreak)) next.add(p.id);
+      for (const p of PROPS) if (p.optional && p.present(doc)) next.add(p.id);
       return next.size === s.size ? s : next;
     });
   }, [doc]);
@@ -185,15 +168,15 @@ export default function EpisodeProperties({
     type = normalizeType(doc.episodeType);
   const available = PROPS.filter((p) => doc.kind === "episode"
     ? p.id !== "episode-binding"
-    : ["episode-binding", "tags", "line-break"].includes(p.id));
-  const visible = available.filter((p) => !p.optional || p.present(doc, defaultManualLineBreak) || shown.has(p.id));
+    : ["episode-binding", "tags"].includes(p.id));
+  const visible = available.filter((p) => !p.optional || p.present(doc) || shown.has(p.id));
   const addable = available.filter((p) => p.optional && !visible.includes(p));
   const menuAt = (e: React.MouseEvent<HTMLElement>, items: MenuItem[]) =>
     onMenu(e.currentTarget.getBoundingClientRect(), items);
 
   function remove(p: Prop) {
     if (!p.clear) return;
-    const { next, restore } = p.clear(doc, defaultManualLineBreak);
+    const { next, restore } = p.clear(doc);
     onEdit(next);
     setShown((s) => {
       const n = new Set(s);
@@ -239,16 +222,6 @@ export default function EpisodeProperties({
       case "tags":
         return <EpisodeTags key={doc.id} tags={doc.tags || []} editable={edit} favorites={favoriteTags}
           onChange={(tags) => onEdit({ tags })} onMenu={onMenu} />;
-      case "line-break":
-        return (
-          <LineBreakControl
-            manual={!!doc.manualLineBreak}
-            def={defaultManualLineBreak}
-            defaultLabel={doc.kind === "episode" ? "새 에피소드 기본값" : "기본값"}
-            disabled={!edit}
-            onChange={(manualLineBreak) => onEdit({ manualLineBreak })}
-          />
-        );
       case "episode-binding":
         return (
           <div className="property-binding">
@@ -396,82 +369,5 @@ function PropertyRow({
           </button>
         )}
       </div>
-  );
-}
-
-// 줄바꿈 방식: 누르면 바꿀지 묻는 작은 창을 띄운다(본문은 바꾸지 않는다).
-function LineBreakControl({
-  manual,
-  def,
-  disabled,
-  onChange,
-  defaultLabel = "새 에피소드 기본값",
-}: {
-  manual: boolean;
-  def: boolean;
-  disabled: boolean;
-  onChange: (manual: boolean) => void;
-  defaultLabel?: string;
-}) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const close = (e: Event) => {
-      if (e instanceof KeyboardEvent ? e.key === "Escape" : !ref.current?.contains(e.target as Node))
-        setOpen(false);
-    };
-    window.addEventListener("mousedown", close, true);
-    window.addEventListener("keydown", close, true);
-    return () => {
-      window.removeEventListener("mousedown", close, true);
-      window.removeEventListener("keydown", close, true);
-    };
-  }, [open]);
-  const differs = manual !== def;
-  return (
-    <div className="line-break-control" ref={ref}>
-      <button
-        type="button"
-        className={`property-select${differs ? " is-completed" : ""}`}
-        aria-label={`줄바꿈: ${lineBreakLabel(manual)}`}
-        title={lineBreakLabel(manual)}
-        disabled={disabled}
-        onClick={() => setOpen((o) => !o)}
-      >
-        {differs && (
-          <span title={`${defaultLabel}(${lineBreakLabel(def)})과 다른 줄바꿈 방식입니다.`}>
-            <Info size={12} />
-          </span>
-        )}
-        <span>{lineBreakLabel(manual)}</span>
-        {!disabled && <ChevronDown size={14} />}
-      </button>
-      {open && (
-        <div className="line-break-pop" role="dialog">
-          <b title="줄바꿈 방식 변경은 이 문서에만 적용되며 본문 내용은 변경하지 않습니다.">
-            {manual ? "자동 줄바꿈 관리로 전환할까요?" : "수동 줄바꿈 관리로 전환할까요?"}
-          </b>
-          <p>
-            {manual
-              ? "단락 간격이 생기며 Shift+Enter로 단락 내 줄바꿈합니다."
-              : "기본 단락 간격이 사라지며 Enter로 줄바꿈합니다."}
-          </p>
-          <div>
-            <button type="button" onClick={() => setOpen(false)}>취소</button>
-            <button
-              type="button"
-              className="primary"
-              onClick={() => {
-                onChange(!manual);
-                setOpen(false);
-              }}
-            >
-              변경
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
   );
 }

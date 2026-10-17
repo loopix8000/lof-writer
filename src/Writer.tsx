@@ -36,6 +36,7 @@ import { TypingAssist, typesettingPluginKey } from "./typing-extension";
 import { MarkdownTables } from "./table-extension";
 import { Bookmarks, BOOKMARK_LOAD, bookmarkPluginKey, readBookmarks, resolveBookmarks } from "./bookmark-extension";
 import type { Bookmark } from "./types";
+import LineBreakControl from "./LineBreakControl";
 import { Fragment, Slice, type Node as PMNode } from "@tiptap/pm/model";
 import { TextSelection } from "@tiptap/pm/state";
 import type { EditorProps } from "@tiptap/pm/view";
@@ -118,6 +119,48 @@ function offsetToPos(node: PMNode, pos: number, offset: number) {
   }
   return p;
 }
+// 줄바꿈 방식을 바꿀 때 본문의 실제 빈 줄을 맞춘다. 맨 위 단계에서 글이 있는 블록 사이의 빈 문단 묶음만 바꾼다.
+// 자동 관리로: 붙여 넣기와 같은 규칙으로 빈 줄 n개를 n/2개(내림)로 줄인다. 빈 줄 1개는 단락 간격이 된다.
+// 수동 관리로: 단락 간격 대신 실제 빈 줄을 넣어 빈 줄 k개를 2k+1개로 늘린다(자동 관리로 되돌리면 다시 k개).
+function convertBlankLines(editor: Editor, toManual: boolean) {
+  const { state } = editor;
+  const tr = state.tr,
+    paragraph = state.schema.nodes.paragraph;
+  // 자동 관리로 바꿀 때는 붙여 넣기 규칙처럼 강제 줄바꿈으로 이어진 줄도 한 줄을 한 문단으로 나눈다.
+  if (!toManual) {
+    const split: { pos: number; node: PMNode }[] = [];
+    state.doc.forEach((node, pos) => {
+      if (node.type.name === "paragraph" && node.content.content.some((c) => c.type.name === "hardBreak"))
+        split.push({ pos, node });
+    });
+    for (const { pos, node } of split.reverse()) {
+      const lines: PMNode[][] = [[]];
+      node.content.forEach((c) => (c.type.name === "hardBreak" ? lines.push([]) : lines[lines.length - 1].push(c)));
+      tr.replaceWith(pos, pos + node.nodeSize, lines.map((line) => paragraph.create(node.attrs, line)));
+    }
+  }
+  const isBlank = (node: PMNode) =>
+    node.type.name === "paragraph" && node.content.content.every((c) => c.isText && !c.text!.trim());
+  const blocks: { pos: number; end: number; blank: boolean }[] = [];
+  tr.doc.forEach((node, pos) => blocks.push({ pos, end: pos + node.nodeSize, blank: isBlank(node) }));
+  const runs: { from: number; to: number; count: number }[] = [];
+  for (let i = 0; i < blocks.length; ) {
+    if (blocks[i].blank) {
+      i++;
+      continue;
+    }
+    let j = i + 1;
+    while (j < blocks.length && blocks[j].blank) j++;
+    if (j < blocks.length) runs.push({ from: blocks[i].end, to: blocks[j].pos, count: j - i - 1 });
+    i = j;
+  }
+  for (const run of runs.reverse()) {
+    const target = toManual ? run.count * 2 + 1 : Math.floor(run.count / 2);
+    if (target !== run.count)
+      tr.replaceWith(run.from, run.to, Array.from({ length: target }, () => paragraph.create()));
+  }
+  if (tr.docChanged) editor.view.dispatch(tr);
+}
 // 저장된 북마크를 편집기에 다시 깐다. 되돌리기 기록과 저장 대상에서는 뺀다.
 function loadBookmarks(editor: Editor, list: Bookmark[] = []) {
   editor.view.dispatch(
@@ -144,6 +187,7 @@ export default function Writer({
   onToggleTypographicMarks,
   onReplaceSymbols,
   tables = false,
+  lineBreak,
   bookmarks,
   onBookmarksChange,
   jumpToBookmark = null,
@@ -167,6 +211,8 @@ export default function Writer({
   onToggleTypographicMarks?: () => void;
   onReplaceSymbols?: () => void;
   tables?: boolean;
+  // 도구 막대의 줄바꿈 방식 버튼. 현재 방식은 manualLineBreak를 쓰고, def는 새 문서 기본값이다.
+  lineBreak?: { def: boolean; defaultLabel: string; onChange: (manual: boolean) => void };
   // 원고 북마크. onBookmarksChange가 있을 때만 왼쪽 여백을 눌러 넣고 뺄 수 있다.
   bookmarks?: Bookmark[];
   onBookmarksChange?: (bookmarks: Bookmark[]) => void;
@@ -576,6 +622,22 @@ export default function Writer({
           >
             <Table2 size={16} />
           </button>
+        )}
+        {lineBreak && (
+          <>
+            <i className="format-divider" />
+            <LineBreakControl
+              manual={manualLineBreak}
+              def={lineBreak.def}
+              defaultLabel={lineBreak.defaultLabel}
+              // 본문의 빈 줄도 함께 바꾸므로, 고칠 수 없는 원고(집필 완료)에서는 바꾸지 않는다.
+              disabled={readOnly}
+              onChange={(manual) => {
+                if (!editor.isDestroyed) convertBlankLines(editor, manual);
+                lineBreak.onChange(manual);
+              }}
+            />
+          </>
         )}
         <span>본문</span>
       </div>

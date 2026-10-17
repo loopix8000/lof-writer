@@ -3574,8 +3574,6 @@ export default function App() {
                         setMenu({ x: rect.left, y: rect.bottom + 4, items })
                       }
                       onNotice={message}
-                      defaultManualLineBreak={active.kind === "episode"
-                        ? lineBreakDefault(project, prefs.defaultManualLineBreak) : false}
                       boundEpisode={lib.documents.find((d) => d.id === active.episodeId && d.kind === "episode")}
                       onBind={attempt(() => openBinding(active.id))}
                       onUnbind={attempt(() => bindDocument(active.id, null))}
@@ -3610,6 +3608,12 @@ export default function App() {
                       }).catch(report)
                     }
                     onReplaceSymbols={replaceActiveSymbols}
+                    lineBreak={{
+                      // 이 작품의 새 에피소드 줄바꿈 기본값(작품 설정, 없으면 공통 설정). 플롯·메모는 자동 관리가 기본이다.
+                      def: active.kind === "episode" ? lineBreakDefault(project, prefs.defaultManualLineBreak) : false,
+                      defaultLabel: active.kind === "episode" ? "새 에피소드 기본값" : "기본값",
+                      onChange: (manualLineBreak) => edit({ manualLineBreak }),
+                    }}
                     bookmarks={active.bookmarks}
                     onBookmarksChange={(bookmarks) => edit({ bookmarks })}
                     jumpToBookmark={bookmarkJump?.docId === active.id ? bookmarkJump : null}
