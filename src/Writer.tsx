@@ -118,6 +118,32 @@ function offsetToPos(node: PMNode, pos: number, offset: number) {
   }
   return p;
 }
+// 웹소설 원고처럼 한 줄바꿈으로만 이어진 줄도 한 줄을 한 문단으로 읽는다. Markdown 규칙대로라면 이런 줄은
+// 한 문단으로 합쳐져 문단 간격·들여쓰기가 첫 줄에만 붙으므로, 읽기 전에 줄 사이를 문단 구분(빈 줄)으로 바꾼다.
+// 자동 관리(hardBreaks)에서는 강제 줄바꿈(줄 끝 공백 두 칸·역슬래시)으로 이어진 줄도 붙여 넣기 규칙처럼
+// 한 줄을 한 문단으로 나눈다. 수동 관리에서는 강제 줄바꿈을 그대로 둔다. 코드 블록 안, 이어지는 표·인용 줄은 건드리지 않는다.
+function splitSoftBreaks(markdown: string, hardBreaks: boolean): string {
+  const lines = markdown.split(/\r\n?|\n/),
+    fenceLine = /^\s*(```|~~~)/,
+    hardEnd = /( {2,}|\\)$/,
+    joined = (line: string) => /^\s*[|>]/.test(line);
+  const out: string[] = [];
+  let fence = false;
+  lines.forEach((line, i) => {
+    if (fenceLine.test(line)) fence = !fence;
+    const next = lines[i + 1],
+      split =
+        !fence &&
+        next !== undefined &&
+        !!line.trim() &&
+        !!next.trim() &&
+        !(joined(line) && joined(next)) &&
+        (hardBreaks || !hardEnd.test(line));
+    out.push(split ? line.replace(hardEnd, "") : line);
+    if (split) out.push("");
+  });
+  return out.join("\n");
+}
 // 줄바꿈 방식을 바꿀 때 본문의 실제 빈 줄을 맞춘다. 맨 위 단계에서 글이 있는 블록 사이의 빈 문단 묶음만 바꾼다.
 // 자동 관리로: 붙여 넣기와 같은 규칙으로 빈 줄 n개를 n/2개(내림)로 줄인다. 빈 줄 1개는 단락 간격이 된다.
 // 수동 관리로: 단락 간격 대신 실제 빈 줄을 넣어 빈 줄 k개를 2k+1개로 늘린다(자동 관리로 되돌리면 다시 k개).
@@ -231,6 +257,9 @@ export default function Writer({
   optionsRef.current = mergedOptions;
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const pendingSelection = useRef<number | null>(null);
+  // 편집기에 마지막으로 읽어 들인 원고. 편집기는 줄을 문단으로 나눠 읽으므로(splitSoftBreaks) 저장 형식과
+  // 편집기의 Markdown이 달라도, 같은 원고를 다시 읽어 커서가 튀지 않게 한다.
+  const loadedBody = useRef(body);
   const protectedSource = requiresSource(body, { tables });
   // 북마크: 최신 목록과 저장 함수, 마지막으로 깔거나 알린 목록(같으면 다시 깔지 않는다).
   const bookmarksRef = useRef(bookmarks),
@@ -251,7 +280,7 @@ export default function Writer({
           placeholder: "이곳에서 이야기를 시작해 보세요.",
         }),
       ],
-      content: body,
+      content: splitSoftBreaks(body, !manualLineBreak),
       contentType: "markdown",
       editable: !readOnly,
       editorProps: {
@@ -334,10 +363,12 @@ export default function Writer({
       !editor.isDestroyed &&
       !source &&
       !protectedSource &&
+      body !== loadedBody.current &&
       editor.getMarkdown() !== body &&
       !editor.view.composing
     ) {
-      editor.commands.setContent(body, {
+      loadedBody.current = body;
+      editor.commands.setContent(splitSoftBreaks(body, !manualLineBreak), {
         contentType: "markdown",
         emitUpdate: false,
       });
