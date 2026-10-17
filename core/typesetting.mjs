@@ -20,7 +20,6 @@ const DEFAULT_DESKTOP_EDITOR_STYLE = {
 
 export const DEFAULT_EDITOR_STYLE = {
   ...DEFAULT_DESKTOP_EDITOR_STYLE,
-  showTypographicMarks: false,
   serifSymbols: true,
   dividerStyle: "solid",
   dividerPaddingY: 2,
@@ -321,7 +320,6 @@ export const DEFAULT_NOTE_EDITOR_STYLE = {
   editorPaddingX: 2,
   textareaBgColor: "",
   editorTextColor: "",
-  showTypographicMarks: false,
   serifSymbols: false,
   dividerStyle: "solid",
   dividerPaddingY: 1,
@@ -398,7 +396,6 @@ export function normalizeEditorStyle(prefs = {}, kind) {
     editorPaddingX: Math.round(clampNum(target.editorPaddingX, 0, 10, def.editorPaddingX)),
     textareaBgColor: typeof target.textareaBgColor === "string" ? target.textareaBgColor.trim() : "",
     editorTextColor: typeof target.editorTextColor === "string" ? target.editorTextColor.trim() : "",
-    showTypographicMarks: target.showTypographicMarks === true,
     serifSymbols:
       typeof target.serifSymbols === "boolean" ? target.serifSymbols : def.serifSymbols,
     dividerStyle: ["solid", "short", "ornament", "stars"].includes(target.dividerStyle)

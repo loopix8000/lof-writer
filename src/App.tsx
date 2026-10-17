@@ -1734,7 +1734,6 @@ export default function App() {
     };
   }
   const activeBox = manuscriptBoxForKind(active?.kind || "episode");
-  const editorStyleNorm = activeBox.norm;
   const manuscriptClassName = activeBox.className;
   const manuscriptStyle = activeBox.style;
   // 포커스되지 않은 그룹: 읽기 전용으로 보여 주고, 클릭하면 그 그룹으로 포커스를 옮긴다.
@@ -3602,11 +3601,6 @@ export default function App() {
                       textReplacements: prefs.textReplacements,
                     }}
                     editorStyle={activeBox.kindPrefs}
-                    onToggleTypographicMarks={() =>
-                      saveKindPrefs(active.kind, {
-                        showTypographicMarks: !editorStyleNorm.showTypographicMarks,
-                      }).catch(report)
-                    }
                     onReplaceSymbols={replaceActiveSymbols}
                     lineBreak={{
                       // 이 작품의 새 에피소드 줄바꿈 기본값(작품 설정, 없으면 공통 설정). 플롯·메모는 자동 관리가 기본이다.
@@ -4584,14 +4578,6 @@ export default function App() {
                               checked={kindEditorStyle.serifSymbols}
                               onChange={(checked) =>
                                 updateTargetPrefs({ serifSymbols: checked })
-                              }
-                            />
-                            <SettingsToggle
-                              label="조판 부호 표시 (¶ · ↵)"
-                              description="에디터 본문에 문단 끝(¶)과 강제 줄바꿈(↵) 기호를 시각적으로 표시합니다."
-                              checked={kindEditorStyle.showTypographicMarks}
-                              onChange={(checked) =>
-                                updateTargetPrefs({ showTypographicMarks: checked })
                               }
                             />
                           </div>

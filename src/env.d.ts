@@ -105,7 +105,6 @@ declare module "*.mjs" {
     textareaBgColor: string;
     editorTextColor: string;
     serifSymbols: boolean;
-    showTypographicMarks: boolean;
     dividerStyle: "solid" | "short" | "ornament" | "stars";
     dividerPaddingY: number;
     pageViewEnabled: boolean;

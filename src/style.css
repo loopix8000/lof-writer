@@ -4327,31 +4327,6 @@ button.episode-tag[draggable]:active {
   user-select: none;
 }
 
-/* 조판 부호 표시 (¶ 문단 끝, ↵ 강제 줄바꿈) */
-.tiptap p.typographic-mark-paragraph-end::after {
-  content: "¶";
-  display: inline-block;
-  margin-left: 0.28em;
-  font-size: 0.78em;
-  font-weight: 400;
-  color: var(--placeholder);
-  opacity: 0.65;
-  pointer-events: none;
-  user-select: none;
-}
-
-.tiptap .typographic-mark-hard-break-widget::after {
-  content: "↵";
-  display: inline-block;
-  margin-left: 0.2em;
-  font-size: 0.8em;
-  font-weight: 400;
-  color: var(--placeholder);
-  opacity: 0.65;
-  pointer-events: none;
-  user-select: none;
-}
-
 /* 구분선(HorizontalRule) 조판 스타일 */
 .editor-content .tiptap hr {
   margin: var(--editor-divider-padding-y, 1.5em) auto;

@@ -7,48 +7,24 @@ import { typingPlan, pairedBackspace, smartClosingEnter } from "../core/typing.m
 export const typesettingPluginKey = new PluginKey("lofTypesetting");
 
 function buildTypesettingDecorations(doc: any, opts: Record<string, any>) {
-  const showMarks = !!opts.showTypographicMarks;
   const brIndent = !!opts.hardBreakIndent && Number(opts.indent || 0) > 0;
-  if (!showMarks && !brIndent) return DecorationSet.empty;
+  if (!brIndent) return DecorationSet.empty;
 
   const decorations: Decoration[] = [];
   doc.descendants((node: any, pos: number) => {
-    if (showMarks && node.isBlock && node.isTextblock && node.content.size > 0) {
-      decorations.push(
-        Decoration.node(pos, pos + node.nodeSize, {
-          class: "typographic-mark-paragraph-end",
-        }),
-      );
-    }
     if (node.type.name === "hardBreak" || node.type.name === "hard_break") {
-      if (showMarks) {
-        decorations.push(
-          Decoration.widget(
-            pos,
-            () => {
-              const span = document.createElement("span");
-              span.className = "typographic-mark-hard-break-widget";
-              span.contentEditable = "false";
-              return span;
-            },
-            { side: -1, key: `mark-br-${pos}` },
-          ),
-        );
-      }
-      if (brIndent) {
-        decorations.push(
-          Decoration.widget(
-            pos + node.nodeSize,
-            () => {
-              const span = document.createElement("span");
-              span.setAttribute("data-br-indent", "");
-              span.contentEditable = "false";
-              return span;
-            },
-            { side: -1, key: `indent-br-${pos}` },
-          ),
-        );
-      }
+      decorations.push(
+        Decoration.widget(
+          pos + node.nodeSize,
+          () => {
+            const span = document.createElement("span");
+            span.setAttribute("data-br-indent", "");
+            span.contentEditable = "false";
+            return span;
+          },
+          { side: -1, key: `indent-br-${pos}` },
+        ),
+      );
     }
   });
   return DecorationSet.create(doc, decorations);

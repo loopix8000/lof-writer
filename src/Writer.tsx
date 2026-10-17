@@ -14,7 +14,6 @@ import {
   Redo2,
   Heading2,
   Minus,
-  Pilcrow,
   Sparkles,
   Table2,
   BetweenHorizontalStart,
@@ -184,7 +183,6 @@ export default function Writer({
   reveal = null,
   manualLineBreak = false,
   editorStyle,
-  onToggleTypographicMarks,
   onReplaceSymbols,
   tables = false,
   lineBreak,
@@ -208,7 +206,6 @@ export default function Writer({
   // 수동 줄바꿈 관리: 단락 간격 없이 Enter 한 번이 한 줄이 된다.
   manualLineBreak?: boolean;
   editorStyle?: Record<string, any>;
-  onToggleTypographicMarks?: () => void;
   onReplaceSymbols?: () => void;
   tables?: boolean;
   // 도구 막대의 줄바꿈 방식 버튼. 현재 방식은 manualLineBreak를 쓰고, def는 새 문서 기본값이다.
@@ -227,7 +224,6 @@ export default function Writer({
   });
   const mergedOptions = {
     ...typingOptions,
-    showTypographicMarks: style.showTypographicMarks,
     hardBreakIndent: style.hardBreakIndent,
     indent: style.indent,
   };
@@ -352,7 +348,7 @@ export default function Writer({
     // Only replace editor content for a document revision or a mode transition.
     // Mirroring every local keystroke can replay a stale React effect over newer input.
   }, [revision, source, protectedSource, editor, id]);
-  // 조판 부호 표시(¶, ↵)나 강제 줄바꿈 들여쓰기 설정이 바뀌면 장식(Decoration)을 즉시 갱신한다.
+  // 강제 줄바꿈 들여쓰기 설정이 바뀌면 장식(Decoration)을 즉시 갱신한다.
   useEffect(() => {
     if (editor && !editor.isDestroyed && editor.view) {
       editor.view.dispatch(
@@ -361,7 +357,6 @@ export default function Writer({
     }
   }, [
     editor,
-    style.showTypographicMarks,
     style.hardBreakIndent,
     style.indent,
   ]);
@@ -576,16 +571,6 @@ export default function Writer({
       icon: Minus,
       action: () => editor.chain().focus().setHorizontalRule().run(),
     },
-    ...(onToggleTypographicMarks
-      ? [
-          {
-            label: "조판 부호 표시 (¶ · ↵)",
-            icon: Pilcrow,
-            active: style.showTypographicMarks,
-            action: onToggleTypographicMarks,
-          },
-        ]
-      : []),
     ...(onReplaceSymbols && !readOnly
       ? [
           {
