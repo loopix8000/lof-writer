@@ -115,6 +115,8 @@ const labels = { episode: "에피소드", plot: "플롯", memo: "메모" };
 const icons = { episode: BookOpen, plot: FileText, memo: StickyNote };
 // 파일 트리에서 회차가 이보다 많으면 이 단위로 묶어 접는다.
 const EPISODE_GROUP = 20;
+// 특정 작품에 매이지 않는 화면(서재, 전체 북마크). 이동해도 보던 작품은 그대로 둔다.
+const globalView = (view: string) => view === "library" || view === "bookmarks";
 // 저장할 때마다 임시 원고를 먼저 쓰고 저장이 끝나면 지운다. 그 사이에 목록을 새로 읽으면
 // 편집 중인 원고의 임시본이 잡히므로, 앱을 연 뒤 지금 편집 중인 원고에 쓴 임시본은 복구 대상에서 뺀다.
 const appStartedAt = Date.now();
@@ -137,7 +139,8 @@ type Dialog = {
   manualLineBreak?: boolean | null;
 };
 type Destination = {
-  view: "library" | "project" | "workspace";
+  // bookmarks는 서재처럼 작품에 매이지 않는 전체 북마크 화면이다.
+  view: "library" | "project" | "workspace" | "bookmarks";
   projectId: string;
   documentId?: string;
   tab?: Kind;
@@ -298,7 +301,9 @@ export default function App() {
     [openEpisodeGroups, setOpenEpisodeGroups] = useState<Set<number>>(new Set()),
     // 위젯 보드 자리에 북마크 목록을 펼쳤는지, 목록에서 고른 북마크(문단 순서).
     [bookmarksOpen, setBookmarksOpen] = useState(false),
-    [bookmarkJump, setBookmarkJump] = useState<{ docId: string; index: number; seq: number } | null>(null);
+    [bookmarkJump, setBookmarkJump] = useState<{ docId: string; index: number; seq: number } | null>(null),
+    // 레일의 전체 북마크 화면 검색어.
+    [bookmarkQuery, setBookmarkQuery] = useState("");
   const [editorTabs, setEditorTabs] = useState<EditorTab[]>([]),
     [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[]; target?: string } | null>(null),
     // 이름 바꾸기 입력칸. widget이면 위젯 보드의 연결 문서 목록에서, 아니면 파일 트리에서 받는다.
@@ -585,8 +590,8 @@ export default function App() {
     if (seq !== navigationSeq.current) return;
     const next: Destination = doc
       ? { view: "workspace", projectId: doc.projectId, documentId: doc.id, tab: doc.kind, archive: doc.archived }
-      : { ...destination, projectId: destination.view === "library" ? "" : destination.projectId };
-    if (next.view !== "library" && !libraryRef.current.projects.some(p => p.id === next.projectId))
+      : { ...destination, projectId: globalView(destination.view) ? "" : destination.projectId };
+    if (!globalView(next.view) && !libraryRef.current.projects.some(p => p.id === next.projectId))
       throw Error("작품을 찾을 수 없습니다.");
     // Commit the history cursor only after saving and loading both succeed.
     const previous = navigationRef.current;
@@ -628,7 +633,7 @@ export default function App() {
       setConflict(false);
       conflictRef.current = false;
     }
-    const id = next.view === "library" ? projectRef.current : next.projectId;
+    const id = globalView(next.view) ? projectRef.current : next.projectId;
     setProjectId(id);
     projectRef.current = id;
     setView(next.view);
@@ -770,6 +775,7 @@ export default function App() {
         tab: ["episode", "plot", "memo"].includes(saved.tab) ? saved.tab : "episode",
         archive: saved.archive === true,
       });
+    else if (saved?.view === "bookmarks") await goView("bookmarks");
     if (saved?.memoOpen) setMemoOpen(true);
   }
   // 문서 ID가 바뀌었을 때(메모 이름 바꾸기) 탭·분할 보기·이동 기록이 새 ID를 가리키게 한다.
@@ -1114,7 +1120,7 @@ export default function App() {
   }
   // 작품 페이지로 새로 들어올 때는 항상 에피소드 목록에서 시작한다.
   // 뒤로/앞으로 이동과 앱 재시작 복원은 navigate에 저장된 탭을 그대로 넘긴다.
-  async function goView(next: "library" | "project", id = projectId) {
+  async function goView(next: "library" | "project" | "bookmarks", id = projectId) {
     const keep = next !== "project" && id === projectId;
     await navigate({ view: next, projectId: id,
       tab: keep ? tab : "episode", archive: keep ? archive : false });
@@ -2224,6 +2230,110 @@ export default function App() {
       </section>
     );
   }
+  // 레일의 북마크 화면: 모든 작품의 원고에 붙인 북마크를 작품·문서별로 모아 본다. 누르면 그 문단으로 옮겨 간다.
+  function bookmarksPage() {
+    // 열려 있는 문서는 저장 전의 북마크까지 보이도록 편집 중인 원고 쪽을 쓴다.
+    const marksOf = (d: Doc) => (d.id === active?.id ? active.bookmarks : d.bookmarks) || [];
+    const q = bookmarkQuery.trim().toLowerCase();
+    let total = 0;
+    const groups = lib.projects
+      .map((p) => {
+        const pdocs = lib.documents.filter((d) => d.projectId === p.id && !d.archived);
+        const numbers = episodeNumbers(pdocs.filter((d) => d.kind === "episode"));
+        const docs = pdocs
+          .map((d) => {
+            const all = marksOf(d),
+              label = d.kind === "episode" ? `${numbers.get(d.id) ?? ""} ${d.title}`.trim() : d.title,
+              hit = !q || p.title.toLowerCase().includes(q) || label.toLowerCase().includes(q);
+            total += all.length;
+            return { d, label, all, marks: all.filter((b) => hit || b.text.toLowerCase().includes(q)) };
+          })
+          .filter((x) => x.marks.length)
+          // 회차를 먼저, 그다음 플롯·메모를 둔다(같은 유형 안에서는 서재 순서).
+          .sort((a, b) => Number(a.d.kind !== "episode") - Number(b.d.kind !== "episode"));
+        return { p, docs, count: docs.reduce((n, x) => n + x.marks.length, 0) };
+      })
+      .filter((g) => g.docs.length);
+    const jump = (d: Doc, index: number) =>
+      attempt(async () => {
+        await openDoc(d.id, true);
+        setBookmarkJump({ docId: d.id, index, seq: Date.now() });
+      })();
+    return (
+      <div className="bookmarks-page">
+        <div className="page-hero">
+          <h1>
+            북마크 <small>{total}개</small>
+          </h1>
+          <p>모든 작품의 원고에 붙인 북마크를 모아 봅니다.</p>
+          {total > 0 && (
+            <label className="tree-search bookmarks-search">
+              <Search size={14} />
+              <input
+                value={bookmarkQuery}
+                placeholder="작품, 문서 제목, 문단 글로 찾기"
+                aria-label="북마크 검색"
+                onChange={(e) => setBookmarkQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape" && bookmarkQuery) {
+                    e.stopPropagation();
+                    setBookmarkQuery("");
+                  }
+                }}
+              />
+              {bookmarkQuery && (
+                <button aria-label="검색어 지우기" title="검색어 지우기" onClick={() => setBookmarkQuery("")}>
+                  <X size={13} />
+                </button>
+              )}
+            </label>
+          )}
+        </div>
+        {groups.map(({ p, docs, count }) => (
+          <section className="bookmark-project" key={p.id}>
+            <h2>
+              {p.title || "제목 없는 작품"} <small>{count}</small>
+            </h2>
+            {docs.map(({ d, label, all, marks }) => (
+              <div className="bookmark-doc" key={d.id}>
+                <button className="bookmark-doc-title" title={d.relPath} onClick={attempt(() => openDoc(d.id, true))}>
+                  {d.kind === "episode" ? <BookOpen size={14} /> : docIcon(d)}
+                  <span>{label}</span>
+                  <small>{marks.length}</small>
+                </button>
+                {marks.map((b) => (
+                  <div className="bookmark-item" key={b.index}>
+                    <button className="bookmark-jump" title={b.text} onClick={() => jump(d, b.index)}>
+                      <BookmarkIcon size={13} />
+                      <span>{b.text || "빈 문단"}</span>
+                    </button>
+                    <button
+                      className="bookmark-remove"
+                      aria-label="북마크 지우기"
+                      title="북마크 지우기"
+                      onClick={attempt(() => patchDoc(d.id, { bookmarks: all.filter((x) => x.index !== b.index) }))}
+                    >
+                      <X size={13} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ))}
+          </section>
+        ))}
+        {!total && (
+          <div className="empty-state">
+            <div className="empty-icon">
+              <BookmarkIcon size={34} />
+            </div>
+            <h2>아직 북마크가 없습니다</h2>
+            <p>원고 왼쪽 여백을 누르면 그 문단에 북마크를 붙일 수 있습니다.</p>
+          </div>
+        )}
+        {total > 0 && !groups.length && <div className="tree-empty bookmarks-none">검색 결과가 없습니다</div>}
+      </div>
+    );
+  }
   // 확인이 필요한 파일: 파일이 없어진 문서와, 회차·플롯 폴더에 있지만 연결되지 않은 파일.
   // 자동 복구로 이을 수 없었던 것만 남는다. 무엇을 할지는 사용자가 고른다.
   function brokenFiles() {
@@ -2774,6 +2884,17 @@ export default function App() {
           >
             <StickyNote size={20} />
           </button>
+          <button
+            title="북마크"
+            aria-label="북마크"
+            className={view === "bookmarks" && !memoOpen ? "selected" : ""}
+            onClick={attempt(async () => {
+              if (view === "bookmarks" && !memoOpen) return;
+              await goView("bookmarks");
+            })}
+          >
+            <BookmarkIcon size={20} />
+          </button>
           <div className="rail-bottom">
             <button
               title="폴더 열기"
@@ -2808,7 +2929,7 @@ export default function App() {
             <header className="workspace-header">
               <strong>Lof Writer</strong>
               <span className="titlebar-path">
-                {project?.title && view !== "library"
+                {project?.title && !globalView(view)
                   ? project.title
                   : "Local First Writing Tool"}
               </span>
@@ -2841,9 +2962,9 @@ export default function App() {
           <ResizableSidebar className="search-sidebar" label="검색" width={prefs.leftSidebarWidth}
             onResize={(width) => savePrefs({ leftSidebarWidth: width }).catch(report)}>
             <SearchPanel
-              projectId={view === "library" ? "" : projectId}
+              projectId={globalView(view) ? "" : projectId}
               scope={
-                view !== "library" && project
+                !globalView(view) && project
                   ? `'${project.title || "제목 없는 작품"}'에서 찾기`
                   : "모든 작품에서 찾기"
               }
@@ -3115,6 +3236,7 @@ export default function App() {
           </ResizableSidebar>
         )}
         <main className={isWorkspace ? "workspace" : "main-page"}>
+          {view === "bookmarks" && bookmarksPage()}
           {view === "library" && (
             <>
               <div className="page-hero">

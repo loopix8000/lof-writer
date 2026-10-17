@@ -4827,6 +4827,78 @@ button.episode-tag[draggable]:active {
 .bookmark-remove:focus-visible {
   opacity: 1;
 }
+/* 레일의 전체 북마크 화면: 작품별 묶음 아래 문서 제목, 그 아래 북마크한 문단 */
+.bookmarks-page {
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto;
+  padding-bottom: 48px;
+}
+.bookmarks-page .page-hero {
+  padding-bottom: 32px;
+}
+.bookmarks-page .page-hero p {
+  margin-bottom: 20px;
+}
+.bookmarks-search {
+  max-width: 420px;
+  height: 36px;
+  margin: 0 auto;
+}
+.bookmark-project {
+  margin-bottom: 30px;
+}
+.bookmark-project > h2 {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0 0 6px;
+  padding: 0 6px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 15px;
+  font-weight: 600;
+}
+.bookmark-project > h2 small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+.bookmark-doc {
+  padding: 6px 0 8px;
+}
+.bookmark-doc-title {
+  width: 100%;
+  justify-content: start;
+  gap: 8px;
+  padding: 6px;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+}
+.bookmark-doc-title > svg {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+.bookmark-doc-title > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bookmark-doc-title small {
+  margin-left: auto;
+  color: var(--muted);
+  font-weight: 400;
+}
+.bookmark-doc .bookmark-item {
+  margin-left: 22px;
+}
+.bookmarks-none {
+  text-align: center;
+}
 /* 퀵 노트: 본문에서 고른 문장과 메모를 함께 저장하는 작은 창. 머리 부분을 끌어 옮긴다. */
 .quick-note {
   position: fixed;
