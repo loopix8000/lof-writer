@@ -306,7 +306,7 @@ export default function App() {
     renamingRef = useRef<{ id: string; value: string; widget?: boolean } | null>(null);
   const memoFlush = useRef<(() => Promise<void>) | null>(null);
   // 메모 화면에서 메모를 여는 함수(빠른 열기에서 공용 메모를 고를 때).
-  const memoApi = useRef<{ open: (space: string, path: string) => Promise<void> } | null>(null);
+  const memoApi = useRef<{ open: (space: string, path: string, pinned?: boolean) => Promise<void> } | null>(null);
   // 전역 단축키에서 늘 최신 검색 함수를 부르도록 한다.
   const searchActions = useRef({ openQuick: () => {}, openSearch: () => {} });
   // 파일 트리에서 끌고 있는 문서 ID(dragPlot)나 doc/ 폴더 경로(dragFolder).
@@ -605,12 +605,12 @@ export default function App() {
     setMemoOpen(false);
     if (doc) {
       if (doc.projectId !== projectRef.current) updateSplit(() => null);
-      // 미리보기 탭은 쓰지 않는다. 문서를 열면 항상 고정 탭으로 연다.
+      // 한 번 클릭한 문서는 미리보기 탭을 재사용하고, 명시적으로 열면 고정한다.
       updateTabs((tabs) =>
         placeTab(
           doc.projectId === projectRef.current ? tabs : [],
           doc.id,
-          true,
+          destination.pinned === true,
           activeId.current,
         ),
       );
@@ -631,7 +631,7 @@ export default function App() {
     if (next.archive !== undefined) setArchive(next.archive);
     setDialog(null);
   }
-  async function openDoc(id: string, pinned = true) {
+  async function openDoc(id: string, pinned = false) {
     await navigate({ view: "workspace", projectId: "", documentId: id, pinned });
   }
   async function closeTab(id: string) {
@@ -895,7 +895,7 @@ export default function App() {
         : {}),
     });
     await refresh();
-    await openDoc(copy.id);
+    await openDoc(copy.id, true);
   }
   async function copyPath(doc: Doc) {
     const meta = libraryRef.current.documents.find((d) => d.id === doc.id);
@@ -1142,7 +1142,7 @@ export default function App() {
         : {}),
     });
     await refresh();
-    await openDoc(doc.id);
+    await openDoc(doc.id, true);
     if (focusRef.current) setFocusTree(true);
     else setSidebar(true);
     if (!opts.title) startRename(doc);
@@ -1457,7 +1457,7 @@ export default function App() {
     conflictRef.current = false;
     setConflict(false);
     await refresh();
-    await openDoc(copy.id);
+    await openDoc(copy.id, true);
     message("내 편집을 새 문서로 보존했습니다. 기존 문서도 유지됩니다.");
   }
   async function reorder(id: string, direction: number) {
@@ -1554,10 +1554,10 @@ export default function App() {
     if (item.key.startsWith("common:")) {
       await flush();
       setMemoOpen(true);
-      await memoApi.current?.open("common", item.key.slice(7));
+      await memoApi.current?.open("common", item.key.slice(7), true);
     } else {
       setMemoOpen(false);
-      await openDoc(item.key.slice(4));
+      await openDoc(item.key.slice(4), true);
     }
   }
   // 본문 검색(Ctrl+Shift+F): 왼쪽에 검색 패널을 연다. 이미 열려 있으면 입력칸에 포커스만 준다.
@@ -1567,9 +1567,10 @@ export default function App() {
     setSearchOpen(true);
     setSearchFocus((n) => n + 1);
   }
-  async function openSearchResult(r: SearchResult, m: SearchMatch) {
+  async function openSearchResult(r: SearchResult, m: SearchMatch, pinned = false) {
     setMemoOpen(false);
-    await openDoc(r.id);
+    await openDoc(r.id, pinned);
+    if (activeId.current !== r.id) return;
     setReveal({
       docId: r.id,
       query: searchQuery,
@@ -1767,6 +1768,7 @@ export default function App() {
                 title={t.pinned ? title : `${title} (미리보기)`}
                 className={`editor-tab ${current ? "current" : ""} ${t.pinned ? "" : "preview"} ${menu?.target === "side:" + t.id ? "context-target" : ""}`}
                 onClick={attempt(() => focusOther(t.id))}
+                onDoubleClick={attempt(() => focusOther(t.id, true))}
                 onMouseDown={(e) => {
                   if (e.button === 1) e.preventDefault();
                 }}
@@ -2227,7 +2229,7 @@ export default function App() {
         action: attempt(async () => {
           const doc = await call<Doc>("adoptFile", { projectId, path: u.path, kind });
           await refresh();
-          await openDoc(doc.id);
+          await openDoc(doc.id, true);
         }),
       })),
       "separator",
@@ -2818,11 +2820,11 @@ export default function App() {
               setCaseSensitive={setSearchCase}
               focus={searchFocus}
               refresh={lib}
-              onOpen={(r, m) => attempt(() => openSearchResult(r, m))()}
-              onOpenFile={(id) =>
+              onOpen={(r, m, pinned) => attempt(() => openSearchResult(r, m, pinned))()}
+              onOpenFile={(id, pinned) =>
                 attempt(async () => {
                   setMemoOpen(false);
-                  await openDoc(id);
+                  await openDoc(id, pinned);
                 })()
               }
               onOpenProject={(id) =>
@@ -2831,11 +2833,11 @@ export default function App() {
                   await goView("project", id);
                 })()
               }
-              onOpenCommon={(path) =>
+              onOpenCommon={(path, pinned) =>
                 attempt(async () => {
                   await flush();
                   setMemoOpen(true);
-                  await memoApi.current?.open("common", path);
+                  await memoApi.current?.open("common", path, pinned);
                 })()
               }
               onClose={() => setSearchOpen(false)}
@@ -3348,6 +3350,7 @@ export default function App() {
                       className="episode-row"
                       key={d.id}
                       onClick={attempt(() => openDoc(d.id))}
+                      onDoubleClick={attempt(() => openDoc(d.id, true))}
                     >
                       <span className={`list-number${/^\d/.test(numberOf(d)) ? "" : " named"}`}>
                         {numberOf(d)}
@@ -4261,7 +4264,7 @@ export default function App() {
                           conflictRef.current = false;
                           setConflict(false);
                         }
-                        await openDoc(copy.id);
+                        await openDoc(copy.id, true);
                         message("임시 원고를 새 문서로 복구했습니다.");
                       })}
                     >

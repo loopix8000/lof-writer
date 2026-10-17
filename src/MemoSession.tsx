@@ -38,10 +38,26 @@ type Memo = {
   manualLineBreak?: boolean;
 };
 // 메모 탭. 다른 스페이스의 메모도 탭으로 계속 열어 둘 수 있다.
-type MemoTab = { space: string; path: string };
+// 이전 세션에는 pinned가 없으므로 false인 탭만 미리보기로 취급한다.
+type MemoTab = { space: string; path: string; pinned?: boolean };
 const COMMON = "common";
 const sameTab = (a: MemoTab, b: { space: string; path: string } | null) =>
   !!b && a.space === b.space && a.path === b.path;
+function placeMemoTab(list: MemoTab[], tab: MemoTab, pinned: boolean, after: Memo | null) {
+  const index = list.findIndex((t) => sameTab(t, tab));
+  if (index >= 0)
+    return pinned && list[index].pinned === false
+      ? list.map((t, i) => i === index ? { ...t, pinned: true } : t)
+      : list;
+  const nextTab = { ...tab, pinned };
+  const previewIndex = pinned ? -1 : list.findIndex((t) => t.pinned === false);
+  if (previewIndex >= 0)
+    return list.map((t, i) => i === previewIndex ? nextTab : t);
+  const at = list.findIndex((t) => sameTab(t, after));
+  const next = [...list];
+  next.splice(at < 0 ? next.length : at + 1, 0, nextTab);
+  return next;
+}
 // 분할 보기에서 포커스되지 않은 그룹. 포커스된 그룹은 tabs와 memo가 맡는다(집필 창과 같은 방식).
 type MemoGroup = { tabs: MemoTab[]; current: MemoTab | null };
 type Side = "left" | "right";
@@ -106,7 +122,7 @@ export default function MemoSession({
   documents: Doc[];
   onOpenDoc: (id: string) => void;
   // 바깥(빠른 열기)에서 메모를 열 때 쓰는 함수를 담아 준다.
-  apiRef?: React.MutableRefObject<{ open: (space: string, path: string) => Promise<void> } | null>;
+  apiRef?: React.MutableRefObject<{ open: (space: string, path: string, pinned?: boolean) => Promise<void> } | null>;
   // 메모 화면이 보이는지. 숨겨져 있어도 탭과 편집 상태는 그대로 둔다.
   active: boolean;
   // 지난번에 앱을 닫을 때의 메모 화면 상태. 서재를 읽기 전에는 undefined, 없으면 null.
@@ -150,6 +166,7 @@ export default function MemoSession({
     conflictRef = useRef(false),
     timer = useRef<number | undefined>(undefined),
     chain = useRef<Promise<void>>(Promise.resolve()),
+    openSeq = useRef(0),
     dragging = useRef(""),
     tabsRef = useRef<MemoTab[]>([]),
     splitRef = useRef<MemoGroup | null>(null),
@@ -185,6 +202,9 @@ export default function MemoSession({
     });
   }
   const currentTab = () => tabsRef.current.find((t) => sameTab(t, memoRef.current)) ?? null;
+  function keepTab(t: MemoTab) {
+    setTabs((list) => placeMemoTab(list, t, true, null));
+  }
   const attempt =
     (fn: (...args: any[]) => Promise<any> | any) =>
     (...args: any[]) => {
@@ -248,6 +268,7 @@ export default function MemoSession({
   function edit(body: string) {
     const m = memoRef.current;
     if (!m || body === m.body) return;
+    keepTab(m);
     setCurrent({ ...m, body });
     dirty.current.seq++;
     setStatus("저장 대기");
@@ -299,31 +320,31 @@ export default function MemoSession({
   }, [space, loadTree, report]);
   useEffect(() => setTitle(memo?.title ?? ""), [memo?.path, memo?.title]);
 
-  // 메모를 연다. 탭이 없으면 지금 탭 오른쪽에 새 탭을 만든다.
-  async function openMemo(path: string, spaceId = spaceRef.current) {
+  // 한 번 클릭하면 미리보기를 재사용하고, 두 번 클릭하거나 편집하면 고정한다.
+  async function openMemo(path: string, spaceId = spaceRef.current, pinned = false) {
+    const seq = ++openSeq.current;
     const prev = memoRef.current;
-    if (prev && prev.path === path && prev.space === spaceId) return;
+    if (prev && prev.path === path && prev.space === spaceId) {
+      if (pinned) keepTab(prev);
+      return;
+    }
     await flush();
+    if (seq !== openSeq.current) return;
     const m = await readItem(spaceId, path);
+    if (seq !== openSeq.current) return;
     dirty.current = { seq: 0, saved: 0 };
     setConflict(false);
     setStatus("저장됨");
     setCurrent(m);
     setOpened((n) => n + 1);
-    setTabs((list) => {
-      if (list.some((t) => sameTab(t, m))) return list;
-      const at = list.findIndex((t) => sameTab(t, prev));
-      const next = [...list];
-      next.splice(at < 0 ? next.length : at + 1, 0, { space: spaceId, path });
-      return next;
-    });
+    setTabs((list) => placeMemoTab(list, { space: spaceId, path }, pinned, prev));
     if (spaceId === spaceRef.current) {
       setSelected(path);
       setExpanded((old) => new Set([...old, ...ancestors(path)]));
     }
   }
   // 다른 스페이스의 탭을 고르면 트리도 그 스페이스로 바꾼다.
-  async function activateTab(t: MemoTab) {
+  async function activateTab(t: MemoTab, pinned = false) {
     if (t.space !== spaceRef.current) {
       spaceRef.current = t.space;
       setSelected("");
@@ -331,9 +352,10 @@ export default function MemoSession({
       setEntries([]);
       setSpace(t.space);
     }
-    await openMemo(t.path, t.space);
+    await openMemo(t.path, t.space, pinned);
   }
   function closeCurrent() {
+    ++openSeq.current;
     clearTimeout(timer.current);
     dirty.current = { seq: 0, saved: 0 };
     setConflict(false);
@@ -365,7 +387,7 @@ export default function MemoSession({
   }
   // ---- 분할 보기 (집필 창과 같은 방식) ----
   // 다른 그룹으로 포커스를 옮긴다. open을 주면 그 그룹에서 그 메모를 연다.
-  async function focusOther(open?: MemoTab) {
+  async function focusOther(open?: MemoTab, pinned = false) {
     const other = splitRef.current;
     if (!other) return;
     await flush();
@@ -377,7 +399,7 @@ export default function MemoSession({
     const target = open ?? other.current;
     try {
       closeCurrent();
-      if (target) await activateTab(target);
+      if (target) await activateTab(target, pinned);
     } catch (e) {
       setTabs(() => mine.tabs);
       setSplit(() => other);
@@ -394,7 +416,7 @@ export default function MemoSession({
   async function splitTo(t: MemoTab | null = currentTab()) {
     if (!t) return;
     if (splitRef.current) {
-      await focusOther(t);
+      await focusOther(t, true);
       setSplit((g) => (g && g.tabs.length > 1 ? withoutMemoTab(g, t) : g));
       return;
     }
@@ -405,7 +427,7 @@ export default function MemoSession({
     setFocusedSide("right");
     try {
       closeCurrent();
-      await activateTab(t);
+      await activateTab(t, true);
     } catch (e) {
       setTabs(() => mine.tabs);
       setSplit(() => null);
@@ -420,7 +442,7 @@ export default function MemoSession({
     setSplit(() => null);
   }
   async function moveToOther(t: MemoTab) {
-    await focusOther(t);
+    await focusOther(t, true);
     setSplit((g) => withoutMemoTab(g, t));
   }
   const closeSideTab = (t: MemoTab) => setSplit((g) => withoutMemoTab(g, t));
@@ -449,7 +471,7 @@ export default function MemoSession({
         const out: MemoTab[] = [];
         for (const t of Array.isArray(list) ? list.filter(isTab) : [])
           if (await readItem(t.space, t.path).then(() => true, () => false))
-            out.push({ space: t.space, path: t.path });
+            out.push({ space: t.space, path: t.path, pinned: t.pinned !== false });
         return out;
       };
       const mine = await live(saved.tabs),
@@ -541,7 +563,7 @@ export default function MemoSession({
     setDragTab(null);
     attempt(() => (splitRef.current ? moveToOther(t) : splitTo(t)))();
   }
-  const closeTab = (t: MemoTab) => closeTabs((x) => x !== t);
+  const closeTab = (t: MemoTab) => closeTabs((x) => !sameTab(x, t));
   async function cycleTab(direction: number) {
     const list = tabsRef.current;
     if (list.length < 2) return;
@@ -561,7 +583,7 @@ export default function MemoSession({
   // 집필 창과 같은 탭 단축키: Ctrl+W 닫기, Ctrl+Tab·Ctrl+PageDown 다음, Ctrl+Shift+Tab·Ctrl+PageUp 이전.
   const keys = useRef({ closeTab, cycleTab, splitTo, focusSide });
   keys.current = { closeTab, cycleTab, splitTo, focusSide };
-  if (apiRef) apiRef.current = { open: (space, path) => activateTab({ space, path }) };
+  if (apiRef) apiRef.current = { open: (space, path, pinned) => activateTab({ space, path }, pinned) };
   const activeRef = useRef(active);
   activeRef.current = active;
   useEffect(() => {
@@ -599,7 +621,7 @@ export default function MemoSession({
   async function newMemo(folder = targetFolder()) {
     const m = await call<Memo>("memoCreate", { space, folder, title: "새 메모" });
     await loadTree();
-    await openMemo(m.path);
+    await openMemo(m.path, space, true);
     setRenaming({ path: m.path, value: m.title });
   }
   async function newFolder(parent = targetFolder()) {
@@ -754,13 +776,15 @@ export default function MemoSession({
     const root = spaces.find((x) => x.id === t.space)?.root;
     return [
       { label: "닫기", shortcut: "Ctrl+W", action: attempt(() => closeTab(t)) },
-      { label: "다른 탭 닫기", disabled: tabs.length < 2, action: attempt(() => closeTabs((x) => x === t)) },
+      { label: "다른 탭 닫기", disabled: tabs.length < 2, action: attempt(() => closeTabs((x) => sameTab(x, t))) },
       {
         label: "오른쪽 탭 닫기",
         disabled: index >= tabs.length - 1,
         action: attempt(() => closeTabs((_, i) => i <= index)),
       },
       { label: "모두 닫기", action: attempt(() => closeTabs(() => false)) },
+      "separator",
+      { label: "탭 고정", disabled: t.pinned !== false, action: () => keepTab(t) },
       "separator",
       split
         ? { label: "다른 그룹으로 이동", action: attempt(() => moveToOther(t)) }
@@ -801,7 +825,7 @@ export default function MemoSession({
       {
         label: "다른 그룹으로 이동",
         action: attempt(async () => {
-          await activateTab(t);
+          await activateTab(t, true);
           closeSideTab(t);
         }),
       },
@@ -903,11 +927,12 @@ export default function MemoSession({
                 role="tab"
                 tabIndex={-1}
                 aria-selected={current}
-                title={`${spaceName(t.space)} / ${t.path}`}
-                className={`editor-tab ${current ? "current" : ""} ${
+                title={`${spaceName(t.space)} / ${t.path}${t.pinned === false ? " (미리보기)" : ""}`}
+                className={`editor-tab ${current ? "current" : ""} ${t.pinned === false ? "preview" : ""} ${
                   menu?.target === "side:" + key ? "context-target" : ""
                 }`}
                 onClick={attempt(() => focusOther(t))}
+                onDoubleClick={attempt(() => focusOther(t, true))}
                 onMouseDown={(e) => {
                   if (e.button === 1) e.preventDefault();
                 }}
@@ -992,6 +1017,7 @@ export default function MemoSession({
           style={{ paddingLeft: 8 + depth * 14 }}
           title={d.relPath}
           onClick={attempt(() => activateTab(t))}
+          onDoubleClick={attempt(() => activateTab(t, true))}
           onContextMenu={(e) =>
             openMenu(
               e,
@@ -1108,6 +1134,10 @@ export default function MemoSession({
               return next;
             });
           else attempt(() => openMemo(entry.path))();
+        }}
+        onDoubleClick={(e) => {
+          e.stopPropagation();
+          if (!folder) attempt(() => openMemo(entry.path, space, true))();
         }}
         onContextMenu={(e) => {
           setSelected(entry.path);
@@ -1283,8 +1313,8 @@ export default function MemoSession({
                   role="tab"
                   tabIndex={current ? 0 : -1}
                   aria-selected={current}
-                  title={`${where} / ${t.path}`}
-                  className={`editor-tab ${current ? "current" : ""} ${
+                  title={`${where} / ${t.path}${t.pinned === false ? " (미리보기)" : ""}`}
+                  className={`editor-tab ${current ? "current" : ""} ${t.pinned === false ? "preview" : ""} ${
                     dragTab === t ? "dragging" : ""
                   } ${menu?.target === "tab:" + key ? "context-target" : ""}`}
                   draggable
@@ -1305,6 +1335,7 @@ export default function MemoSession({
                     setDragTab(null);
                   }}
                   onClick={attempt(() => activateTab(t))}
+                  onDoubleClick={() => keepTab(t)}
                   onMouseDown={(e) => {
                     if (e.button === 1) e.preventDefault();
                   }}
@@ -1356,7 +1387,10 @@ export default function MemoSession({
                       aria-label="메모 제목"
                       value={title}
                       placeholder="제목"
-                      onChange={(e) => setTitle(e.target.value)}
+                      onChange={(e) => {
+                        keepTab(memo);
+                        setTitle(e.target.value);
+                      }}
                       onBlur={attempt(async () => {
                         if (!title.trim() || title.trim() === memo.title) return setTitle(memo.title);
                         if (!isDocPath(memo.path)) return rename(memo.path, title);
