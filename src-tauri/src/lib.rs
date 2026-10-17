@@ -11,6 +11,7 @@ pub mod markdown;
 pub mod memo;
 pub mod platforms;
 mod pin;
+mod single_instance;
 pub mod store;
 pub mod sync;
 pub mod text;
@@ -1665,43 +1666,6 @@ fn window_start_dragging(window: WebviewWindow) {
     let _ = window.start_dragging();
 }
 
-#[cfg(windows)]
-fn acquire_single_instance_lock(user_dir: &Path) -> bool {
-    use crate::error::hash_str;
-    use windows_sys::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
-    use windows_sys::Win32::System::Threading::CreateMutexW;
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        FindWindowW, IsIconic, SetForegroundWindow, ShowWindow, SW_RESTORE, SW_SHOW,
-    };
-
-    let dir_hash = &hash_str(&user_dir.to_string_lossy().to_lowercase())[..16];
-    let mutex_name: Vec<u16> = format!("Local\\LofWriterSingleInstance_{}\0", dir_hash)
-        .encode_utf16()
-        .collect();
-    unsafe {
-        let handle = CreateMutexW(std::ptr::null(), 0, mutex_name.as_ptr());
-        if !handle.is_null() && GetLastError() == ERROR_ALREADY_EXISTS {
-            let title: Vec<u16> = "Lof Writer\0".encode_utf16().collect();
-            let hwnd = FindWindowW(std::ptr::null(), title.as_ptr());
-            if !hwnd.is_null() {
-                if IsIconic(hwnd) != 0 {
-                    ShowWindow(hwnd, SW_RESTORE);
-                } else {
-                    ShowWindow(hwnd, SW_SHOW);
-                }
-                SetForegroundWindow(hwnd);
-            }
-            return false;
-        }
-    }
-    true
-}
-
-#[cfg(not(windows))]
-fn acquire_single_instance_lock(_user_dir: &Path) -> bool {
-    true
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     if std::env::args()
@@ -1713,9 +1677,15 @@ pub fn run() {
     }
 
     let user_dir = get_user_dir();
-    if !acquire_single_instance_lock(&user_dir) {
-        return;
-    }
+    let instance = match single_instance::SingleInstance::acquire(&user_dir) {
+        Ok(Some(instance)) => instance,
+        Ok(None) => return,
+        Err(error) => {
+            MessageDialog::new().set_level(MessageLevel::Error)
+                .set_title("Lof Writer 시작 실패").set_description(error.to_string()).show();
+            return;
+        }
+    };
 
     #[cfg(windows)]
     unsafe {
@@ -1884,6 +1854,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(instance)
         .manage(state)
         .manage(google_drive::AuthState::default())
         .manage(pin_state)
@@ -2064,6 +2035,7 @@ pub fn run() {
                 *cw = setup_common_watcher(&clean_vault_root, &common_root, &handle, &st.notify_seq);
             }
             auto_sync::request(&handle);
+            app.state::<single_instance::SingleInstance>().listen(&handle);
             Ok(())
         })
         .on_window_event(move |window, event| {
