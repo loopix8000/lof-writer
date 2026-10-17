@@ -1,5 +1,5 @@
 export type Kind = "episode" | "plot" | "memo";
-export type AutoSyncStatus = { phase: "idle" | "pending" | "syncing" | "error"; message: string };
+export type AutoSyncStatus = { phase: "idle" | "pending" | "syncing" | "error"; message: string; hasConnections?: boolean };
 export type WritingRules = {
   version?: number;
   platform: string;

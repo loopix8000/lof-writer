@@ -46,6 +46,13 @@
 .pin-settings-form > label { display: flex; flex-direction: column; gap: 7px; font-size: 13px; }
 .auto-sync-status { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); white-space: nowrap; }
 .auto-sync-status.error { color: var(--danger-text); }
+.save-status-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
 * {
   box-sizing: border-box;
 }
@@ -135,6 +142,9 @@ button:focus-visible {
   --selection-bg: #e8e8e8;
   --selection-text: #000000;
   --text-selection: #add6ff;
+  --find-match: #ffe29a;
+  --find-current: #e9a52f;
+  --find-text: #3b2a08;
   --cover-start: #eeeeee;
   --cover-end: #e5e5e5;
   --cover-text: #616161;
@@ -185,6 +195,9 @@ button:focus-visible {
   --selection-bg: #37373d;
   --selection-text: #ffffff;
   --text-selection: #264f78;
+  --find-match: #594717;
+  --find-current: #976719;
+  --find-text: #fff0c2;
   --cover-start: #333333;
   --cover-end: #2b2b2b;
   --cover-text: #cccccc;
@@ -1507,6 +1520,35 @@ body.sidebar-resizing * {
   opacity: 0.45;
   pointer-events: none;
 }
+/* 검색창은 현재 원고 폭 안에 두고, 스크롤 중에도 편집 도구 위에 유지한다. */
+.editor-find {
+  position: sticky;
+  top: 0;
+  z-index: 8;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-height: 44px;
+  margin-bottom: 8px;
+  padding: 5px 8px;
+  border: 1px solid var(--input-border);
+  border-radius: 6px;
+  color: var(--text);
+  background: var(--surface);
+  box-shadow: 0 3px 10px #00000026;
+  font-size: 12px;
+}
+.editor-find > svg { flex-shrink: 0; color: var(--muted); }
+.editor-find input { flex: 1 1 100px; width: 0; padding: 5px 7px; font-size: 13px; }
+.editor-find button { flex-shrink: 0; padding: 5px; min-height: 28px; border: 0; border-radius: 4px; color: var(--muted); }
+.editor-find button:hover { color: var(--text); }
+.editor-find button.active { color: var(--accent); background: var(--selection-bg); }
+.editor-find button:disabled { cursor: default; }
+.editor-find-count { color: var(--muted); white-space: nowrap; padding: 0 4px; font-variant-numeric: tabular-nums; }
+.manuscript:has(.editor-find) > .format-bar { top: var(--editor-find-offset, 52px); }
+.editor-find-hit { background: var(--find-match); color: var(--find-text); }
+.editor-find-hit.current { background: var(--find-current); outline: 1px solid var(--find-text); }
 .tiptap {
   outline: none;
   flex: 1 0 auto;
@@ -2396,6 +2438,20 @@ body.sidebar-resizing * {
 .connection button {
   font-size: 13px;
   padding: 7px;
+}
+.connection-conflict-policy {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.connection-conflict-policy select {
+  max-width: 100%;
+  padding: 5px 7px;
+  font-size: 12px;
 }
 .connection-form {
   margin-top: 18px;

@@ -1,6 +1,6 @@
 [package]
 name = "lof-writer"
-version = "1.0.3-beta.5"
+version = "1.0.3-beta.8"
 description = "Local First Writing Tool"
 authors = ["Lof Writer"]
 license = "MIT"
@@ -40,6 +40,7 @@ rand = "0.8"
 rusqlite = { version = "0.40", features = ["bundled", "backup"] }
 flate2 = "1"
 fs2 = "0.4"
+zip = { version = "9", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [

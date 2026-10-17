@@ -1,6 +1,6 @@
 use super::{create_adapter, name_ok, with_store, RemoteAdapter, MAX_SYNC_BYTES};
 use crate::error::{fail, fail_invalid, hash_str, valid_id, LofError};
-use crate::store::{project_fields, Store, FORMAT};
+use crate::store::{project_fields, Store, SyncConflictPolicy, FORMAT};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
@@ -110,6 +110,8 @@ fn add_result(total: &mut Value, result: &Value) {
         ("downloaded", "imported"),
         ("conflicts", "conflicts"),
         ("projectConflicts", "projectConflicts"),
+        ("projectsUpdated", "projectsUpdated"),
+        ("assetsUpdated", "assetsUpdated"),
         ("removed", "removed"),
     ] {
         let old = total[count].as_u64().unwrap_or(0);
@@ -157,7 +159,12 @@ pub(super) fn sync(
         return Err(fail_invalid("로컬 동기화 상태가 올바르지 않습니다."));
     }
     let mut remote = create_adapter(config)?;
-    let result = run(store, root, device, &state_key, &mut state, &mut *remote);
+    let policy = if config["conflictPolicy"].as_str() == Some("latest") {
+        SyncConflictPolicy::Latest
+    } else {
+        SyncConflictPolicy::KeepBoth
+    };
+    let result = run(store, root, device, &state_key, &mut state, &mut *remote, policy);
     remote.close();
     result
 }
@@ -169,6 +176,7 @@ fn run(
     state_key: &str,
     state: &mut Value,
     remote: &mut dyn RemoteAdapter,
+    conflict_policy: SyncConflictPolicy,
 ) -> Result<Value, LofError> {
     let names = remote.list()?;
     let peer_files: Vec<_> = names
@@ -180,7 +188,7 @@ fn run(
         return Err(fail_invalid("동기화 기기가 너무 많습니다."));
     }
     let own_index = format!("index-v2-{device}.json");
-    let mut total = json!({"downloaded":0,"conflicts":0,"projectConflicts":0,"removed":0,"uploaded":0,"downloadedFiles":0,"uploadedBytes":0,"downloadedBytes":0,"cleanedFiles":0,"protocol":2});
+    let mut total = json!({"downloaded":0,"conflicts":0,"projectConflicts":0,"projectsUpdated":0,"assetsUpdated":0,"removed":0,"uploaded":0,"downloadedFiles":0,"uploadedBytes":0,"downloadedBytes":0,"cleanedFiles":0,"protocol":2});
     let mut applied = state["applied"].as_object().cloned().unwrap_or_default();
     let mut peers = state["peers"].as_object().cloned().unwrap_or_default();
 
@@ -259,7 +267,7 @@ fn run(
             json!({"format":FORMAT,"projects":projects,"documents":documents,"assets":assets,"deleted":index.deleted})
         };
         let base = base_for(state, &peer);
-        let merged = with_store(store, root, |st| st.merge(&snapshot, &base))?;
+        let merged = with_store(store, root, |st| st.merge(&snapshot, &base, conflict_policy))?;
         add_result(&mut total, &merged);
         peers.insert(peer.clone(), Value::Object(revisions(&snapshot)));
         applied.insert(peer, digest.into());

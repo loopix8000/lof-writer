@@ -19,7 +19,9 @@ import RetainedTab from "./RetainedTab";
 import { editorDropZone, type EditorDropZone } from "./editor-groups";
 import ContextMenu, { type MenuItem } from "./ContextMenu";
 import { useConfirm } from "./ConfirmDialog";
-import { call, type Doc, type Kind } from "./types";
+import { useSyncFileUpdates } from "./useSyncFileUpdates";
+import { call, type AutoSyncStatus, type Doc, type Kind } from "./types";
+import SyncStatus from "./SyncStatus";
 import { normalizeEditorStyle, resolveKindPrefs } from "../core/typesetting.mjs";
 import ResizableSidebar from "./ResizableSidebar";
 
@@ -114,6 +116,9 @@ const ancestors = (p: string) => {
 // 왼쪽은 폴더 트리(만들기·이름 바꾸기·끌어서 옮기기·삭제), 오른쪽은 메모 편집기다.
 export default function MemoSession({
   active,
+  syncStatus,
+  syncChecking,
+  syncAvailable,
   saved,
   apiRef,
   documents,
@@ -131,6 +136,9 @@ export default function MemoSession({
   apiRef?: React.MutableRefObject<{ open: (space: string, path: string, pinned?: boolean) => Promise<void> } | null>;
   // 메모 화면이 보이는지. 숨겨져 있어도 탭과 편집 상태는 그대로 둔다.
   active: boolean;
+  syncStatus: AutoSyncStatus;
+  syncChecking: boolean;
+  syncAvailable: boolean;
   // 지난번에 앱을 닫을 때의 메모 화면 상태. 서재를 읽기 전에는 undefined, 없으면 null.
   saved: any;
   prefs: Record<string, any>;
@@ -169,6 +177,8 @@ export default function MemoSession({
     [sideRev, setSideRev] = useState(0),
     [dropZone, setDropZone] = useState<EditorDropZone | null>(null);
   const scrollPositions = useRef<EditorScrollPositions>(new Map());
+  const titleRef = useRef(title); titleRef.current = title;
+  const checkMemoRef = useRef<(() => Promise<void>) | null>(null);
   const retainedMemos = useRef(new Map<string, Memo>());
   const setSideMemo = useCallback((m: Memo | null) => {
     if (m) retainedMemos.current.set(`${m.space}\n${m.path}`, m);
@@ -314,17 +324,42 @@ export default function MemoSession({
       mapGroups((t) => (alive(t) ? t : null));
     if (memoRef.current && !alive(memoRef.current)) setCurrent(null);
   }, []);
-  // 바깥에서 파일이 바뀌면 트리를 다시 읽고, 고치지 않은 메모는 새 내용으로 바꾼다.
+  const checkOpenMemo = useSyncFileUpdates({
+    fileKey: memo ? `${memo.space}\n${memo.path}` : "",
+    enabled: !!memo,
+    canCheck: () => active && !composing.current,
+    current: () => {
+      const m = memoRef.current;
+      return m ? { doc: m, version: `${dirty.current.seq}:${m.revision}:${titleRef.current}` } : null;
+    },
+    beforeRead: () => chain.current,
+    read: (m: Memo) => readItem(m.space, m.path),
+    pending: () => {
+      clearTimeout(timer.current);
+      conflictRef.current = true;
+      setConflict(true);
+      if (dirty.current.seq === dirty.current.saved) dirty.current.seq++;
+      setStatus("외부 변경 있음");
+    },
+    apply: (fresh) => {
+      dirty.current = { seq: 0, saved: 0 };
+      conflictRef.current = false;
+      setConflict(false);
+      setStatus("저장됨");
+      setTitle(fresh.title);
+      setCurrent(fresh);
+    },
+    report,
+  });
+  checkMemoRef.current = checkOpenMemo;
+  // 바깥에서 파일이 바뀌면 트리는 다시 읽되, 열린 본문은 사용자 확인 후에만 반영한다.
   const reloadOpen = useCallback(async () => {
     const m = memoRef.current;
-    if (!m || dirty.current.seq !== dirty.current.saved || conflictRef.current) return;
+    if (!m) return;
     try {
-      const fresh = await readItem(m.space, m.path);
-      const now = memoRef.current;
-      if (now && now.path === m.path && now.space === m.space && fresh.revision !== now.revision)
-        setCurrent(fresh);
+      await checkMemoRef.current?.();
     } catch (e: any) {
-      if (e.code !== "NOT_FOUND") throw e;
+      if (!["NOT_FOUND", "ENOENT"].includes(e.code)) throw e;
       mapGroups((t) => (sameTab(t, m) ? null : t));
       if (memoRef.current?.path === m.path && memoRef.current.space === m.space) setCurrent(null);
     }
@@ -347,6 +382,12 @@ export default function MemoSession({
   useEffect(() => setTitle(memo?.title ?? ""), [memo?.path, memo?.title]);
 
   // 한 번 클릭하면 미리보기를 재사용하고, 두 번 클릭하거나 편집하면 고정한다.
+  async function readForOpening(space: string, path: string) {
+    const fresh = await readItem(space, path);
+    const retained = retainedMemos.current.get(`${space}\n${path}`);
+    const stale = !!retained && retained.revision !== fresh.revision;
+    return { doc: stale ? retained! : fresh, stale };
+  }
   async function openMemo(path: string, spaceId = spaceRef.current, pinned = false) {
     const seq = ++openSeq.current;
     const prev = memoRef.current;
@@ -356,11 +397,12 @@ export default function MemoSession({
     }
     await flush();
     if (seq !== openSeq.current) return;
-    const m = await readItem(spaceId, path);
+    const opening = await readForOpening(spaceId, path), m = opening.doc;
     if (seq !== openSeq.current) return;
-    dirty.current = { seq: 0, saved: 0 };
-    setConflict(false);
-    setStatus("저장됨");
+    dirty.current = { seq: opening.stale ? 1 : 0, saved: 0 };
+    conflictRef.current = opening.stale;
+    setConflict(opening.stale);
+    setStatus(opening.stale ? "외부 변경 있음" : "저장됨");
     setCurrent(m);
     setTabs((list) => placeMemoTab(list, { space: spaceId, path }, pinned, prev));
     if (spaceId === spaceRef.current) {
@@ -419,20 +461,22 @@ export default function MemoSession({
     const seq = ++openSeq.current;
     const target = open ?? other.current;
     // 읽기를 마친 뒤 두 그룹을 함께 바꿔 빈 화면이 끼어들지 않게 한다.
-    const next = target ? await readItem(target.space, target.path) : null;
+    const opening = target ? await readForOpening(target.space, target.path) : null;
+    const next = opening?.doc ?? null;
     if (seq !== openSeq.current || splitRef.current !== other) return;
     const mine: MemoGroup = { tabs: tabsRef.current, current: currentTab() };
     setSideMemo(memoRef.current);
     setTabs(() => target ? placeMemoTab(other.tabs, target, pinned, null) : other.tabs);
     setSplit(() => (mine.tabs.length ? mine : null));
     setFocusedSide(focusedSideRef.current === "left" ? "right" : "left");
-    selectGroupMemo(next);
+    selectGroupMemo(next, opening?.stale);
   }
   // 그룹 전환에서는 편집기를 비우지 않고 새 메모와 트리 상태를 한 번에 반영한다.
-  function selectGroupMemo(next: Memo | null) {
-    dirty.current = { seq: 0, saved: 0 };
-    setConflict(false);
-    setStatus("저장됨");
+  function selectGroupMemo(next: Memo | null, stale = false) {
+    dirty.current = { seq: stale ? 1 : 0, saved: 0 };
+    conflictRef.current = stale;
+    setConflict(stale);
+    setStatus(stale ? "외부 변경 있음" : "저장됨");
     setCurrent(next);
     setTitle(next?.title ?? "");
     if (!next) return;
@@ -467,14 +511,14 @@ export default function MemoSession({
     }
     await flush();
     const seq = ++openSeq.current;
-    const next = await readItem(t.space, t.path);
+    const opening = await readForOpening(t.space, t.path), next = opening.doc;
     if (seq !== openSeq.current) return;
     const mine: MemoGroup = { tabs: tabsRef.current, current: currentTab() };
     setSideMemo(memoRef.current);
     setTabs(() => placeMemoTab([], t, true, null));
     setSplit(() => (moveTab && mine.tabs.length > 1 ? withoutMemoTab(mine, t) : mine));
     setFocusedSide(side);
-    selectGroupMemo(next);
+    selectGroupMemo(next, opening.stale);
   }
   // 오른쪽 그룹이 이미 있으면 그 자리에 열고, 없으면 새로 나눈다.
   async function splitTo(t: MemoTab | null = currentTab()) {
@@ -491,11 +535,25 @@ export default function MemoSession({
     setSplit((g) => withoutMemoTab(g, t));
   }
   const closeSideTab = (t: MemoTab) => setSplit((g) => withoutMemoTab(g, t));
-  // 포커스되지 않은 그룹의 메모는 읽기 전용으로 보여 준다. 파일이 바뀌면 다시 읽는다.
+  // 다른 그룹의 읽기 전용 메모도 새 본문을 반영하기 전에 확인한다.
   const sideKey = split?.current ? `${split.current.space}\n${split.current.path}` : "";
+  const [sideSyncKey, setSideSyncKey] = useState("");
+  const checkSideMemo = useSyncFileUpdates({
+    fileKey: sideKey,
+    enabled: !!sideMemo && !!split?.current && sameTab(split.current, sideMemo) && !sameTab(sideMemo, memo),
+    canCheck: () => active,
+    current: () => sideMemo ? { doc: sideMemo, version: sideMemo.revision } : null,
+    read: (m: Memo) => readItem(m.space, m.path),
+    pending: () => setSideSyncKey(`${sideKey}\n${sideMemo?.revision}`),
+    apply: (fresh) => { setSideMemo(fresh); setSideSyncKey(""); },
+    report,
+  });
   useEffect(() => {
     const t = splitRef.current?.current;
     if (!t) return setSideMemo(null);
+    if (sideMemo && sameTab(t, sideMemo)) { void checkSideMemo().catch(report); return; }
+    const retained = retainedMemos.current.get(sideKey);
+    if (retained) { setSideMemo(retained); return; }
     let canceled = false;
     readItem(t.space, t.path)
       .then((m) => !canceled && setSideMemo(m))
@@ -503,7 +561,7 @@ export default function MemoSession({
     return () => {
       canceled = true;
     };
-  }, [sideKey, sideRev]);
+  }, [sideKey, sideRev, sideMemo?.path, sideMemo?.space, checkSideMemo]);
   // 앱을 다시 열면 지난번 스페이스·탭·보던 메모·분할을 되살린다. 없어진 메모의 탭은 뺀다.
   const restored = useRef(false);
   useEffect(() => {
@@ -759,20 +817,13 @@ export default function MemoSession({
     await loadTree();
   }
   async function reloadFromDisk() {
-    const m = memoRef.current;
-    if (!m) return;
-    clearTimeout(timer.current);
-    await chain.current;
-    const fresh = await readItem(m.space, m.path);
-    dirty.current = { seq: 0, saved: 0 };
-    setConflict(false);
-    setStatus("저장됨");
-    setCurrent(fresh);
+    await checkOpenMemo(true);
   }
   async function keepMine() {
     const m = memoRef.current;
     if (!m) return;
     const fresh = await readItem(m.space, m.path);
+    if (dirty.current.seq === dirty.current.saved) dirty.current.seq++;
     setCurrent({ ...memoRef.current!, revision: fresh.revision });
     setConflict(false);
     conflictRef.current = false;
@@ -1036,13 +1087,13 @@ export default function MemoSession({
       <div
         className="group-body"
         onMouseDownCapture={(e) => {
-          if (!focused && e.button === 0) {
+          if (!focused && e.button === 0 && !(e.target as Element).closest("[data-sync-actions]")) {
             e.stopPropagation();
             attempt(() => focusOther())();
           }
         }}
         onClickCapture={(e) => {
-          if (!focused) {
+          if (!focused && !(e.target as Element).closest("[data-sync-actions]")) {
             e.preventDefault();
             e.stopPropagation();
           }
@@ -1055,7 +1106,7 @@ export default function MemoSession({
           }
         }}
         onKeyDownCapture={(e) => {
-          if (!focused && e.key !== "Tab") {
+          if (!focused && e.key !== "Tab" && !(e.target as Element).closest("[data-sync-actions]")) {
             e.preventDefault();
             e.stopPropagation();
             attempt(() => focusOther())();
@@ -1066,13 +1117,22 @@ export default function MemoSession({
           <span className="memo-crumbs" title={memo.path}>
             {crumbs(memo)}
           </span>
-          <span className={`memo-status ${groupStatus === "저장됨" ? "" : "pending"}`}>{groupStatus}</span>
+          <div className="save-status-group">
+            <span className={`memo-status ${groupStatus === "저장됨" ? "" : "pending"}`}>{groupStatus}</span>
+            <SyncStatus status={syncStatus} checking={syncChecking} available={syncAvailable} />
+          </div>
         </div>
         {focused && conflict && (
           <div className="memo-conflict" role="alert">
             <span>다른 곳에서 이 메모가 바뀌었습니다.</span>
             <button onClick={attempt(reloadFromDisk)}>바뀐 내용 불러오기</button>
             <button onClick={attempt(keepMine)}>내 내용으로 덮어쓰기</button>
+          </div>
+        )}
+        {!focused && sideSyncKey === `${memo.space}\n${memo.path}\n${memo.revision}` && (
+          <div className="memo-conflict" data-sync-actions>
+            <span>다른 곳에서 이 메모가 바뀌었습니다. 현재 내용은 유지됩니다.</span>
+            <button onClick={attempt(() => checkSideMemo(true))}>바뀐 내용 불러오기</button>
           </div>
         )}
         <EditorScroll key={`${memo.space}\n${memo.path}`} documentId={`${memo.space}\n${memo.path}`} positions={scrollPositions.current} visible={visible}>
@@ -1083,6 +1143,7 @@ export default function MemoSession({
                 <input
                   className="document-title"
                   aria-label="메모 제목"
+                  spellCheck={false}
                   readOnly={!focused}
                   value={focused ? title : memo.title}
                   placeholder="제목"
@@ -1092,6 +1153,7 @@ export default function MemoSession({
                   }}
                   onBlur={attempt(async () => {
                     if (!focused) return;
+                    if (conflictRef.current) return;
                     if (!title.trim() || title.trim() === memo.title) return setTitle(memo.title);
                     if (!isDocPath(memo.path)) return rename(memo.path, title);
                     await flush();

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
 export type ConfirmOptions = {
@@ -7,6 +7,7 @@ export type ConfirmOptions = {
   // 본문 아래 흐린 글씨로 덧붙이는 설명(예: 되돌릴 수 없음).
   detail?: ReactNode;
   confirmLabel?: string;
+  cancelLabel?: string;
   // 지우기처럼 되돌릴 수 없는 일이면 확인 단추를 빨갛게 하고, 실수로 누르지 않게 취소에 포커스를 둔다.
   danger?: boolean;
   icon?: ReactNode;
@@ -18,14 +19,21 @@ type Pending = ConfirmOptions & { resolve: (ok: boolean) => void };
 // 설정·이력 창 위에도 겹쳐 떠야 하므로 앱의 대화상자와 따로 그린다. element를 화면 어딘가에 그려 둔다.
 export function useConfirm() {
   const [pending, setPending] = useState<Pending | null>(null);
+  const queue = useRef<Pending[]>([]);
   const confirm = useCallback(
-    (options: ConfirmOptions) => new Promise<boolean>((resolve) => setPending({ ...options, resolve })),
+    (options: ConfirmOptions) => new Promise<boolean>((resolve) => {
+      const next = { ...options, resolve };
+      queue.current.push(next);
+      if (queue.current.length === 1) setPending(next);
+    }),
     [],
   );
   const close = (ok: boolean) => {
-    pending?.resolve(ok);
-    setPending(null);
+    const current = queue.current.shift();
+    setPending(queue.current[0] ?? null);
+    current?.resolve(ok);
   };
+  useEffect(() => () => { for (const item of queue.current.splice(0)) item.resolve(false); }, []);
   const element =
     pending &&
     // 테마 색 변수가 .app에 있으므로 그 안에 띄운다.
@@ -38,6 +46,7 @@ function ConfirmBox({
   message,
   detail,
   confirmLabel = "확인",
+  cancelLabel = "취소",
   danger = false,
   icon,
   onClose,
@@ -69,7 +78,7 @@ function ConfirmBox({
         {detail && <p className="muted">{detail}</p>}
         <div className="modal-footer">
           <button autoFocus={danger} onClick={() => onClose(false)}>
-            취소
+            {cancelLabel}
           </button>
           <button autoFocus={!danger} className={danger ? "danger-solid" : "primary"} onClick={() => onClose(true)}>
             {icon}
