@@ -32,7 +32,7 @@ export type Doc = {
   projectId: string;
   kind: Kind;
   title: string;
-  // 회차 상태(뮤블과 같은 값): planned·in_progress·revision·completed.
+  // 회차 상태(뮤블과 같은 값): in_progress·revision·completed. 예전 planned는 in_progress로 읽는다.
   status: string;
   // 회차 유형: 0 일반·2 프롤로그·3 에필로그·4 특별편·6 단편.
   episodeType?: number;
@@ -57,7 +57,10 @@ export type Doc = {
   fingerprint?: string;
   // Markdown YAML에 기록하는 사용자 속성.
   properties?: Record<string, unknown>;
+  // 원고 북마크: 본문 맨 위 단계 문단의 순서와 그 문단의 앞부분 글.
+  bookmarks?: Bookmark[];
 };
+export type Bookmark = { index: number; text: string };
 export type Library = {
   root: string;
   projects: Project[];

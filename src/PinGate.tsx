@@ -59,7 +59,7 @@ export default function PinGate() {
   }
   return <>
     <div hidden={locked} inert={locked} aria-hidden={locked}><App /></div>
-    {locked && <div className={`app pin-screen ${status?.theme === "dark" ? "dark" : ""} ${status?.colorTheme === "bakery" ? "bakery" : ""}`}
+    {(status?.locked || (!status && error)) && <div className={`app pin-screen ${status?.theme === "dark" ? "dark" : ""} ${status?.colorTheme === "bakery" ? "bakery" : ""}`}
       onKeyDown={(e) => e.stopPropagation()}>
       <header className="pin-titlebar" data-tauri-drag-region onMouseDown={(e) => {
         if (e.button === 0 && !(e.target as HTMLElement).closest("button")) void window.lof.windowStartDragging?.();
@@ -72,10 +72,10 @@ export default function PinGate() {
       </header>
       <main className="pin-screen-main">
         <form className="pin-card" onSubmit={(e) => { e.preventDefault(); void unlock(); }} aria-labelledby="pin-heading">
-          <div className="pin-symbol"><LockKeyhole size={28} /></div>
-          <h1 id="pin-heading">{status ? "PIN으로 잠금 해제" : "Lof Writer"}</h1>
-          <p>{status ? "계속하려면 설정한 PIN을 입력해 주세요." : "잠금 설정을 확인하고 있습니다…"}</p>
-          {status && <>
+          {status?.locked && <div className="pin-symbol"><LockKeyhole size={28} /></div>}
+          <h1 id="pin-heading">{status?.locked ? "PIN으로 잠금 해제" : "Lof Writer"}</h1>
+          <p>{status?.locked ? "계속하려면 설정한 PIN을 입력해 주세요." : "잠금 설정을 불러오지 못했습니다."}</p>
+          {status?.locked && <>
             <label className="pin-input-label">PIN
               <input ref={input} type="password" inputMode="numeric" autoComplete="off" minLength={4} maxLength={12} required
                 value={pin} disabled={busy} onChange={(e) => setPin(pinDigits(e.target.value))} aria-label="잠금 해제 PIN" />

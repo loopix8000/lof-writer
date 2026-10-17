@@ -8,8 +8,8 @@ const pkg = JSON.parse(fs.readFileSync(path.join(rootDir, "package.json"), "utf8
 const version = pkg.version;
 const mode = process.argv[2] || "dir";
 
-// 앱 버전이 바뀌어도 기존 폴더 배포본의 위치를 유지한다.
-const releaseDir = path.join(rootDir, "release", "1.0.0-beta.1");
+// 앱 버전이나 저장소 위치가 바뀌어도 기존 폴더 배포본의 위치를 유지한다.
+const releaseDir = "C:\\Projects\\lof-writer\\release";
 const unpackedDir = path.join(releaseDir, "win-unpacked");
 const builtExe = path.join(
   rootDir,
@@ -45,6 +45,22 @@ if (iconChanged && fs.existsSync(cargoBuildDir)) {
 }
 
 const tauriCli = path.join(rootDir, "node_modules", "@tauri-apps", "cli", "tauri.js");
+// 빌드가 중단되면 압축 캐시가 빈 파일로 남을 수 있다. 존재 여부만으로 재사용되지 않도록 지운다.
+if (fs.existsSync(cargoBuildDir)) {
+  for (const entry of fs.readdirSync(cargoBuildDir)) {
+    if (!entry.startsWith("lof-writer-")) continue;
+    const assetsDir = path.join(cargoBuildDir, entry, "out", "tauri-codegen-assets");
+    if (!fs.existsSync(assetsDir)) continue;
+    for (const asset of fs.readdirSync(assetsDir, { withFileTypes: true })) {
+      if (!asset.isFile()) continue;
+      const cachePath = path.join(assetsDir, asset.name);
+      if (fs.statSync(cachePath).size !== 0) continue;
+      assertChildPath(assetsDir, cachePath);
+      console.log(`빈 배포 리소스 캐시를 다시 생성합니다: ${asset.name}`);
+      fs.rmSync(cachePath);
+    }
+  }
+}
 const tauriArgs =
   mode === "msi"
     ? [tauriCli, "build", "--bundles", "msi"]
@@ -69,7 +85,7 @@ if (process.platform === "win32") {
 }
 
 fs.mkdirSync(unpackedDir, { recursive: true });
-assertChildPath(rootDir, unpackedDir);
+assertChildPath(releaseDir, unpackedDir);
 for (const entry of fs.readdirSync(unpackedDir)) {
   assertChildPath(unpackedDir, path.join(unpackedDir, entry));
 }

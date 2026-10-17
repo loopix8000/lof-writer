@@ -172,9 +172,10 @@ function Highlight({ text, query, caseSensitive }: { text: string; query: string
     </>
   );
 }
-function MatchLine({ m, onClick }: { m: SearchMatch; onClick: () => void }) {
+function MatchLine({ m, onOpen }: { m: SearchMatch; onOpen: (pinned: boolean) => void }) {
   return (
-    <button className="search-hit" title={`${m.line}번째 줄`} onClick={onClick}>
+    <button className="search-hit" title={`${m.line}번째 줄`}
+      onClick={() => onOpen(false)} onDoubleClick={() => onOpen(true)}>
       {m.text.slice(0, m.start)}
       <mark>{m.text.slice(m.start, m.start + m.length)}</mark>
       {m.text.slice(m.start + m.length)}
@@ -210,10 +211,10 @@ export function SearchPanel({
   focus: number;
   // 서재가 바뀌면 다시 찾는다.
   refresh: unknown;
-  onOpen: (result: SearchResult, match: SearchMatch) => void;
-  onOpenFile: (id: string) => void;
+  onOpen: (result: SearchResult, match: SearchMatch, pinned?: boolean) => void;
+  onOpenFile: (id: string, pinned?: boolean) => void;
   onOpenProject: (id: string) => void;
-  onOpenCommon: (path: string) => void;
+  onOpenCommon: (path: string, pinned?: boolean) => void;
   onClose: () => void;
   report: (e: any) => void;
 }) {
@@ -265,7 +266,7 @@ export function SearchPanel({
     path: string | undefined,
     archived: boolean,
     matches: SearchMatch[],
-    open: (m: SearchMatch) => void,
+    open: (m: SearchMatch, pinned: boolean) => void,
   ) => {
     const shown = !collapsed.has(key);
     return (
@@ -277,7 +278,7 @@ export function SearchPanel({
           {archived && <small>보관</small>}
           <em>{matches.length}</em>
         </button>
-        {shown && matches.map((m) => <MatchLine key={m.index} m={m} onClick={() => open(m)} />)}
+        {shown && matches.map((m) => <MatchLine key={m.index} m={m} onOpen={(pinned) => open(m, pinned)} />)}
       </div>
     );
   };
@@ -363,6 +364,7 @@ export function SearchPanel({
                 className="search-item"
                 title={rel}
                 onClick={() => onOpenFile(f.id)}
+                onDoubleClick={() => onOpenFile(f.id, true)}
               >
                 <Icon size={14} />
                 <span>
@@ -390,7 +392,7 @@ export function SearchPanel({
               r.relPath?.replace(/^(?:assets|doc|episodes|plot|memo)\//i, ""),
               r.archived,
               r.matches,
-              (m) => onOpen(r, m),
+              (m, pinned) => onOpen(r, m, pinned),
             ),
           ),
         )}
@@ -405,6 +407,7 @@ export function SearchPanel({
                 className="search-item"
                 title={f.path}
                 onClick={() => onOpenCommon(f.path)}
+                onDoubleClick={() => onOpenCommon(f.path, true)}
               >
                 <StickyNote size={14} />
                 <span>
@@ -414,8 +417,8 @@ export function SearchPanel({
               </button>
             ))}
             {commonResults.map((r) =>
-              fileBlock("common:" + r.path, StickyNote, r.name, r.path, false, r.matches || [], () =>
-                onOpenCommon(r.path),
+              fileBlock("common:" + r.path, StickyNote, r.name, r.path, false, r.matches || [], (_, pinned) =>
+                onOpenCommon(r.path, pinned),
               ),
             )}
           </>,

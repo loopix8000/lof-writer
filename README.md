@@ -1,6 +1,54 @@
 # Lof Writer
 
-<img width="1440" height="960" alt="image" src="https://github.com/user-attachments/assets/84b2046a-5ae3-4acd-959c-c587c264a6a5" />
+## 화면으로 살펴보기
+
+<!-- demo-snapshots:start -->
+
+> 예시 이미지와 텍스트는 기능 이해를 돕기 위해 생성형 AI를 사용해 제작했습니다. 스크린샷은 데모 파이프라인에서 실제 앱으로 촬영했습니다.
+
+### 집필 화면과 연결 문서 위젯
+
+원고를 쓰면서 글자 수와 연결된 플롯·메모를 함께 확인합니다. 문단 여백의 북마크와 메모 표시로 필요한 위치에 돌아갈 수 있습니다.
+
+![집필 화면과 연결 문서 위젯](assets/screenshots/editor.png)
+
+### 회차와 집필 상태
+
+표지와 작품 소개, 태그, 회차별 집필 상태를 한곳에서 관리합니다.
+
+![회차와 집필 상태](assets/screenshots/project.png)
+
+### 선택한 문장에서 퀵 노트 작성
+
+원고에서 문장을 선택해 퀵 노트를 작성합니다. 제목과 생각을 적어 저장하면 원래 문장으로 돌아갈 수 있는 출처 링크가 남습니다.
+
+![선택한 문장에서 퀵 노트 작성](assets/screenshots/quick-note.png)
+
+### 모든 작품의 북마크 모아 보기
+
+작품과 문서에 붙인 북마크를 한 화면에서 모아 보고, 원하는 문단으로 이동합니다.
+
+![모든 작품의 북마크 모아 보기](assets/screenshots/bookmarks.png)
+
+### 원고와 플롯을 나란히 집필
+
+원고와 플롯 등 두 문서를 나란히 열어 내용을 비교하고 집필합니다.
+
+![원고와 플롯을 나란히 집필](assets/screenshots/split.png)
+
+### 모바일 화면으로 원고 미리보기
+
+집필 중인 원고를 모바일 화면의 폭과 글자 크기로 미리 살펴봅니다.
+
+![모바일 화면으로 원고 미리보기](assets/screenshots/mobile.png)
+
+### 표와 문서 속성
+
+플롯과 메모의 표로 설정과 자료를 정리하고, 문서에 사용자 속성을 붙입니다.
+
+![표와 문서 속성](assets/screenshots/table.png)
+
+<!-- demo-snapshots:end -->
 
 ## 특징
 
@@ -74,14 +122,6 @@
 ## 개발 정보
 
 Tauri 2, Rust, React, TypeScript, Tiptap을 사용합니다.
-
-파일 중심 저장, 로컬 SQLite 이력, 최신 문서만 교환하는 동기화 규격과 마이그레이션은 [저장·이력·동기화 설계](planning/design/STORAGE_SYNC.md)에 정리했습니다.
-
-에이전트용 MCP 사용 지침과 입력 검증 보강 작업은 [MCP TODO](planning/todo/MCP.md)에 정리했습니다.
-
-긴 회차 목록과 본문 탐색, 우측 위젯과 책갈피·조판 아이콘에 대한 개선 작업은 [UX TODO](planning/todo/UX.md)에 정리했습니다.
-
-전체 기획 자료는 [문서 목록](planning/README.md)에서, 이미지 시안은 [시안 목록](planning/mockups/README.md)에서 확인할 수 있습니다.
 
 Node.js 24 이상과 Rust, Tauri 2용 Windows 빌드 환경이 필요합니다.
 

@@ -9,6 +9,17 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+const MCP_INSTRUCTIONS: &str = r#"Lof Writer의 작품, 회차, 플롯, 메모를 조회하고 편집하는 서버입니다. Lof Writer 앱이 실행 중이어야 합니다.
+
+- library_list로 작품과 문서를 확인하고, 조회 결과의 작품 id를 projectId로, 문서 id를 id로 사용하세요. ID를 추측하지 마세요.
+- 문서를 수정하거나 이력을 복원하기 전에 document_read로 현재 내용과 revision을 조회하세요. document_update, document_patch, history_restore의 expectedRevision에는 조회한 revision을 그대로 전달하세요. 저장 후에는 새로 반환된 revision을 사용하세요.
+- CONFLICT 오류가 나면 최신 문서를 다시 읽고 변경 내용을 비교한 뒤 사용자가 요청한 수정만 다시 적용하세요. revision만 최신 값으로 바꿔 이전 본문을 덮어쓰지 마세요.
+- 일부 문장을 수정할 때는 document_patch를 사용하세요. find는 현재 본문에서 정확히 한 번 일치해야 하므로 필요한 앞뒤 문맥을 포함하세요. 전체 본문 교체는 document_update의 body를 사용하세요.
+- document_read의 truncated가 true이면 본문이 일부만 반환된 것입니다. 전체 본문을 교체하기 전에 offset과 limit으로 나머지를 읽으세요. offset, limit, totalLength는 UTF-16 코드 단위입니다. 여러 번 읽는 동안 revision이 바뀌면 처음부터 다시 조회하세요.
+- 문서 생성 시 kind를 episode(회차), plot(플롯), memo(메모) 중에서 지정하세요. 플롯과 메모의 folder는 doc/ 아래의 상대 경로이므로 doc/ 접두사 없이 전달하세요. 회차에 연결할 때는 해당 작품에 존재하는 회차의 id를 episodeId로 전달하세요.
+- 사용자가 요청한 본문과 메타데이터만 변경하고, 나머지 문장, Markdown 서식, 태그, 속성, 줄바꿈 설정은 보존하세요. 순서 변경과 이력 복원은 사용자의 요청 범위에 포함된 경우에 수행하세요.
+- 도구 응답의 isError와 오류 내용을 확인하고 성공한 작업만 완료했다고 안내하세요. 연결 오류가 나면 Lof Writer 앱의 실행 상태를 확인하도록 안내하세요."#;
+
 pub fn tool_definitions() -> Value {
     json!([
         {
@@ -91,7 +102,7 @@ pub fn tool_definitions() -> Value {
                     "expectedRevision": { "type": "string" },
                     "body": { "type": "string" },
                     "title": { "type": "string" },
-                    "status": { "type": "string", "enum": ["planned", "in_progress", "revision", "completed"] },
+                    "status": { "type": "string", "enum": ["in_progress", "revision", "completed"] },
                     "episodeType": { "type": "integer", "enum": [0, 2, 3, 4, 6], "description": "0 일반, 2 프롤로그, 3 에필로그, 4 특별편, 6 단편" },
                     "description": { "type": "string", "description": "회차 요약" },
                     "authorComment": { "type": "string", "description": "작가의 말" },
@@ -522,7 +533,8 @@ fn handle_client(
                     "result": {
                         "protocolVersion": proto_ver,
                         "capabilities": { "tools": { "listChanged": false } },
-                        "serverInfo": { "name": "lof-writer", "version": env!("CARGO_PKG_VERSION") }
+                        "serverInfo": { "name": "lof-writer", "version": env!("CARGO_PKG_VERSION") },
+                        "instructions": MCP_INSTRUCTIONS
                     }
                 })),
             );

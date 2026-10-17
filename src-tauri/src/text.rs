@@ -429,6 +429,97 @@ pub fn manuscript_stats(markdown: &str) -> ManuscriptStats {
     }
 }
 
+// 화면과 같은 ECMAScript 공백 규칙을 사용한다. Rust의 공백 판정과 BOM·NEL 처리가 다르다.
+fn display_whitespace(c: char) -> bool {
+    matches!(c, '\u{0009}'..='\u{000d}' | ' ' | '\u{00a0}' | '\u{1680}' |
+        '\u{2000}'..='\u{200a}' | '\u{2028}' | '\u{2029}' | '\u{202f}' |
+        '\u{205f}' | '\u{3000}' | '\u{feff}')
+}
+
+// Markdown 해석은 독립 작업자가 수행한다. 이 함수는 일반 텍스트에서 숫자만 계산해 반환한다.
+pub fn display_counts(raw: &str, rules: &Value) -> Value {
+    let text = raw.replace("\r\n", "\n").replace('\r', "\n")
+        .replace('\u{2028}', "\n").replace('\u{2029}', "\n").replace('\u{00a0}', " ");
+    let mut without_spaces = 0usize;
+    let mut with_spaces = 0usize;
+    let mut with_line_breaks = 0usize;
+    let mut utf16_without_spaces = 0usize;
+    let mut utf16_with_spaces = 0usize;
+    let mut utf16_with_line_breaks = 0usize;
+    let mut lines = usize::from(!text.is_empty());
+    let mut paragraphs = 0usize;
+    let mut has_text = false;
+    for c in text.chars() {
+        with_line_breaks += 1;
+        utf16_with_line_breaks += c.len_utf16();
+        if c != '\n' {
+            with_spaces += 1;
+            utf16_with_spaces += c.len_utf16();
+        } else {
+            lines += 1;
+            if has_text { paragraphs += 1; }
+            has_text = false;
+        }
+        if !display_whitespace(c) {
+            without_spaces += 1;
+            utf16_without_spaces += c.len_utf16();
+            has_text = true;
+        }
+    }
+    if has_text { paragraphs += 1; }
+    let rule = rules.get("rule").and_then(Value::as_str).unwrap_or("noSpace");
+    let platform_characters = if rule == "novelpia" {
+        let escaped = text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
+        let filtered: String = escaped.chars().filter(|&c|
+            !matches!(c, ' ' | '.' | ',' | '\n' | '\t' | '\r' | '!' | '?' | '\'' | '"' | '\u{00a0}')).collect();
+        let filtered: String = filtered.trim_matches(display_whitespace).chars().filter(|&c| c != '\u{200e}').collect();
+        utf16_len(&filtered)
+    } else {
+        let mut value = match rule {
+            "noSpace" => text.chars().filter(|&c| !display_whitespace(c)).collect::<String>(),
+            "spaces" => text.chars().filter(|&c| c != '\n').collect::<String>(),
+            "collapsed" => {
+                let mut result = String::new();
+                let mut whitespace = false;
+                for c in text.trim_matches(display_whitespace).chars() {
+                    if display_whitespace(c) {
+                        if !whitespace { result.push(' '); }
+                        whitespace = true;
+                    } else { result.push(c); whitespace = false; }
+                }
+                result
+            }
+            _ => text.clone(),
+        };
+        match rules.get("punctuation").and_then(Value::as_str).unwrap_or("include") {
+            "ascii" => value.retain(|c| !matches!(c, '.' | ',' | '!' | '?' | '\'' | '"')),
+            "unicode" => {
+                static PUNCTUATION: OnceLock<Regex> = OnceLock::new();
+                value = PUNCTUATION.get_or_init(|| Regex::new(r"\p{P}").unwrap()).replace_all(&value, "").into_owned();
+            }
+            _ => {}
+        }
+        if rules.get("excludeSpecial").and_then(Value::as_bool) == Some(true) {
+            static SPECIAL: OnceLock<Regex> = OnceLock::new();
+            let letters_and_numbers = SPECIAL.get_or_init(|| Regex::new(r"^[\p{L}\p{N}]$").unwrap());
+            value.retain(|c| {
+                let mut encoded = [0u8; 4];
+                display_whitespace(c) || letters_and_numbers.is_match(c.encode_utf8(&mut encoded))
+            });
+        }
+        let extra = if rules.get("ellipsisWeight").and_then(Value::as_u64) == Some(3) {
+            value.chars().filter(|&c| c == '…').count() * 2
+        } else { 0 };
+        utf16_len(&value) + extra
+    };
+    serde_json::json!({
+        "withoutSpaces": without_spaces, "withSpaces": with_spaces, "withLineBreaks": with_line_breaks,
+        "utf16WithoutSpaces": utf16_without_spaces, "utf16WithSpaces": utf16_with_spaces,
+        "utf16WithLineBreaks": utf16_with_line_breaks, "utf8Bytes": text.len(),
+        "lines": lines, "paragraphs": paragraphs, "platformCharacters": platform_characters
+    })
+}
+
 pub fn novelpia_count(text: &str) -> usize {
     let escaped = text
         .replace('&', "&amp;")

@@ -519,6 +519,19 @@ impl LibraryDb {
         bytes.map(|data| decode(&data)).transpose()
     }
 
+    // 이력을 지운다. id가 있으면 그 문서의 이력만(name이 있으면 그 하나만), 없으면 모든 이력을 지운다. 지운 개수를 돌려준다.
+    pub fn delete_history(&self, id: Option<&str>, name: Option<&str>) -> Result<usize, LofError> {
+        let removed = match (id, name) {
+            (Some(id), Some(name)) => self
+                .connection
+                .execute("DELETE FROM history WHERE doc_id=?1 AND name=?2", params![id, name])?,
+            (Some(id), None) => self.connection.execute("DELETE FROM history WHERE doc_id=?1", [id])?,
+            (None, _) => self.connection.execute("DELETE FROM history", [])?,
+        };
+        self.connection.execute_batch("PRAGMA incremental_vacuum(256);")?;
+        Ok(removed)
+    }
+
     pub fn latest_history(&self, id: &str) -> Result<Option<(u64, String)>, LofError> {
         let name: Option<String> = self
             .connection
@@ -582,19 +595,23 @@ impl LibraryDb {
         Ok(())
     }
 
-    pub fn retain_history(&self) -> Result<(), LofError> {
+    // 보관 규칙에 맞춰 오래된 이력을 지운다. 문서당 최근 limit개를 넘거나, days일이 지난 이력을 지우되
+    // 최근 HISTORY_MINIMUM개는 기간과 상관없이 남긴다. 평소에는 하루 한 번, 설정을 바꾸면 바로(force) 정리한다.
+    pub fn retain_history(&self, limit: usize, days: i64, force: bool) -> Result<(), LofError> {
         let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-        if self
-            .get("lastHistoryCleanup")?
-            .and_then(|v| v.as_str().map(str::to_string))
-            .as_deref()
-            == Some(today.as_str())
+        if !force
+            && self
+                .get("lastHistoryCleanup")?
+                .and_then(|v| v.as_str().map(str::to_string))
+                .as_deref()
+                == Some(today.as_str())
         {
             return Ok(());
         }
-        let cutoff = (chrono::Utc::now() - chrono::Duration::days(HISTORY_DAYS)).to_rfc3339();
+        let limit = limit.max(HISTORY_MINIMUM);
+        let cutoff = (chrono::Utc::now() - chrono::Duration::days(days.max(1))).to_rfc3339();
         let transaction = self.connection.unchecked_transaction()?;
-        self.connection.execute("DELETE FROM history WHERE pinned=0 AND rowid IN (SELECT rowid FROM (SELECT rowid,saved_at,ROW_NUMBER() OVER(PARTITION BY doc_id ORDER BY saved_at DESC,name DESC) AS position FROM history WHERE pinned=0) WHERE position>?1 OR (position>?2 AND saved_at<?3))",params![HISTORY_LIMIT as i64,HISTORY_MINIMUM as i64,cutoff])?;
+        self.connection.execute("DELETE FROM history WHERE pinned=0 AND rowid IN (SELECT rowid FROM (SELECT rowid,saved_at,ROW_NUMBER() OVER(PARTITION BY doc_id ORDER BY saved_at DESC,name DESC) AS position FROM history WHERE pinned=0) WHERE position>?1 OR (position>?2 AND saved_at<?3))",params![limit as i64,HISTORY_MINIMUM as i64,cutoff])?;
         self.set("lastHistoryCleanup", &json!(today))?;
         transaction.commit()?;
         self.connection

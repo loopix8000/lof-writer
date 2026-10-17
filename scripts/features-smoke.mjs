@@ -78,7 +78,7 @@ try {
   await page.getByRole("button", { name: "저장", exact: true }).click();
   await page.locator(".hero-cover img").waitFor();
   await expect(page.locator(".project-tags")).not.toContainText("#일상");
-  await page.getByRole("button", { name: "새 편 쓰기", exact: true }).click();
+  await page.getByRole("button", { name: "새 에피소드 쓰기", exact: true }).click();
   await page.getByRole("button", { name: "만들기", exact: true }).click();
   const editor = page.locator('[data-testid="manuscript"]');
   await editor.waitFor();

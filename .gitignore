@@ -4,10 +4,12 @@ release/
 src-tauri/target/
 src-tauri/gen/
 .test-data/
+.snapshots/
 test-results/
 playwright-report/
 *.log
 docs/
 .private/
+.startup-diagnostic/
 src-tauri/tauri.updater.generated.json
 /AGENTS.md

@@ -122,6 +122,7 @@ button:focus-visible {
   --border-hover: #cecece;
   --hover: #f2f2f2;
   --accent: #005fb8;
+  --bookmark: #d93a42;
   --accent-strong: #005fb8;
   --soft: #f2f2f2;
   --sidebar: #f8f8f8;
@@ -171,6 +172,7 @@ button:focus-visible {
   --border-hover: #3c3c3c;
   --hover: #2b2b2b;
   --accent: #4daafc;
+  --bookmark: #f2555a;
   --accent-strong: #4daafc;
   --soft: #2b2b2b;
   --sidebar: #181818;
@@ -753,20 +755,36 @@ h1 small {
   padding: 20px 0;
   border-bottom: 1px solid var(--border);
 }
+/* 에피소드·플롯·메모 탭: 옅은 바탕 위에서 선택된 탭만 떠 보이게 한다. */
+.project-tabs .row:first-child {
+  gap: 2px;
+  padding: 3px;
+  border-radius: 10px;
+  background: var(--soft);
+}
 .project-tabs .row:first-child button {
-  border: 0;
+  border: 1px solid transparent;
   background: none;
-  border-radius: 20px;
+  border-radius: 7px;
   color: var(--muted);
+}
+.project-tabs .row:first-child button:hover:not(.selected) {
+  color: var(--text);
 }
 .project-tabs button.selected {
   background: var(--surface) !important;
+  border-color: var(--border) !important;
   color: var(--text) !important;
-  box-shadow: 0 2px 8px #00000008;
+  font-weight: 600;
+  box-shadow: 0 1px 3px #00000014;
 }
 .project-tabs small {
-  font-size: 13px;
+  font-size: 12px;
+  font-weight: 500;
   margin-left: 2px;
+}
+.project-tabs button.selected small {
+  color: var(--accent);
 }
 .episode-list {
   padding: 12px 0 40px;
@@ -1004,6 +1022,181 @@ body.sidebar-resizing * {
   justify-content: start;
   margin: 3px 12px;
 }
+/* 파일 트리: 위에 탭·검색, 가운데 목록만 스크롤, 아래에 에피소드 추가·보관함 */
+.file-sidebar.file-tree {
+  overflow: hidden;
+}
+.tree-tabs {
+  display: flex;
+  margin: 0 12px;
+  border-bottom: 1px solid var(--border);
+}
+.tree-tabs button {
+  flex: 1;
+  gap: 6px;
+  margin-bottom: -1px;
+  padding: 8px 0 9px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+.tree-tabs button:hover {
+  background: none;
+  color: var(--text);
+}
+.tree-tabs button.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+.tree-tabs small {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+}
+.doc-scope {
+  display: flex;
+  margin: 10px 12px 0;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+}
+.doc-scope button {
+  flex: 1;
+  padding: 5px 0;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: var(--muted);
+  font-size: 13px;
+}
+.doc-scope button:hover {
+  background: var(--hover);
+}
+.doc-scope button.active {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.tree-search-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 10px 12px 8px;
+}
+.tree-search {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--input-border);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--muted);
+}
+.tree-search:focus-within {
+  border-color: var(--accent);
+}
+.tree-search > svg {
+  flex-shrink: 0;
+}
+.tree-search input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: 13px;
+}
+.tree-search button,
+.tree-search-action {
+  flex-shrink: 0;
+  padding: 4px;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: var(--muted);
+}
+.tree-search button:hover,
+.tree-search-action:hover:not(:disabled) {
+  color: var(--text);
+}
+.tree-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+/* 탭으로 나눈 두 목록은 위아래로 이어지지 않으므로 구분선을 두지 않고, 빈 곳까지 놓을 자리로 채운다. */
+.tree-section.tree-panel {
+  flex: 1 0 auto;
+  padding-top: 0;
+  border-top: 0;
+}
+.tree-section[hidden] {
+  display: none;
+}
+.episode-doc-caption {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 8px 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.episode-doc-caption span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.episode-doc-caption small {
+  margin-left: auto;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.tree-item.doc-group,
+.tree-item.episode-group {
+  color: var(--text);
+}
+.tree-item.episode-group > span {
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.tree-item.doc-group b {
+  font-weight: 600;
+}
+.tree-item.doc-group small {
+  color: var(--muted);
+  font-size: 12px;
+}
+.tree-footer {
+  flex-shrink: 0;
+  padding: 6px 0;
+}
+/* 목록 아래의 넓은 추가 버튼: 테마 강조색을 옅게 깐 면 버튼 */
+.episode-add {
+  width: calc(100% - 24px);
+  margin: 0 12px 4px;
+  height: 40px;
+  border: 0;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+}
+.episode-add:hover {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
 .sidebar-footer {
   margin-top: auto;
   padding: 24px 20px 17px;
@@ -1197,6 +1390,10 @@ body.sidebar-resizing * {
   align-items: center;
   gap: 6px;
 }
+/* 버튼을 숨겨도 도구 막대의 높이와 저장 상태 표시의 자리를 유지한다. */
+.editor-action-buttons[aria-hidden="true"] {
+  visibility: hidden;
+}
 .editor-actions button {
   padding: 6px;
   border: 0;
@@ -1278,6 +1475,7 @@ body.sidebar-resizing * {
 .document-details > span {
   opacity: 0.65;
 }
+/* 편집 도구 막대는 원고를 내려도 위에 붙어 따라온다. 뒤로 본문이 비치지 않게 원고 배경(원고지 색이 있으면 그 색)을 깐다. */
 .format-bar {
   display: flex;
   align-items: center;
@@ -1286,6 +1484,12 @@ body.sidebar-resizing * {
   border-bottom: 1px solid var(--border);
   padding: 8px 0;
   margin-bottom: 30px;
+  position: sticky;
+  top: 0;
+  z-index: 6;
+  background:
+    linear-gradient(var(--textarea-bg-color, transparent), var(--textarea-bg-color, transparent)),
+    var(--bg);
 }
 .format-bar button {
   padding: 6px;
@@ -1299,10 +1503,9 @@ body.sidebar-resizing * {
   color: var(--text);
   background: var(--soft);
 }
-.format-bar > span {
-  margin-left: auto;
-  font-size: 13px;
-  color: var(--muted);
+.format-bar.inactive button {
+  opacity: 0.45;
+  pointer-events: none;
 }
 .tiptap {
   outline: none;
@@ -1452,6 +1655,21 @@ body.sidebar-resizing * {
   font-family: "Consolas", "Malgun Gothic", monospace;
   background: transparent;
 }
+.source-editor .cm-editor {
+  min-height: 8em;
+  color: var(--text);
+  background: transparent;
+}
+.source-editor .cm-editor.cm-focused { outline: none; }
+.source-editor .cm-scroller {
+  font-family: "Consolas", "Malgun Gothic", monospace;
+  line-height: inherit;
+  overflow: visible;
+}
+.source-editor .cm-content { padding: 0; caret-color: var(--text); }
+.source-editor .cm-line { padding: 0; }
+.source-editor .cm-selectionBackground { background: var(--selection-bg, #8ca8cf55) !important; }
+.source-editor .cm-cursor { border-left-color: var(--text); }
 .editor-footer {
   height: 32px;
   min-height: 32px;
@@ -1786,6 +2004,27 @@ body.sidebar-resizing * {
   justify-content: end;
   gap: 9px;
   margin-top: 28px;
+}
+/* 확인 창(ConfirmDialog): 설정·이력 창 위에도 겹쳐 뜨도록 그보다 위에 둔다. */
+.confirm-backdrop {
+  z-index: 70;
+}
+/* 아래에 이미 열린 대화상자가 배경을 어둡게 했으면 확인 창은 다시 어둡게 하지 않는다(겹치면 너무 어두워진다). */
+.app:has(.modal-backdrop:not(.confirm-backdrop)) .confirm-backdrop:not(.plain-backdrop) {
+  background: transparent;
+}
+/* 삭제를 묻는 창(plain-backdrop)은 배경을 아주 옅게만 깔아, 흰 창이 뒤 화면과 구분되게만 한다. */
+.modal-backdrop.plain-backdrop {
+  background: #0000001f;
+}
+.modal.confirm-modal {
+  width: 400px;
+}
+.confirm-modal .modal-header {
+  margin-bottom: 12px;
+}
+.confirm-modal p {
+  margin: 0 0 6px;
 }
 .modal p {
   line-height: 1.8;
@@ -2476,6 +2715,15 @@ body.sidebar-resizing * {
   color: var(--text);
   background: var(--soft);
 }
+/* 이력 목록 맨 아래의 '모든 이력 삭제'. */
+.history-list button.history-clear {
+  margin: 8px 0 0;
+}
+/* 이력 미리보기 아래의 복원·삭제 단추, 설정의 이력 백업·초기화 단추. */
+.history-actions {
+  display: flex;
+  gap: 8px;
+}
 .history-preview {
   flex: 1;
   min-width: 0;
@@ -2508,18 +2756,32 @@ body.sidebar-resizing * {
   margin: 6px 0 0;
 }
 
-.recovery-strip,
 .warning-strip {
   padding: 7px 20px;
   font-size: 13px;
-  background: var(--soft);
-  color: var(--text);
   display: flex;
   align-items: center;
   gap: 15px;
 }
-.recovery-strip button {
-  padding: 3px 7px;
+/* 임시 원고 알림은 레이아웃을 밀지 않도록 우측 하단에 띄운다. */
+.recovery-toast {
+  position: fixed;
+  right: 20px;
+  bottom: 44px;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px 10px 16px;
+  background: var(--toast-bg);
+  color: var(--toast-text);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  box-shadow: 0 8px 30px #0002;
+  font-size: 13px;
+}
+.recovery-toast button {
+  padding: 3px 8px;
   font-size: 13px;
 }
 .warning-strip {
@@ -2657,7 +2919,15 @@ textarea::-webkit-scrollbar-track {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  cursor: default;
+}
+/* 탭 본문은 마운트 상태를 유지하고, 선택한 탭만 그룹의 공간을 차지한다. */
+.retained-tab {
+  display: contents;
+}
+.retained-tab[hidden],
+.editor-groups[hidden],
+.editor-footer[hidden] {
+  display: none;
 }
 .group-sash {
   flex: 0 0 4px;
@@ -2674,23 +2944,6 @@ textarea::-webkit-scrollbar-track {
 body.sash-dragging {
   cursor: col-resize;
   user-select: none;
-}
-.editor-group.inactive .editor-tab.current {
-  border-top-color: var(--faint);
-}
-.editor-groups.split .editor-group.focused .editor-tab.current {
-  border-top-color: var(--accent);
-}
-.editor-group.inactive .group-body {
-  opacity: 0.85;
-}
-.editor-group.inactive .save-indicator > span {
-  display: none;
-}
-.document-title.static {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .status-label {
   display: inline-block;
@@ -3033,6 +3286,12 @@ select:not([multiple]) {
 .tree-item:focus-visible .tree-actions {
   display: flex;
 }
+/* 버튼 묶음이 뜨는 동안에는 같은 자리의 연결 회차 배지를 감춘다(자리는 그대로 두어 제목이 밀리지 않는다).
+   다중 선택한 줄은 버튼 묶음을 띄우지 않으므로 배지를 그대로 둔다. */
+.tree-item:not(.multi-selected):hover .tree-badge,
+.tree-item:not(.multi-selected):focus-visible .tree-badge {
+  visibility: hidden;
+}
 .tree-item.current .tree-actions {
   background: var(--selection-bg);
 }
@@ -3051,6 +3310,45 @@ select:not([multiple]) {
   background: var(--soft);
   color: var(--text);
 }
+/* Shift·Ctrl+클릭으로 여러 줄을 고른 상태(파일 트리·메모 트리).
+   줄마다 칠하면 줄 사이 틈과 둥근 모서리 때문에 끊겨 보이므로, 줄 뒤에 틈까지 덮는 배경(::after)을 깔아
+   이어진 줄을 한 덩어리로 보이게 하고 덩어리의 처음과 끝에만 모서리를 둥글린다. 겹쳐도 진해지지 않게 불투명한 색을 쓴다. */
+.tree-item.multi-selected,
+.tree-item.multi-selected:hover {
+  background: transparent;
+  color: var(--text);
+  isolation: isolate;
+}
+.tree-item.multi-selected::after {
+  content: "";
+  position: absolute;
+  inset: -2px 0;
+  z-index: -1;
+  background: color-mix(in srgb, var(--accent) 16%, var(--sidebar));
+  pointer-events: none;
+}
+.tree-item.multi-selected:not(.multi-selected + .multi-selected)::after {
+  top: 0;
+  border-top-left-radius: 5px;
+  border-top-right-radius: 5px;
+}
+.tree-item.multi-selected:not(:has(+ .multi-selected))::after {
+  bottom: 0;
+  border-bottom-left-radius: 5px;
+  border-bottom-right-radius: 5px;
+}
+/* 고른 줄은 함께 다루므로 한 줄짜리 표시(포커스 테두리, 호버하면 뜨는 보관 버튼)를 감춘다. */
+.tree-item.multi-selected:focus-visible {
+  outline: none;
+}
+.tree-item.multi-selected .tree-actions {
+  display: none;
+}
+/* 연결 회차 배지는 평소의 밝은 바탕이면 강조 배경 위에서 떠 보이므로 같은 색 계열로 조금 진하게 맞춘다. */
+.tree-item.multi-selected .tree-badge {
+  background: color-mix(in srgb, var(--accent) 28%, var(--sidebar));
+  color: var(--text);
+}
 /* 플롯 트리: 회차 폴더 줄과 플롯을 끌어 놓을 곳 */
 .tree-item.plot-episode {
   gap: 5px;
@@ -3065,6 +3363,24 @@ select:not([multiple]) {
   outline: 1px dashed var(--accent);
   outline-offset: -1px;
 }
+/* 끌어서 순서를 바꿀 때 놓을 자리. 줄의 둥근 모서리를 따라 휘지 않도록 줄 사이 경계에 곧은 선을 따로 그린다. */
+.tree-item.drop-before::before,
+.tree-item.drop-after::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  pointer-events: none;
+}
+.tree-item.drop-before::before {
+  top: -1px;
+}
+.tree-item.drop-after::before {
+  bottom: -1px;
+}
 /* 위젯 보드의 '이 회차의 플롯' */
 .episode-plots .widget-title {
   margin-bottom: 8px;
@@ -3074,6 +3390,27 @@ select:not([multiple]) {
 }
 .episode-plots .widget-subtitle {
   margin-top: 18px;
+}
+.episode-plots .widget-title-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.episode-plots .widget-title .widget-quick-add {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  color: var(--muted);
+}
+.episode-plots .widget-title .widget-quick-add:hover:not(:disabled) {
+  background: var(--soft);
+  color: var(--text);
+}
+.episode-plots .widget-title .widget-quick-add:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 .episode-plots .memo-card.current > span {
   font-weight: 600;
@@ -4051,11 +4388,17 @@ button.episode-tag[draggable]:active {
   min-width: 0;
   max-width: 100%;
 }
+/* 편집 도구 막대의 줄바꿈 방식 버튼. */
+.format-bar .line-break-button {
+  gap: 5px;
+  padding: 5px 7px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+/* 작은 창은 도구 막대 밖(.app)에 화면 기준 위치로 띄운다. 위치는 버튼 자리로 정한다. */
 .line-break-pop {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: -6px;
-  z-index: 20;
+  position: fixed;
+  z-index: 40;
   width: 230px;
   padding: 12px;
   border: 1px solid var(--border);
@@ -4129,31 +4472,6 @@ button.episode-tag[draggable]:active {
 .tiptap [data-br-indent] {
   display: inline-block;
   width: var(--editor-indent, 0);
-  pointer-events: none;
-  user-select: none;
-}
-
-/* 조판 부호 표시 (¶ 문단 끝, ↵ 강제 줄바꿈) */
-.tiptap p.typographic-mark-paragraph-end::after {
-  content: "¶";
-  display: inline-block;
-  margin-left: 0.28em;
-  font-size: 0.78em;
-  font-weight: 400;
-  color: var(--placeholder);
-  opacity: 0.65;
-  pointer-events: none;
-  user-select: none;
-}
-
-.tiptap .typographic-mark-hard-break-widget::after {
-  content: "↵";
-  display: inline-block;
-  margin-left: 0.2em;
-  font-size: 0.8em;
-  font-weight: 400;
-  color: var(--placeholder);
-  opacity: 0.65;
   pointer-events: none;
   user-select: none;
 }
@@ -4516,4 +4834,408 @@ button.episode-tag[draggable]:active {
 .updater-lock p {
   margin: 10px 0 0;
   font-size: 13px;
+}
+/* 원고 북마크: 문단 왼쪽 여백의 리본. 문단 높이만큼 누를 자리를 두고, 리본은 첫 줄에 그린다.
+   리본의 진하기는 문단에 둔 변수로 정한다. 북마크한 문단은 늘 보이고, 나머지는 왼쪽 여백에 마우스를 올렸을 때만
+   흐리게 보인다. 그때 그 문단(bookmark-target)의 글을 강조해 어느 문단에 붙을지 보여 준다. */
+.editor-content .tiptap > :is(p, h1, h2, h3, h4, h5, h6, blockquote, ul, ol, pre) {
+  position: relative;
+}
+.editor-content.bookmarkable .tiptap > .bookmark-target {
+  --bookmark-opacity: 0.45;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--bookmark) 9%, transparent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--bookmark) 9%, transparent);
+}
+.editor-content .tiptap > .bookmarked {
+  --bookmark-opacity: 1;
+}
+.editor-content.bookmarkable .tiptap > :is(p, h1, h2, h3, h4, h5, h6, blockquote, ul, ol, pre):not(.is-editor-empty)::before,
+.editor-content .tiptap > .bookmarked::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -38px;
+  width: 26px;
+  cursor: pointer;
+  background-color: var(--bookmark);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M19 21l-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z'/%3E%3C/svg%3E")
+    no-repeat center 0.2em / 16px 16px;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M19 21l-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z'/%3E%3C/svg%3E")
+    no-repeat center 0.2em / 16px 16px;
+  opacity: var(--bookmark-opacity, 0);
+  transition: opacity 0.12s;
+}
+.editor-content .tiptap > .bookmark-flash {
+  animation: bookmark-flash 1.2s ease-out;
+}
+@keyframes bookmark-flash {
+  from {
+    background: color-mix(in srgb, var(--bookmark) 14%, transparent);
+  }
+  to {
+    background: transparent;
+  }
+}
+/* 위젯 보드 머리의 북마크 버튼과, 위젯 자리에 펼치는 북마크 목록 */
+.panel-caption .bookmark-toggle {
+  border-radius: 5px;
+}
+.panel-caption .bookmark-toggle:hover {
+  color: var(--text);
+}
+.panel-caption .bookmark-toggle.active {
+  color: var(--bookmark);
+}
+.panel-caption-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.panel-caption-actions button {
+  display: inline-flex;
+  border-radius: 5px;
+}
+.panel-caption-actions button:hover {
+  color: var(--text);
+}
+/* 위젯 보드 자리에 펼친 조판 설정. 설정 창보다 좁으므로 한 열로 쌓는다. */
+.widget-sidebar.typesetting-open {
+  width: 320px;
+  min-width: 320px;
+}
+.typesetting-panel {
+  padding: 14px 14px 24px;
+}
+.typesetting-panel .typesetting-kind-bar {
+  margin-bottom: 18px;
+  background: var(--surface);
+}
+.typesetting-kind-current {
+  font-size: 13px;
+  color: var(--text);
+}
+.typesetting-panel .typesetting-kind-meta {
+  flex-direction: column;
+  align-items: flex-start;
+}
+.typesetting-panel h3 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.typesetting-panel .settings-description {
+  margin: 0 0 12px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+.typesetting-panel .settings-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+/* 프리셋은 이름만 담은 작은 칩을 두 열로 놓는다. */
+.typesetting-panel .preset-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+.typesetting-panel .settings-grid {
+  gap: 12px;
+}
+.typesetting-panel .settings-grid select,
+.typesetting-panel .settings-grid input[type="number"] {
+  height: 32px;
+  padding: 5px 8px;
+}
+.typesetting-panel .preset-card {
+  justify-content: center;
+  min-width: 0;
+  padding: 7px 9px;
+}
+.typesetting-panel .preset-card strong {
+  max-width: 100%;
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.typesetting-panel .preset-card strong small {
+  font-weight: 400;
+}
+.typesetting-panel .settings-subsection {
+  margin-top: 18px;
+  padding-top: 16px;
+}
+.typesetting-panel .settings-toggles {
+  background: var(--surface);
+}
+.typesetting-panel .settings-toggle {
+  gap: 12px;
+  padding: 10px 12px;
+}
+.bookmark-widget .widget-title {
+  margin-bottom: 10px;
+}
+.bookmark-item {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border-radius: 6px;
+}
+.bookmark-item:hover {
+  background: var(--hover);
+}
+.bookmark-jump {
+  flex: 1;
+  min-width: 0;
+  justify-content: start;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 7px 6px;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
+}
+.bookmark-jump:hover {
+  background: none;
+}
+.bookmark-jump > svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--bookmark);
+  fill: currentColor;
+}
+.bookmark-jump > span {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  line-height: 1.45;
+}
+.bookmark-remove {
+  flex-shrink: 0;
+  padding: 4px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  opacity: 0;
+}
+.bookmark-item:hover .bookmark-remove,
+.bookmark-remove:focus-visible {
+  opacity: 1;
+}
+/* 레일의 전체 북마크 화면: 작품별 묶음 아래 문서 제목, 그 아래 북마크한 문단 */
+.bookmarks-page {
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto;
+  padding-bottom: 48px;
+}
+.bookmarks-page .page-hero {
+  padding-bottom: 32px;
+}
+.bookmarks-page .page-hero p {
+  margin-bottom: 20px;
+}
+.bookmarks-search {
+  max-width: 420px;
+  height: 36px;
+  margin: 0 auto;
+}
+.bookmark-project {
+  margin-bottom: 30px;
+}
+.bookmark-project > h2 {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0 0 6px;
+  padding: 0 6px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 15px;
+  font-weight: 600;
+}
+.bookmark-project > h2 small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+.bookmark-doc {
+  padding: 6px 0 8px;
+}
+.bookmark-doc-title {
+  width: 100%;
+  justify-content: start;
+  gap: 8px;
+  padding: 6px;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+}
+.bookmark-doc-title > svg {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+.bookmark-doc-title > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bookmark-doc-title small {
+  margin-left: auto;
+  color: var(--muted);
+  font-weight: 400;
+}
+.bookmark-doc .bookmark-item {
+  margin-left: 22px;
+}
+.bookmarks-none {
+  text-align: center;
+}
+/* 퀵 노트: 본문에서 고른 문장과 메모를 함께 저장하는 작은 창. 머리 부분을 끌어 옮긴다. */
+.quick-note {
+  position: fixed;
+  z-index: 900;
+  width: min(380px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  padding: 14px 16px 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 10px 40px #00000029;
+  font-size: 13px;
+}
+.quick-note-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: -4px -6px 2px;
+  padding: 4px 0 4px 6px;
+  cursor: move;
+  user-select: none;
+  touch-action: none;
+}
+.quick-note-head strong {
+  font-size: 14px;
+  font-weight: 600;
+}
+.quick-note-grip {
+  margin: 0 auto;
+  color: var(--faint);
+}
+.quick-note-head button {
+  padding: 4px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+}
+.quick-note-head button:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.quick-note-source {
+  margin-bottom: 14px;
+  color: var(--muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.quick-note-label {
+  margin-bottom: 7px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.quick-note-title {
+  margin-bottom: 14px;
+  padding: 7px 10px;
+}
+.quick-note-quote {
+  max-height: 132px;
+  margin: 0 0 14px;
+  padding: 2px 0 2px 12px;
+  overflow-y: auto;
+  border-left: 3px solid var(--border-hover);
+  color: var(--text);
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.quick-note textarea {
+  min-height: 112px;
+  resize: vertical;
+  line-height: 1.6;
+}
+.quick-note-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 14px;
+}
+.quick-note-foot button {
+  padding: 7px 14px;
+}
+/* 원고 이미지(Markdown 이미지 문법). 본문 폭에 맞춰 줄이고, 고르면 테두리로 표시한다. */
+.editor-content .tiptap .md-image {
+  display: inline-block;
+  max-width: 100%;
+  vertical-align: bottom;
+  line-height: 0;
+}
+.editor-content .tiptap .md-image img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
+}
+.editor-content .tiptap .md-image.ProseMirror-selectednode img {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.editor-content .tiptap .md-image.missing {
+  padding: 10px 12px;
+  border: 1px dashed var(--border-hover);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.editor-content .tiptap .md-image.missing::after {
+  content: attr(data-missing);
+}
+/* 플롯·메모 본문의 링크. 문서 링크(퀵 노트 출처)는 누르면 그 문서의 인용한 문장으로 간다. */
+.editor-content .tiptap a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+/* 원고 메모 표시: 메모가 인용한 문단의 왼쪽 여백, 북마크 리본보다 바깥에 메모 아이콘을 둔다. 누르면 메모를 연다. */
+.editor-content .tiptap > .noted {
+  position: relative;
+}
+.editor-content .tiptap > .noted::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -64px;
+  width: 22px;
+  cursor: pointer;
+  background-color: var(--accent);
+  opacity: 0.8;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M16 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8Z'/%3E%3Cpath d='M15 3v4a2 2 0 0 0 2 2h4'/%3E%3C/svg%3E")
+    no-repeat center 0.2em / 15px 15px;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M16 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8Z'/%3E%3Cpath d='M15 3v4a2 2 0 0 0 2 2h4'/%3E%3C/svg%3E")
+    no-repeat center 0.2em / 15px 15px;
 }

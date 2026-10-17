@@ -20,7 +20,6 @@ const DEFAULT_DESKTOP_EDITOR_STYLE = {
 
 export const DEFAULT_EDITOR_STYLE = {
   ...DEFAULT_DESKTOP_EDITOR_STYLE,
-  showTypographicMarks: false,
   serifSymbols: true,
   dividerStyle: "solid",
   dividerPaddingY: 2,
@@ -105,27 +104,6 @@ export const PLATFORM_STYLE_PRESETS = [
     description: "기본 집필 조판 (폭 760px · 줄간격 2.0 · 들여쓰기 1em)",
     style: {
       ...DEFAULT_DESKTOP_EDITOR_STYLE,
-    },
-  },
-  {
-    id: "lof-compact",
-    name: "집중형",
-    environment: "데스크톱",
-    description: "좁은 단폭 집필 조판 (폭 600px · 줄간격 1.8 · 들여쓰기 1em)",
-    style: {
-      fontFamily: '"Pretendard Variable", Pretendard, "Malgun Gothic", sans-serif',
-      fontSize: 18,
-      fontWeight: 400,
-      letterSpacing: 0,
-      lineHeight: 1.8,
-      blockGap: 0.9,
-      indent: 1,
-      hardBreakIndent: false,
-      textAlign: "left",
-      editorMaxWidth: 600,
-      editorPaddingX: 5,
-      textareaBgColor: "",
-      editorTextColor: "",
     },
   },
   {
@@ -321,7 +299,6 @@ export const DEFAULT_NOTE_EDITOR_STYLE = {
   editorPaddingX: 2,
   textareaBgColor: "",
   editorTextColor: "",
-  showTypographicMarks: false,
   serifSymbols: false,
   dividerStyle: "solid",
   dividerPaddingY: 1,
@@ -398,7 +375,6 @@ export function normalizeEditorStyle(prefs = {}, kind) {
     editorPaddingX: Math.round(clampNum(target.editorPaddingX, 0, 10, def.editorPaddingX)),
     textareaBgColor: typeof target.textareaBgColor === "string" ? target.textareaBgColor.trim() : "",
     editorTextColor: typeof target.editorTextColor === "string" ? target.editorTextColor.trim() : "",
-    showTypographicMarks: target.showTypographicMarks === true,
     serifSymbols:
       typeof target.serifSymbols === "boolean" ? target.serifSymbols : def.serifSymbols,
     dividerStyle: ["solid", "short", "ornament", "stars"].includes(target.dividerStyle)

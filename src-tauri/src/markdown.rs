@@ -15,6 +15,7 @@ const COMMON_FIELDS: &[&str] = &[
     "title",
     "tags",
     "manualLineBreak",
+    "bookmarks",
     "episodeId",
     "archived",
     "createdAt",
@@ -440,6 +441,14 @@ pub fn document_properties(doc: &Value) -> Map<String, Value> {
         for (k, v) in normalize_document_meta(Some(doc)) {
             out.insert(k, v);
         }
+    }
+    // 북마크가 없으면 파일 머리에 빈 목록을 남기지 않는다.
+    if out
+        .get("bookmarks")
+        .and_then(|v| v.as_array())
+        .is_some_and(|a| a.is_empty())
+    {
+        out.remove("bookmarks");
     }
     let ep_id = if kind != "episode" {
         obj.get("episodeId")

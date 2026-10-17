@@ -49,8 +49,8 @@ export const toolDefinitions = [
       expectedRevision: { type: "string" },
       body: { type: "string" },
       title: { type: "string" },
-      // 회차 상태: 집필 예정·집필 중·퇴고 중·집필 완료(완료하면 원고 보호로 편집이 막힌다).
-      status: { type: "string", enum: ["planned", "in_progress", "revision", "completed"] },
+      // 회차 상태: 집필 중·퇴고 중·집필 완료(완료하면 원고 보호로 편집이 막힌다).
+      status: { type: "string", enum: ["in_progress", "revision", "completed"] },
       episodeType: { type: "integer", enum: [0, 2, 3, 4, 6], description: "0 일반, 2 프롤로그, 3 에필로그, 4 특별편, 6 단편" },
       description: { type: "string", description: "회차 요약" },
       authorComment: { type: "string", description: "작가의 말" },

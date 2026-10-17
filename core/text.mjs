@@ -1,13 +1,46 @@
-import { marked } from "marked";
+import { Marked } from "marked";
 import { decodeHTMLStrict } from "entities";
-export function plainText(markdown) {
+
+// 편집기의 표·이미지 확장이 통계와 원문 보호 검사에 섞이지 않게 별도 파서를 사용한다.
+const textParser = new Marked();
+
+// 웹소설 원고처럼 한 줄바꿈으로만 이어진 줄도 한 줄을 한 문단으로 읽는다. Markdown 규칙대로라면 이런 줄은
+// 한 문단으로 합쳐져 문단 간격·들여쓰기가 첫 줄에만 붙으므로, 읽기 전에 줄 사이를 문단 구분(빈 줄)으로 바꾼다.
+// 자동 관리(hardBreaks)에서는 강제 줄바꿈(줄 끝 공백 두 칸·역슬래시)으로 이어진 줄도 붙여 넣기 규칙처럼
+// 한 줄을 한 문단으로 나눈다. 수동 관리에서는 강제 줄바꿈을 그대로 둔다. 코드 블록 안, 이어지는 표·인용 줄은 건드리지 않는다.
+export function splitSoftBreaks(markdown, hardBreaks) {
+  const lines = markdown.split(/\r\n?|\n/),
+    fenceLine = /^\s*(```|~~~)/,
+    hardEnd = /( {2,}|\\)$/,
+    joined = (line) => /^\s*[|>]/.test(line);
+  const out = [];
+  let fence = false;
+  lines.forEach((line, i) => {
+    if (fenceLine.test(line)) fence = !fence;
+    const next = lines[i + 1],
+      split =
+        !fence &&
+        next !== undefined &&
+        !!line.trim() &&
+        !!next.trim() &&
+        !(joined(line) && joined(next)) &&
+        (hardBreaks || !hardEnd.test(line));
+    out.push(split ? line.replace(hardEnd, "") : line);
+    if (split) out.push("");
+  });
+  return out.join("\n");
+}
+
+export function plainText(markdown, { preserveParagraphBreaks = false } = {}) {
   function walk(tokens) {
     return tokens
       .map((t) => {
-        if (t.type === "space")
+        if (t.type === "space") {
+          const breaks = (t.raw.match(/\n/g) || []).length;
           return "\n".repeat(
-            Math.max(0, Math.floor((t.raw.match(/\n/g) || []).length / 2) - 1),
+            Math.max(0, (preserveParagraphBreaks ? breaks : Math.floor(breaks / 2)) - 1),
           );
+        }
         if (t.type === "br" || t.type === "hr") return "\n";
         if (t.type === "list")
           return t.items.map((i) => walk(i.tokens).replace(/\n$/, "")).join("\n") + "\n";
@@ -28,26 +61,48 @@ export function plainText(markdown) {
       })
       .join("");
   }
-  return walk(marked.lexer(markdown)).replace(/\n$/, "");
+  // 자동 관리 복사는 편집기와 같은 문단 구분을 적용하고, 문단 사이의 빈 줄을 보존한다.
+  const content = preserveParagraphBreaks ? splitSoftBreaks(markdown, true) : markdown;
+  return walk(lex(content)).replace(/\n$/, "");
 }
 export const characterCount = (markdown, spaces = false) =>
   (spaces ? plainText(markdown).replace(/[\r\n]/g, "") : plainText(markdown).replace(/\s/g, "")).length;
-export function requiresSource(markdown, { tables = false } = {}) {
-  let unsupported = false;
-  marked.walkTokens(marked.lexer(markdown), (t) => {
-    if (tables && (t.type === "table" ||
-      (t.type === "html" && /^<br\s*\/?\s*>$/i.test(t.raw.trim())))) return;
-    if (["table", "image", "html", "link"].includes(t.type)) unsupported = true;
-  });
-  return unsupported;
+// 같은 원고를 화면 여러 곳에서 연달아 검사하므로 마지막으로 읽은 토큰을 다시 쓴다.
+let lastLexed = { markdown: "", tokens: [] };
+function lex(markdown) {
+  if (lastLexed.markdown !== markdown) lastLexed = { markdown, tokens: textParser.lexer(markdown) };
+  return lastLexed.tokens;
 }
+// 토큰을 깊이 우선으로 돌며 test가 참인 토큰이 나오면 바로 멈춘다(marked.walkTokens와 같은 자식 순서).
+function someToken(tokens, test) {
+  for (const t of tokens) {
+    if (test(t)) return true;
+    const children =
+      t.type === "table" ? [...t.header, ...t.rows.flat()].flatMap((cell) => cell.tokens)
+      : t.type === "list" ? t.items
+      : t.tokens;
+    if (children && someToken(children, test)) return true;
+  }
+  return false;
+}
+export function requiresSource(markdown, { tables = false, links = false, images = false } = {}) {
+  return someToken(lex(markdown), (t) => {
+    if (tables && (t.type === "table" ||
+      (t.type === "html" && /^<br\s*\/?\s*>$/i.test(t.raw.trim())))) return false;
+    if (links && t.type === "link") return false;
+    if (images && t.type === "image") return false;
+    return ["table", "image", "html", "link"].includes(t.type);
+  });
+}
+let lastStats;
 export function manuscriptStats(markdown) {
+  if (lastStats?.markdown === markdown) return lastStats.stats;
   const text = plainText(markdown)
     .replace(/\r\n?|\u2028|\u2029/g, "\n")
     .replace(/\u00a0/g, " ");
   const noSpace = text.replace(/\s/g, ""),
     spaces = text.replace(/[\n\r]/g, "");
-  return {
+  const stats = {
     text,
     withoutSpaces: [...noSpace].length,
     withSpaces: [...spaces].length,
@@ -59,6 +114,9 @@ export function manuscriptStats(markdown) {
     lines: text ? text.split("\n").length : 0,
     paragraphs: text ? text.split(/\n+/).filter((p) => p.trim()).length : 0,
   };
+  // 상태줄과 분량 패널 등에서 같은 본문을 연달아 요청하면 계산 결과를 공유한다.
+  lastStats = { markdown, stats };
+  return stats;
 }
 export function countForRule(stats, rule = "noSpace", unit = "utf16") {
   const key =

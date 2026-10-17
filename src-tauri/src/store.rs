@@ -2,7 +2,7 @@ use crate::assets::{normalize_tags, valid_cover, validate_cover};
 use crate::episode::{
     check_meta_patch, custom_properties, line_break_default, normalize_document_meta, normalize_meta,
     normalize_status, normalize_status_val, status_token, stored_document_meta, stored_meta,
-    DOCUMENT_META_FIELDS, META_FIELDS, STATUSES,
+    DOCUMENT_META_FIELDS, LEGACY_STATUSES, META_FIELDS, STATUSES,
 };
 use crate::error::{
     fail, fail_invalid, hash_str, now_iso, slice_utf16, sys_time_to_iso, utf16_len, valid_id,
@@ -739,13 +739,38 @@ fn prune_empty(dir: &Path) {
     let _ = fs::remove_dir(dir);
 }
 
+// 관리 DB가 없던 예전 보관함의 이력 폴더를 지우고, 지운 이력 파일 수를 돌려준다.
+fn remove_history_dir(dir: &Path) -> Result<usize, LofError> {
+    if !dir.exists() {
+        return Ok(0);
+    }
+    let count = walkdir_count(dir);
+    fs::remove_dir_all(dir)?;
+    Ok(count)
+}
+
+fn walkdir_count(dir: &Path) -> usize {
+    fs::read_dir(dir)
+        .map(|rd| {
+            rd.filter_map(|e| e.ok())
+                .map(|e| if e.path().is_dir() { walkdir_count(&e.path()) } else { 1 })
+                .sum()
+        })
+        .unwrap_or(0)
+}
+
 const RENAME_FAILED: &str =
     "파일 이름을 바꾸지 못했습니다. 다른 프로그램에서 작품 폴더의 파일을 열고 있는지 확인해 주세요.";
 
+// 변경 이력 규칙(설정의 '보관 및 이력'). 자동 저장은 이력을 남기지 않고, 화면이 작업의 끝(입력이 멈춤, 문서를 떠남,
+// Ctrl+S)을 알릴 때 checkpoint로 남긴다. 쉬지 않고 오래 쓸 때는 저장하면서 max_minutes마다 하나씩 남긴다.
 #[derive(Clone, Copy)]
 pub struct HistoryPolicy {
-    pub min_minutes: f64,
+    pub max_minutes: f64,
     pub min_chars: usize,
+    // 보관 규칙: 문서당 최근 keep_count개와 keep_days일 이내 이력을 두고, 적어도 HISTORY_MINIMUM개는 남긴다.
+    pub keep_count: usize,
+    pub keep_days: i64,
 }
 
 #[derive(Clone)]
@@ -774,6 +799,12 @@ impl Store {
     }
 
     pub fn require_database(&self) -> Result<(),LofError> { self.database().map(|_|()) }
+
+    // 설정의 보관 규칙으로 오래된 이력을 정리한다. force면 오늘 이미 정리했어도 다시 한다(보관 규칙을 바꿨을 때).
+    pub fn retain_history(&self, force: bool) -> Result<(), LofError> {
+        let p = self.history_policy;
+        self.database()?.retain_history(p.keep_count, p.keep_days, force)
+    }
 
     fn save_deleted(&self, deleted:&Map<String,Value>)->Result<(),LofError>{
         self.database()?.set("deleted",&Value::Object(deleted.clone()))
@@ -1370,7 +1401,7 @@ impl Store {
                 .unwrap_or("")
                 .to_string();
             self.index.save(&vault_id, &cat)?;
-            self.database()?.retain_history()?;
+            self.retain_history(false)?;
             Ok(())
         })();
 
@@ -3232,13 +3263,8 @@ impl Store {
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string())
             .unwrap_or_else(|| Uuid::new_v4().to_string());
-        let status = if let Some(st) = fixed.get("status").and_then(|v| v.as_str()) {
-            normalize_status(Some(st))
-        } else if !body.trim().is_empty() {
-            "in_progress".to_string()
-        } else {
-            "planned".to_string()
-        };
+        // 새 회차는 집필 중으로 시작한다.
+        let status = normalize_status(fixed.get("status").and_then(|v| v.as_str()));
 
         let manual_lb = input
             .get("manualLineBreak")
@@ -3455,7 +3481,7 @@ impl Store {
         }
         if let Some(st) = patch.get("status").cloned() {
             let s = st.as_str().unwrap_or("");
-            if !STATUSES.contains(&s) && !["초안", "진행", "완료"].contains(&s) {
+            if !STATUSES.contains(&s) && !LEGACY_STATUSES.contains(&s) {
                 return Err(fail_invalid("잘못된 상태"));
             }
             patch.insert("status".to_string(), json!(normalize_status(Some(s))));
@@ -3568,7 +3594,11 @@ impl Store {
             .get("forceHistory")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        if force_history || !changed.is_empty() || self.history_due(id, &current_body) {
+        // 이력은 본문과 제목을 기준으로 남긴다. 상태·태그·북마크 같은 속성만 바뀐 저장은 남기지 않는다.
+        // 북마크는 본문을 고치면 문단 번호가 따라 바뀌어 자동 저장마다 함께 실리므로, 속성 변경으로 남기면
+        // 최소 간격·글자 수 조건을 건너뛰고 저장할 때마다 이력이 쌓인다.
+        let renamed = changed.iter().any(|k| k == "title");
+        if force_history || renamed || (body != current_body && self.history_due(id, &current_body)) {
             self.write_history(id, &current, &raw)?;
         }
 
@@ -3728,14 +3758,9 @@ impl Store {
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            let did = d
-                .get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
+            // 순서만 바뀌고 본문은 그대로이므로 이력을 남기지 않는다. 한 회차를 옮겨도 사이의 회차가
+            // 모두 밀려 회차마다 이력이 쌓이기 때문이다.
             let raw = fs::read_to_string(abs(&p.dir, &rel))?;
-            let current_doc = doc_of(&p.dir, project_id, d, &raw)?;
-            self.write_history(&did, &current_doc, &raw)?;
             if let Some(dobj) = d.as_object_mut() {
                 dobj.insert("order".to_string(), json!(ord));
             }
@@ -3850,19 +3875,47 @@ impl Store {
         latest
     }
 
+    // 쉬지 않고 오래 쓸 때의 이력: 마지막 이력 뒤로 max_minutes가 지났고 본문이 min_chars 넘게 바뀌었으면
+    // 저장하면서 저장 직전 원고를 남긴다. 평소의 이력은 checkpoint가 남긴다.
     fn history_due(&mut self, id: &str, body: &str) -> bool {
-        let min_minutes = self.history_policy.min_minutes;
+        let max_minutes = self.history_policy.max_minutes;
         let min_chars = self.history_policy.min_chars;
         let latest = self.latest_snapshot(id);
         let now = Self::now_ms();
         if let Some(ref l) = latest {
             let elapsed = now.saturating_sub(l.at) as f64;
-            if elapsed < min_minutes * 60_000.0 {
+            if elapsed < max_minutes * 60_000.0 {
                 return false;
             }
         }
         let prev_body = latest.as_ref().map(|l| l.body.as_str()).unwrap_or("");
         changed_chars(prev_body, body) >= min_chars
+    }
+
+    // 작업의 끝(입력이 멈춤, 문서를 떠남, Ctrl+S)에 지금 저장된 원고를 이력으로 남긴다.
+    // 마지막 이력과 같거나 바뀐 글자가 min_chars보다 적으면 남기지 않는다. force(직접 저장)면 글자 수와 상관없이
+    // 남기되, 마지막 이력과 본문이 똑같으면 남길 것이 없으므로 남기지 않는다.
+    pub fn checkpoint(&mut self, id: &str, force: bool) -> Result<bool, LofError> {
+        if !valid_id(id) {
+            return Err(fail_invalid("잘못된 ID"));
+        }
+        let (f_proj, f_entry, f_file) = self.find_doc(id)?;
+        let raw = fs::read_to_string(&f_file)?;
+        let proj_id = f_proj
+            .project
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let current = doc_of(&f_proj.dir, &proj_id, &f_entry, &raw)?;
+        let body = current.get("body").and_then(|v| v.as_str()).unwrap_or("");
+        let latest = self.latest_snapshot(id);
+        let prev_body = latest.as_ref().map(|l| l.body.as_str()).unwrap_or("");
+        if body == prev_body || (!force && changed_chars(prev_body, body) < self.history_policy.min_chars) {
+            return Ok(false);
+        }
+        self.write_history(id, &current, &raw)?;
+        Ok(true)
     }
 
     pub fn history(&self, id: &str) -> Result<Value, LofError> {
@@ -3884,6 +3937,41 @@ impl Store {
         names.truncate(100);
         let out: Vec<Value> = names.into_iter().map(|name| json!({ "name": name })).collect();
         Ok(Value::Array(out))
+    }
+
+    // 이력을 지운다. id가 있으면 그 문서의 이력만(name이 있으면 그 하나만), 없으면 모든 문서의 이력을 지운다.
+    // 지운 뒤에는 마지막 이력 기억을 버려 다음 이력 판단을 남은 이력으로 다시 한다. 지운 개수를 돌려준다.
+    pub fn history_delete(&mut self, id: Option<&str>, name: Option<&str>) -> Result<usize, LofError> {
+        static HIST_RE: OnceLock<Regex> = OnceLock::new();
+        let re = HIST_RE.get_or_init(|| Regex::new(r"^\d+-[a-f0-9-]+\.(json|md)$").unwrap());
+        if id.is_some_and(|id| !valid_id(id)) || name.is_some_and(|n| id.is_none() || !re.is_match(n)) {
+            return Err(fail_invalid("잘못된 이력"));
+        }
+        let removed = if let Some(db) = &self.index.database {
+            db.delete_history(id, name)?
+        } else {
+            let base = self.root.join(".lof").join("history");
+            match (id, name) {
+                (Some(id), Some(name)) => {
+                    let file = base.join(id).join(name);
+                    if file.exists() {
+                        fs::remove_file(file)?;
+                        1
+                    } else {
+                        0
+                    }
+                }
+                (Some(id), None) => remove_history_dir(&base.join(id))?,
+                (None, _) => remove_history_dir(&base)?,
+            }
+        };
+        match id {
+            Some(id) => {
+                self.last_snapshot.remove(id);
+            }
+            None => self.last_snapshot.clear(),
+        }
+        Ok(removed)
     }
 
     pub fn history_read(&self, id: &str, name: &str) -> Result<Value, LofError> {
@@ -4214,7 +4302,8 @@ impl Store {
         }
         let inner_rel = |rel: &str| -> String {
             for prefix in ["assets/", "doc/", "episodes/", "plot/", "memo/"] {
-                if rel.len() >= prefix.len() && rel[..prefix.len()].eq_ignore_ascii_case(prefix) {
+                // 바이트 위치가 한글 글자 중간일 수 있으므로 get으로 잘라 본다.
+                if rel.get(..prefix.len()).is_some_and(|head| head.eq_ignore_ascii_case(prefix)) {
                     return rel[prefix.len()..].to_string();
                 }
             }

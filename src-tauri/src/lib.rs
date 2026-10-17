@@ -11,6 +11,7 @@ pub mod markdown;
 pub mod memo;
 pub mod platforms;
 mod pin;
+mod single_instance;
 pub mod store;
 pub mod sync;
 pub mod text;
@@ -276,19 +277,20 @@ fn connect_google_drive(args: &Value, state: &AppState, auth: &google_drive::Aut
     Ok(safe_connection(&conn))
 }
 
+// 설정의 '보관 및 이력'. 입력이 멈춘 뒤 이력을 남길 시간(historyIdleMinutes)은 화면이 쓴다.
 fn history_policy_from_settings(settings: &Value) -> HistoryPolicy {
     let prefs = settings.get("preferences");
-    let min_minutes = prefs
-        .and_then(|p| p.get("historyMinMinutes"))
-        .and_then(|v| v.as_f64())
-        .unwrap_or(1.0);
-    let min_chars = prefs
-        .and_then(|p| p.get("historyMinChars"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(200) as usize;
+    let number = |key: &str, default: f64| {
+        prefs
+            .and_then(|p| p.get(key))
+            .and_then(|v| v.as_f64())
+            .unwrap_or(default)
+    };
     HistoryPolicy {
-        min_minutes,
-        min_chars,
+        max_minutes: number("historyMaxMinutes", 30.0).max(1.0),
+        min_chars: number("historyMinChars", 200.0).max(0.0) as usize,
+        keep_count: number("historyKeepCount", 100.0).max(1.0) as usize,
+        keep_days: number("historyKeepDays", 30.0).max(1.0) as i64,
     }
 }
 
@@ -632,6 +634,10 @@ fn dispatch_method(
     };
 
     match method {
+        "countManuscript" => Ok(crate::text::display_counts(
+            args.get("text").and_then(Value::as_str).unwrap_or(""),
+            &args.get("rules").cloned().unwrap_or_else(|| json!({})),
+        )),
         "autoSyncStatus" => Ok(app.state::<auto_sync::AutoSyncState>().status()),
         "backupStorage" => {
             let guard=state.store.lock().unwrap();
@@ -771,6 +777,71 @@ fn dispatch_method(
             };
             schedule_notify(app, &state.notify_seq);
             Ok(res)
+        }
+        // 원고 이미지 저장: data(base64)가 있으면 그 내용을, 없으면 파일 선택 창에서 고른 파일을 작품의 assets/에 둔다.
+        "saveImage" => {
+            let project_id = args.get("projectId").and_then(|v| v.as_str()).unwrap_or("");
+            let (name, bytes) = if let Some(data) = args.get("data").and_then(|v| v.as_str()) {
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(data)
+                    .map_err(|_| fail_invalid("이미지를 읽을 수 없습니다."))?;
+                let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("image");
+                (name.to_string(), bytes)
+            } else {
+                let picked = FileDialog::new()
+                    .set_title("이미지 삽입")
+                    .add_filter("이미지", &["png", "jpg", "jpeg", "gif", "webp"])
+                    .pick_file();
+                let Some(file) = picked else {
+                    return Ok(Value::Null);
+                };
+                if fs::metadata(&file)?.len() > assets::IMAGE_LIMIT {
+                    return Err(fail_invalid("이미지는 20MB 이하만 넣을 수 있습니다."));
+                }
+                let name = file.file_name().and_then(|n| n.to_str()).unwrap_or("image").to_string();
+                (name, fs::read(&file)?)
+            };
+            let dir = {
+                let mut guard = state.store.lock().unwrap();
+                let st = guard
+                    .as_mut()
+                    .ok_or_else(|| fail_invalid("Store not initialized"))?;
+                st.get_project(project_id)?.dir
+            };
+            let path = assets::save_image(&dir, &name, &bytes)?;
+            Ok(json!({ "path": path, "name": name }))
+        }
+        "readImage" => {
+            let project_id = args.get("projectId").and_then(|v| v.as_str()).unwrap_or("");
+            let doc_path = args.get("docPath").and_then(|v| v.as_str()).unwrap_or("");
+            let src = args.get("src").and_then(|v| v.as_str()).unwrap_or("");
+            let dir = {
+                let mut guard = state.store.lock().unwrap();
+                let st = guard
+                    .as_mut()
+                    .ok_or_else(|| fail_invalid("Store not initialized"))?;
+                st.get_project(project_id)?.dir
+            };
+            assets::image_data_url(&dir, doc_path, src)
+        }
+        // 집필 화면 우클릭 메뉴의 붙여넣기. 글이 있으면 글을, 없고 그림이 있으면 PNG(base64)를 돌려준다.
+        "readClipboard" => {
+            let mut cb = arboard::Clipboard::new().map_err(|e| fail_invalid(e.to_string()))?;
+            if let Ok(text) = cb.get_text() {
+                if !text.is_empty() {
+                    return Ok(json!({ "text": text }));
+                }
+            }
+            if let Ok(img) = cb.get_image() {
+                let rgba = image::RgbaImage::from_raw(img.width as u32, img.height as u32, img.bytes.into_owned())
+                    .ok_or_else(|| fail_invalid("클립보드 이미지를 읽을 수 없습니다."))?;
+                let mut png = Vec::new();
+                image::DynamicImage::ImageRgba8(rgba)
+                    .write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
+                    .map_err(|_| fail_invalid("클립보드 이미지를 읽을 수 없습니다."))?;
+                return Ok(json!({ "image": base64::engine::general_purpose::STANDARD.encode(png) }));
+            }
+            Ok(json!({}))
         }
         "createDocument" => {
             let res = {
@@ -1073,6 +1144,27 @@ fn dispatch_method(
                 .as_mut()
                 .ok_or_else(|| fail_invalid("Store not initialized"))?;
             st.history(id)
+        }
+        // 이력 지우기: id와 name이면 그 이력 하나, id만 있으면 그 문서의 이력 전부, 둘 다 없으면 모든 이력. 지운 개수를 돌려준다.
+        "deleteHistory" => {
+            let id = args.get("id").and_then(|v| v.as_str());
+            let name = args.get("name").and_then(|v| v.as_str());
+            let mut guard = state.store.lock().unwrap();
+            let st = guard
+                .as_mut()
+                .ok_or_else(|| fail_invalid("Store not initialized"))?;
+            Ok(json!(st.history_delete(id, name)?))
+        }
+        // 작업의 끝(입력이 멈춤, 문서를 떠남, Ctrl+S)에 지금 원고를 이력으로 남긴다. 남겼으면 true.
+        // force면 최소 변경 글자 수와 상관없이 남긴다(직접 저장).
+        "checkpointDocument" => {
+            let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            let force = args.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
+            let mut guard = state.store.lock().unwrap();
+            let st = guard
+                .as_mut()
+                .ok_or_else(|| fail_invalid("Store not initialized"))?;
+            Ok(json!(st.checkpoint(id, force)?))
         }
         "historyRead" => {
             let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
@@ -1393,10 +1485,17 @@ fn dispatch_method(
                 persist_settings(&state.config_file, &s_guard)?;
                 let policy = history_policy_from_settings(&s_guard);
                 let manual_lb = default_manual_line_break_from_settings(&s_guard);
+                // 보관 규칙을 바꾸면 다음 날까지 기다리지 않고 바로 정리한다.
+                let retention_changed = args
+                    .as_object()
+                    .is_some_and(|o| o.contains_key("historyKeepCount") || o.contains_key("historyKeepDays"));
                 if let Ok(mut st_guard) = state.store.lock() {
                     if let Some(ref mut st) = *st_guard {
                         st.history_policy = policy;
                         st.default_manual_line_break = manual_lb;
+                        if retention_changed {
+                            st.retain_history(true)?;
+                        }
                     }
                 }
                 prefs_val
@@ -1469,7 +1568,7 @@ async fn lof_invoke(
     window: WebviewWindow,
 ) -> Result<Value, String> {
     let args_val = args.unwrap_or_else(|| json!({}));
-    let result = if matches!(method.as_str(), "connectGoogleDrive" | "sync" | "pinUnlock" | "pinSave" | "backupStorage") {
+    let result = if matches!(method.as_str(), "connectGoogleDrive" | "sync" | "pinUnlock" | "pinSave" | "backupStorage" | "countManuscript") {
         tauri::async_runtime::spawn_blocking(move || {
             let state = app.state::<AppState>();
             if method == "pinUnlock" || method == "pinSave" {
@@ -1665,43 +1764,6 @@ fn window_start_dragging(window: WebviewWindow) {
     let _ = window.start_dragging();
 }
 
-#[cfg(windows)]
-fn acquire_single_instance_lock(user_dir: &Path) -> bool {
-    use crate::error::hash_str;
-    use windows_sys::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
-    use windows_sys::Win32::System::Threading::CreateMutexW;
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        FindWindowW, IsIconic, SetForegroundWindow, ShowWindow, SW_RESTORE, SW_SHOW,
-    };
-
-    let dir_hash = &hash_str(&user_dir.to_string_lossy().to_lowercase())[..16];
-    let mutex_name: Vec<u16> = format!("Local\\LofWriterSingleInstance_{}\0", dir_hash)
-        .encode_utf16()
-        .collect();
-    unsafe {
-        let handle = CreateMutexW(std::ptr::null(), 0, mutex_name.as_ptr());
-        if !handle.is_null() && GetLastError() == ERROR_ALREADY_EXISTS {
-            let title: Vec<u16> = "Lof Writer\0".encode_utf16().collect();
-            let hwnd = FindWindowW(std::ptr::null(), title.as_ptr());
-            if !hwnd.is_null() {
-                if IsIconic(hwnd) != 0 {
-                    ShowWindow(hwnd, SW_RESTORE);
-                } else {
-                    ShowWindow(hwnd, SW_SHOW);
-                }
-                SetForegroundWindow(hwnd);
-            }
-            return false;
-        }
-    }
-    true
-}
-
-#[cfg(not(windows))]
-fn acquire_single_instance_lock(_user_dir: &Path) -> bool {
-    true
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     if std::env::args()
@@ -1713,9 +1775,15 @@ pub fn run() {
     }
 
     let user_dir = get_user_dir();
-    if !acquire_single_instance_lock(&user_dir) {
-        return;
-    }
+    let instance = match single_instance::SingleInstance::acquire(&user_dir) {
+        Ok(Some(instance)) => instance,
+        Ok(None) => return,
+        Err(error) => {
+            MessageDialog::new().set_level(MessageLevel::Error)
+                .set_title("Lof Writer 시작 실패").set_description(error.to_string()).show();
+            return;
+        }
+    };
 
     #[cfg(windows)]
     unsafe {
@@ -1884,6 +1952,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(instance)
         .manage(state)
         .manage(google_drive::AuthState::default())
         .manage(pin_state)
@@ -2064,6 +2133,7 @@ pub fn run() {
                 *cw = setup_common_watcher(&clean_vault_root, &common_root, &handle, &st.notify_seq);
             }
             auto_sync::request(&handle);
+            app.state::<single_instance::SingleInstance>().listen(&handle);
             Ok(())
         })
         .on_window_event(move |window, event| {

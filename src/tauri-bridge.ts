@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import type { AutoSyncStatus } from "./types";
 
 const methods = [
+  "countManuscript",
   "autoSyncStatus",
   "backupStorage",
   "pinStatus",
@@ -20,6 +21,8 @@ const methods = [
   "searchText",
   "history",
   "historyRead",
+  "deleteHistory",
+  "checkpointDocument",
   "restore",
   "saveDraft",
   "clearDraft",
@@ -36,6 +39,9 @@ const methods = [
   "sync",
   "chooseCover",
   "removeCover",
+  "saveImage",
+  "readImage",
+  "readClipboard",
   "mcpConfig",
   "copyApi",
   "setPreferences",
