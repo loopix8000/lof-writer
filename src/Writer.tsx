@@ -34,7 +34,10 @@ import {
 import { normalizeEditorStyle } from "../core/typesetting.mjs";
 import { TypingAssist, typesettingPluginKey } from "./typing-extension";
 import { MarkdownTables } from "./table-extension";
+import { Bookmarks, BOOKMARK_LOAD, bookmarkPluginKey, readBookmarks, resolveBookmarks } from "./bookmark-extension";
+import type { Bookmark } from "./types";
 import { Fragment, Slice, type Node as PMNode } from "@tiptap/pm/model";
+import { TextSelection } from "@tiptap/pm/state";
 import type { EditorProps } from "@tiptap/pm/view";
 
 function compactBlankLines<T>(lines: readonly T[], isBlank: (line: T) => boolean): T[] {
@@ -115,6 +118,15 @@ function offsetToPos(node: PMNode, pos: number, offset: number) {
   }
   return p;
 }
+// 저장된 북마크를 편집기에 다시 깐다. 되돌리기 기록과 저장 대상에서는 뺀다.
+function loadBookmarks(editor: Editor, list: Bookmark[] = []) {
+  editor.view.dispatch(
+    editor.state.tr
+      .setMeta(bookmarkPluginKey, { set: resolveBookmarks(editor.state.doc, list) })
+      .setMeta(BOOKMARK_LOAD, true)
+      .setMeta("addToHistory", false),
+  );
+}
 export default function Writer({
   id,
   body,
@@ -132,6 +144,9 @@ export default function Writer({
   onToggleTypographicMarks,
   onReplaceSymbols,
   tables = false,
+  bookmarks,
+  onBookmarksChange,
+  jumpToBookmark = null,
 }: {
   id: string;
   body: string;
@@ -152,6 +167,11 @@ export default function Writer({
   onToggleTypographicMarks?: () => void;
   onReplaceSymbols?: () => void;
   tables?: boolean;
+  // 원고 북마크. onBookmarksChange가 있을 때만 왼쪽 여백을 눌러 넣고 뺄 수 있다.
+  bookmarks?: Bookmark[];
+  onBookmarksChange?: (bookmarks: Bookmark[]) => void;
+  // 북마크 목록에서 고른 문단(맨 위 단계 순서)으로 옮겨 간다. seq가 바뀔 때마다 다시 한다.
+  jumpToBookmark?: { index: number; seq: number } | null;
 }) {
   const style = normalizeEditorStyle({
     ...typingOptions,
@@ -170,6 +190,13 @@ export default function Writer({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const pendingSelection = useRef<number | null>(null);
   const protectedSource = requiresSource(body, { tables });
+  // 북마크: 최신 목록과 저장 함수, 마지막으로 깔거나 알린 목록(같으면 다시 깔지 않는다).
+  const bookmarksRef = useRef(bookmarks),
+    onBookmarksRef = useRef(onBookmarksChange),
+    bookmarkKey = useRef<{ editor: Editor | null; key: string }>({ editor: null, key: "" });
+  bookmarksRef.current = bookmarks;
+  onBookmarksRef.current = onBookmarksChange;
+  const bookmarksJson = JSON.stringify(bookmarks || []);
   const editor = useEditor(
     {
       extensions: [
@@ -177,6 +204,7 @@ export default function Writer({
         Markdown,
         ...(tables ? [MarkdownTables] : []),
         TypingAssist.configure({ getOptions: () => optionsRef.current }),
+        Bookmarks.configure({ canToggle: () => !!onBookmarksRef.current }),
         Placeholder.configure({
           placeholder: "이곳에서 이야기를 시작해 보세요.",
         }),
@@ -204,9 +232,45 @@ export default function Writer({
         },
       },
       onUpdate: ({ editor }) => onChange(editor.getMarkdown()),
+      // 북마크를 넣고 빼거나, 본문이 바뀌어 북마크 문단의 순서·글이 달라지면 알린다.
+      onTransaction: ({ editor, transaction: tr }) => {
+        if (tr.getMeta(BOOKMARK_LOAD) || tr.getMeta("preventUpdate")) return;
+        if (!tr.docChanged && !tr.getMeta(bookmarkPluginKey)) return;
+        const list = readBookmarks(editor.state),
+          key = JSON.stringify(list);
+        if (key === bookmarkKey.current.key) return;
+        bookmarkKey.current = { editor, key };
+        onBookmarksRef.current?.(list);
+      },
     },
     [id, tables],
   );
+  // 문서를 열 때, 그리고 목록에서 북마크를 지우는 등 밖에서 목록이 바뀌었을 때 다시 깐다.
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return;
+    if (bookmarkKey.current.editor === editor && bookmarkKey.current.key === bookmarksJson) return;
+    bookmarkKey.current = { editor, key: bookmarksJson };
+    loadBookmarks(editor, bookmarksRef.current);
+  }, [editor, bookmarksJson]);
+  useEffect(() => {
+    if (!jumpToBookmark || !editor || editor.isDestroyed) return;
+    let target = -1;
+    editor.state.doc.forEach((_node, offset, index) => {
+      if (index === jumpToBookmark.index) target = offset;
+    });
+    if (target < 0) return;
+    const { state, view } = editor;
+    view.dispatch(state.tr.setSelection(TextSelection.near(state.doc.resolve(target + 1))));
+    view.focus();
+    const dom = view.nodeDOM(target);
+    if (dom instanceof HTMLElement) {
+      dom.scrollIntoView({ block: "center", behavior: "smooth" });
+      dom.classList.remove("bookmark-flash");
+      void dom.offsetWidth;
+      dom.classList.add("bookmark-flash");
+      setTimeout(() => dom.classList.remove("bookmark-flash"), 1200);
+    }
+  }, [jumpToBookmark?.seq, editor]);
   const inTable = useEditorState({
     editor,
     selector: ({ editor }) => !!editor?.isActive("table"),
@@ -230,11 +294,15 @@ export default function Writer({
       !protectedSource &&
       editor.getMarkdown() !== body &&
       !editor.view.composing
-    )
+    ) {
       editor.commands.setContent(body, {
         contentType: "markdown",
         emitUpdate: false,
       });
+      // 본문을 통째로 바꾸면 붙어 있던 북마크가 사라지므로 저장된 목록으로 다시 깐다.
+      bookmarkKey.current = { editor, key: JSON.stringify(bookmarksRef.current || []) };
+      loadBookmarks(editor, bookmarksRef.current);
+    }
     // Only replace editor content for a document revision or a mode transition.
     // Mirroring every local keystroke can replay a stale React effect over newer input.
   }, [revision, source, protectedSource, editor, id]);
@@ -559,7 +627,7 @@ export default function Writer({
         </BubbleMenu>
       )}
       <EditorContent
-        className={`editor-content${manualLineBreak ? " manual-break" : ""}${style.pageViewEnabled ? " page-view" : ""}`}
+        className={`editor-content${manualLineBreak ? " manual-break" : ""}${style.pageViewEnabled ? " page-view" : ""}${onBookmarksChange ? " bookmarkable" : ""}`}
         data-divider-style={style.dividerStyle}
         data-page-view={style.pageViewEnabled ? style.pageViewFlow : undefined}
         editor={editor}

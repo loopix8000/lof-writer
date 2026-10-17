@@ -57,7 +57,10 @@ export type Doc = {
   fingerprint?: string;
   // Markdown YAML에 기록하는 사용자 속성.
   properties?: Record<string, unknown>;
+  // 원고 북마크: 본문 맨 위 단계 문단의 순서와 그 문단의 앞부분 글.
+  bookmarks?: Bookmark[];
 };
+export type Bookmark = { index: number; text: string };
 export type Library = {
   root: string;
   projects: Project[];

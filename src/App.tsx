@@ -43,6 +43,7 @@ import {
   Pilcrow,
   Sparkles,
   LockKeyhole,
+  Bookmark as BookmarkIcon,
 } from "lucide-react";
 import Writer from "./Writer";
 import ResizableSidebar from "./ResizableSidebar";
@@ -288,7 +289,10 @@ export default function App() {
     [treeEpisodeId, setTreeEpisodeId] = useState(""),
     [closedDocGroups, setClosedDocGroups] = useState<Set<Kind>>(new Set()),
     // 회차가 많은 작품에서 펼친 회차 묶음(묶음 첫 회차의 목록 위치).
-    [openEpisodeGroups, setOpenEpisodeGroups] = useState<Set<number>>(new Set());
+    [openEpisodeGroups, setOpenEpisodeGroups] = useState<Set<number>>(new Set()),
+    // 위젯 보드 자리에 북마크 목록을 펼쳤는지, 목록에서 고른 북마크(문단 순서).
+    [bookmarksOpen, setBookmarksOpen] = useState(false),
+    [bookmarkJump, setBookmarkJump] = useState<{ docId: string; index: number; seq: number } | null>(null);
   const [editorTabs, setEditorTabs] = useState<EditorTab[]>([]),
     [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[]; target?: string } | null>(null),
     // 이름 바꾸기 입력칸. widget이면 위젯 보드의 '이 회차의 플롯' 목록에서, 아니면 파일 트리에서 받는다.
@@ -1825,6 +1829,7 @@ export default function App() {
                   onComposition={() => {}}
                   typingOptions={{}}
                   editorStyle={sideBox.kindPrefs}
+                  bookmarks={doc.bookmarks}
                 />
               </article>
             )}
@@ -2114,6 +2119,40 @@ export default function App() {
         </div>
         {memos.map(item)}
         {!memos.length && <p className="widget-empty">연결된 메모가 없습니다.</p>}
+      </section>
+    );
+  }
+  // 위젯 보드 자리에 펼치는 북마크 목록. 누르면 그 문단으로 옮겨 간다.
+  function bookmarkList() {
+    if (!active) return null;
+    const list = active.bookmarks || [];
+    return (
+      <section className="widget bookmark-widget">
+        <div className="widget-title">
+          <span>이 문서의 북마크</span>
+          <small>{list.length}</small>
+        </div>
+        {list.map((b) => (
+          <div className="bookmark-item" key={b.index}>
+            <button
+              className="bookmark-jump"
+              title={b.text}
+              onClick={() => setBookmarkJump({ docId: active.id, index: b.index, seq: Date.now() })}
+            >
+              <BookmarkIcon size={13} />
+              <span>{b.text || "빈 문단"}</span>
+            </button>
+            <button
+              className="bookmark-remove"
+              aria-label="북마크 지우기"
+              title="북마크 지우기"
+              onClick={() => edit({ bookmarks: list.filter((x) => x.index !== b.index) })}
+            >
+              <X size={13} />
+            </button>
+          </div>
+        ))}
+        {!list.length && <p className="widget-empty">원고 왼쪽 여백을 누르면 그 문단에 북마크를 붙입니다.</p>}
       </section>
     );
   }
@@ -3571,6 +3610,9 @@ export default function App() {
                       }).catch(report)
                     }
                     onReplaceSymbols={replaceActiveSymbols}
+                    bookmarks={active.bookmarks}
+                    onBookmarksChange={(bookmarks) => edit({ bookmarks })}
+                    jumpToBookmark={bookmarkJump?.docId === active.id ? bookmarkJump : null}
                   />
                 </article>
                 <div className="end-marker">✧</div>
@@ -3619,8 +3661,19 @@ export default function App() {
         {isWorkspace && right && (
           <aside className="widget-sidebar">
             <div className="panel-caption">
-              <span>위젯 보드</span>
+              <span>{bookmarksOpen ? "북마크" : "위젯 보드"}</span>
+              <button
+                className={`bookmark-toggle ${bookmarksOpen ? "active" : ""}`}
+                aria-pressed={bookmarksOpen}
+                aria-label="북마크 목록"
+                title={bookmarksOpen ? "위젯 보드로 돌아가기" : "북마크 목록 보기"}
+                onClick={() => setBookmarksOpen((open) => !open)}
+              >
+                <BookmarkIcon size={15} />
+              </button>
             </div>
+            {bookmarksOpen ? bookmarkList() : (
+            <>
             <PlatformCount
               body={active.body}
               rules={writingRules}
@@ -3651,6 +3704,8 @@ export default function App() {
               </strong>
             </section>
             {episodePlotsWidget()}
+            </>
+            )}
           </aside>
         )}
           </div>

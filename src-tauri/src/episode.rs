@@ -11,9 +11,10 @@ pub const META_FIELDS: &[&str] = &[
     "authorComment",
     "tags",
     "manualLineBreak",
+    "bookmarks",
 ];
 
-pub const DOCUMENT_META_FIELDS: &[&str] = &["tags", "manualLineBreak"];
+pub const DOCUMENT_META_FIELDS: &[&str] = &["tags", "manualLineBreak", "bookmarks"];
 
 pub fn normalize_status(s: Option<&str>) -> String {
     match s {
@@ -56,6 +57,30 @@ fn text_field(v: Option<&Value>, max: usize) -> String {
     }
 }
 
+// 원고 북마크: 본문 맨 위 단계의 문단 순서(index)와 그 문단의 앞부분 글(text).
+// 본문이 바뀌어 순서가 어긋나도 앞부분 글로 같은 문단을 다시 찾는다.
+fn bookmarks_field(v: Option<&Value>) -> Vec<Value> {
+    let mut out: Vec<(u64, String)> = Vec::new();
+    if let Some(arr) = v.and_then(|x| x.as_array()) {
+        for item in arr {
+            let Some(index) = item.get("index").and_then(|i| i.as_u64()) else {
+                continue;
+            };
+            if out.iter().any(|(i, _)| *i == index) {
+                continue;
+            }
+            out.push((index, text_field(item.get("text"), 80)));
+            if out.len() >= 500 {
+                break;
+            }
+        }
+    }
+    out.sort_by_key(|(i, _)| *i);
+    out.into_iter()
+        .map(|(index, text)| json!({ "index": index, "text": text }))
+        .collect()
+}
+
 pub fn normalize_meta(e: Option<&Value>) -> Map<String, Value> {
     let obj = e.and_then(|v| v.as_object());
     let mut tags: Vec<String> = Vec::new();
@@ -79,6 +104,7 @@ pub fn normalize_meta(e: Option<&Value>) -> Map<String, Value> {
         .and_then(|o| o.get("manualLineBreak"))
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+    let bookmarks = bookmarks_field(obj.and_then(|o| o.get("bookmarks")));
 
     let mut out = Map::new();
     out.insert("episodeType".to_string(), json!(episode_type));
@@ -86,6 +112,7 @@ pub fn normalize_meta(e: Option<&Value>) -> Map<String, Value> {
     out.insert("authorComment".to_string(), json!(author_comment));
     out.insert("tags".to_string(), json!(tags));
     out.insert("manualLineBreak".to_string(), json!(manual_line_break));
+    out.insert("bookmarks".to_string(), json!(bookmarks));
     out
 }
 
@@ -181,6 +208,17 @@ pub fn check_meta_patch(k: &str, v: &Value) -> Option<&'static str> {
             } else {
                 Some("줄바꿈 방식은 true나 false여야 합니다.")
             }
+        }
+        "bookmarks" => {
+            if let Some(arr) = v.as_array() {
+                if arr.iter().all(|b| {
+                    b.get("index").is_some_and(|i| i.is_u64())
+                        && b.get("text").map_or(true, |t| t.is_string())
+                }) {
+                    return None;
+                }
+            }
+            Some("북마크는 문단 순서와 글의 목록이어야 합니다.")
         }
         _ => None,
     }
