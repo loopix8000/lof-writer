@@ -50,8 +50,8 @@ node scripts/snapshot.mjs --list
 # 지정한 커밋 이후 바뀐 파일과 연결된 촬영 장면을 조회한다.
 node scripts/snapshot.mjs --plan --since HEAD~5
 
-# 퀵 노트와 조판 화면만 밝게·어둡게 촬영한다.
-node scripts/snapshot.mjs --exe src-tauri/target/debug/lof-writer.exe --serve-dist --scene quick-note,typesetting --theme both
+# 퀵 노트와 북마크 화면만 밝게·어둡게 촬영한다.
+node scripts/snapshot.mjs --exe src-tauri/target/debug/lof-writer.exe --serve-dist --scene quick-note,bookmarks --theme both
 
 # 지정 커밋 이후 영향을 받은 화면을 촬영한다.
 node scripts/snapshot.mjs --exe src-tauri/target/debug/lof-writer.exe --serve-dist --since HEAD~5
@@ -61,8 +61,8 @@ node scripts/snapshot.mjs --exe src-tauri/target/debug/lof-writer.exe --serve-di
 
 ## 생성 결과
 
-- `.snapshots/latest/`: 1440×960 PNG 15장, 미리보기 `index.html`, 실행 결과 `manifest.json`.
-- `assets/screenshots/`: `--update-readme`로 갱신한 README용 대표 이미지 8장과 공개용 출처 기록.
+- `.snapshots/latest/`: 1440×960 PNG 14장, 미리보기 `index.html`, 실행 결과 `manifest.json`.
+- `assets/screenshots/`: `--update-readme`로 갱신한 README용 대표 이미지 7장과 공개용 출처 기록.
 - `.private/index.html`, `.private/assets/`: `--update-site`로 생성한 소개 사이트 파일. 기존 사이트의 색상과 다운로드·개인정보처리방침 링크를 유지합니다.
 - 임시 폴더의 `lof-writer-demo-*`: 촬영용 설정·서재·WebView 프로필. 실제 작업 원고와 분리되며 촬영 후에도 데모 원고를 확인할 수 있도록 보존합니다. 경로는 촬영 로그와 내부 manifest에 표시합니다.
 
@@ -76,7 +76,7 @@ node scripts/snapshot.mjs --exe src-tauri/target/debug/lof-writer.exe --serve-di
 node scripts/snapshot.mjs --render-only --update-readme --update-site
 ```
 
-소개 자료에는 `editor`, `project`, `quick-note`, `typesetting`, `bookmarks`, `split`, `mobile`, `table`의 밝은 화면이 모두 필요합니다. 실패했거나 파일 해시가 맞지 않는 결과는 게시용 이미지로 복사하지 않습니다. README는 `demo-snapshots` 표시 안의 소개 영역만 갱신합니다.
+소개 자료에는 `editor`, `project`, `quick-note`, `bookmarks`, `split`, `mobile`, `table`의 밝은 화면이 모두 필요합니다. 조판 패널 장면은 촬영과 소개 자료에서 제외합니다. 실패했거나 파일 해시가 맞지 않는 결과는 게시용 이미지로 복사하지 않습니다. README는 `demo-snapshots` 표시 안의 소개 영역만 갱신합니다.
 
 사이트 반영 시 `.private/index.html`과 `.private/assets/`를 사이트 저장소 루트에 복사합니다. 기존 `privacy.html`은 유지합니다. 이 명령은 파일만 생성하며 GitHub Pages에 게시하지 않습니다. `.private/`와 `.snapshots/`는 Git에서 제외됩니다.
 

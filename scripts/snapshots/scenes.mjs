@@ -15,9 +15,6 @@ export const scenes = [
   { id: "project", title: "회차와 집필 상태", view: "project", ready: ".project-hero", paths: [...appPaths, "src-tauri/src/episode.rs"] },
   { id: "editor", title: "집필 화면과 연결 문서 위젯", ready: '[data-testid="manuscript"] .noted',
     commits: ["7928311", "92d917c", "94b5479", "cc35060"], paths: writerPaths },
-  { id: "typesetting", title: "본문을 보며 조판 설정", ready: ".typesetting-panel",
-    commits: ["9cf6dfc"], paths: [...writerPaths, "core/typesetting.mjs"],
-    async arrange(page) { await button(page, "조판 설정").click(); } },
   { id: "quick-note", title: "선택한 문장에서 퀵 노트 작성", ready: ".quick-note",
     commits: ["b2c3949", "b9b3a8c"], paths: [...writerPaths, "src/QuickNote.tsx"],
     async arrange(page, demo) {

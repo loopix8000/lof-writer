@@ -65,9 +65,9 @@ async function writeReport(output, report) {
 }
 
 async function marketingCaptures(output, report) {
-  const required = ["editor", "project", "quick-note", "typesetting", "bookmarks", "split", "mobile", "table"];
+  const required = ["editor", "project", "quick-note", "bookmarks", "split", "mobile", "table"];
   const captures = required.map(id => report.captures.find(item => item.id === id && item.theme === "light" && item.status === "ok"));
-  if (captures.some(item => !item)) throw Error("소개 자료 갱신에는 editor, project, quick-note, typesetting, bookmarks, split, mobile, table의 밝은 화면 촬영이 모두 필요합니다.");
+  if (captures.some(item => !item)) throw Error("소개 자료 갱신에는 editor, project, quick-note, bookmarks, split, mobile, table의 밝은 화면 촬영이 모두 필요합니다.");
   for (const capture of captures) {
     if (path.basename(capture.file) !== capture.file) throw Error("촬영 파일 경로가 잘못되었습니다.");
     const hash = createHash("sha256").update(await fs.readFile(path.join(output, capture.file))).digest("hex");
@@ -98,7 +98,6 @@ async function updateReadme(output, report) {
     editor: "원고를 쓰면서 글자 수와 연결된 플롯·메모를 함께 확인합니다. 문단 여백의 북마크와 메모 표시로 필요한 위치에 돌아갈 수 있습니다.",
     project: "표지와 작품 소개, 태그, 회차별 집필 상태를 한곳에서 관리합니다.",
     "quick-note": "원고에서 문장을 선택해 퀵 노트를 작성합니다. 제목과 생각을 적어 저장하면 원래 문장으로 돌아갈 수 있는 출처 링크가 남습니다.",
-    typesetting: "본문을 보면서 오른쪽 조판 패널에서 글꼴, 줄 간격, 문단 간격과 원고 너비를 조절합니다.",
     bookmarks: "작품과 문서에 붙인 북마크를 한 화면에서 모아 보고, 원하는 문단으로 이동합니다.",
     split: "원고와 플롯 등 두 문서를 나란히 열어 내용을 비교하고 집필합니다.",
     mobile: "집필 중인 원고를 모바일 화면의 폭과 글자 크기로 미리 살펴봅니다.",
@@ -131,7 +130,6 @@ async function updateSite(output, report) {
   const descriptions = {
     project: "작품의 표지와 소개, 태그, 회차별 집필 상태를 한곳에서 관리합니다.",
     "quick-note": "선택한 문장에서 떠오른 생각을 바로 적으세요. 퀵 노트에 남은 출처 링크로 원래 원고에 돌아갈 수 있습니다.",
-    typesetting: "본문을 보면서 글꼴, 줄 간격, 문단 간격과 원고 너비를 조절합니다.",
     bookmarks: "모든 작품의 북마크를 모아 보고, 필요한 문단으로 바로 이동합니다.",
     split: "원고와 플롯을 나란히 열어 이야기의 흐름을 확인하며 집필합니다.",
     mobile: "원고가 작은 화면에서 어떻게 읽히는지 집필 중에 확인합니다.",
