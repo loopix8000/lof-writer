@@ -588,7 +588,8 @@ export default function App() {
     if (!value)
       timer.current = setTimeout(() => flush({ auto: true }).catch(report), 800);
   }
-  async function navigate(destination: Destination, historyIndex?: number) {
+  // beforeCommit은 문서를 읽은 뒤 화면 상태를 바꾸기 직전에 부른다. 같은 렌더에 묶여 중간 상태가 그려지지 않는다.
+  async function navigate(destination: Destination, historyIndex?: number, beforeCommit?: () => void) {
     const seq = ++navigationSeq.current;
     await flush();
     if (seq !== navigationSeq.current) return;
@@ -600,6 +601,7 @@ export default function App() {
       : { ...destination, projectId: globalView(destination.view) ? "" : destination.projectId };
     if (!globalView(next.view) && !libraryRef.current.projects.some(p => p.id === next.projectId))
       throw Error("작품을 찾을 수 없습니다.");
+    beforeCommit?.();
     // Commit the history cursor only after saving and loading both succeed.
     const previous = navigationRef.current;
     const entries = previous.entries.map((entry, index) => index === previous.index
@@ -665,27 +667,28 @@ export default function App() {
     updateTabs((current) => current.filter((t) => t.id !== id));
   }
   // 포커스를 다른 그룹으로 옮긴다. openId가 있으면 그 문서를 그 그룹에서 연다.
+  // 두 그룹을 맞바꾸는 일은 열 문서를 읽은 뒤 한 번에 한다. 먼저 바꾸면 옛 문서가 반대편 그룹에
+  // 잠깐 그려졌다가 바뀌어 화면이 깜빡이고 원고가 다시 만들어져 스크롤이 맨 위로 돌아간다.
   async function focusOther(openId?: string, pinned = false) {
     const other = splitRef.current;
     if (!other) return;
-    await flush();
-    const mine = { tabs: editorTabsRef.current, docId: activeId.current },
-      side = focusedSide;
-    editorTabsRef.current = other.tabs;
-    setEditorTabs(other.tabs);
-    splitRef.current = mine;
-    setSplit(mine);
-    setFocusedSide(side === "left" ? "right" : "left");
-    try {
-      await openDoc(openId ?? other.docId, pinned);
-    } catch (e) {
-      editorTabsRef.current = mine.tabs;
-      setEditorTabs(mine.tabs);
-      splitRef.current = other;
-      setSplit(other);
-      setFocusedSide(side);
-      throw e;
-    }
+    await navigate(
+      { view: "workspace", projectId: "", documentId: openId ?? other.docId, pinned },
+      undefined,
+      () => {
+        const mine = { tabs: editorTabsRef.current, docId: activeId.current };
+        editorTabsRef.current = other.tabs;
+        setEditorTabs(other.tabs);
+        splitRef.current = mine;
+        setSplit(mine);
+        setFocusedSide((side) => (side === "left" ? "right" : "left"));
+        keepSideDoc();
+      },
+    );
+  }
+  // 포커스를 잃는 그룹은 방금 저장한 원고를 그대로 보여 준다. 다시 읽기를 기다리면 그 사이 원고가 사라진다.
+  function keepSideDoc() {
+    if (draft.current) setSideDoc(draft.current.doc);
   }
   async function focusSide(side: Side) {
     if (splitRef.current && side !== focusedSide) await focusOther();
@@ -700,20 +703,14 @@ export default function App() {
       );
       return;
     }
-    await flush();
-    const mine = { tabs: editorTabsRef.current, docId: activeId.current };
-    editorTabsRef.current = [];
-    setEditorTabs([]);
-    updateSplit(() => (mine.tabs.length > 1 ? withoutTab(mine, id) : mine));
-    setFocusedSide("right");
-    try {
-      await openDoc(id, true);
-    } catch (e) {
-      editorTabsRef.current = mine.tabs;
-      setEditorTabs(mine.tabs);
-      updateSplit(() => null);
-      throw e;
-    }
+    await navigate({ view: "workspace", projectId: "", documentId: id, pinned: true }, undefined, () => {
+      const mine = { tabs: editorTabsRef.current, docId: activeId.current };
+      editorTabsRef.current = [];
+      setEditorTabs([]);
+      updateSplit(() => (mine.tabs.length > 1 ? withoutTab(mine, id) : mine));
+      setFocusedSide("right");
+      keepSideDoc();
+    });
   }
   // 포커스된 그룹을 닫고 남은 그룹 하나로 돌아간다.
   async function closeGroup() {
@@ -1864,15 +1861,19 @@ export default function App() {
   const manuscriptClassName = activeBox.className;
   const manuscriptStyle = activeBox.style;
   // 포커스되지 않은 그룹: 읽기 전용으로 보여 주고, 클릭하면 그 그룹으로 포커스를 옮긴다.
+  // 그룹은 포커스와 상관없이 자리(left/right)를 key로 쓰고, 포커스된 그룹과 같은 줄기(group-body >
+  // editor-scroll > article > Writer)로 그린다. 그래야 그룹을 오갈 때 같은 원고의 편집기와 스크롤 영역이
+  // 그대로 남아 읽기 전용 여부만 바뀐다.
   function sideGroup() {
     if (!split || !active) return null;
-    const doc = shownSide;
+    const doc = shownSide,
+      side: Side = focusedSide === "left" ? "right" : "left";
     const sideBox = doc ? manuscriptBoxForKind(doc.kind) : null;
     return (
       <section
-        key="side"
+        key={side}
         className="editor-group inactive"
-        style={groupStyle(focusedSide === "left" ? "right" : "left")}
+        style={groupStyle(side)}
       >
         <div className="editor-tabs" role="tablist" aria-label="다른 그룹의 열린 문서">
           {split.tabs.map((t) => {
@@ -1929,7 +1930,7 @@ export default function App() {
               클릭하면 이 그룹에서 편집합니다
             </span>
           </div>
-          <div className="editor-scroll">
+          <div key="scroll" className="editor-scroll">
             {doc && sideBox && (
               <article className={sideBox.className} style={sideBox.style}>
                 <div className="document-kind">
@@ -1942,7 +1943,7 @@ export default function App() {
                   </div>
                 )}
                 <Writer
-                  key={"side-" + doc.id}
+                  key="writer"
                   manualLineBreak={!!doc.manualLineBreak}
                   id={doc.id}
                   revision={doc.revision}
@@ -4077,7 +4078,7 @@ export default function App() {
               {split && focusedSide === "right" && sideGroup()}
               {split && focusedSide === "right" && sash}
               <section
-                key="focused"
+                key={focusedSide}
                 className={`editor-group ${split ? "focused" : ""}`}
                 style={groupStyle(focusedSide)}
               >
@@ -4153,6 +4154,7 @@ export default function App() {
                   );
                 })}
               </div>
+              <div className="group-body">
               <div className="editor-actions">
                 <span
                   className={`save-indicator ${saveStatus !== "저장됨" ? "pending" : ""}`}
@@ -4259,7 +4261,7 @@ export default function App() {
                   </button>
                 </div>
               )}
-              <div className="editor-scroll">
+              <div key="scroll" className="editor-scroll">
                 <article className={manuscriptClassName} style={manuscriptStyle}>
                   <div className="document-kind">
                     {labels[active.kind]} · {numberOf(active)}
@@ -4296,6 +4298,7 @@ export default function App() {
                       onOpenBound={active.episodeId ? attempt(() => openDoc(active.episodeId!)) : undefined}
                     />
                   <Writer
+                    key="writer"
                     readOnly={isProtected}
                     manualLineBreak={!!active.manualLineBreak}
                     id={active.id}
@@ -4355,6 +4358,7 @@ export default function App() {
                   />
                 </article>
                 <div className="end-marker">✧</div>
+              </div>
               </div>
               </section>
               {split && focusedSide === "left" && sash}

@@ -755,20 +755,36 @@ h1 small {
   padding: 20px 0;
   border-bottom: 1px solid var(--border);
 }
+/* 에피소드·플롯·메모 탭: 옅은 바탕 위에서 선택된 탭만 떠 보이게 한다. */
+.project-tabs .row:first-child {
+  gap: 2px;
+  padding: 3px;
+  border-radius: 10px;
+  background: var(--soft);
+}
 .project-tabs .row:first-child button {
-  border: 0;
+  border: 1px solid transparent;
   background: none;
-  border-radius: 20px;
+  border-radius: 7px;
   color: var(--muted);
+}
+.project-tabs .row:first-child button:hover:not(.selected) {
+  color: var(--text);
 }
 .project-tabs button.selected {
   background: var(--surface) !important;
+  border-color: var(--border) !important;
   color: var(--text) !important;
-  box-shadow: 0 2px 8px #00000008;
+  font-weight: 600;
+  box-shadow: 0 1px 3px #00000014;
 }
 .project-tabs small {
-  font-size: 13px;
+  font-size: 12px;
+  font-weight: 500;
   margin-left: 2px;
+}
+.project-tabs button.selected small {
+  color: var(--accent);
 }
 .episode-list {
   padding: 12px 0 40px;
@@ -2855,6 +2871,8 @@ textarea::-webkit-scrollbar-track {
   display: flex;
   flex-direction: column;
   min-height: 0;
+}
+.editor-group.inactive .group-body {
   cursor: default;
 }
 .group-sash {
@@ -2878,9 +2896,6 @@ body.sash-dragging {
 }
 .editor-groups.split .editor-group.focused .editor-tab.current {
   border-top-color: var(--accent);
-}
-.editor-group.inactive .group-body {
-  opacity: 0.85;
 }
 .editor-group.inactive .save-indicator > span {
   display: none;
