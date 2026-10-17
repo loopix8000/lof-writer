@@ -101,6 +101,7 @@ import {
 } from "../core/episode.mjs";
 import MobilePreview from "./MobilePreview";
 import MemoSession from "./MemoSession";
+import QuickNote, { quickNoteMarkdown, quickNoteTitle, type QuickNoteSource } from "./QuickNote";
 import {
   QuickOpen,
   SearchPanel,
@@ -273,6 +274,8 @@ export default function App() {
     // 메모 세션(레일의 메모 버튼). 열려 있는 동안 집필 화면은 그대로 두고 가린다.
     [memoOpen, setMemoOpen] = useState(false),
     [commonMemoPath, setCommonMemoPath] = useState(""),
+    // 본문 우클릭 '메모 추가'로 연 퀵 노트 창.
+    [quickNote, setQuickNote] = useState<QuickNoteSource | null>(null),
     // 작품 삭제 확인: 작품 제목을 그대로 입력해야 삭제 버튼이 켜진다.
     [confirmTitle, setConfirmTitle] = useState(""),
     // 플롯 트리에서 접어 둔 회차, 플롯을 끌어 놓을 대상(회차 ID, 연결 해제는 "").
@@ -2043,6 +2046,23 @@ export default function App() {
     else setSidebar(true);
     startRename(doc);
   }
+  // 퀵 노트: 고른 문장과 메모를 문서 영역 맨 위에 메모 문서로 만들고 바로 연다.
+  async function saveQuickNote(note: QuickNoteSource, memo: string) {
+    await flush();
+    const doc = await call<Doc>("createDocument", {
+      projectId: note.projectId,
+      kind: "memo",
+      title: quickNoteTitle(note, memo),
+      body: quickNoteMarkdown(note, memo),
+      episodeId: note.episodeId,
+      manualLineBreak: true,
+    });
+    setQuickNote(null);
+    await refresh();
+    await loadMemoFolders();
+    await openDoc(doc.id, true);
+    message("메모가 저장되었습니다");
+  }
   // 위젯 보드의 '이 회차의 플롯·메모': 보고 있는 회차(또는 회차에 연결된 플롯)에 연결된 문서를
   // 플롯과 메모로 나눠 보여 준다. 누르면 열고, 더블클릭·우클릭으로 이름을 바꾼다.
   function episodePlotsWidget() {
@@ -3611,6 +3631,19 @@ export default function App() {
                     bookmarks={active.bookmarks}
                     onBookmarksChange={(bookmarks) => edit({ bookmarks })}
                     jumpToBookmark={bookmarkJump?.docId === active.id ? bookmarkJump : null}
+                    onQuickNote={(text, at) =>
+                      setQuickNote({
+                        projectId: active.projectId,
+                        // 회차는 회차 번호를 붙여 출처를 알아보기 쉽게 한다(예: 44. 아이스크림 두 개).
+                        title:
+                          active.kind === "episode" && numberOf(active)
+                            ? `${numberOf(active)}. ${active.title || "제목 없음"}`
+                            : active.title,
+                        text,
+                        episodeId: active.kind === "episode" ? active.id : active.episodeId || undefined,
+                        at,
+                      })
+                    }
                   />
                 </article>
                 <div className="end-marker">✧</div>
@@ -3724,6 +3757,13 @@ export default function App() {
       )}
       {menu && (
         <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={closeMenu} />
+      )}
+      {quickNote && (
+        <QuickNote
+          source={quickNote}
+          onSave={(memo) => saveQuickNote(quickNote, memo).catch(report)}
+          onClose={() => setQuickNote(null)}
+        />
       )}
       {quickOpen && (
         <QuickOpen

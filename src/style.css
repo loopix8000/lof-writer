@@ -4792,3 +4792,90 @@ button.episode-tag[draggable]:active {
 .bookmark-remove:focus-visible {
   opacity: 1;
 }
+/* 퀵 노트: 본문에서 고른 문장과 메모를 함께 저장하는 작은 창. 머리 부분을 끌어 옮긴다. */
+.quick-note {
+  position: fixed;
+  z-index: 900;
+  width: min(380px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  padding: 14px 16px 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 10px 40px #00000029;
+  font-size: 13px;
+}
+.quick-note-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: -4px -6px 2px;
+  padding: 4px 0 4px 6px;
+  cursor: move;
+  user-select: none;
+  touch-action: none;
+}
+.quick-note-head strong {
+  font-size: 14px;
+  font-weight: 600;
+}
+.quick-note-grip {
+  margin: 0 auto;
+  color: var(--faint);
+}
+.quick-note-head button {
+  padding: 4px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+}
+.quick-note-head button:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.quick-note-source {
+  margin-bottom: 14px;
+  color: var(--muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.quick-note-label {
+  margin-bottom: 7px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.quick-note-quote {
+  max-height: 132px;
+  margin: 0 0 14px;
+  padding: 2px 0 2px 12px;
+  overflow-y: auto;
+  border-left: 3px solid var(--border-hover);
+  color: var(--text);
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.quick-note textarea {
+  min-height: 112px;
+  resize: vertical;
+  line-height: 1.6;
+}
+.quick-note-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+}
+.quick-note-foot small {
+  flex: 1;
+  min-width: 0;
+  color: var(--faint);
+  font-size: 11px;
+}
+.quick-note-foot button {
+  padding: 7px 14px;
+}

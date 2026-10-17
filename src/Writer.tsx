@@ -1,4 +1,4 @@
-import { useEffect, useRef, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type MouseEvent } from "react";
 import { useEditor, useEditorState, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { Markdown } from "@tiptap/markdown";
@@ -21,7 +21,13 @@ import {
   BetweenVerticalStart,
   BetweenVerticalEnd,
   Trash2,
+  Scissors,
+  Copy,
+  NotebookPen,
+  SquareDashed,
 } from "lucide-react";
+import { createPortal } from "react-dom";
+import ContextMenu, { type MenuItem } from "./ContextMenu";
 import { BubbleMenu } from "@tiptap/react/menus";
 import type { Editor } from "@tiptap/core";
 import { requiresSource } from "../core/text.mjs";
@@ -215,6 +221,7 @@ export default function Writer({
   bookmarks,
   onBookmarksChange,
   jumpToBookmark = null,
+  onQuickNote,
 }: {
   id: string;
   body: string;
@@ -241,7 +248,11 @@ export default function Writer({
   onBookmarksChange?: (bookmarks: Bookmark[]) => void;
   // 북마크 목록에서 고른 문단(맨 위 단계 순서)으로 옮겨 간다. seq가 바뀔 때마다 다시 한다.
   jumpToBookmark?: { index: number; seq: number } | null;
+  // 본문을 고르고 우클릭한 메뉴의 '메모 추가'. 있을 때만 고른 글에 우클릭 메뉴를 띄운다.
+  // at은 우클릭한 화면 위치로, 퀵 노트 창을 그 근처에 연다.
+  onQuickNote?: (text: string, at: { x: number; y: number }) => void;
 }) {
+  const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
   const style = normalizeEditorStyle({
     ...typingOptions,
     ...editorStyle,
@@ -465,6 +476,47 @@ export default function Writer({
     ["--editor-divider-padding-y" as any]: `${style.dividerPaddingY}em`,
   };
 
+  // 고른 글에 우클릭하면 앱 메뉴(잘라내기·복사·메모 추가·전체 선택)를 띄운다. 고른 글이 없으면 기본 메뉴를 둔다.
+  function openSelectionMenu(
+    e: MouseEvent,
+    text: string,
+    ops: { cut: () => void; selectAll: () => void; refocus: () => void },
+  ) {
+    if (!onQuickNote || !text.trim()) return;
+    e.preventDefault();
+    setMenu({
+      x: e.clientX,
+      y: e.clientY,
+      items: [
+        {
+          label: "잘라내기",
+          shortcut: "Ctrl+X",
+          icon: <Scissors size={15} />,
+          disabled: readOnly,
+          action: () => void navigator.clipboard.writeText(text).then(ops.cut, ops.refocus),
+        },
+        {
+          label: "복사",
+          shortcut: "Ctrl+C",
+          icon: <Copy size={15} />,
+          action: () => void navigator.clipboard.writeText(text).finally(ops.refocus),
+        },
+        {
+          label: "메모 추가",
+          icon: <NotebookPen size={15} />,
+          action: () => onQuickNote(text, { x: e.clientX, y: e.clientY }),
+        },
+        "separator",
+        { label: "전체 선택", shortcut: "Ctrl+A", icon: <SquareDashed size={15} />, action: ops.selectAll },
+      ],
+    });
+  }
+  // 테마 색 변수가 .app에 있으므로 메뉴를 그 안에 띄운다.
+  const selectionMenu = menu && createPortal(
+    <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />,
+    document.querySelector(".app") ?? document.body,
+  );
+
   if (source || protectedSource)
     return (
       <div className="source-editor">
@@ -475,6 +527,25 @@ export default function Writer({
           aria-label={readOnly ? "다른 그룹 Markdown 원문" : "Markdown 원문"}
           spellCheck={false}
           value={body}
+          onContextMenu={(e) => {
+            const area = e.currentTarget,
+              { selectionStart: start, selectionEnd: end } = area;
+            const reselect = () => {
+              area.focus();
+              area.setSelectionRange(start, end);
+            };
+            openSelectionMenu(e, area.value.slice(start, end), {
+              cut: () => {
+                reselect();
+                if (!document.execCommand("delete")) onChange(area.value.slice(0, start) + area.value.slice(end));
+              },
+              selectAll: () => {
+                area.focus();
+                area.select();
+              },
+              refocus: reselect,
+            });
+          }}
           onPaste={(event) => {
             const target = event.currentTarget;
             const start = target.selectionStart;
@@ -541,6 +612,7 @@ export default function Writer({
           onCompositionEnd={() => onComposition(false)}
           style={{ fontSize: style.fontSize, lineHeight: style.lineHeight }}
         />
+        {selectionMenu}
       </div>
     );
   if (!editor) return null;
@@ -710,7 +782,16 @@ export default function Writer({
         data-page-view={style.pageViewEnabled ? style.pageViewFlow : undefined}
         editor={editor}
         style={contentVars}
+        onContextMenu={(e) => {
+          const { from, to } = editor.state.selection;
+          openSelectionMenu(e, editor.state.doc.textBetween(from, to, "\n"), {
+            cut: () => editor.chain().focus().deleteSelection().run(),
+            selectAll: () => editor.chain().focus().selectAll().run(),
+            refocus: () => editor.commands.focus(),
+          });
+        }}
       />
+      {selectionMenu}
     </>
   );
 }
