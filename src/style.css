@@ -2692,18 +2692,32 @@ body.sidebar-resizing * {
   margin: 6px 0 0;
 }
 
-.recovery-strip,
 .warning-strip {
   padding: 7px 20px;
   font-size: 13px;
-  background: var(--soft);
-  color: var(--text);
   display: flex;
   align-items: center;
   gap: 15px;
 }
-.recovery-strip button {
-  padding: 3px 7px;
+/* 임시 원고 알림은 레이아웃을 밀지 않도록 우측 하단에 띄운다. */
+.recovery-toast {
+  position: fixed;
+  right: 20px;
+  bottom: 44px;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px 10px 16px;
+  background: var(--toast-bg);
+  color: var(--toast-text);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  box-shadow: 0 8px 30px #0002;
+  font-size: 13px;
+}
+.recovery-toast button {
+  padding: 3px 8px;
   font-size: 13px;
 }
 .warning-strip {

@@ -115,6 +115,9 @@ const labels = { episode: "에피소드", plot: "플롯", memo: "메모" };
 const icons = { episode: BookOpen, plot: FileText, memo: StickyNote };
 // 파일 트리에서 회차가 이보다 많으면 이 단위로 묶어 접는다.
 const EPISODE_GROUP = 20;
+// 저장할 때마다 임시 원고를 먼저 쓰고 저장이 끝나면 지운다. 그 사이에 목록을 새로 읽으면
+// 편집 중인 원고의 임시본이 잡히므로, 앱을 연 뒤 지금 편집 중인 원고에 쓴 임시본은 복구 대상에서 뺀다.
+const appStartedAt = Date.now();
 const empty: Library = {
   root: "",
   projects: [],
@@ -2587,6 +2590,11 @@ export default function App() {
     window.addEventListener("resize", syncMax);
     return () => window.removeEventListener("resize", syncMax);
   }, []);
+  // 충돌이나 저장 실패로 남은 임시본은 그대로 알린다.
+  const saving = !conflict && saveStatus !== "저장 실패",
+    recoverable = (lib.drafts || []).filter(
+      (d: any) => !(saving && d.id === active?.id && Date.parse(d.savedAt) >= appStartedAt),
+    ).length;
   return (
     <>
     <div
@@ -3783,9 +3791,9 @@ export default function App() {
           읽지 못한 파일 {lib.warnings.length}개 · {lib.warnings[0]}
         </div>
       )}
-      {!!lib.drafts?.length && (
-        <div className="recovery-strip">
-          <span>복구 가능한 임시 원고 {lib.drafts.length}개</span>
+      {recoverable > 0 && (
+        <div className="recovery-toast" role="status">
+          <span>복구 가능한 임시 원고 {recoverable}개</span>
           <button onClick={() => setDialog({ type: "recovery" })}>
             확인하기
           </button>
