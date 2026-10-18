@@ -5546,7 +5546,7 @@ button.episode-tag[draggable]:active {
 .realtime-device { display: flex; align-items: center; gap: 12px; width: 100%; padding: 16px; border: 1px solid var(--border); border-radius: 10px; }
 .realtime-device-icon { display: grid; place-items: center; flex: 0 0 32px; height: 36px; color: var(--muted); }
 .realtime-device-info { min-width: 0; flex: 1; }
-.realtime-device-title { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; justify-content: space-between; }
+.realtime-device-title { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
 .realtime-device-title strong { min-width: 0; overflow-wrap: anywhere; font-size: 13px; font-weight: 600; }
 .realtime-device-status { display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--muted); margin-top: 9px; }
 .realtime-device-status .realtime-dot { width: 5px; height: 5px; flex-basis: 5px; box-shadow: none; }
@@ -5555,9 +5555,10 @@ button.episode-tag[draggable]:active {
 .realtime-name-form { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .realtime-name-form input { min-width: 100px; flex: 1; width: 120px; padding: 7px 8px; font-size: 12px; }
 .realtime-name-form button { padding: 6px 8px; font-size: 11px; }
-.realtime-first-sync { width: 100%; font-size: 12px; color: var(--muted); }
-.realtime-first-sync > svg { color: var(--success-text); margin-top: 8px; }
-.realtime-indeterminate { margin-top: 12px; }
+.realtime-first-sync { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; width: 100%; font-size: 12px; color: var(--muted); }
+.realtime-first-sync > svg { flex: none; color: var(--success-text); }
+.realtime-first-sync > .realtime-indeterminate, .realtime-first-sync > .realtime-inline-error { flex-basis: 100%; }
+.realtime-indeterminate { margin-top: 6px; }
 .realtime-indeterminate > span { display: block; width: 35%; height: 100%; background: var(--accent); border-radius: inherit; animation: realtime-progress 1.5s ease-in-out infinite; }
 .realtime-spinner { animation: realtime-turn 1s linear infinite; }
 @keyframes realtime-turn { to { transform: rotate(360deg); } }
