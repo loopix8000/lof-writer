@@ -12,7 +12,7 @@ use iroh::SecretKey;
 use lof_realtime::{Connection, EndpointAddr, Host, Message, Node};
 use serde_json::{json, Value};
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     path::PathBuf,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -33,6 +33,8 @@ pub struct Realtime {
     lease: Mutex<Option<(String, PathBuf, Instant)>>,
     error: Mutex<String>,
     urgent: Mutex<bool>,
+    // 상대가 먼저 접속해 온 장치는 재시도 대기를 건너뛰고 바로 연결한다.
+    reconnect: Mutex<HashSet<String>>,
     wake: Condvar,
 }
 struct Invitation {
@@ -351,11 +353,18 @@ impl WriterHost {
         if request["target"].as_str() != Some(vault(app)?.as_str()) {
             return Err(fail_invalid("연결 대상 서재가 변경되었습니다."));
         }
+        if op == "notify" || op == "hello" {
+            if let Some(id) = peer_config["id"].as_str() {
+                rt.reconnect.lock().unwrap().insert(id.to_string());
+            }
+        }
         if op == "notify" {
             remote_changed(app);
             return Ok(Message::json(json!(true)));
         }
         if op == "hello" {
+            *rt.urgent.lock().unwrap() = true;
+            rt.wake.notify_all();
             return Ok(Message::json(json!({"storage":false})));
         }
         let current = root(app)?;
@@ -653,6 +662,9 @@ pub fn start(app: &AppHandle) {
                     }
                     keep
                 });
+                for id in rt.reconnect.lock().unwrap().drain() {
+                    retry.remove(&id);
+                }
                 let generation = rt.dirty.load(Ordering::SeqCst);
                 for peer in wanted {
                     let id = peer["id"].as_str().unwrap_or("").to_string();
