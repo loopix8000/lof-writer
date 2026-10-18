@@ -40,6 +40,7 @@ rusqlite = { version = "0.40", features = ["bundled", "backup"] }
 flate2 = "1"
 fs2 = "0.4"
 zip = { version = "9", default-features = false }
+notify = "8.2"
 git2 = { version = "0.21", default-features = false, features = ["vendored-libgit2"] }
 
 [target.'cfg(windows)'.dependencies]

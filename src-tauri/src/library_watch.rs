@@ -41,6 +41,7 @@ fn targets(app: &AppHandle) -> HashMap<String, Target> {
 }
 
 pub fn start(app: &AppHandle) {
+    if !auto_sync::LIBRARY_SYNC_ENABLED { return; }
     let app = app.clone();
     thread::spawn(move || {
         let mut running: HashMap<String, (Target, Arc<AtomicBool>)> = HashMap::new();
@@ -98,7 +99,7 @@ fn stream(app: &AppHandle, connection: &str, target: &Target, stop: &AtomicBool)
     let response = client.get(format!("{base}/v1/libraries/{}/events?after={cursor}", target.library))
         .bearer_auth(&target.token).header("Accept", "text/event-stream").send().map_err(|_| ())?
         .error_for_status().map_err(|_| ())?;
-    auto_sync::request_now(app);
+    auto_sync::request_connection(app, connection);
     for line in BufReader::new(response).lines() {
         if stop.load(Ordering::SeqCst) {
             return Ok(());
@@ -113,7 +114,7 @@ fn stream(app: &AppHandle, connection: &str, target: &Target, stop: &AtomicBool)
         let version = event["data"]["version"].as_i64().unwrap_or(0);
         // 이 기기가 보낸 변경은 다시 받을 필요가 없다.
         if !library::take_own(connection, id, version) {
-            auto_sync::request_now(app);
+            auto_sync::request_connection(app, connection);
         }
     }
     Ok(())

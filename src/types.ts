@@ -1,5 +1,17 @@
 export type Kind = "episode" | "plot" | "memo";
-export type AutoSyncStatus = { phase: "idle" | "pending" | "syncing" | "error"; message: string; hasConnections?: boolean };
+export type SyncProgress = { phase: "idle" | "pending" | "syncing" | "error"; message: string; hasConnections?: boolean };
+export type AutoSyncStatus = SyncProgress & { channels?: Record<"files" | "server", SyncProgress> };
+export type SyncConnection = {
+  id: string;
+  name: string;
+  type: "folder" | "webdav" | "ftp" | "library";
+  folder?: string;
+  url?: string;
+  host?: string;
+  libraryId?: string;
+  libraryName?: string;
+  conflictPolicy?: "keepBoth" | "latest";
+};
 export type WritingRules = {
   version?: number;
   platform: string;

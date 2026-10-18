@@ -2411,6 +2411,61 @@ body.sidebar-resizing * {
     padding: 12px 20px;
   }
 }
+.modal.server-sync-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(700px, calc(100vw - 32px));
+  max-height: calc(100dvh - 48px);
+  padding: 0;
+  overflow: hidden;
+}
+.server-sync-modal > .modal-header {
+  margin: 0;
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.server-sync-content {
+  padding: 24px;
+  overflow-y: auto;
+  min-height: 0;
+  overscroll-behavior: contain;
+}
+.server-sync-content .settings-section {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.server-sync-content .settings-description,
+.server-sync-content .settings-note {
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--muted);
+}
+.sync-schedule {
+  background: var(--sidebar);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 16px;
+  font-size: 13px;
+}
+.sync-connections {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.sync-schedule p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.7;
+}
+.sync-empty {
+  color: var(--muted);
+  font-size: 13px;
+  padding: 12px 0;
+}
 .connection {
   display: flex;
   gap: 10px;
@@ -2485,6 +2540,21 @@ body.sidebar-resizing * {
 .connection-form select {
   font-size: 13px;
   padding: 9px;
+}
+@media (max-width: 600px) {
+  .sync-connections .connection {
+    flex-wrap: wrap;
+  }
+  .sync-connections .connection > div {
+    flex-basis: 100%;
+  }
+  .sync-connections .connection-form > .row,
+  .sync-connections .library-choice {
+    flex-wrap: wrap;
+  }
+  .sync-connections .connection-form input {
+    min-width: 0;
+  }
 }
 .checkbox {
   display: flex;

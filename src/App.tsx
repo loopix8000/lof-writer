@@ -25,6 +25,7 @@ import {
   Upload,
   Check,
   Cloud,
+  FolderSync,
   HardDrive,
   RefreshCw,
   Code2,
@@ -40,7 +41,6 @@ import {
   Moon,
   X,
   Feather,
-  Link,
   Copy,
   Pilcrow,
   Sparkles,
@@ -60,6 +60,7 @@ import {
   type Project,
   type WritingRules,
   type AutoSyncStatus,
+  type SyncConnection,
 } from "./types";
 import {
   countForRule,
@@ -93,6 +94,8 @@ import ContextMenu, { type MenuItem } from "./ContextMenu";
 import { useConfirm } from "./ConfirmDialog";
 import { useProjectSyncUpdates, useSyncFileUpdates } from "./useSyncFileUpdates";
 import SyncStatus from "./SyncStatus";
+import SyncConnections from "./SyncConnections";
+import { LIBRARY_SYNC_ENABLED } from "./features";
 import EpisodeProperties, { statusItems } from "./EpisodeProperties";
 import EpisodeBindingPicker from "./EpisodeBindingPicker";
 import {
@@ -114,7 +117,6 @@ import {
   type SearchResult,
 } from "./SearchViews";
 const composingError = "한글 입력 조합이 끝난 뒤 다시 저장해 주세요.";
-const autoSyncLabels = { idle: "동기화 완료", pending: "동기화 대기", syncing: "동기화 중", error: "동기화 재시도 대기" };
 const labels = { episode: "에피소드", plot: "플롯", memo: "메모" };
 const icons = { episode: BookOpen, plot: FileText, memo: StickyNote };
 // 파일 트리에서 회차가 이보다 많으면 이 단위로 묶어 접는다.
@@ -205,7 +207,7 @@ const settingPages = [
   { id: "autocomplete", label: "자동 완성", icon: Sparkles },
   { id: "defaults", label: "작품 기본값", icon: BookOpen },
   { id: "storage", label: "보관 및 이력", icon: HardDrive },
-  { id: "connections", label: "외부 저장소", icon: Cloud },
+  { id: "connections", label: "파일 동기화", icon: FolderSync },
   { id: "api", label: "MCP / API", icon: Code2 },
   { id: "security", label: "앱 잠금", icon: LockKeyhole },
   { id: "updates", label: "앱 업데이트", icon: Download },
@@ -291,13 +293,10 @@ export default function App() {
       autoDividerReplacement: true,
       quoteStyle: "straight",
     }),
-    [connections, setConnections] = useState<any[]>([]),
+    [connections, setConnections] = useState<SyncConnection[]>([]),
     [autoSync, setAutoSync] = useState<AutoSyncStatus>({ phase: "idle", message: "" }),
     [syncChecking, setSyncChecking] = useState(false),
     [syncAvailable, setSyncAvailable] = useState(false),
-    [connectionType, setConnectionType] = useState("folder"),
-    // 서재를 아직 고르지 않은 Lof Library 서버 연결별 서버 서재 목록
-    [libraryChoices, setLibraryChoices] = useState<Record<string, { id: string; name: string }[]>>({}),
     [skillDownloading, setSkillDownloading] = useState(false),
     [busy, setBusy] = useState(false),
     // 메모 세션(레일의 메모 버튼). 열려 있는 동안 집필 화면은 그대로 두고 가린다.
@@ -635,7 +634,8 @@ export default function App() {
     });
     const updateAutoSync = (status: AutoSyncStatus) => {
       setAutoSync(previous => previous.phase === status.phase && previous.message === status.message &&
-        previous.hasConnections === status.hasConnections ? previous : status);
+        previous.hasConnections === status.hasConnections &&
+        JSON.stringify(previous.channels) === JSON.stringify(status.channels) ? previous : status);
       if (status.hasConnections !== undefined) setSyncAvailable(status.hasConnections);
     };
     const offAutoSync = window.lof.onAutoSync?.(updateAutoSync);
@@ -1556,14 +1556,21 @@ export default function App() {
         : { typesettingByKind: nextByKind };
     await savePrefs(fullPatch);
   }
-  async function openSettings() {
+  async function openSettings(type: "settings" | "serverSync" = "settings") {
+    if (type === "serverSync" && !LIBRARY_SYNC_ENABLED) return;
     await flush();
     const s = await call("settings");
     setConnections(s.connections);
     if (s.autoSync) setAutoSync(s.autoSync);
     setCommonMemoPath(s.commonMemoPath || "");
     if (active?.kind) setTypesettingKind(active.kind === "episode" ? "episode" : "document");
-    setDialog({ type: "settings" });
+    setDialog({ type });
+  }
+  function renderSyncConnections(mode: "files" | "server") {
+    return <SyncConnections mode={mode} connections={connections} setConnections={setConnections}
+      autoSync={autoSync} intervalSeconds={prefs.syncIntervalSeconds ?? 60}
+      onIntervalChange={(seconds) => savePrefs({ syncIntervalSeconds: seconds })}
+      busy={busy} setBusy={setBusy} onSync={doSync} message={message} report={report} />;
   }
   async function chooseVault() {
     setBusy(true);
@@ -3806,10 +3813,20 @@ export default function App() {
             >
               {prefs.theme === "dark" ? <Sun size={20} /> : <Moon size={20} />}
             </button>
+            {LIBRARY_SYNC_ENABLED && <button
+              title="서버 동기화"
+              aria-label="서버 동기화"
+              aria-haspopup="dialog"
+              aria-expanded={dialog?.type === "serverSync"}
+              className={dialog?.type === "serverSync" ? "selected" : ""}
+              onClick={attempt(() => openSettings("serverSync"))}
+            >
+              <Cloud size={20} />
+            </button>}
             <button
-              title="설정 및 외부 연결"
+              title="설정"
               aria-label="설정"
-              onClick={attempt(openSettings)}
+              onClick={attempt(() => openSettings())}
             >
               <Settings size={20} />
             </button>
@@ -4739,7 +4756,7 @@ export default function App() {
           }}
         >
           <div
-            className={`modal ${["settings", "history"].includes(dialog.type) ? "wide" : ""}${dialog.type === "settings" ? " settings-modal" : ""}`}
+            className={`modal ${["settings", "history"].includes(dialog.type) ? "wide" : ""}${dialog.type === "settings" ? " settings-modal" : ""}${dialog.type === "serverSync" ? " server-sync-modal" : ""}`}
             role="dialog"
             aria-modal="true"
           >
@@ -4749,7 +4766,8 @@ export default function App() {
                   {
                     newProject: "새 이야기",
                     editProject: "소설 관리",
-                    settings: "설정 및 연결",
+                    settings: "설정",
+                    serverSync: "서버 동기화",
                     history: "변경 이력",
                     document: "문서 관리",
                     deleteDoc: "영구 삭제",
@@ -5145,6 +5163,15 @@ export default function App() {
                     </button>
                   </div>
                 ))}
+              </div>
+            )}
+            {LIBRARY_SYNC_ENABLED && dialog.type === "serverSync" && (
+              <div className="server-sync-content">
+                <section className="settings-section" aria-label="Lof Library 서버 연결">
+                  <h3><Cloud size={18} />Lof Library</h3>
+                  <p className="settings-description">Lof Library Daemon이 실행 중인 서버와 이 서재를 연결합니다.</p>
+                  {renderSyncConnections("server")}
+                </section>
               </div>
             )}
             {dialog.type === "settings" && (
@@ -5597,237 +5624,8 @@ export default function App() {
                   </fieldset>
                 </section>
                 <section id="settings-connections" className="settings-section" hidden={settingsPage !== "connections"}>
-                  <h3>
-                    <Cloud size={18} />
-                    외부 저장소
-                  </h3>
-                  <p className="settings-description">앱 실행 시와 트레이에서 열 때, 설정한 주기마다 동기화합니다. 로컬 파일과 외부 저장소의 변경을 확인하고 받기·충돌 확인·보내기를 함께 처리합니다. 변경된 내용이 없으면 업로드하지 않으며, 열린 본문은 확인 후 바꿉니다.</p>
-                  <label className="connection-conflict-policy">
-                    자동 동기화 주기
-                    <select aria-label="자동 동기화 주기" value={prefs.syncIntervalSeconds ?? 60}
-                      onChange={(event) => savePrefs({ syncIntervalSeconds: Number(event.target.value) }).catch(report)}>
-                      <option value={60}>1분 (기본)</option>
-                      <option value={300}>5분</option>
-                      <option value={600}>10분</option>
-                      <option value={900}>15분</option>
-                      <option value={1800}>30분</option>
-                      <option value={3600}>1시간</option>
-                    </select>
-                  </label>
-                  <p className="settings-note">이 기기의 모든 외부 저장소에 적용되며, 다른 페이지와 트레이에서도 같은 주기로 동기화합니다. 변경한 주기는 즉시 적용되고 앱을 다시 켜도 유지됩니다. 원고를 수동 저장하거나 각 저장소의 ‘동기화’ 버튼을 누르면 바로 실행합니다.</p>
-                  <aside className="sync-notice" aria-label="동기화 이용 안내">
-                    <strong>동기화는 아직 불안정할 수 있으니 중요한 원고는 따로 백업해 주세요.</strong>
-                    <p>모든 기기를 최신 버전으로 업데이트해야 하며, 수정 이력은 기기마다 따로 보관합니다.</p>
-                  </aside>
-                  {connections.length > 0 && <p role="status" aria-live="off" className={autoSync.phase === "error" ? "pin-error" : "muted"}>
-                    {autoSyncLabels[autoSync.phase]}{autoSync.message && ` · ${autoSync.message}`}
-                  </p>}
-                  {connections.map((c) => (
-                    <div className="connection" key={c.id}>
-                      <div>
-                        <b>{c.name}</b>
-                        <small>
-                          {c.type === "folder" ? c.folder
-                            : c.type === "library" ? `${c.url} · ${c.libraryName || "서재 선택 필요"}`
-                            : c.url || c.host}
-                        </small>
-                        {c.type === "library" && !c.libraryId && (
-                          <form className="row gap library-choice" onSubmit={(event) => {
-                            event.preventDefault();
-                            const choice = String(new FormData(event.currentTarget).get("library") ?? "");
-                            attempt(async () => {
-                              setBusy(true);
-                              try {
-                                const updated = await call("libraryChoose", choice === "__new__" ? { id: c.id, create: true } : { id: c.id, libraryId: choice });
-                                setConnections((current) => current.map((connection) => connection.id === c.id ? updated : connection));
-                                message(`서버의 ‘${updated.libraryName}’ 서재와 동기화를 시작합니다.`);
-                              } finally { setBusy(false); }
-                            })();
-                          }}>
-                            <select name="library" aria-label={`${c.name} 서버 서재`} disabled={busy}
-                              onFocus={() => {
-                                if (libraryChoices[c.id]) return;
-                                call("libraryList", { id: c.id })
-                                  .then((list) => setLibraryChoices((current) => ({ ...current, [c.id]: list })))
-                                  .catch(report);
-                              }}>
-                              {(libraryChoices[c.id] ?? []).map((library) => <option key={library.id} value={library.id}>{library.name}</option>)}
-                              <option value="__new__">이 서재 이름으로 새로 만들기</option>
-                            </select>
-                            <button type="submit" disabled={busy}>서재 연결</button>
-                          </form>
-                        )}
-                        <label className="connection-conflict-policy">
-                          충돌 사본 처리
-                          <select aria-label={`${c.name} 충돌 사본 처리`} value={c.conflictPolicy ?? "keepBoth"}
-                            disabled={busy || autoSync.phase === "syncing"}
-                            onChange={(event) => {
-                              const conflictPolicy = event.target.value;
-                              attempt(async () => {
-                                setBusy(true);
-                                try {
-                                  const updated = await call("setSyncConflictPolicy", { id: c.id, conflictPolicy });
-                                  setConnections((current) => current.map((connection) => connection.id === c.id ? updated : connection));
-                                } finally { setBusy(false); }
-                              })();
-                            }}>
-                            <option value="latest">최신본으로 덮어쓰기</option>
-                            <option value="keepBoth">파일명을 바꿔 둘 다 보존</option>
-                          </select>
-                        </label>
-                      </div>
-                      <button disabled={busy || autoSync.phase === "syncing"} onClick={() => doSync(c.id)}>
-                        <RefreshCw size={15} />
-                        {busy ? "진행 중" : "동기화"}
-                      </button>
-                      <button
-                        disabled={busy}
-                        title="연결 제거 (원격 파일 보존)"
-                        aria-label={`${c.name} 연결 제거`}
-                        onClick={attempt(async () => {
-                          await call("removeConnection", { id: c.id });
-                          setConnections((await call("settings")).connections);
-                        })}
-                      >
-                        <X size={15} />
-                      </button>
-                    </div>
-                  ))}
-                  <form
-                    className="connection-form"
-                    onSubmit={(e) => {
-                      e.preventDefault();
-                      const form = e.currentTarget;
-                      const data = Object.fromEntries(
-                        new FormData(form),
-                      );
-                      (async () => {
-                        setBusy(true);
-                        try {
-                          if (connectionType === "library") {
-                            // 서버에서 발급한 연결 정보나 서버 주소·연결 코드로 이 기기를 등록한다.
-                            const result = await call("libraryPair", data);
-                            setConnections((await call("settings")).connections);
-                            if (result.connection.libraryId) {
-                              message(`서버의 ‘${result.connection.libraryName}’ 서재와 연결했습니다. 자동 동기화를 시작합니다.`);
-                            } else {
-                              setLibraryChoices((current) => ({ ...current, [result.connection.id]: result.libraries }));
-                              message("서버에 연결했습니다. 동기화할 서버의 서재를 선택해 주세요.");
-                            }
-                            form.reset();
-                            return;
-                          }
-                          await call("saveConnection", {
-                            ...data,
-                            type: connectionType,
-                            secure: data.secure === "on",
-                          });
-                          setConnections((await call("settings")).connections);
-                          message(
-                            "연결을 추가했습니다. 자동 동기화를 시작합니다.",
-                          );
-                        } finally {
-                          setBusy(false);
-                        }
-                      })().catch(report);
-                    }}
-                  >
-                    <div className="row gap">
-                      <select
-                        aria-label="연결 방식"
-                        disabled={busy}
-                        value={connectionType}
-                        onChange={(e) => setConnectionType(e.target.value)}
-                      >
-                        <option value="folder">로컬 폴더</option>
-                        <option value="library">Lof Library 서버</option>
-                        <option value="webdav">WebDAV</option>
-                        <option value="ftp">FTP / FTPS</option>
-                      </select>
-                      <input
-                        name="name"
-                        aria-label="연결 이름"
-                        placeholder="연결 이름"
-                        disabled={busy}
-                      />
-                    </div>
-                    {connectionType === "library" && (
-                      <>
-                        <input
-                          name="connection"
-                          aria-label="연결 정보 또는 서버 주소"
-                          required
-                          autoComplete="off"
-                          placeholder="연결 정보(lof-library://…) 또는 서버 주소(http://192.168.0.10:8787)"
-                        />
-                        <input
-                          name="code"
-                          aria-label="연결 코드"
-                          autoComplete="off"
-                          placeholder="연결 코드 (연결 정보를 붙여넣었으면 비워 두세요)"
-                        />
-                        <p className="settings-note">Lof Library 서버의 ‘기기 추가’에서 발급한 연결 정보나 코드를 입력합니다. 코드는 10분 동안 한 번만 쓸 수 있습니다.</p>
-                      </>
-                    )}
-                    {(connectionType === "webdav" || connectionType === "ftp") && (
-                      <>
-                        <input
-                          name={connectionType === "webdav" ? "url" : "host"}
-                          aria-label="서버 주소"
-                          required
-                          placeholder={
-                            connectionType === "webdav"
-                              ? "https://nas.example.com/dav"
-                              : "FTP 호스트"
-                          }
-                        />
-                        <div className="row gap">
-                          <input
-                            name="username"
-                            aria-label="사용자 이름"
-                            placeholder="사용자 이름"
-                            autoComplete="off"
-                          />
-                          <input
-                            name="password"
-                            aria-label="비밀번호"
-                            type="password"
-                            placeholder="비밀번호"
-                            autoComplete="off"
-                          />
-                        </div>
-                        <input
-                          name="remotePath"
-                          aria-label="원격 폴더"
-                          placeholder="원격 폴더 (예: /writing)"
-                        />
-                        {connectionType === "ftp" && (
-                          <div className="row gap">
-                            <input
-                              name="port"
-                              aria-label="FTP 포트"
-                              type="number"
-                              placeholder="포트 (기본 21)"
-                            />
-                            <label className="checkbox">
-                              <input
-                                type="checkbox"
-                                name="secure"
-                                defaultChecked
-                              />
-                              FTPS
-                            </label>
-                          </div>
-                        )}
-                      </>
-                    )}
-                    <button disabled={busy} type="submit">
-                      <Link size={15} />
-                      {connectionType === "folder"
-                        ? "동기화 폴더 선택"
-                        : connectionType === "library" ? "서버에 연결" : "연결 추가"}
-                    </button>
-                  </form>
+                  <h3><FolderSync size={18} />파일 동기화</h3>
+                  {settingsPage === "connections" && renderSyncConnections("files")}
                 </section>
                 <section id="settings-api" className="settings-section" hidden={settingsPage !== "api"}>
                   <h3>

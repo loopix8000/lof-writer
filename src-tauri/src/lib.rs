@@ -378,6 +378,9 @@ fn sync_connection(state: &AppState, id: &str, root: &Path) -> Result<Value, Lof
         let device = settings.get("deviceId").and_then(Value::as_str).unwrap_or("").to_string();
         (decrypt_connection(&conn)?, device)
     };
+    if conn["type"].as_str() == Some("library") && !auto_sync::LIBRARY_SYNC_ENABLED {
+        return Err(fail("이 동기화 방식은 현재 제공하지 않습니다.", "FEATURE_UNAVAILABLE"));
+    }
     {
         let store = state.store.lock().unwrap();
         if store.as_ref().map(|store| store.root.as_path()) != Some(root) {
@@ -436,6 +439,9 @@ fn dispatch_method(
         Ok((st_root, c_root))
     };
 
+    if matches!(method, "libraryPair" | "libraryList" | "libraryChoose") && !auto_sync::LIBRARY_SYNC_ENABLED {
+        return Err(fail("이 동기화 방식은 현재 제공하지 않습니다.", "FEATURE_UNAVAILABLE"));
+    }
     match method {
         "countManuscript" => Ok(crate::text::display_counts(
             args.get("text").and_then(Value::as_str).unwrap_or(""),
@@ -1165,7 +1171,9 @@ fn dispatch_method(
             let conns: Vec<Value> = s_guard
                 .get("connections")
                 .and_then(|v| v.as_array())
-                .map(|arr| arr.iter().map(safe_connection).collect())
+                .map(|arr| arr.iter()
+                    .filter(|connection| auto_sync::LIBRARY_SYNC_ENABLED || connection["type"].as_str() != Some("library"))
+                    .map(safe_connection).collect())
                 .unwrap_or_default();
             let prefs = s_guard
                 .get("preferences")
@@ -1325,7 +1333,7 @@ fn dispatch_method(
                 persist_settings(&state.config_file, &s_guard)?;
             }
             if conn["libraryId"].as_str().is_some_and(|id| !id.is_empty()) {
-                auto_sync::request_now(app);
+                auto_sync::request_connection(app, conn["id"].as_str().unwrap_or_default());
             }
             Ok(json!({ "connection": safe_connection(&conn), "libraries": libraries }))
         }
@@ -1367,7 +1375,7 @@ fn dispatch_method(
                 *s_guard = next;
                 safe
             };
-            auto_sync::request_now(app);
+            auto_sync::request_connection(app, id);
             Ok(updated)
         }
         "checkSyncUpdates" => auto_sync::request_check(app),
@@ -1392,6 +1400,8 @@ fn dispatch_method(
                 obj.insert("connections".to_string(), Value::Array(conns));
             }
             persist_settings(&state.config_file, &s_guard)?;
+            drop(s_guard);
+            auto_sync::configure(app);
             Ok(json!(true))
         }
         "sync" => {
@@ -1621,7 +1631,7 @@ fn show_main_window(app: &AppHandle) {
         let _ = window.unminimize();
         let _ = window.set_focus();
         if was_hidden && window.is_visible().unwrap_or(false) {
-            auto_sync::request_now(app);
+            auto_sync::resume(app);
         }
     }
 }

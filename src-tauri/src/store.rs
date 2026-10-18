@@ -842,12 +842,16 @@ pub struct Store {
 }
 
 impl Store {
+    pub fn has_pending_disk_changes(&self) -> Result<bool, LofError> {
+        Ok(self.database()?.get("missingFiles")?
+            .and_then(|value| value.as_object().map(|files| !files.is_empty())).unwrap_or(false))
+    }
+
     pub fn poll_disk(&mut self) -> Result<bool, LofError> {
         let files = disk_inventory(&self.root)?;
         let changed = self.disk_inventory.as_ref() != Some(&files);
         let revision = self.sync_revision();
-        let pending_deletions = self.database()?.get("missingFiles")?
-            .and_then(|value| value.as_object().map(|files| !files.is_empty())).unwrap_or(false);
+        let pending_deletions = self.has_pending_disk_changes()?;
         if changed {
             self.sync_sequence.fetch_add(1, Ordering::SeqCst);
             // 밀리초 단위 캐시 값이 같아도 더 정밀한 수정 시각이 달라졌다면 본문을 다시 읽는다.

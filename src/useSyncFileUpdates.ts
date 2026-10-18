@@ -81,9 +81,8 @@ export function useSyncFileUpdates<T extends SyncedFile>(options: Options<T>) {
     const tick = () => { if (!canceled) void checkLocal().catch(report); };
     // 네트워크 동기화는 공통 스케줄러가 맡고, 여기서는 열린 편집기의 내용만 비교한다.
     tick();
-    const interval = window.setInterval(() => { void tick(); }, 5000);
     const off = window.lof.onChange(() => { if (!canceled) void checkLocal().catch(report); });
-    return () => { canceled = true; clearInterval(interval); off(); };
+    return () => { canceled = true; off(); };
   }, [options.enabled, options.fileKey, checkLocal]);
   return checkLocal;
 }
