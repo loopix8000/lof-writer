@@ -2453,6 +2453,20 @@ body.sidebar-resizing * {
   padding: 5px 7px;
   font-size: 12px;
 }
+/* 서재를 아직 고르지 않은 Lof Library 서버 연결의 서재 선택 */
+.library-choice {
+  margin-top: 10px;
+}
+.library-choice select {
+  min-width: 180px;
+  max-width: 100%;
+  padding: 5px 7px;
+  font-size: 12px;
+}
+.library-choice button {
+  padding: 5px 10px;
+  font-size: 12px;
+}
 .connection-form {
   margin-top: 18px;
   background: var(--bg);
@@ -2826,16 +2840,20 @@ body.sidebar-resizing * {
   padding: 15px;
 }
 .sync-notice {
-  margin-bottom: 16px;
-  padding: 12px 14px;
+  margin: 14px 0 16px;
+  padding: 10px 14px;
   border: 1px solid var(--warning-border);
   border-radius: 8px;
   background: var(--warning-bg);
   color: var(--warning-text);
+  font-size: 12px;
   line-height: 1.6;
 }
+.sync-notice strong {
+  font-weight: 600;
+}
 .sync-notice p {
-  margin: 6px 0 0;
+  margin: 2px 0 0;
 }
 
 .warning-strip {

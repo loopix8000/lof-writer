@@ -8,7 +8,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
-const DEFAULT_INTERVAL: Duration = Duration::from_secs(300);
+const DEFAULT_INTERVAL: Duration = Duration::from_secs(60);
 const RETRY_DELAY: Duration = Duration::from_secs(30);
 
 struct Queue {
@@ -91,7 +91,7 @@ pub fn request(app: &AppHandle) {
 pub fn interval_seconds(settings: &Value) -> u64 {
     settings
         .get("preferences").and_then(|prefs| prefs.get("syncIntervalSeconds"))
-        .and_then(Value::as_u64).filter(|seconds| (300..=3600).contains(seconds))
+        .and_then(Value::as_u64).filter(|seconds| (60..=3600).contains(seconds))
         .unwrap_or(DEFAULT_INTERVAL.as_secs())
 }
 
@@ -126,6 +126,10 @@ pub fn start(app: &AppHandle) {
     request_now(app);
     let app = app.clone();
     thread::spawn(move || worker(app));
+}
+
+pub fn stopped(app: &AppHandle) -> bool {
+    app.state::<AutoSyncState>().stopped.load(Ordering::SeqCst)
 }
 
 pub fn stop(app: &AppHandle) {

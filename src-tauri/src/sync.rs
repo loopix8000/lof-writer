@@ -12,6 +12,7 @@ use std::time::Duration;
 use suppaftp::RustlsConnector;
 use suppaftp::RustlsFtpStream;
 
+pub mod library;
 mod latest;
 
 const MAX_SYNC_BYTES: usize = 50_000_000;
@@ -408,5 +409,9 @@ fn with_store<T>(
 }
 
 pub fn sync_once(store: &Mutex<Option<Store>>, root: &Path, config: &Value, device_id: &str) -> Result<Value, LofError> {
+    // Lof Library 서버는 파일 대신 문서 단위 API로 주고받는다.
+    if config.get("type").and_then(Value::as_str) == Some("library") {
+        return library::sync(store, root, config);
+    }
     latest::sync(store,root,config,device_id)
 }

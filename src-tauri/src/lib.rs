@@ -7,6 +7,7 @@ pub mod error;
 pub mod file_index;
 mod git_worker;
 mod git_history;
+mod library_watch;
 pub mod local_git;
 pub mod import;
 pub mod markdown;
@@ -1187,6 +1188,7 @@ fn dispatch_method(
                 return Err(fail_invalid("충돌 사본 처리 방식을 확인해 주세요."));
             }
             let ctype = args.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            // Lof Library 서버는 연결 코드로 등록하는 libraryPair에서만 추가한다.
             if !matches!(ctype, "folder" | "ftp" | "webdav") {
                 return Err(fail_invalid("지원하지 않는 연결"));
             }
@@ -1284,7 +1286,95 @@ fn dispatch_method(
             *settings = next;
             Ok(safe)
         }
+        "libraryPair" => {
+            let policy = args.get("conflictPolicy").and_then(Value::as_str).unwrap_or("keepBoth");
+            if !matches!(policy, "keepBoth" | "latest") {
+                return Err(fail_invalid("충돌 사본 처리 방식을 확인해 주세요."));
+            }
+            let input = args.get("connection").and_then(Value::as_str).unwrap_or("");
+            let code = args.get("code").and_then(Value::as_str).unwrap_or("");
+            let device_name = std::env::var("COMPUTERNAME").ok().filter(|name| !name.trim().is_empty())
+                .unwrap_or_else(|| "Lof Writer".to_string());
+            let paired = sync::library::pair(input, code, &device_name)?;
+            let (url, token) = (paired["url"].as_str().unwrap_or_default(), paired["token"].as_str().unwrap_or_default());
+            let mut libraries = sync::library::libraries(url, token)?;
+            let name: String = args.get("name").and_then(Value::as_str).map(str::trim).filter(|name| !name.is_empty())
+                .or_else(|| paired["serverName"].as_str()).unwrap_or("Lof Library").chars().take(100).collect();
+            let mut conn = json!({
+                "id": Uuid::new_v4().to_string(), "name": name, "type": "library", "conflictPolicy": policy,
+                "url": url, "password": token, "deviceId": paired["deviceId"],
+                "serverId": paired["serverId"], "serverName": paired["serverName"],
+                "libraryId": "", "libraryName": "",
+            });
+            // 서버에 서재가 하나도 없으면 지금 서재 이름으로 바로 만들어 연결한다.
+            if libraries.is_empty() {
+                let vault = state.store.lock().unwrap().as_ref()
+                    .and_then(|store| store.root.file_name().map(|name| name.to_string_lossy().to_string()))
+                    .unwrap_or_default();
+                let created = sync::library::create_library(url, token, &vault)?;
+                conn["libraryId"] = created["id"].clone();
+                conn["libraryName"] = created["name"].clone();
+                libraries.push(created);
+            }
+            let encrypted = encrypt_connection(&conn)?;
+            {
+                let mut s_guard = state.settings.lock().unwrap();
+                let mut conns = s_guard.get("connections").and_then(Value::as_array).cloned().unwrap_or_default();
+                conns.push(encrypted);
+                s_guard["connections"] = Value::Array(conns);
+                persist_settings(&state.config_file, &s_guard)?;
+            }
+            if conn["libraryId"].as_str().is_some_and(|id| !id.is_empty()) {
+                auto_sync::request_now(app);
+            }
+            Ok(json!({ "connection": safe_connection(&conn), "libraries": libraries }))
+        }
+        "libraryList" | "libraryChoose" => {
+            let id = args.get("id").and_then(Value::as_str).unwrap_or("");
+            let conn = {
+                let settings = state.settings.lock().unwrap();
+                settings.get("connections").and_then(Value::as_array)
+                    .and_then(|conns| conns.iter().find(|c| c["id"].as_str() == Some(id) && c["type"].as_str() == Some("library")))
+                    .cloned().ok_or_else(|| fail_invalid("서버 연결을 찾을 수 없습니다."))?
+            };
+            let decrypted = decrypt_connection(&conn)?;
+            let (url, token) = (decrypted["url"].as_str().unwrap_or_default(), decrypted["password"].as_str().unwrap_or_default());
+            let libraries = sync::library::libraries(url, token)?;
+            if method == "libraryList" {
+                return Ok(json!(libraries));
+            }
+            let chosen = if args.get("create").and_then(Value::as_bool) == Some(true) {
+                let vault = state.store.lock().unwrap().as_ref()
+                    .and_then(|store| store.root.file_name().map(|name| name.to_string_lossy().to_string()))
+                    .unwrap_or_default();
+                let name = args.get("name").and_then(Value::as_str).filter(|name| !name.trim().is_empty()).unwrap_or(&vault);
+                sync::library::create_library(url, token, name)?
+            } else {
+                let library = args.get("libraryId").and_then(Value::as_str).unwrap_or("");
+                libraries.into_iter().find(|item| item["id"].as_str() == Some(library))
+                    .ok_or_else(|| fail_invalid("서버에서 선택한 서재를 찾을 수 없습니다."))?
+            };
+            let updated = {
+                let mut s_guard = state.settings.lock().unwrap();
+                let mut next = s_guard.clone();
+                let connection = next.get_mut("connections").and_then(Value::as_array_mut)
+                    .and_then(|conns| conns.iter_mut().find(|c| c["id"].as_str() == Some(id)))
+                    .ok_or_else(|| fail_invalid("서버 연결을 찾을 수 없습니다."))?;
+                connection["libraryId"] = chosen["id"].clone();
+                connection["libraryName"] = chosen["name"].clone();
+                let safe = safe_connection(connection);
+                persist_settings(&state.config_file, &next)?;
+                *s_guard = next;
+                safe
+            };
+            auto_sync::request_now(app);
+            Ok(updated)
+        }
         "checkSyncUpdates" => auto_sync::request_check(app),
+        "requestSyncNow" => {
+            auto_sync::request_now(app);
+            Ok(json!(true))
+        }
         "removeConnection" => {
             let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
             let mut s_guard = state.settings.lock().unwrap();
@@ -1318,8 +1408,8 @@ fn dispatch_method(
         }
         "setPreferences" => {
             if let Some(value) = args.get("syncIntervalSeconds") {
-                if !value.as_u64().is_some_and(|seconds| (300..=3600).contains(&seconds)) {
-                    return Err(fail_invalid("자동 동기화 주기는 5분부터 1시간 사이로 지정해 주세요."));
+                if !value.as_u64().is_some_and(|seconds| (60..=3600).contains(&seconds)) {
+                    return Err(fail_invalid("자동 동기화 주기는 1분부터 1시간 사이로 지정해 주세요."));
                 }
             }
             let new_prefs = {
@@ -1679,7 +1769,7 @@ pub fn run() {
     if !settings.is_object() {
         settings = json!({});
     }
-    // 이전의 짧은 주기는 기본 5분으로 바꾸고 새 허용 범위 안의 설정은 유지한다.
+    // 허용 범위 밖의 기존 주기는 기본 1분으로 바꾸고 범위 안의 설정은 유지한다.
     let sync_interval = auto_sync::interval_seconds(&settings);
     if !settings.get("preferences").is_some_and(Value::is_object) {
         settings["preferences"] = json!({});
@@ -1701,7 +1791,7 @@ pub fn run() {
                 .filter(|c| {
                     c.get("type")
                         .and_then(|v| v.as_str())
-                        .is_some_and(|t| matches!(t, "folder" | "ftp" | "webdav"))
+                        .is_some_and(|t| matches!(t, "folder" | "ftp" | "webdav" | "library"))
                 })
                 .cloned()
                 .collect()
@@ -1975,6 +2065,7 @@ pub fn run() {
                 restore_main_window(&handle);
             }
             auto_sync::start(&handle);
+            library_watch::start(&handle);
             git_worker::start(&handle);
             app.state::<single_instance::SingleInstance>().listen(&handle);
             Ok(())
