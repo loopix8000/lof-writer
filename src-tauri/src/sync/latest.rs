@@ -37,6 +37,14 @@ fn owned_latest(device: &str, name: &str) -> bool {
     })
 }
 
+fn published_files_present(state: &Value, names: &HashSet<&str>, device: &str, own_index: &str) -> bool {
+    state["ownIndexHash"].as_str().is_some() && names.contains(own_index)
+        && state["files"].as_object().is_some_and(|files| {
+            files.keys().all(|name| names.contains(name.as_str()))
+                && !names.iter().any(|name| owned_latest(device, name) && !files.contains_key(*name))
+        })
+}
+
 fn validate(index: &Index, name: &str) -> Result<(), LofError> {
     if index.protocol != 2 {
         return Err(fail(
@@ -201,6 +209,7 @@ fn run(
     conflict_policy: SyncConflictPolicy,
 ) -> Result<Value, LofError> {
     let names = remote.list()?;
+    let name_set: HashSet<_> = names.iter().map(String::as_str).collect();
     let peer_files: Vec<_> = names
         .iter()
         .filter(|name| name.starts_with("device-") || name.starts_with("index-v2-"))
@@ -213,6 +222,8 @@ fn run(
     let mut total = json!({"downloaded":0,"conflicts":0,"projectConflicts":0,"projectsUpdated":0,"assetsUpdated":0,"removed":0,"uploaded":0,"downloadedFiles":0,"uploadedBytes":0,"downloadedBytes":0,"cleanedFiles":0,"protocol":2});
     let mut applied = state["applied"].as_object().cloned().unwrap_or_default();
     let mut peers = state["peers"].as_object().cloned().unwrap_or_default();
+    let mut remote_versions = state["remoteVersions"].as_object().cloned().unwrap_or_default();
+    let mut remote_changed = false;
 
     for peer in peer_files {
         if peer == format!("device-{device}.json") {
@@ -226,13 +237,26 @@ fn run(
                 continue;
             }
         }
+        let version = remote.version(&peer);
+        // 이전에 성공적으로 처리한 색인의 버전이 같으면 본문 다운로드와 비교를 생략한다.
+        if version.as_deref().is_some_and(|version| {
+            applied.contains_key(&peer) && remote_versions.get(&peer).and_then(Value::as_str) == Some(version)
+        }) {
+            continue;
+        }
         let raw = remote.read(&peer)?;
         let digest = hash_str(&raw);
         total["downloadedBytes"] =
             json!(total["downloadedBytes"].as_u64().unwrap_or(0) + raw.len() as u64);
         if applied.get(&peer).and_then(Value::as_str) == Some(digest.as_str()) {
+            if let Some(version) = version {
+                remote_versions.insert(peer, json!(version));
+                state["remoteVersions"] = json!(remote_versions);
+                with_store(store, root, |st| st.database()?.set(state_key, state))?;
+            }
             continue;
         }
+        remote_changed = true;
         let mut cache_scope = None;
         let snapshot = if peer.starts_with("device-") {
             parse(&raw)?
@@ -292,29 +316,42 @@ fn run(
         let merged = with_store(store, root, |st| st.merge(&snapshot, &base, conflict_policy))?;
         add_result(&mut total, &merged);
         peers.insert(peer.clone(), Value::Object(revisions(&snapshot)));
-        applied.insert(peer, digest.into());
+        applied.insert(peer.clone(), digest.into());
+        // 병합까지 성공한 경우에만 다음 확인에서 사용할 원격 버전을 기억한다.
+        if let Some(version) = version {
+            remote_versions.insert(peer.clone(), json!(version));
+        }
         state["peers"] = json!(peers);
         state["applied"] = json!(applied);
+        state["remoteVersions"] = json!(remote_versions);
         with_store(store, root, |st| st.database()?.set(state_key, state))?;
         if let Some((prefix, keys)) = cache_scope {
             with_store(store, root, |st| st.database()?.retain_keys(&prefix, &keys))?;
         }
     }
 
-    let snapshot = with_store(store, root, Store::snapshot)?;
+    // 원격과 로컬이 모두 그대로면 서재 전체 읽기와 해시 계산도 하지 않는다.
+    if !remote_changed && state["outboundHash"].as_str().is_some()
+        && published_files_present(state, &name_set, device, &own_index)
+        && with_store(store, root, |st| Ok(st.sync_unchanged(state_key)))?
+    {
+        return Ok(total);
+    }
+    let (snapshot, local_revision) = with_store(store, root, |st| {
+        let revision = st.sync_revision();
+        Ok((st.snapshot()?, revision))
+    })?;
     let outbound_hash = snapshot_hash(&snapshot);
-    let previous_files = state["files"].as_object();
     // 수신 확인은 계속하되, 마지막 전송 내용과 같으면 업로드 단계 자체를 건너뛴다.
     // 원격에서 사라진 파일의 복구와 남은 구형 파일 정리는 기존 경로에서 처리한다.
     let unchanged = state["outboundHash"].as_str() == Some(outbound_hash.as_str())
-        && state["ownIndexHash"].as_str().is_some()
-        && names.contains(&own_index)
-        && previous_files.is_some_and(|files| {
-            files.keys().all(|name| names.contains(name))
-                && !names.iter().any(|name| owned_latest(device, name) && !files.contains_key(name))
-        });
+        && published_files_present(state, &name_set, device, &own_index);
     if unchanged {
-        with_store(store, root, |st| st.retain_history(false))?;
+        with_store(store, root, |st| {
+            st.retain_history(false)?;
+            st.remember_sync_revision(state_key, local_revision);
+            Ok(())
+        })?;
         return Ok(total);
     }
     // 전송 도중 실패하거나 원고가 이전 내용으로 돌아가도, 미완료 전송을 완료 상태로 오인하지 않는다.
@@ -422,6 +459,10 @@ fn run(
             total["cleanedFiles"] = json!(total["cleanedFiles"].as_u64().unwrap_or(0) + 1);
         }
     }
-    with_store(store, root, |st| st.retain_history(false))?;
+    with_store(store, root, |st| {
+        st.retain_history(false)?;
+        st.remember_sync_revision(state_key, local_revision);
+        Ok(())
+    })?;
     Ok(total)
 }

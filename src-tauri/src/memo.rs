@@ -273,6 +273,7 @@ impl Memos {
         Ok(json!({
             "space": space.id,
             "path": rel,
+            "id": parsed.properties.get("id").cloned().unwrap_or_else(|| json!(crate::store::memo_id(&space.id, &format!("doc/{rel}")))),
             "title": strip_md_ext(name_of(rel)),
             "body": parsed.body,
             "manualLineBreak": mlb,

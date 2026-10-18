@@ -1,6 +1,6 @@
 [package]
 name = "lof-writer"
-version = "1.0.3-beta.9"
+version = "1.0.3-beta.10"
 description = "Local First Writing Tool"
 authors = ["Lof Writer"]
 license = "MIT"
@@ -27,7 +27,6 @@ hex = "0.4"
 base64 = "0.22"
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
-notify = "6"
 trash = "5"
 rfd = "0.15"
 arboard = "3"
@@ -41,6 +40,7 @@ rusqlite = { version = "0.40", features = ["bundled", "backup"] }
 flate2 = "1"
 fs2 = "0.4"
 zip = { version = "9", default-features = false }
+git2 = { version = "0.21", default-features = false, features = ["vendored-libgit2"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [

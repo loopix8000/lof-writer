@@ -26,6 +26,8 @@ fn name_ok(n: &str) -> bool {
 
 trait RemoteAdapter {
     fn list(&mut self) -> Result<Vec<String>, LofError>;
+    // 신뢰할 수 있는 버전 정보가 없는 연결은 본문 해시로 변경을 확인한다.
+    fn version(&self, _name: &str) -> Option<String> { None }
     fn read(&mut self, name: &str) -> Result<String, LofError>;
     fn write(&mut self, name: &str, content: &str) -> Result<(), LofError>;
     fn remove(&mut self, name: &str) -> Result<(), LofError>;

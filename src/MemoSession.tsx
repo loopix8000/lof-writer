@@ -20,6 +20,7 @@ import { editorDropZone, type EditorDropZone } from "./editor-groups";
 import ContextMenu, { type MenuItem } from "./ContextMenu";
 import { useConfirm } from "./ConfirmDialog";
 import { useSyncFileUpdates } from "./useSyncFileUpdates";
+import { useGitActivity } from "./useGitActivity";
 import { call, type AutoSyncStatus, type Doc, type Kind } from "./types";
 import SyncStatus from "./SyncStatus";
 import { normalizeEditorStyle, resolveKindPrefs } from "../core/typesetting.mjs";
@@ -36,6 +37,7 @@ type Entry = {
   episodeId?: string;
 };
 type Memo = {
+  id?: string;
   space: string;
   path: string;
   title: string;
@@ -126,6 +128,7 @@ export default function MemoSession({
   prefs,
   onSidebarResize,
   flushRef,
+  manualSaveRef,
   report,
   onOpenLink,
 }: {
@@ -144,6 +147,7 @@ export default function MemoSession({
   prefs: Record<string, any>;
   onSidebarResize: (width: number) => void;
   flushRef: React.MutableRefObject<(() => Promise<void>) | null>;
+  manualSaveRef: React.MutableRefObject<(() => Promise<void>) | null>;
   report: (e: any) => void;
   // 메모의 문서 링크(퀵 노트 출처)를 누르면 집필 창에서 그 문서를 열고 인용한 문장으로 간다.
   onOpenLink: (href: string, quote: string) => void;
@@ -291,12 +295,27 @@ export default function MemoSession({
       throw Error("메모 변경 충돌을 해결해 주세요.");
     await save();
   }, [save]);
+  const gitActivity = useGitActivity(async () => {
+    await flush();
+    return !composing.current && !conflictRef.current && dirty.current.seq === dirty.current.saved;
+  }, report);
   useEffect(() => {
     flushRef.current = flush;
     return () => {
       flushRef.current = null;
     };
   }, [flush, flushRef]);
+  useEffect(() => {
+    manualSaveRef.current = async () => {
+      await flush();
+      const memo = memoRef.current;
+      if (!memo || memo.space === COMMON) return;
+      const document = isDocPath(memo.path) ? memo.path.slice(DOC.length)
+        : (await readItem(memo.space, memo.path)).id;
+      if (document) await call("checkpointDocument", { id: document, force: true });
+    };
+    return () => { manualSaveRef.current = null; };
+  }, [flush, manualSaveRef]);
   function schedule() {
     clearTimeout(timer.current);
     timer.current = window.setTimeout(() => save(true).catch(report), 700);
@@ -304,6 +323,7 @@ export default function MemoSession({
   function edit(body: string) {
     const m = memoRef.current;
     if (!m || body === m.body) return;
+    if (m.space !== COMMON) gitActivity();
     keepTab(m);
     setCurrent({ ...m, body });
     dirty.current.seq++;
@@ -1193,6 +1213,7 @@ export default function MemoSession({
                   source={false}
                   onComposition={(value) => {
                     if (!focused) return;
+                    if (memo.space !== COMMON) gitActivity();
                     composing.current = value;
                     if (!value && dirty.current.seq !== dirty.current.saved) schedule();
                   }}

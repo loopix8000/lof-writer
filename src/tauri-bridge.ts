@@ -5,7 +5,9 @@ import type { AutoSyncStatus } from "./types";
 const methods = [
   "countManuscript",
   "autoSyncStatus",
+  "gitEditing",
   "backupStorage",
+  "backupGitHistory",
   "pinStatus",
   "pinUnlock",
   "pinSave",
@@ -20,6 +22,7 @@ const methods = [
   "search",
   "searchText",
   "history",
+  "historyPage",
   "historyRead",
   "deleteHistory",
   "checkpointDocument",

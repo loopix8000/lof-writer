@@ -6,6 +6,9 @@ pub mod episode;
 pub mod error;
 pub mod file_index;
 mod google_drive;
+mod git_worker;
+mod git_history;
+pub mod local_git;
 pub mod import;
 pub mod markdown;
 pub mod memo;
@@ -25,7 +28,6 @@ use crate::store::{atomic_write_str, strip_verbatim_prefix, HistoryPolicy, Store
 use crate::sync::sync_once;
 use crate::text::plain_text;
 use base64::Engine;
-use notify::{Config as NotifyConfig, RecommendedWatcher, RecursiveMode, Watcher};
 use rfd::{FileDialog, MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
 use serde_json::{json, Value};
 use std::fs;
@@ -47,8 +49,6 @@ pub struct AppState {
     pub config_file: PathBuf,
     pub user_dir: PathBuf,
     pub api: ApiServer,
-    pub vault_watcher: Mutex<Option<RecommendedWatcher>>,
-    pub common_watcher: Mutex<Option<RecommendedWatcher>>,
     pub syncing: Arc<AtomicBool>,
     pub title_bar_dimmed: AtomicBool,
     /// 집중 모드에서 요청한 작은 창 허용 여부와 실제로 적용된 값.
@@ -59,7 +59,6 @@ pub struct AppState {
     pub close_pending: Arc<AtomicBool>,
     pub close_seq: Arc<AtomicU64>,
     pub notify_seq: Arc<AtomicU64>,
-    pub refresh_seq: Arc<AtomicU64>,
 }
 
 pub fn get_user_dir() -> PathBuf {
@@ -336,134 +335,9 @@ fn schedule_notify(app: &AppHandle, seq: &Arc<AtomicU64>) {
     });
 }
 
-fn schedule_index_refresh(store: &Arc<Mutex<Option<Store>>>, seq: &Arc<AtomicU64>, app: &AppHandle) {
-    let my_seq = seq.fetch_add(1, Ordering::SeqCst) + 1;
-    let seq_clone = Arc::clone(seq);
-    let store_clone = Arc::clone(store);
-    let app=app.clone();
-    let root=store.lock().unwrap().as_ref().map(|store|store.root.clone());
-    thread::spawn(move || {
-        // A second observation confirms deletions after external editors finish replacing files.
-        for delay in [1000,5500] {
-            thread::sleep(Duration::from_millis(delay));
-            if seq_clone.load(Ordering::SeqCst)!=my_seq{return;}
-            let changed=(||->Result<bool,LofError>{
-                let mut guard=store_clone.lock().unwrap();
-                let Some(st)=guard.as_mut() else{return Ok(false)};
-                if Some(&st.root)!=root.as_ref(){return Ok(false);}
-                let before=(st.database()?.get("catalog")?,st.deleted()?);
-                st.refresh_index(true)?;
-                let after=(st.database()?.get("catalog")?,st.deleted()?);
-                Ok(before!=after)
-            })();
-            if changed.unwrap_or(false) {
-                if let Some(state)=app.try_state::<AppState>(){schedule_notify(&app,&state.notify_seq);}
-                auto_sync::request_now(&app);
-            }
-        }
-    });
-}
-
-fn setup_vault_watcher(
-    root: &Path,
-    app: &AppHandle,
-    store: &Arc<Mutex<Option<Store>>>,
-    notify_seq: &Arc<AtomicU64>,
-    refresh_seq: &Arc<AtomicU64>,
-) -> Option<RecommendedWatcher> {
-    let root_buf = root.to_path_buf();
-    let app_clone = app.clone();
-    let store_clone = Arc::clone(store);
-    let n_seq = Arc::clone(notify_seq);
-    let r_seq = Arc::clone(refresh_seq);
-
-    let mut watcher = RecommendedWatcher::new(
-        move |res: Result<notify::Event, notify::Error>| {
-            let Ok(event) = res else { return };
-            if event.kind.is_access() {
-                return;
-            }
-            let mut relevant = false;
-            for path in &event.paths {
-                let rel = path
-                    .strip_prefix(&root_buf)
-                    .unwrap_or(path.as_path())
-                    .to_string_lossy()
-                    .replace('\\', "/");
-                let low = rel.to_ascii_lowercase();
-                if rel.starts_with(".lof")
-                    || low.ends_with(".tmp")
-                    || low.ends_with(".lofmv")
-                    || low.ends_with(".lofnew")
-                {
-                    continue;
-                }
-                if let Ok(mut guard) = store_clone.lock() {
-                    if let Some(ref mut st) = *guard {
-                        st.invalidate_path(&rel);
-                    }
-                }
-                relevant = true;
-            }
-            if relevant {
-                auto_sync::request_now(&app_clone);
-                schedule_notify(&app_clone, &n_seq);
-                schedule_index_refresh(&store_clone, &r_seq, &app_clone);
-            }
-        },
-        NotifyConfig::default(),
-    )
-    .ok()?;
-
-    if let Err(error) = watcher.watch(root, RecursiveMode::Recursive) {
-        eprintln!("서재 폴더 감시를 시작하지 못했습니다: {}: {error}", root.display());
-        return None;
-    }
-    Some(watcher)
-}
-
-fn setup_common_watcher(
-    store_root: &Path,
-    common_root: &Path,
-    app: &AppHandle,
-    notify_seq: &Arc<AtomicU64>,
-) -> Option<RecommendedWatcher> {
-    if common_root.starts_with(store_root) {
-        return None;
-    }
-    let _ = fs::create_dir_all(common_root);
-    let app_clone = app.clone();
-    let n_seq = Arc::clone(notify_seq);
-
-    let mut watcher = RecommendedWatcher::new(
-        move |res: Result<notify::Event, notify::Error>| {
-            let Ok(event) = res else { return };
-            if event.kind.is_access() {
-                return;
-            }
-            let relevant = event.paths.iter().any(|p| {
-                let s = p.to_string_lossy().to_ascii_lowercase();
-                !s.ends_with(".tmp") && !s.ends_with(".lofmv")
-            });
-            if relevant {
-                schedule_notify(&app_clone, &n_seq);
-            }
-        },
-        NotifyConfig::default(),
-    )
-    .ok()?;
-
-    let _ = watcher.watch(common_root, RecursiveMode::Recursive);
-    Some(watcher)
-}
-
 fn bind_vault(state: &AppState, app: &AppHandle, root: &Path) -> Result<(), LofError> {
     let resolved=strip_verbatim_prefix(&fs::canonicalize(root).unwrap_or_else(|_|root.to_path_buf()));
     if state.store.lock().unwrap().as_ref().is_some_and(|store|store.root==resolved) {return Ok(());}
-    {
-        let mut vw = state.vault_watcher.lock().unwrap();
-        *vw = None;
-    }
     let (policy, manual_lb) = {
         let s = state.settings.lock().unwrap();
         (
@@ -475,9 +349,15 @@ fn bind_vault(state: &AppState, app: &AppHandle, root: &Path) -> Result<(), LofE
     let clean_root = new_store.root.clone();
     {
         let mut st_guard = state.store.lock().unwrap();
+        if let Some(previous) = st_guard.as_mut() {
+            // Git 오류가 있어도 서재 전환을 막지 않는다. 저장된 원고와 이관 진행점은 원래 서재에 남는다.
+            if let Err(error) = previous.git_tick(true, false) {
+                eprintln!("서재 전환 전 로컬 이력 기록을 완료하지 못했습니다: {}", error.message);
+            }
+        }
         *st_guard = Some(new_store);
     }
-    let common_root = {
+    {
         let mut s_guard = state.settings.lock().unwrap();
         if let Some(obj) = s_guard.as_object_mut() {
             obj.insert(
@@ -486,24 +366,8 @@ fn bind_vault(state: &AppState, app: &AppHandle, root: &Path) -> Result<(), LofE
             );
         }
         persist_settings(&state.config_file, &s_guard)?;
-        common_memo_root_of(&clean_root, &s_guard)
-    };
-    {
-        let mut vw = state.vault_watcher.lock().unwrap();
-        *vw = setup_vault_watcher(
-            &clean_root,
-            app,
-            &state.store,
-            &state.notify_seq,
-            &state.refresh_seq,
-        );
-    }
-    {
-        let mut cw = state.common_watcher.lock().unwrap();
-        *cw = setup_common_watcher(&clean_root, &common_root, app, &state.notify_seq);
     }
     schedule_notify(app, &state.notify_seq);
-    schedule_index_refresh(&state.store, &state.refresh_seq, app);
     Ok(())
 }
 
@@ -647,12 +511,27 @@ fn dispatch_method(
             &args.get("rules").cloned().unwrap_or_else(|| json!({})),
         )),
         "autoSyncStatus" => Ok(app.state::<auto_sync::AutoSyncState>().status()),
+        "gitEditing" => git_worker::activity(app, &args),
         "backupStorage" => {
             let guard=state.store.lock().unwrap();
             let store=guard.as_ref().ok_or_else(||fail_invalid("서재가 열려 있지 않습니다."))?;
             let name=format!("library-{}-{}.sqlite",chrono::Utc::now().format("%Y%m%d-%H%M%S"),Uuid::new_v4());
             let destination=store.root.join(".lof").join("backups").join(name);
             store.database()?.backup(&destination)?;
+            Ok(json!({"path":destination.to_string_lossy()}))
+        }
+        "backupGitHistory" => {
+            let mut guard = state.store.lock().unwrap();
+            let store = guard.as_mut().ok_or_else(|| fail_invalid("서재가 열려 있지 않습니다."))?;
+            if !store.local_git.ready { return Err(fail_invalid("이력 이관이 끝난 뒤 백업해 주세요.")); }
+            store.git_tick(true, false)?;
+            let directory = store.root.join(".lof").join("backups");
+            fs::create_dir_all(&directory)?;
+            let name = format!("git-history-{}-{}.zip", chrono::Utc::now().format("%Y%m%d-%H%M%S"), Uuid::new_v4());
+            let destination = directory.join(name);
+            let temporary = destination.with_extension("zip.tmp");
+            store.local_git.backup(&temporary)?;
+            fs::rename(&temporary, &destination)?;
             Ok(json!({"path":destination.to_string_lossy()}))
         }
         "pinStatus" => Ok(pin_status(app)),
@@ -686,6 +565,7 @@ fn dispatch_method(
                 out.insert("projects".to_string(), Value::Array(enriched));
             }
             out.insert("drafts".to_string(), Value::Array(st.drafts()?));
+            out.insert("localGit".to_string(), st.local_git.status());
             out.insert("preferences".to_string(), prefs);
             out.insert(
                 "version".to_string(),
@@ -1105,10 +985,6 @@ fn dispatch_method(
                 persist_settings(&state.config_file, &s_guard)?;
                 common_memo_root_of(&store_root, &s_guard)
             };
-            {
-                let mut cw = state.common_watcher.lock().unwrap();
-                *cw = setup_common_watcher(&store_root, &new_common, app, &state.notify_seq);
-            }
             schedule_notify(app, &state.notify_seq);
             Ok(json!(new_common.to_string_lossy().to_string()))
         }
@@ -1153,6 +1029,14 @@ fn dispatch_method(
                 .ok_or_else(|| fail_invalid("Store not initialized"))?;
             st.history(id)
         }
+        "historyPage" => {
+            let id = args["id"].as_str().unwrap_or("");
+            let offset = args["offset"].as_u64().unwrap_or(0).min(1_000_000) as usize;
+            let limit = args["limit"].as_u64().unwrap_or(100).clamp(1, 100) as usize;
+            let guard = state.store.lock().unwrap();
+            let store = guard.as_ref().ok_or_else(|| fail_invalid("서재가 열려 있지 않습니다."))?;
+            store.history_page(id, offset, limit, args["anchor"].as_str())
+        }
         // 이력 지우기: id와 name이면 그 이력 하나, id만 있으면 그 문서의 이력 전부, 둘 다 없으면 모든 이력. 지운 개수를 돌려준다.
         "deleteHistory" => {
             let id = args.get("id").and_then(|v| v.as_str());
@@ -1163,8 +1047,7 @@ fn dispatch_method(
                 .ok_or_else(|| fail_invalid("Store not initialized"))?;
             Ok(json!(st.history_delete(id, name)?))
         }
-        // 작업의 끝(입력이 멈춤, 문서를 떠남, Ctrl+S)에 지금 원고를 이력으로 남긴다. 남겼으면 true.
-        // force면 최소 변경 글자 수와 상관없이 남긴다(직접 저장).
+        // 직접 저장은 현재 원고를 기록하거나 기존 같은 버전에 수동 저장 표시를 추가한다.
         "checkpointDocument" => {
             let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
             let force = args.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
@@ -1172,7 +1055,10 @@ fn dispatch_method(
             let st = guard
                 .as_mut()
                 .ok_or_else(|| fail_invalid("Store not initialized"))?;
-            Ok(json!(st.checkpoint(id, force)?))
+            let recorded = st.checkpoint(id, force)?;
+            drop(guard);
+            schedule_notify(app, &state.notify_seq);
+            Ok(json!(recorded))
         }
         "historyRead" => {
             let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
@@ -1181,7 +1067,12 @@ fn dispatch_method(
             let st = guard
                 .as_mut()
                 .ok_or_else(|| fail_invalid("Store not initialized"))?;
-            st.history_read(id, name)
+            let mut previous = st.history_read(id, name)?;
+            if args["compare"].as_bool() == Some(true) {
+                let current = st.read(id)?;
+                previous["comparison"] = git_history::comparison(previous["body"].as_str().unwrap_or(""), current["body"].as_str().unwrap_or(""))?;
+            }
+            Ok(previous)
         }
         "restore" => {
             let res = {
@@ -1464,7 +1355,7 @@ fn dispatch_method(
             *settings = next;
             Ok(safe)
         }
-        "checkSyncUpdates" => auto_sync::check_now(app),
+        "checkSyncUpdates" => auto_sync::request_check(app),
         "cancelGoogleDrive" => {
             app.state::<google_drive::AuthState>().cancel();
             Ok(json!(true))
@@ -1490,13 +1381,22 @@ fn dispatch_method(
         }
         "sync" => {
             let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
-            let root = state.store.lock().unwrap().as_ref()
-                .ok_or_else(|| fail_invalid("Store not initialized"))?.root.clone();
+            let root = {
+                let mut guard = state.store.lock().unwrap();
+                let store = guard.as_mut().ok_or_else(|| fail_invalid("서재가 열려 있지 않습니다."))?;
+                store.poll_disk()?;
+                store.root.clone()
+            };
             let sync_res = sync_connection(state, id, &root);
             schedule_notify(app, &state.notify_seq);
             sync_res
         }
         "setPreferences" => {
+            if let Some(value) = args.get("syncIntervalSeconds") {
+                if !value.as_u64().is_some_and(|seconds| (300..=3600).contains(&seconds)) {
+                    return Err(fail_invalid("자동 동기화 주기는 5분부터 1시간 사이로 지정해 주세요."));
+                }
+            }
             let new_prefs = {
                 let mut s_guard = state.settings.lock().unwrap();
                 let mut prefs = s_guard
@@ -1531,6 +1431,7 @@ fn dispatch_method(
                 }
                 prefs_val
             };
+            auto_sync::configure(app);
             Ok(new_prefs)
         }
         "setCompactWindow" => {
@@ -1600,7 +1501,7 @@ async fn lof_invoke(
     window: WebviewWindow,
 ) -> Result<Value, String> {
     let args_val = args.unwrap_or_else(|| json!({}));
-    let result = if matches!(method.as_str(), "connectGoogleDrive" | "sync" | "pinUnlock" | "pinSave" | "backupStorage" | "countManuscript" | "downloadSkill" | "checkSyncUpdates") {
+    let result = if matches!(method.as_str(), "connectGoogleDrive" | "sync" | "pinUnlock" | "pinSave" | "backupStorage" | "backupGitHistory" | "history" | "historyPage" | "historyRead" | "restore" | "checkpointDocument" | "countManuscript" | "downloadSkill" | "checkSyncUpdates") {
         tauri::async_runtime::spawn_blocking(move || {
             let state = app.state::<AppState>();
             if method == "pinUnlock" || method == "pinSave" {
@@ -1708,9 +1609,13 @@ fn restore_main_window(app: &AppHandle) {
 
 fn show_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
+        let was_hidden = !window.is_visible().unwrap_or(true);
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
+        if was_hidden && window.is_visible().unwrap_or(false) {
+            auto_sync::request_now(app);
+        }
     }
 }
 
@@ -1857,6 +1762,12 @@ pub fn run() {
     if !settings.is_object() {
         settings = json!({});
     }
+    // 이전의 짧은 주기는 기본 5분으로 바꾸고 새 허용 범위 안의 설정은 유지한다.
+    let sync_interval = auto_sync::interval_seconds(&settings);
+    if !settings.get("preferences").is_some_and(Value::is_object) {
+        settings["preferences"] = json!({});
+    }
+    settings["preferences"]["syncIntervalSeconds"] = json!(sync_interval);
     if settings
         .get("deviceId")
         .and_then(|v| v.as_str())
@@ -1917,7 +1828,6 @@ pub fn run() {
     let store_arc = Arc::new(Mutex::new(Some(initial_store)));
     let settings_arc = Arc::new(Mutex::new(settings));
     let notify_seq = Arc::new(AtomicU64::new(0));
-    let refresh_seq = Arc::new(AtomicU64::new(0));
     let closing = Arc::new(AtomicBool::new(false));
     let close_pending = Arc::new(AtomicBool::new(false));
     let close_seq = Arc::new(AtomicU64::new(0));
@@ -1966,8 +1876,6 @@ pub fn run() {
         config_file,
         user_dir: user_dir.clone(),
         api: api_server,
-        vault_watcher: Mutex::new(None),
-        common_watcher: Mutex::new(None),
         syncing: Arc::new(AtomicBool::new(false)),
         title_bar_dimmed: AtomicBool::new(false),
         compact_window: AtomicBool::new(false),
@@ -1977,7 +1885,6 @@ pub fn run() {
         close_pending: Arc::clone(&close_pending),
         close_seq: Arc::clone(&close_seq),
         notify_seq: Arc::clone(&notify_seq),
-        refresh_seq: Arc::clone(&refresh_seq),
     };
 
     let user_dir_for_exit = user_dir.clone();
@@ -1989,6 +1896,7 @@ pub fn run() {
         .manage(google_drive::AuthState::default())
         .manage(pin_state)
         .manage(auto_sync::AutoSyncState::default())
+        .manage(git_worker::GitWorker::default())
         .invoke_handler(tauri::generate_handler![
             lof_invoke,
             lof_flushed,
@@ -2041,7 +1949,7 @@ pub fn run() {
                 *h_guard = Some(handle.clone());
             }
             let st: State<AppState> = app.state();
-            let (common_root, bg_color) = {
+            let bg_color = {
                 let s_guard = st.settings.lock().unwrap();
                 let prefs = s_guard.get("preferences");
                 let dark = prefs
@@ -2063,7 +1971,7 @@ pub fn run() {
                 } else {
                     tauri::webview::Color(0xff, 0xff, 0xff, 0xff)
                 };
-                (common_memo_root_of(&clean_vault_root, &s_guard), color)
+                color
             };
             if let Some(win) = app.get_webview_window("main") {
                 if let Ok(img) = image::load_from_memory(include_bytes!("../icons/icon.png")) {
@@ -2150,21 +2058,8 @@ pub fn run() {
                 let _ = win.set_background_color(Some(bg_color));
                 restore_main_window(&handle);
             }
-            {
-                let mut vw = st.vault_watcher.lock().unwrap();
-                *vw = setup_vault_watcher(
-                    &clean_vault_root,
-                    &handle,
-                    &st.store,
-                    &st.notify_seq,
-                    &st.refresh_seq,
-                );
-            }
-            {
-                let mut cw = st.common_watcher.lock().unwrap();
-                *cw = setup_common_watcher(&clean_vault_root, &common_root, &handle, &st.notify_seq);
-            }
             auto_sync::start(&handle);
+            git_worker::start(&handle);
             app.state::<single_instance::SingleInstance>().listen(&handle);
             Ok(())
         })
@@ -2259,6 +2154,7 @@ pub fn run() {
         .run(move |app_handle, event| {
             if let tauri::RunEvent::Exit = event {
                 auto_sync::stop(app_handle);
+                git_worker::stop(app_handle);
                 let _ = fs::remove_file(user_dir_for_exit.join("runtime.json"));
             }
         });

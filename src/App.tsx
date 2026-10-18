@@ -1,5 +1,7 @@
 import { Fragment, useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useManuscriptCounts } from "./useManuscriptCounts";
+import { useGitActivity } from "./useGitActivity";
+import HistoryDialog from "./HistoryDialog";
 import CoverImage, { ImageViewer } from "./CoverImage";
 import { editorDropZone, type EditorDropZone } from "./editor-groups";
 import {
@@ -276,8 +278,6 @@ export default function App() {
       seq: number;
     } | null>(null),
     [archive, setArchive] = useState(false),
-    [history, setHistory] = useState<{ name: string }[]>([]),
-    [preview, setPreview] = useState<any>(null),
     [prefs, setPrefs] = useState<Record<string, any>>({
       ...DEFAULT_EDITOR_STYLE,
       goal: 3000,
@@ -343,6 +343,7 @@ export default function App() {
   const editorTabsRef = useRef<EditorTab[]>([]),
     renamingRef = useRef<{ id: string; value: string; widget?: boolean } | null>(null);
   const memoFlush = useRef<(() => Promise<void>) | null>(null);
+  const memoManualSave = useRef<(() => Promise<void>) | null>(null);
   // 원고 이미지 경로별로 읽은 data URL(작품·원고 경로·이미지 경로가 키).
   const imageCache = useRef(new Map<string, Promise<string | null>>());
   // 메모 화면에서 메모를 여는 함수(빠른 열기에서 공용 메모를 고를 때).
@@ -555,6 +556,11 @@ export default function App() {
     saveChain.current = task.catch(() => {});
     return task;
   }, []);
+  const gitActivity = useGitActivity(async () => {
+    await flush();
+    const pending = draft.current;
+    return !composing.current && !conflictRef.current && (!pending || pending.seq === pending.saved);
+  }, report);
   const updater = useAppUpdater({
     loaded,
     autoCheck: prefs.checkUpdatesOnStartup !== false,
@@ -607,39 +613,13 @@ export default function App() {
     report,
   });
   checkOpenDocRef.current = checkOpenDocument;
-  const checkpointDue = useRef(new Set<string>());
-  const checkpointTimer = useRef<number | undefined>(undefined);
-  const checkpoint = useCallback(
-    async (ids?: string[]) => {
-      const list = (ids ?? [...checkpointDue.current]).filter((id) => checkpointDue.current.has(id));
-      if (!list.length) return;
-      await flush({ auto: true });
-      for (const id of list) {
-        checkpointDue.current.delete(id);
-        // 그사이 지워졌거나 이름이 바뀌어 ID가 달라진 문서는 건너뛴다.
-        await call("checkpointDocument", { id }).catch(() => {});
-      }
-    },
-    [flush],
-  );
-  // 직접 저장(Ctrl+S, 저장 단추). 설정에서 켜 두면(기본) 최소 변경 글자 수와 상관없이 지금 원고를 이력으로 남기고,
-  // 끄면 다른 작업의 끝처럼 규칙에 맞을 때만 남긴다.
+  // 직접 저장은 현재 문서의 Git 기록에 수동 저장 표시를 남긴다.
   const manualSave = useCallback(async () => {
     await flush();
+    if (memoOpen) { await memoManualSave.current?.(); return; }
     const id = draft.current?.doc.id;
-    if (id && prefsRef.current.historyOnManualSave !== false) {
-      checkpointDue.current.delete(id);
-      await call("checkpointDocument", { id, force: true });
-    }
-    await checkpoint();
-  }, [flush, checkpoint]);
-  // 다른 문서로 옮기거나(분할 편집의 다른 그룹 포함) 문서를 닫으면 떠난 문서의 이력을 남긴다.
-  const leftDocId = useRef("");
-  useEffect(() => {
-    const prev = leftDocId.current;
-    leftDocId.current = active?.id ?? "";
-    if (prev && prev !== leftDocId.current) checkpoint([prev]).catch(report);
-  }, [active?.id, checkpoint, report]);
+    if (id) await call("checkpointDocument", { id, force: true });
+  }, [flush, memoOpen]);
   useEffect(() => {
     refresh().catch(report);
     const off = window.lof.onChange(() => {
@@ -648,7 +628,6 @@ export default function App() {
     });
     const offFlush = window.lof.onFlush(async () => {
       await flush();
-      await checkpoint();
     });
     const updateAutoSync = (status: AutoSyncStatus) => {
       setAutoSync(previous => previous.phase === status.phase && previous.message === status.message &&
@@ -662,25 +641,16 @@ export default function App() {
       offFlush();
       offAutoSync?.();
     };
-  }, [refresh, flush, checkpoint, report]);
+  }, [refresh, flush, report]);
   function edit(patch: Partial<Doc>, markdownCopy?: boolean) {
     const d = draft.current;
     if (!d) return;
+    gitActivity();
     const previousPolicy = documentSourceCache.get(d.doc);
     d.doc = cloneDocument(d.doc, patch);
     const required = markdownCopy ?? (patch.body === undefined ? previousPolicy?.required : undefined);
     if (required !== undefined) documentSourceCache.set(d.doc, { body: d.doc.body, required });
     d.seq++;
-    // 본문을 고치면 이력 대상으로 기억하고, 입력이 멈춘 채 설정한 시간이 지나면 이력을 남긴다.
-    if (patch.body !== undefined) {
-      const id = d.doc.id;
-      checkpointDue.current.add(id);
-      clearTimeout(checkpointTimer.current);
-      checkpointTimer.current = window.setTimeout(
-        () => checkpoint([id]).catch(report),
-        Math.max(1, Number(prefsRef.current.historyIdleMinutes) || 5) * 60_000,
-      );
-    }
     // VS Code처럼 미리보기 탭을 편집하면 고정 탭이 된다.
     updateTabs((tabs) =>
       tabs.some((t) => t.id === d.doc.id && !t.pinned)
@@ -696,6 +666,7 @@ export default function App() {
       timer.current = setTimeout(() => flush({ auto: true }).catch(report), 650);
   }
   function composition(value: boolean) {
+    gitActivity();
     composing.current = value;
     if (timer.current) clearTimeout(timer.current);
     if (!value)
@@ -1526,51 +1497,6 @@ export default function App() {
   useEffect(() => {
     if (view === "workspace" && projectId) loadMemoFolders().catch(() => {});
   }, [view, projectId, lib]);
-  // 설정의 변경 이력 숫자 칸. 입력하는 중간값(예: 50을 치는 중의 5)으로 저장되지 않게 칸을 벗어날 때(Enter 포함)
-  // 저장한다. 보관 규칙(개수·기간)을 줄이면 오래된 이력이 바로 지워지므로 먼저 묻는다.
-  function historyField(label: string, key: string, fallback: number, min: number, max: number, step = 1) {
-    const value = Number(prefs[key] ?? fallback);
-    const commit = async (input: HTMLInputElement) => {
-      const next = Math.min(max, Math.max(min, Math.floor(Number(input.value) || min)));
-      input.value = String(next);
-      if (next === value) return;
-      const retention = key === "historyKeepCount" || key === "historyKeepDays";
-      if (
-        retention &&
-        next < value &&
-        !(await confirm({
-          title: "보관 범위 줄이기",
-          message: `${label}: ${value} → ${next}`,
-          detail: "규칙을 넘는 오래된 이력이 바로 지워지며, 되돌릴 수 없습니다.",
-          confirmLabel: "줄이기",
-          danger: true,
-        }))
-      ) {
-        input.value = String(value);
-        return;
-      }
-      await savePrefs({ [key]: next });
-    };
-    return (
-      <label>
-        {label}
-        <input
-          key={value}
-          type="number"
-          min={min}
-          max={max}
-          step={step}
-          aria-label={`변경 이력 ${label}`}
-          defaultValue={value}
-          onBlur={(e) => commit(e.currentTarget).catch(report)}
-          // Enter는 칸을 벗어나게 해서 한 번만 저장한다.
-          onKeyDown={(e) => {
-            if (e.key === "Enter") e.currentTarget.blur();
-          }}
-        />
-      </label>
-    );
-  }
   async function savePrefs(p: Record<string, any>) {
     let payload = p;
     if (
@@ -1695,28 +1621,7 @@ export default function App() {
   async function showHistory() {
     await flush();
     if (!active) return;
-    setHistory(await call("history", { id: active.id }));
-    setPreview(null);
     setDialog({ type: "history" });
-  }
-  // 이력 창에서 이력 하나(name)나 이 문서의 이력 전부(name 없음)를 지운다. 되돌릴 수 없으므로 먼저 묻는다.
-  async function deleteHistory(name?: string) {
-    if (!active) return;
-    const ok = await confirm({
-      title: "이력 삭제",
-      message: name
-        ? `${new Date(Number(name.split("-")[0])).toLocaleString("ko-KR")} 이력을 삭제할까요?`
-        : `이 문서의 이력 ${history.length}개를 모두 삭제할까요?`,
-      detail: "삭제한 이력은 되돌릴 수 없습니다.",
-      confirmLabel: "삭제",
-      danger: true,
-      icon: <Trash2 size={15} />,
-    });
-    if (!ok) return;
-    const removed = await call<number>("deleteHistory", { id: active.id, name });
-    setHistory(await call("history", { id: active.id }));
-    if (!name || preview?.name === name) setPreview(null);
-    message(name ? "이력을 삭제했습니다." : `이력 ${removed}개를 삭제했습니다.`);
   }
   async function resolveConflict() {
     const d = draft.current;
@@ -3956,6 +3861,7 @@ export default function App() {
             prefs={prefs}
             onSidebarResize={(width) => savePrefs({ leftSidebarWidth: width }).catch(report)}
             flushRef={memoFlush}
+            manualSaveRef={memoManualSave}
             report={report}
             onOpenLink={(href, quote) =>
               attempt(async () => {
@@ -4782,6 +4688,9 @@ export default function App() {
           읽지 못한 파일 {lib.warnings.length}개 · {lib.warnings[0]}
         </div>
       )}
+      {lib.localGit?.message && (
+        <div className="warning-strip" role="status">로컬 원고 기록 대기 · {lib.localGit.message}</div>
+      )}
       {recoverable > 0 && (
         <div className="recovery-toast" role="status">
           <span>복구 가능한 임시 원고 {recoverable}개</span>
@@ -5080,81 +4989,21 @@ export default function App() {
                 </div>
               </form>
             )}
-            {dialog.type === "history" && (
-              <div className="history-layout">
-                <div className="history-list">
-                  {history.map((h) => (
-                    <button
-                      className={preview?.name === h.name ? "selected" : ""}
-                      key={h.name}
-                      onClick={attempt(async () =>
-                        setPreview({
-                          ...(await call("historyRead", {
-                            id: active!.id,
-                            name: h.name,
-                          })),
-                          name: h.name,
-                        }),
-                      )}
-                      onContextMenu={(e) =>
-                        openMenu(e, [
-                          { label: "이력 삭제", danger: true, action: attempt(() => deleteHistory(h.name)) },
-                        ])
-                      }
-                    >
-                      {new Date(Number(h.name.split("-")[0])).toLocaleString(
-                        "ko-KR",
-                      )}
-                    </button>
-                  ))}
-                  {!history.length && <p>아직 저장 이력이 없습니다.</p>}
-                  {history.length > 0 && (
-                    <button className="danger-outline history-clear" onClick={attempt(() => deleteHistory())}>
-                      <Trash2 size={14} />
-                      모든 이력 삭제
-                    </button>
-                  )}
-                </div>
-                <div className="history-preview">
-                  {preview ? (
-                    <>
-                      <b>{preview.title}</b>
-                      <pre>{preview.body}</pre>
-                      <div className="history-actions">
-                      <button
-                        className="primary"
-                        onClick={attempt(async () => {
-                          await flush();
-                          const restored = await call<Doc>("restore", {
-                            id: active!.id,
-                            name: preview.name,
-                            expectedRevision: draft.current!.doc.revision,
-                          });
-                          draft.current = { doc: restored, seq: 0, saved: 0 };
-                          setActive(restored);
-                          setDialog(null);
-                          await refresh();
-                          message(
-                            "이전 원고를 복원했습니다. 복원 전 내용도 이력에 남습니다.",
-                          );
-                        })}
-                      >
-                        이 버전으로 복원
-                      </button>
-                      <button
-                        className="danger-outline"
-                        onClick={attempt(() => deleteHistory(preview.name))}
-                      >
-                        <Trash2 size={14} />
-                        이 이력 삭제
-                      </button>
-                      </div>
-                    </>
-                  ) : (
-                    <p>왼쪽에서 저장 이력을 선택하세요.</p>
-                  )}
-                </div>
-              </div>
+            {dialog.type === "history" && active && (
+              <HistoryDialog documentId={active.id} report={report} onRestore={async (id, name) => {
+                await flush();
+                const current = draft.current;
+                if (!current || current.doc.id !== id) throw Error("열린 문서가 바뀌었습니다. 이력을 다시 열어 주세요.");
+                const restored = await call<Doc & { historyWarning?: string }>("restore", {
+                  id, name, expectedRevision: current.doc.revision,
+                });
+                if (restored.id !== id) replaceDocId(id, restored.id);
+                draft.current = { doc: restored, seq: 0, saved: 0 };
+                setActive(restored);
+                setDialog(null);
+                await refresh();
+                message(restored.historyWarning ?? "이전 원고를 복원했습니다. 복원 전 원고와 복원 결과를 모두 이력에 남겼습니다.");
+              }} />
             )}
             {dialog.type === "document" && active && (
               <>
@@ -5688,64 +5537,26 @@ export default function App() {
                 <section className="settings-section" hidden={settingsPage !== "storage"}>
                   <h3>
                     <History size={17} />
-                    변경 이력
+                    로컬 Git 기록
                   </h3>
-                  {/* 이력을 남기는 때: 자동 저장과 따로, 작업의 끝에만 남긴다(저장소 HistoryPolicy·checkpoint). */}
-                  <div className="settings-grid">
-                    {historyField("입력이 멈춘 뒤(분)", "historyIdleMinutes", 5, 1, 120)}
-                    {historyField("계속 쓸 때 최대 간격(분)", "historyMaxMinutes", 30, 5, 1440)}
-                    {historyField("최소 변경 글자 수", "historyMinChars", 200, 0, 100000, 50)}
-                  </div>
-                  <p className="muted">
-                    쓰다가 멈추거나 다른 문서로 옮길 때 이력을 남깁니다. 계속 쓰는 중에는 최대 간격마다 남깁니다.
+                  <p role="status" className={lib.localGit?.message ? "pin-error" : "muted"}>
+                    {lib.localGit?.message ? `로컬 Git 기록 대기 · ${lib.localGit.message}`
+                      : lib.localGit?.ready ? "로컬 Git 기록 사용 중"
+                      : `기존 이력을 로컬 Git으로 옮기는 중 · ${lib.localGit?.importedHistory ?? 0}개 완료`}
                   </p>
-                  <SettingsToggle
-                    label="직접 저장하면 항상 이력 남기기"
-                    description="Ctrl+S나 저장 단추로 저장하면 최소 변경 글자 수와 상관없이 이력을 남깁니다."
-                    checked={prefs.historyOnManualSave !== false}
-                    onChange={(checked) => savePrefs({ historyOnManualSave: checked }).catch(report)}
-                  />
-                  {/* 보관 규칙: 저장소가 하루 한 번(바꾸면 바로) 정리한다. 최근 10개는 늘 남는다(HISTORY_MINIMUM). */}
-                  <div className="settings-grid">
-                    {historyField("문서당 최대 개수", "historyKeepCount", 100, 10, 1000, 10)}
-                    {historyField("보관 기간(일)", "historyKeepDays", 30, 1, 3650)}
-                  </div>
-                  <p className="muted">
-                    개수나 기간을 넘은 이력은 지우고, 최근 10개는 항상 남깁니다. 이력은 이 PC에만 보관합니다.
-                  </p>
+                  <p className="settings-description">입력이 10초간 멈추고 원고 저장이 완료되면 로컬 Git에 기록합니다. 인터넷 연결이나 별도 Git 설치 없이 작동하며, 기존 원고와 변경 이력은 보존합니다.</p>
+                  <p className="settings-description">수동 저장 기록은 별도로 표시합니다. 모든 기록은 기간과 개수에 관계없이 그대로 보관하며, 자동으로 합치거나 삭제하지 않습니다. 이전 원고를 복원하면 현재 원고를 먼저 보존한 뒤 복원 결과를 새 기록으로 남깁니다.</p>
                   <div className="history-actions">
-                  <button disabled={busy} onClick={attempt(async () => {
-                    setBusy(true);
-                    try {
-                      await flush();
-                      const result = await call<{ path: string }>("backupStorage");
-                      message("로컬 이력 백업을 저장했습니다: " + result.path);
-                    } finally {
-                      setBusy(false);
-                    }
-                  })}>
-                    <HardDrive size={16} /> 로컬 이력 백업
-                  </button>
-                  {/* 모든 문서의 이력을 지운다. 되돌릴 수 없으므로 먼저 묻는다. */}
-                  <button
-                    className="danger-outline"
-                    disabled={busy}
-                    onClick={attempt(async () => {
-                      const ok = await confirm({
-                        title: "모든 이력 초기화",
-                        message: "모든 문서의 변경 이력을 삭제할까요?",
-                        detail: "삭제한 이력은 되돌릴 수 없습니다. 필요하면 먼저 로컬 이력 백업을 해 두세요.",
-                        confirmLabel: "초기화",
-                        danger: true,
-                        icon: <Trash2 size={15} />,
-                      });
-                      if (!ok) return;
-                      const removed = await call<number>("deleteHistory", {});
-                      message(`이력 ${removed}개를 삭제했습니다.`);
-                    })}
-                  >
-                    <Trash2 size={16} /> 모든 이력 초기화
-                  </button>
+                    <button disabled={busy || !lib.localGit?.ready} onClick={attempt(async () => {
+                      setBusy(true);
+                      try {
+                        await flush();
+                        const result = await call<{ path: string }>("backupGitHistory");
+                        message("Git 이력 백업을 저장했습니다: " + result.path);
+                      } finally { setBusy(false); }
+                    })}>
+                      <HardDrive size={16} /> Git 이력 백업
+                    </button>
                   </div>
                 </section>
                 <section id="settings-defaults" className="settings-section" hidden={settingsPage !== "defaults"}>
@@ -5805,7 +5616,19 @@ export default function App() {
                     <Cloud size={18} />
                     외부 저장소
                   </h3>
-                  <p className="settings-description">작품·작문 페이지에 들어가면 즉시 동기화하고, 해당 화면에서는 3초마다 확인합니다. 다른 페이지나 트레이 상태에서도 1분마다 동기화합니다. 서재 파일의 변경이 감지되면 즉시 전송하며, 열린 본문은 확인 후 바꿉니다.</p>
+                  <p className="settings-description">앱 실행 시와 트레이에서 열 때, 설정한 주기마다 동기화합니다. 로컬 파일과 외부 저장소의 변경을 확인하고 받기·충돌 확인·보내기를 함께 처리합니다. 변경된 내용이 없으면 업로드하지 않으며, 열린 본문은 확인 후 바꿉니다.</p>
+                  <label className="connection-conflict-policy">
+                    자동 동기화 주기
+                    <select aria-label="자동 동기화 주기" value={prefs.syncIntervalSeconds ?? 300}
+                      onChange={(event) => savePrefs({ syncIntervalSeconds: Number(event.target.value) }).catch(report)}>
+                      <option value={300}>5분 (기본)</option>
+                      <option value={600}>10분</option>
+                      <option value={900}>15분</option>
+                      <option value={1800}>30분</option>
+                      <option value={3600}>1시간</option>
+                    </select>
+                  </label>
+                  <p className="settings-note">이 기기의 모든 외부 저장소에 적용되며, 다른 페이지와 트레이에서도 같은 주기로 동기화합니다. 변경한 주기는 즉시 적용되고 앱을 다시 켜도 유지됩니다. 각 저장소의 ‘동기화’ 버튼은 주기와 관계없이 바로 실행합니다.</p>
                   <aside className="sync-notice" aria-label="동기화 이용 안내">
                     <strong>동기화는 아직 불안정할 수 있습니다.</strong>
                     <p>중요한 원고는 별도로 백업해 주세요.</p>

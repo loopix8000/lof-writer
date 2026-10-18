@@ -62,6 +62,7 @@ export type Doc = {
 };
 export type Bookmark = { index: number; text: string };
 export type Library = {
+  localGit?: { ready: boolean; message: string; head: string; importedHistory: number; path: string };
   root: string;
   projects: Project[];
   documents: Doc[];

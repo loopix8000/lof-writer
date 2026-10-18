@@ -38,6 +38,12 @@ impl From<rusqlite::Error> for LofError {
     }
 }
 
+impl From<git2::Error> for LofError {
+    fn from(error: git2::Error) -> Self {
+        fail(format!("로컬 Git 처리 실패: {error}"), "LOCAL_GIT")
+    }
+}
+
 pub fn fail(message: impl Into<String>, code: impl Into<String>) -> LofError {
     LofError {
         message: message.into(),

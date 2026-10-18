@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use unicode_normalization::UnicodeNormalization;
 use uuid::Uuid;
 
@@ -261,6 +261,38 @@ pub fn is_variant(cur: &str, want: &str, ext: &str) -> bool {
 pub fn skipped_name(name: &str) -> bool {
     let low = name.to_ascii_lowercase();
     name.starts_with('.') || low.ends_with(".tmp") || low.ends_with(".lofmv") || low.ends_with(".lofnew")
+}
+
+pub(crate) type DiskInventory = HashMap<PathBuf, (u64, Option<SystemTime>, Option<SystemTime>, bool)>;
+
+// 본문을 읽지 않고 파일 목록과 메타데이터만 수집한다. 심볼릭 링크와 관리·임시 파일은 제외한다.
+pub(crate) fn disk_inventory(root: &Path) -> Result<DiskInventory, LofError> {
+    fn walk(root: &Path, dir: &Path, files: &mut DiskInventory) -> std::io::Result<()> {
+        let entries = match fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(error) if dir != root && error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error),
+        };
+        for entry in entries {
+            let entry = entry?;
+            if skipped_name(&entry.file_name().to_string_lossy()) { continue; }
+            let kind = entry.file_type()?;
+            if !kind.is_dir() && !kind.is_file() { continue; }
+            let metadata = match entry.metadata() {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error),
+            };
+            let path = entry.path();
+            files.insert(path.strip_prefix(root).unwrap_or(&path).to_path_buf(),
+                (metadata.len(), metadata.modified().ok(), metadata.created().ok(), kind.is_dir()));
+            if kind.is_dir() { walk(root, &path, files)?; }
+        }
+        Ok(())
+    }
+    let mut files = HashMap::new();
+    walk(root, root, &mut files)?;
+    Ok(files)
 }
 
 pub fn walk_rel(dir: &Path, rel: &str) -> Vec<String> {
@@ -776,13 +808,12 @@ fn walkdir_count(dir: &Path) -> usize {
 const RENAME_FAILED: &str =
     "파일 이름을 바꾸지 못했습니다. 다른 프로그램에서 작품 폴더의 파일을 열고 있는지 확인해 주세요.";
 
-// 변경 이력 규칙(설정의 '보관 및 이력'). 자동 저장은 이력을 남기지 않고, 화면이 작업의 끝(입력이 멈춤, 문서를 떠남,
-// Ctrl+S)을 알릴 때 checkpoint로 남긴다. 쉬지 않고 오래 쓸 때는 저장하면서 max_minutes마다 하나씩 남긴다.
+// 기존 설정 및 Git 이관 중의 이력 기록과 호환한다. 이관 완료 후에는 Git 작업자가 자동 기록한다.
 #[derive(Clone, Copy)]
 pub struct HistoryPolicy {
     pub max_minutes: f64,
     pub min_chars: usize,
-    // 보관 규칙: 문서당 최근 keep_count개와 keep_days일 이내 이력을 두고, 적어도 HISTORY_MINIMUM개는 남긴다.
+    // 이전 설정을 읽기 위한 필드이며 자동 삭제에는 사용하지 않는다.
     pub keep_count: usize,
     pub keep_days: i64,
 }
@@ -800,13 +831,59 @@ pub struct Store {
     pub catalog: Option<Catalog>,
     pub index_enabled: bool,
     pub index_sequence: u64,
+    sync_sequence: AtomicU64,
+    sync_checkpoints: HashMap<String, ((u64, u64), Instant)>,
+    disk_inventory: Option<DiskInventory>,
     pub migration_warning: String,
+    pub local_git: crate::local_git::LocalHistory,
     last_snapshot: HashMap<String, Option<SnapshotEntry>>,
     pub history_policy: HistoryPolicy,
     pub default_manual_line_break: bool,
 }
 
 impl Store {
+    pub fn poll_disk(&mut self) -> Result<bool, LofError> {
+        let files = disk_inventory(&self.root)?;
+        let changed = self.disk_inventory.as_ref() != Some(&files);
+        let revision = self.sync_revision();
+        let pending_deletions = self.database()?.get("missingFiles")?
+            .and_then(|value| value.as_object().map(|files| !files.is_empty())).unwrap_or(false);
+        if changed {
+            self.sync_sequence.fetch_add(1, Ordering::SeqCst);
+            // 밀리초 단위 캐시 값이 같아도 더 정밀한 수정 시각이 달라졌다면 본문을 다시 읽는다.
+            if let Some(catalog) = self.catalog.as_mut() {
+                for (path, stamp) in &files {
+                    if stamp.3 || self.disk_inventory.as_ref().and_then(|files| files.get(path)) == Some(stamp) { continue; }
+                    let relative = path.to_string_lossy().replace('\\', "/");
+                    let Some((folder, relative)) = relative.split_once('/') else { continue };
+                    if let Some(project) = catalog.projects.iter_mut().find(|project| project.dir == self.root.join(folder)) {
+                        if let Some(file) = project.files.get_mut(relative) { file.stamp.clear(); }
+                    }
+                }
+            }
+        }
+        // 삭제 유예 기간을 유지하며, 파일 목록이 그대로여도 다음 주기에 삭제 여부를 재확인한다.
+        if changed || pending_deletions { self.refresh_index(true)?; }
+        self.disk_inventory = Some(files);
+        Ok(changed || revision != self.sync_revision())
+    }
+
+    pub fn sync_revision(&self) -> (u64, u64) {
+        (CHANGE_SEQUENCE.load(Ordering::SeqCst), self.sync_sequence.load(Ordering::SeqCst))
+    }
+
+    // 실행 중인 서재에서만 비교를 생략한다. 재시작 후와 60초마다 전체 확인을 다시 한다.
+    pub fn sync_unchanged(&self, connection: &str) -> bool {
+        self.index_enabled && self.index.dirty.is_empty()
+            && self.sync_checkpoints.get(connection).is_some_and(|(revision, checked)| {
+                *revision == self.sync_revision() && checked.elapsed() < Duration::from_secs(60)
+            })
+    }
+
+    pub fn remember_sync_revision(&mut self, connection: &str, revision: (u64, u64)) {
+        self.sync_checkpoints.insert(connection.to_string(), (revision, Instant::now()));
+    }
+
     pub fn database(&self) -> Result<&crate::database::LibraryDb, LofError> {
         self.index.database.as_ref().ok_or_else(||fail(
             if self.index.database_error.is_empty(){"관리 DB가 준비되지 않았습니다.".to_string()}else{self.index.database_error.clone()},"DATABASE_NOT_READY"))
@@ -814,18 +891,68 @@ impl Store {
 
     pub fn require_database(&self) -> Result<(),LofError> { self.database().map(|_|()) }
 
-    // 설정의 보관 규칙으로 오래된 이력을 정리한다. force면 오늘 이미 정리했어도 다시 한다(보관 규칙을 바꿨을 때).
-    pub fn retain_history(&self, force: bool) -> Result<(), LofError> {
-        let p = self.history_policy;
-        self.database()?.retain_history(p.keep_count, p.keep_days, force)
+    // 이전 호출부와 호환하되 기존 이력과 Git 커밋을 그대로 보관한다.
+    pub fn retain_history(&self, _force: bool) -> Result<(), LofError> {
+        // Git 이력 전환 후에는 기존 DB와 Git 기록 모두 자동으로 삭제하지 않는다.
+        Ok(())
     }
 
     fn save_deleted(&self, deleted:&Map<String,Value>)->Result<(),LofError>{
-        self.database()?.set("deleted",&Value::Object(deleted.clone()))
+        self.database()?.set("deleted",&Value::Object(deleted.clone()))?;
+        self.sync_sequence.fetch_add(1, Ordering::SeqCst);
+        Ok(())
     }
 
     pub fn storage_status(&self)->Value{
         self.database().map(|db|db.status()).unwrap_or_else(|e|json!({"ready":false,"message":e.message}))
+    }
+
+    pub fn git_tick(&mut self, force: bool, editing: bool) -> Result<(), LofError> {
+        let result = self.update_git(force, editing);
+        if result.is_err() { self.local_git.retry_migration(); }
+        self.local_git.error = result.as_ref().err().map(|error| error.message.clone()).unwrap_or_default();
+        result
+    }
+
+    fn update_git(&mut self, force: bool, editing: bool) -> Result<(), LofError> {
+        self.require_database()?;
+        let vault_id = self.vault["id"].as_str().unwrap_or("").to_string();
+        if !self.local_git.ready {
+            let db = self.index.database.as_ref().unwrap();
+            if !self.local_git.resume(&vault_id, db)? {
+                if !self.local_git.import_legacy(db)? { return Ok(()) }
+                let snapshot = self.git_snapshot()?;
+                self.local_git.finish_migration(&vault_id, self.index.database.as_ref().unwrap(), &snapshot)?;
+            }
+        }
+        self.local_git.observe(self.sync_revision());
+        if self.local_git.due(force, editing) {
+            let snapshot = self.git_snapshot()?;
+            self.local_git.commit(&vault_id, &snapshot)?;
+        }
+        Ok(())
+    }
+
+    fn git_snapshot(&mut self) -> Result<crate::local_git::Snapshot, LofError> {
+        let list = self.list()?;
+        let unreadable = list["warnings"].as_array().is_some_and(|items| !items.is_empty());
+        let missing = list["missing"].as_array().is_some_and(|items| !items.is_empty());
+        if unreadable || missing {
+            return Err(fail("읽지 못했거나 삭제 확인 중인 원고가 있어 로컬 Git 기록을 미뤘습니다.", "LOCAL_GIT"));
+        }
+        let projects: Vec<_> = list["projects"].as_array().into_iter().flatten().map(project_fields).collect();
+        let mut documents = Vec::new();
+        for entry in list["documents"].as_array().into_iter().flatten() {
+            let id = entry["id"].as_str().ok_or_else(|| fail_invalid("원고 ID가 없습니다."))?;
+            documents.push(self.read(id)?);
+        }
+        let mut assets = Vec::new();
+        for project in list["projects"].as_array().into_iter().flatten() {
+            let id = project["id"].as_str().unwrap_or("");
+            let folder = project["folder"].as_str().ok_or_else(|| fail_invalid("작품 폴더가 없습니다."))?;
+            crate::local_git::collect_assets(id, &self.root.join(folder), &mut assets)?;
+        }
+        Ok(crate::local_git::Snapshot { documents, projects, assets, deleted: json!(self.deleted()?) })
     }
 
     pub fn new(
@@ -838,11 +965,15 @@ impl Store {
         let clean_root = strip_verbatim_prefix(&root_path);
         let mut s = Self {
             index: FileIndex::new(&clean_root),
+            local_git: crate::local_git::LocalHistory::new(&clean_root),
             root: clean_root,
             vault: Value::Null,
             catalog: None,
             index_enabled: false,
             index_sequence: CHANGE_SEQUENCE.load(Ordering::SeqCst),
+            sync_sequence: AtomicU64::new(0),
+            sync_checkpoints: HashMap::new(),
+            disk_inventory: None,
             migration_warning: String::new(),
             last_snapshot: HashMap::new(),
             history_policy,
@@ -997,6 +1128,7 @@ impl Store {
             && !relative.split(['/', '\\']).any(|s| s == ".lof")
         {
             self.index.dirty.insert(relative.replace('\\', "/"));
+            self.sync_sequence.fetch_add(1, Ordering::SeqCst);
         }
     }
 
@@ -3612,7 +3744,7 @@ impl Store {
         // 북마크는 본문을 고치면 문단 번호가 따라 바뀌어 자동 저장마다 함께 실리므로, 속성 변경으로 남기면
         // 최소 간격·글자 수 조건을 건너뛰고 저장할 때마다 이력이 쌓인다.
         let renamed = changed.iter().any(|k| k == "title");
-        if force_history || renamed || (body != current_body && self.history_due(id, &current_body)) {
+        if force_history || renamed || (!self.local_git.ready && body != current_body && self.history_due(id, &current_body)) {
             self.write_history(id, &current, &raw)?;
         }
 
@@ -3810,6 +3942,9 @@ impl Store {
     }
 
     fn write_history(&mut self, id: &str, doc: &Value, previous_raw: &str) -> Result<(), LofError> {
+        if self.local_git.ready {
+            return self.local_git.capture_document(id, doc, "변경 전 원고 보존");
+        }
         let at = Self::now_ms();
         let body = doc.get("body").and_then(|v| v.as_str()).unwrap_or("");
         if let Some(db) = &self.index.database {
@@ -3922,13 +4057,24 @@ impl Store {
             .unwrap_or("")
             .to_string();
         let current = doc_of(&f_proj.dir, &proj_id, &f_entry, &raw)?;
+        if self.local_git.ready {
+            if !force { return Ok(false) }
+            self.local_git.capture_document(id, &current, "수동 저장한 원고 기록")?;
+            return self.local_git.mark(id, "manual");
+        }
         let body = current.get("body").and_then(|v| v.as_str()).unwrap_or("");
         let latest = self.latest_snapshot(id);
         let prev_body = latest.as_ref().map(|l| l.body.as_str()).unwrap_or("");
         if body == prev_body || (!force && changed_chars(prev_body, body) < self.history_policy.min_chars) {
             return Ok(false);
         }
-        self.write_history(id, &current, &raw)?;
+        if force {
+            let mut value = crate::database::history_value(&current, &now_iso());
+            value["manual"] = json!(true);
+            let at = Self::now_ms();
+            self.database()?.insert_history(id, &format!("{at}-{}.md", Uuid::new_v4()), &value)?;
+            self.last_snapshot.insert(id.to_string(), Some(SnapshotEntry { at, body: body.to_string() }));
+        } else { self.write_history(id, &current, &raw)?; }
         Ok(true)
     }
 
@@ -3936,6 +4082,7 @@ impl Store {
         if !valid_id(id) {
             return Err(fail_invalid("잘못된 ID"));
         }
+        if self.local_git.ready { return Ok(self.local_git.history_page(id, 0, 100, None)?["entries"].clone()) }
         if let Some(db)=&self.index.database {return db.history(id);}
         let dir = self.root.join(".lof").join("history").join(id);
         let mut names: Vec<String> = fs::read_dir(&dir)
@@ -3953,9 +4100,18 @@ impl Store {
         Ok(Value::Array(out))
     }
 
+    pub fn history_page(&self, id: &str, offset: usize, limit: usize, anchor: Option<&str>) -> Result<Value, LofError> {
+        if !valid_id(id) { return Err(fail_invalid("잘못된 문서 ID입니다.")); }
+        if self.local_git.ready { self.local_git.history_page(id, offset, limit, anchor) }
+        else { self.database()?.legacy_history_page(id, offset, limit) }
+    }
+
     // 이력을 지운다. id가 있으면 그 문서의 이력만(name이 있으면 그 하나만), 없으면 모든 문서의 이력을 지운다.
     // 지운 뒤에는 마지막 이력 기억을 버려 다음 이력 판단을 남은 이력으로 다시 한다. 지운 개수를 돌려준다.
     pub fn history_delete(&mut self, id: Option<&str>, name: Option<&str>) -> Result<usize, LofError> {
+        if self.local_git.ready {
+            return Err(fail("Git 기록은 개별 삭제하거나 초기화하지 않고 그대로 보관합니다.", "HISTORY_READ_ONLY"));
+        }
         static HIST_RE: OnceLock<Regex> = OnceLock::new();
         let re = HIST_RE.get_or_init(|| Regex::new(r"^\d+-[a-f0-9-]+\.(json|md)$").unwrap());
         if id.is_some_and(|id| !valid_id(id)) || name.is_some_and(|n| id.is_none() || !re.is_match(n)) {
@@ -3989,6 +4145,10 @@ impl Store {
     }
 
     pub fn history_read(&self, id: &str, name: &str) -> Result<Value, LofError> {
+        if name.starts_with("git-") {
+            if !self.local_git.ready { return Err(fail("기존 이력을 Git으로 옮기는 중입니다.", "GIT_MIGRATING")); }
+            return self.local_git.history_read(id, name);
+        }
         static HIST_RE: OnceLock<Regex> = OnceLock::new();
         let re = HIST_RE.get_or_init(|| Regex::new(r"^\d+-[a-f0-9-]+\.(json|md)$").unwrap());
         if !valid_id(id) || !re.is_match(name) {
@@ -4042,6 +4202,10 @@ impl Store {
         let name = input.get("name").and_then(|v| v.as_str()).unwrap_or("");
         let expected_rev = input.get("expectedRevision").cloned().unwrap_or(Value::Null);
         let old = self.history_read(id, name)?;
+        let before = self.read(id)?;
+        if self.local_git.ready {
+            self.local_git.capture_document(id, &before, "복원 전 원고 보존")?;
+        }
         let mut attrs = old
             .get("attributes")
             .and_then(|v| v.as_object())
@@ -4083,7 +4247,23 @@ impl Store {
             "status".to_string(),
             old.get("status").cloned().unwrap_or(json!("in_progress")),
         );
-        self.save(&Value::Object(attrs))
+        let mut restored = self.save(&Value::Object(attrs))?;
+        if restored["fingerprint"] != before["fingerprint"] {
+            if self.local_git.ready {
+                let record = self.local_git.mark(id, "before-restore").and_then(|_| {
+                    self.local_git.capture_document(id, &restored, "이전 원고 복원")
+                }).and_then(|_| self.local_git.mark(id, "restore"));
+                if let Err(error) = record {
+                    self.local_git.error = error.message.clone();
+                    restored["historyWarning"] = json!(format!("원고는 복원했지만 Git 기록을 완료하지 못했습니다: {}", error.message));
+                }
+            } else {
+                let mut value = crate::database::history_value(&restored, &now_iso());
+                value["recordKind"] = json!("restore");
+                self.database()?.insert_history(id, &format!("{}-{}.md", Self::now_ms(), Uuid::new_v4()), &value)?;
+            }
+        }
+        Ok(restored)
     }
 
     pub fn search(&mut self, query: &str, project_id: Option<&str>) -> Result<Value, LofError> {

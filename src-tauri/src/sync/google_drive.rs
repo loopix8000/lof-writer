@@ -16,6 +16,7 @@ struct DriveFile {
     id: String,
     name: String,
     size: Option<String>,
+    version: Option<String>,
     #[serde(rename = "ownedByMe", default)]
     owned_by_me: bool,
 }
@@ -115,7 +116,7 @@ impl GoogleDriveAdapter {
                     .query(&[
                         ("q", query),
                         ("spaces", "drive"),
-                        ("fields", "nextPageToken,files(id,name,size,ownedByMe)"),
+                        ("fields", "nextPageToken,files(id,name,size,ownedByMe,version)"),
                         ("pageSize", "100"),
                         ("orderBy", order),
                         ("pageToken", &page),
@@ -161,6 +162,11 @@ pub(super) fn prepare_connection(config: &Value) -> Result<Value, LofError> {
 }
 
 impl RemoteAdapter for GoogleDriveAdapter {
+    fn version(&self, name: &str) -> Option<String> {
+        let file = self.files.get(name)?;
+        Some(format!("{}:{}", file.id, file.version.as_ref()?))
+    }
+
     fn list(&mut self) -> Result<Vec<String>, LofError> {
         let query = format!(
             "trashed = false and 'me' in owners and '{}' in parents",

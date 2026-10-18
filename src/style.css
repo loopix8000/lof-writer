@@ -2763,6 +2763,9 @@ body.sidebar-resizing * {
   max-height: 470px;
 }
 .history-list button {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
   font-size: 13px;
   width: 100%;
   margin-bottom: 8px;
@@ -2771,11 +2774,34 @@ body.sidebar-resizing * {
   color: var(--text);
   background: var(--soft);
 }
-/* 이력 목록 맨 아래의 '모든 이력 삭제'. */
-.history-list button.history-clear {
-  margin: 8px 0 0;
+.history-list button span, .history-list button small {
+  display: block;
+  text-align: left;
 }
-/* 이력 미리보기 아래의 복원·삭제 단추, 설정의 이력 백업·초기화 단추. */
+.history-list button small {
+  color: var(--muted);
+}
+.history-mode {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 12px;
+}
+.history-mode button[aria-pressed="true"] {
+  background: var(--soft);
+  color: var(--text);
+}
+.history-diff-added {
+  background: color-mix(in srgb, #30975c 18%, transparent);
+}
+.history-diff-removed {
+  background: color-mix(in srgb, #d95e5e 18%, transparent);
+}
+.history-preview .history-diff span {
+  display: inline;
+  white-space: pre-wrap;
+}
+/* 이력 복원 및 백업 단추. */
 .history-actions {
   display: flex;
   gap: 8px;
