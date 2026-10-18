@@ -5,6 +5,7 @@ import type { AutoSyncStatus } from "./types";
 const methods = [
   "realtimeStatus", "realtimeInvite", "realtimePair", "realtimeRemove", "realtimeSync",
   "realtimeCancelPair", "realtimeValidateCode", "realtimeClipboard", "realtimeRename",
+  "realtimeLeave", "realtimeResetNotice", "realtimeDismissReset",
   "countManuscript",
   "autoSyncStatus",
   "gitEditing",
