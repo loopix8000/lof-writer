@@ -265,7 +265,7 @@ export default function RealtimeSync({ onClose }: { onClose: () => void }) {
       <section className="settings-section realtime-panel" role="tabpanel" id={`realtime-panel-${tab}`} aria-labelledby={`realtime-tab-${tab}`} tabIndex={0}>
         {tab === "devices" && <>
           <h3>연결된 장치</h3>
-          <p className="settings-description">온라인 상태인 연결된 장치끼리 변경 내용을 주고받습니다.</p>
+          <p className="settings-description">P2P 방식으로 연결된 장치끼리 변경 내용을 동기화 합니다.</p>
           {status.peers.length ? <div className="realtime-device-list">{status.peers.map(peer => device(peer, true))}</div>
             : <div className="realtime-empty"><Cloud size={38} /><strong>아직 연결된 장치가 없습니다</strong><p>연결 코드를 만들어 다른 기기와 연결해 보세요.</p></div>}
         </>}
