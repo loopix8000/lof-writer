@@ -12,7 +12,6 @@ use std::time::Duration;
 use suppaftp::RustlsConnector;
 use suppaftp::RustlsFtpStream;
 
-mod google_drive;
 mod latest;
 
 const MAX_SYNC_BYTES: usize = 50_000_000;
@@ -383,15 +382,6 @@ impl RemoteAdapter for FtpAdapter {
     }
 }
 
-pub fn prepare_connection(config: &Value) -> Result<Value, LofError> {
-    if config.get("type").and_then(Value::as_str) == Some("google-drive") {
-        crate::google_drive::ensure_enabled()?;
-        google_drive::prepare_connection(config)
-    } else {
-        Ok(config.clone())
-    }
-}
-
 fn create_adapter(config: &Value) -> Result<Box<dyn RemoteAdapter>, LofError> {
     match config.get("type").and_then(|v| v.as_str()) {
         Some("folder") => {
@@ -400,7 +390,6 @@ fn create_adapter(config: &Value) -> Result<Box<dyn RemoteAdapter>, LofError> {
         }
         Some("webdav") => Ok(Box::new(WebDavAdapter::new(config)?)),
         Some("ftp") => Ok(Box::new(FtpAdapter::new(config)?)),
-        Some("google-drive") => Ok(Box::new(google_drive::GoogleDriveAdapter::new(config)?)),
         _ => Err(fail_invalid("연결 방식을 선택해 주세요.")),
     }
 }

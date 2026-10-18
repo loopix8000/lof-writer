@@ -57,7 +57,6 @@ fn destinations(app: &AppHandle) -> (PathBuf, Vec<(String, String)>) {
     let root = PathBuf::from(settings.get("vaultPath").and_then(Value::as_str).unwrap_or(""));
     let connections = settings.get("connections").and_then(Value::as_array).map(|connections| {
         connections.iter()
-            .filter(|connection| crate::google_drive::connection_enabled(connection))
             .filter_map(|connection| {
                 let id = connection.get("id").and_then(Value::as_str)?.to_string();
                 let name = connection.get("name").and_then(Value::as_str).unwrap_or("외부 저장소").to_string();
