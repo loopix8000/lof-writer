@@ -330,7 +330,8 @@ pub(super) fn sync(
 pub(crate) fn sync_peer(
     store: &Mutex<Option<Store>>, root: &Path, peer: &str, remote: &mut dyn FileRemote,
 ) -> Result<Value, LofError> {
-    let key = format!("realtime-files-v1:{peer}");
+    // 그룹 방식으로 바뀌며 이전 1:1 연결의 비교 기록은 이어 쓰지 않는다. 다시 연결한 첫 비교는 양쪽 파일을 합친다.
+    let key = format!("realtime-files-v2:{peer}");
     let mut state: Checkpoint = with_store(store, root, |st| {
         st.require_database()?;
         st.poll_disk()?;

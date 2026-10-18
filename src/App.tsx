@@ -576,6 +576,24 @@ export default function App() {
   // 변경 이력: 자동 저장은 이력을 남기지 않는다. 본문을 고친 문서를 기억해 두었다가 작업의 끝(입력이 멈춤,
   // 다른 문서로 옮김, Ctrl+S, 앱 종료)에 저장소가 지금 원고를 이력으로 남기게 한다. 남길지는 설정의 규칙으로 저장소가 정한다.
   const [confirm, confirmDialog] = useConfirm();
+  // 실시간 동기화가 그룹 방식으로 바뀌며 이전 장치 연결을 초기화했다면 서재를 연 뒤 한 번 안내한다.
+  const resetNoticeShown = useRef(false);
+  useEffect(() => {
+    if (!loaded || resetNoticeShown.current) return;
+    resetNoticeShown.current = true;
+    void call<boolean>("realtimeResetNotice").then(async notice => {
+      if (!notice) return;
+      const reconnect = await confirm({
+        title: "장치 연결이 초기화되었습니다",
+        message: "실시간 동기화가 동기화 그룹 방식으로 바뀌어 이전 장치 연결을 한 번 초기화했습니다. 서재와 원고는 그대로 있습니다.",
+        detail: "모든 장치의 Lof Writer와 Lof Library를 최신 버전으로 업데이트한 뒤, 한 장치에서 초대 코드를 만들어 나머지 장치를 같은 그룹에 다시 가입시켜 주세요. 이후 새 장치는 페어링 코드 한 번으로 그룹의 모든 장치와 연결됩니다.",
+        confirmLabel: "동기화 그룹 열기",
+        cancelLabel: "나중에",
+      });
+      await call("realtimeDismissReset");
+      if (reconnect) await openSettings("serverSync");
+    }).catch(report);
+  }, [loaded]);
   const checkOpenDocument = useSyncFileUpdates({
     fileKey: active?.id ?? "",
     enabled: loaded && !!active,

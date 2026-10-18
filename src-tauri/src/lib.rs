@@ -441,7 +441,8 @@ fn dispatch_method(
 
     match method {
         "realtimeStatus" | "realtimeInvite" | "realtimePair" | "realtimeRemove" | "realtimeSync" |
-        "realtimeCancelPair" | "realtimeValidateCode" | "realtimeClipboard" | "realtimeRename" => realtime::command(app, method, &args),
+        "realtimeCancelPair" | "realtimeValidateCode" | "realtimeClipboard" | "realtimeRename" | "realtimeLeave" |
+        "realtimeResetNotice" | "realtimeDismissReset" => realtime::command(app, method, &args),
         "countManuscript" => Ok(crate::text::display_counts(
             args.get("text").and_then(Value::as_str).unwrap_or(""),
             &args.get("rules").cloned().unwrap_or_else(|| json!({})),
