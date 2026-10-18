@@ -12,17 +12,13 @@ use std::thread;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
-const DEFAULT_INTERVAL: Duration = Duration::from_secs(60);
-const SERVER_INTERVAL: Duration = Duration::from_secs(5);
+const DEFAULT_INTERVAL: Duration = Duration::from_secs(300);
+const LOCAL_CHECK_INTERVAL: Duration = Duration::from_secs(5);
 const RETRY_DELAY: Duration = Duration::from_secs(30);
-// 연결 설정은 보존하고, 공개를 재개할 때 프론트엔드의 같은 플래그와 함께 활성화한다.
-pub const LIBRARY_SYNC_ENABLED: bool = false;
 
 struct Destination {
     id: String,
     name: String,
-    server: bool,
-    enabled: bool,
 }
 
 struct Queue {
@@ -82,21 +78,13 @@ fn destinations(app: &AppHandle) -> (PathBuf, Vec<Destination>) {
         .into_iter()
         .flatten()
         .filter_map(|connection| {
-            let server = connection["type"].as_str() == Some("library");
-            if server && !LIBRARY_SYNC_ENABLED {
-                return None;
-            }
+            if !matches!(connection["type"].as_str(), Some("folder" | "webdav" | "ftp")) {return None;}
             Some(Destination {
                 id: connection["id"].as_str()?.to_string(),
                 name: connection["name"]
                     .as_str()
                     .unwrap_or("외부 저장소")
                     .to_string(),
-                server,
-                enabled: !server
-                    || connection["libraryId"]
-                        .as_str()
-                        .is_some_and(|id| !id.is_empty()),
             })
         })
         .collect();
@@ -116,7 +104,6 @@ fn reconcile(queue: &mut Queue, root: &PathBuf, connections: &[Destination]) {
     }
     let known: HashSet<_> = connections
         .iter()
-        .filter(|c| c.enabled)
         .map(|c| c.id.clone())
         .collect();
     queue.pending.retain(|id| known.contains(id));
@@ -124,46 +111,19 @@ fn reconcile(queue: &mut Queue, root: &PathBuf, connections: &[Destination]) {
     queue.errors.retain(|id, _| known.contains(id));
 }
 
-// 상태도 전송 방식별로 계산해 다른 연결의 오류가 섞여 보이지 않게 한다.
-fn publish(app: &AppHandle, queue: &mut Queue, connections: &[Destination]) {
-    let progress = |server: Option<bool>| {
-        let selected: Vec<_> = connections
-            .iter()
-            .filter(|c| server.is_none_or(|server| c.server == server))
-            .collect();
-        let mut errors: Vec<_> = selected
-            .iter()
-            .filter_map(|c| {
-                queue
-                    .errors
-                    .get(&c.id)
-                    .map(|error| format!("{}: {error}", c.name))
-            })
-            .collect();
-        if let Some(error) = &queue.local_error {
-            errors.push(error.clone());
-        }
-        let phase = if selected.iter().any(|c| queue.active.contains(&c.id)) {
-            "syncing"
-        } else if !errors.is_empty() {
-            "error"
-        } else if selected.iter().any(|c| queue.pending.contains(&c.id)) {
-            "pending"
-        } else {
-            "idle"
-        };
-        json!({ "phase": phase, "message": errors.join(" · "), "hasConnections": !selected.is_empty() })
-    };
-    let mut status = progress(None);
-    status["channels"] = json!({ "files": progress(Some(false)), "server": progress(Some(true)) });
-    if queue.status != status {
-        queue.status = status;
-        let _ = app.emit("lof:auto-sync", queue.status.clone());
-    }
+// 파일 저장소 상태는 실시간 장치 연결과 분리해 표시한다.
+fn publish(app:&AppHandle, queue:&mut Queue, connections:&[Destination]) {
+    let mut errors:Vec<_>=connections.iter().filter_map(|c|queue.errors.get(&c.id).map(|error|format!("{}: {error}",c.name))).collect();
+    if let Some(error)=&queue.local_error {errors.push(error.clone());}
+    let phase=if connections.iter().any(|c|queue.active.contains(&c.id)){"syncing"}else if !errors.is_empty(){"error"}else if connections.iter().any(|c|queue.pending.contains(&c.id)){"pending"}else{"idle"};
+    let progress=json!({"phase":phase,"message":errors.join(" · "),"hasConnections":!connections.is_empty()});
+    let mut status=progress.clone();status["channels"]=json!({"files":progress});
+    if queue.status!=status {queue.status=status;let _=app.emit("lof:auto-sync",queue.status.clone());}
 }
 
-// 저장 요청은 대기열만 갱신한다. 서버 전송은 다음 5초 시점에 합쳐 실행한다.
+// 파일 저장소는 설정한 주기를 사용하고 실시간 피어는 변경 알림만 예약한다.
 pub fn request(app: &AppHandle) {
+    crate::realtime::changed(app);
     enqueue(app, None, false);
 }
 
@@ -178,7 +138,7 @@ fn enqueue(app: &AppHandle, target: Option<&str>, immediate: bool) {
     if !root.as_os_str().is_empty() {
         for connection in connections
             .iter()
-            .filter(|c| c.enabled && target.is_none_or(|id| c.id == id))
+            .filter(|c| target.is_none_or(|id| c.id == id))
         {
             queue.pending.insert(connection.id.clone());
             if immediate {
@@ -211,7 +171,7 @@ pub fn request_now(app: &AppHandle) {
     enqueue(app, None, true);
 }
 
-// 서버 알림과 재연결은 해당 서버만 즉시 확인한다.
+// 지정한 파일 연결을 즉시 확인한다.
 pub fn request_connection(app: &AppHandle, id: &str) {
     enqueue(app, Some(id), true);
 }
@@ -219,7 +179,7 @@ pub fn request_connection(app: &AppHandle, id: &str) {
 // 트레이에서 복귀해도 변경 없는 서버에는 새 동기화 요청을 보내지 않는다.
 pub fn resume(app: &AppHandle) {
     let (_, connections) = destinations(app);
-    for connection in connections.iter().filter(|c| !c.server) {
+    for connection in connections.iter() {
         request_connection(app, &connection.id);
     }
 }
@@ -338,6 +298,7 @@ impl LocalWatch {
                         }
                     };
                     if relevant {
+                        crate::realtime::changed(&app_clone);
                         let auto = app_clone.state::<AutoSyncState>();
                         let mut queue = auto.queue.lock().unwrap();
                         if queue.root == watch_root {
@@ -401,7 +362,7 @@ fn worker(app: AppHandle) {
     let auto = app.state::<AutoSyncState>();
     let mut interval = auto.queue.lock().unwrap().interval;
     let mut next_files = Instant::now() + interval;
-    let mut next_server = Instant::now() + SERVER_INTERVAL;
+    let mut next_local_check = Instant::now() + LOCAL_CHECK_INTERVAL;
     let mut retry_root = PathBuf::new();
     let mut retries: HashMap<String, Instant> = HashMap::new();
     let mut common_files: Option<(PathBuf, DiskInventory)> = None;
@@ -414,7 +375,7 @@ fn worker(app: AppHandle) {
                     interval = queue.interval;
                     next_files = Instant::now() + interval;
                 }
-                if !queue.urgent.is_empty() || Instant::now() >= next_files.min(next_server) {
+                if !queue.urgent.is_empty() || Instant::now() >= next_files.min(next_local_check) {
                     break;
                 }
                 queue = auto
@@ -422,7 +383,7 @@ fn worker(app: AppHandle) {
                     .wait_timeout(
                         queue,
                         next_files
-                            .min(next_server)
+                            .min(next_local_check)
                             .saturating_duration_since(Instant::now()),
                     )
                     .unwrap()
@@ -434,7 +395,7 @@ fn worker(app: AppHandle) {
         }
         let (root, connections) = destinations(&app);
         if root.as_os_str().is_empty() {
-            next_server = Instant::now() + SERVER_INTERVAL;
+            next_local_check = Instant::now() + LOCAL_CHECK_INTERVAL;
             next_files = Instant::now() + interval;
             continue;
         }
@@ -445,12 +406,12 @@ fn worker(app: AppHandle) {
         }
         let now = Instant::now();
         let files_due = now >= next_files;
-        let server_due = now >= next_server;
+        let local_check_due = now >= next_local_check;
         if files_due {
             next_files = now + interval;
         }
-        if server_due {
-            next_server = now + SERVER_INTERVAL;
+        if local_check_due {
+            next_local_check = now + LOCAL_CHECK_INTERVAL;
         }
         if std::mem::take(&mut auto.queue.lock().unwrap().watch_restart) {
             watch.source = None;
@@ -462,8 +423,8 @@ fn worker(app: AppHandle) {
             queue.local_error = watch_error;
             (std::mem::take(&mut queue.local_dirty), queue.urgent.clone())
         };
-        let has_files = connections.iter().any(|c| !c.server);
-        // 서버만 연결한 경우에는 OS가 알린 변경이나 명시적인 확인 요청이 있을 때만 디스크를 읽는다.
+        let has_files = !connections.is_empty();
+        // 파일 저장소가 없으면 OS 변경 알림이나 명시적 요청 뒤에만 디스크를 읽는다.
         if local_dirty || (files_due && has_files) || !urgent.is_empty() {
             match poll_local(&app, &mut common_files) {
                 Ok((changed, recheck)) => {
@@ -488,7 +449,6 @@ fn worker(app: AppHandle) {
             &root,
             &connections,
             files_due,
-            server_due,
             &mut retries,
         );
     }
@@ -536,7 +496,6 @@ fn sync_cycle(
     root: &PathBuf,
     connections: &[Destination],
     files_due: bool,
-    server_due: bool,
     retries: &mut HashMap<String, Instant>,
 ) {
     let auto = app.state::<AutoSyncState>();
@@ -548,14 +507,7 @@ fn sync_cycle(
         let ready: Vec<_> = connections
             .iter()
             .filter(|c| {
-                c.enabled
-                    && (queue.urgent.contains(&c.id)
-                        || (retries.get(&c.id).is_none_or(|due| *due <= now)
-                            && if c.server {
-                                server_due && queue.pending.contains(&c.id)
-                            } else {
-                                files_due
-                            }))
+                queue.urgent.contains(&c.id) || (files_due && retries.get(&c.id).is_none_or(|due| *due <= now))
             })
             .map(|c| c.id.clone())
             .collect();
@@ -612,11 +564,11 @@ fn sync_cycle(
     }
     reconcile(&mut queue, root, &current_connections);
     if received_changes {
-        // 받은 변경은 다른 저장소로도 전달하되 같은 서버를 곧바로 다시 확인하지 않는다.
+        // 받은 변경은 다른 저장소에 전달하고 같은 저장소를 즉시 다시 확인하지 않는다.
         queue.pending.extend(
             current_connections
                 .iter()
-                .filter(|c| c.enabled && !ready.contains(&c.id))
+                .filter(|c| !ready.contains(&c.id))
                 .map(|c| c.id.clone()),
         );
     }

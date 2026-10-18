@@ -1,19 +1,19 @@
 use crate::error::{fail, fail_invalid, LofError};
-use crate::store::{atomic_write_str, Store};
+use crate::store::Store;
 use regex::Regex;
 use reqwest::blocking::Client as HttpClient;
 use reqwest::Method;
 use serde_json::Value;
 use std::fs;
-use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use suppaftp::RustlsConnector;
 use suppaftp::RustlsFtpStream;
 
-pub mod library;
 mod latest;
+pub(crate) mod files;
+pub(crate) mod file_remote;
 
 const MAX_SYNC_BYTES: usize = 50_000_000;
 const SYNC_PREFIX: &str = "lof-writer-sync-v1";
@@ -29,8 +29,6 @@ trait RemoteAdapter {
     // 신뢰할 수 있는 버전 정보가 없는 연결은 본문 해시로 변경을 확인한다.
     fn version(&self, _name: &str) -> Option<String> { None }
     fn read(&mut self, name: &str) -> Result<String, LofError>;
-    fn write(&mut self, name: &str, content: &str) -> Result<(), LofError>;
-    fn remove(&mut self, name: &str) -> Result<(), LofError>;
     fn close(&mut self) {}
 }
 
@@ -69,18 +67,7 @@ impl RemoteAdapter for FolderAdapter {
         Ok(fs::read_to_string(&f)?)
     }
 
-    fn write(&mut self, name: &str, content: &str) -> Result<(), LofError> {
-        atomic_write_str(&self.root.join(name), content)
-    }
 
-    fn remove(&mut self, name: &str) -> Result<(), LofError> {
-        if !name_ok(name) { return Err(fail_invalid("잘못된 동기화 파일 이름")); }
-        match fs::remove_file(self.root.join(name)) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(e.into()),
-        }
-    }
 }
 
 struct WebDavAdapter {
@@ -208,42 +195,7 @@ impl RemoteAdapter for WebDavAdapter {
         String::from_utf8(bytes.to_vec()).map_err(|e| fail_invalid(e.to_string()))
     }
 
-    fn write(&mut self, name: &str, content: &str) -> Result<(), LofError> {
-        let temp = format!(".{}.upload", name);
-        let temp_url = self.full_url(&temp);
-        let dest_url = self.full_url(name);
-        let put_res = self
-            .client
-            .put(&temp_url)
-            .basic_auth(&self.username, Some(&self.password))
-            .body(content.to_string())
-            .send()
-            .map_err(|e| fail_invalid(e.to_string()))?;
-        if !put_res.status().is_success() {
-            return Err(fail_invalid(format!("WebDAV 업로드 실패: {}", put_res.status())));
-        }
-        let move_method = Method::from_bytes(b"MOVE").unwrap();
-        let move_res = self
-            .client
-            .request(move_method, &temp_url)
-            .basic_auth(&self.username, Some(&self.password))
-            .header("Destination", &dest_url)
-            .header("Overwrite", "T")
-            .send()
-            .map_err(|e| fail_invalid(e.to_string()))?;
-        if !move_res.status().is_success() {
-            return Err(fail_invalid(format!("WebDAV 파일 교체 실패: {}", move_res.status())));
-        }
-        Ok(())
-    }
 
-    fn remove(&mut self, name: &str) -> Result<(), LofError> {
-        if !name_ok(name) { return Err(fail_invalid("잘못된 동기화 파일 이름")); }
-        let response=self.client.delete(self.full_url(name)).basic_auth(&self.username,Some(&self.password))
-            .send().map_err(|e|fail_invalid(e.to_string()))?;
-        if response.status().is_success() || response.status().as_u16()==404 {Ok(())}
-        else {Err(fail_invalid(format!("WebDAV 정리 실패: {}",response.status())))}
-    }
 }
 
 struct FtpAdapter {
@@ -294,7 +246,8 @@ impl FtpAdapter {
         let mut stream = RustlsFtpStream::connect(format!("{}:{}", host, port))
             .map_err(|e| fail_invalid(e.to_string()))?;
         if secure {
-            let root_store = suppaftp::rustls::RootCertStore::empty();
+            let mut root_store = suppaftp::rustls::RootCertStore::empty();
+            for certificate in rustls_native_certs::load_native_certs().certs { let _ = root_store.add(certificate); }
             let tls_cfg = suppaftp::rustls::ClientConfig::builder()
                 .with_root_certificates(root_store)
                 .with_no_client_auth();
@@ -311,6 +264,7 @@ impl FtpAdapter {
             .map_err(|e| fail_invalid(e.to_string()))?;
 
         let target_dir = format!("{}/{}", remote_path.trim_end_matches('/'), SYNC_PREFIX);
+        if remote_path.starts_with('/') { stream.cwd("/").map_err(|_| fail_invalid("FTP 저장 경로에 접근하지 못했습니다."))?; }
         for seg in target_dir.split('/').filter(|s| !s.is_empty()) {
             if stream.cwd(seg).is_err() {
                 let _ = stream.mkdir(seg);
@@ -357,30 +311,11 @@ impl RemoteAdapter for FtpAdapter {
         String::from_utf8(bytes).map_err(|e| fail_invalid(e.to_string()))
     }
 
-    fn write(&mut self, name: &str, content: &str) -> Result<(), LofError> {
-        if !name_ok(name) {
-            return Err(fail_invalid("잘못된 FTP 동기화 파일 이름입니다."));
-        }
-        let temp = format!(".{}.upload", name);
-        let mut reader = Cursor::new(content.as_bytes());
-        self.stream
-            .put_file(&temp, &mut reader)
-            .map_err(|e| fail_invalid(e.to_string()))?;
-        let _ = self.stream.rm(name);
-        self.stream
-            .rename(temp.as_str(), name)
-            .map_err(|e| fail_invalid(e.to_string()))?;
-        Ok(())
-    }
 
     fn close(&mut self) {
         let _ = self.stream.quit();
     }
 
-    fn remove(&mut self, name: &str) -> Result<(), LofError> {
-        if !name_ok(name) {return Err(fail_invalid("잘못된 FTP 동기화 파일 이름"));}
-        self.stream.rm(name).map_err(|e|fail_invalid(e.to_string()))
-    }
 }
 
 fn create_adapter(config: &Value) -> Result<Box<dyn RemoteAdapter>, LofError> {
@@ -409,9 +344,5 @@ fn with_store<T>(
 }
 
 pub fn sync_once(store: &Mutex<Option<Store>>, root: &Path, config: &Value, device_id: &str) -> Result<Value, LofError> {
-    // Lof Library 서버는 파일 대신 문서 단위 API로 주고받는다.
-    if config.get("type").and_then(Value::as_str) == Some("library") {
-        return library::sync(store, root, config);
-    }
-    latest::sync(store,root,config,device_id)
+    files::sync(store, root, config, device_id)
 }

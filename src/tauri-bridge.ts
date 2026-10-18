@@ -3,6 +3,8 @@ import { listen } from "@tauri-apps/api/event";
 import type { AutoSyncStatus } from "./types";
 
 const methods = [
+  "realtimeStatus", "realtimeInvite", "realtimePair", "realtimeRemove", "realtimeSync",
+  "realtimeCancelPair", "realtimeValidateCode", "realtimeClipboard", "realtimeRename",
   "countManuscript",
   "autoSyncStatus",
   "gitEditing",
@@ -36,9 +38,6 @@ const methods = [
   "reveal",
   "settings",
   "saveConnection",
-  "libraryPair",
-  "libraryList",
-  "libraryChoose",
   "removeConnection",
   "sync",
   "requestSyncNow",

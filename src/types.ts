@@ -1,10 +1,10 @@
 export type Kind = "episode" | "plot" | "memo";
 export type SyncProgress = { phase: "idle" | "pending" | "syncing" | "error"; message: string; hasConnections?: boolean };
-export type AutoSyncStatus = SyncProgress & { channels?: Record<"files" | "server", SyncProgress> };
+export type AutoSyncStatus = SyncProgress & { channels?: Record<"files", SyncProgress> };
 export type SyncConnection = {
   id: string;
   name: string;
-  type: "folder" | "webdav" | "ftp" | "library";
+  type: "folder" | "webdav" | "ftp";
   folder?: string;
   url?: string;
   host?: string;

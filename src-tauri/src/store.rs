@@ -514,7 +514,7 @@ fn public_project(p: &CatalogProject) -> Value {
     pf
 }
 
-fn parse_project(raw: &str) -> Result<Value, LofError> {
+pub(crate) fn parse_project(raw: &str) -> Result<Value, LofError> {
     let mut p: Value = serde_json::from_str(raw)
         .map_err(|_| fail("작품 정보 형식이 올바르지 않습니다.", "FORMAT"))?;
     let Some(obj) = p.as_object_mut() else {

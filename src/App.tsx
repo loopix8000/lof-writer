@@ -96,7 +96,7 @@ import { useConfirm } from "./ConfirmDialog";
 import { useProjectSyncUpdates, useSyncFileUpdates } from "./useSyncFileUpdates";
 import SyncStatus from "./SyncStatus";
 import SyncConnections from "./SyncConnections";
-import { LIBRARY_SYNC_ENABLED } from "./features";
+import RealtimeSync from "./RealtimeSync";
 import EpisodeProperties, { statusItems } from "./EpisodeProperties";
 import EpisodeBindingPicker from "./EpisodeBindingPicker";
 import {
@@ -1558,7 +1558,6 @@ export default function App() {
     await savePrefs(fullPatch);
   }
   async function openSettings(type: "settings" | "serverSync" = "settings") {
-    if (type === "serverSync" && !LIBRARY_SYNC_ENABLED) return;
     await flush();
     const s = await call("settings");
     setConnections(s.connections);
@@ -1567,9 +1566,9 @@ export default function App() {
     if (active?.kind) setTypesettingKind(active.kind === "episode" ? "episode" : "document");
     setDialog({ type });
   }
-  function renderSyncConnections(mode: "files" | "server") {
-    return <SyncConnections mode={mode} connections={connections} setConnections={setConnections}
-      autoSync={autoSync} intervalSeconds={prefs.syncIntervalSeconds ?? 60}
+  function renderSyncConnections() {
+    return <SyncConnections connections={connections} setConnections={setConnections}
+      autoSync={autoSync} intervalSeconds={prefs.syncIntervalSeconds ?? 300}
       onIntervalChange={(seconds) => savePrefs({ syncIntervalSeconds: seconds })}
       busy={busy} setBusy={setBusy} onSync={doSync} message={message} report={report} />;
   }
@@ -1603,7 +1602,7 @@ export default function App() {
       const result = await call("sync", { id });
       await refresh();
       message(
-        `동기화 완료 · 받음 ${result.downloaded} · 보냄 ${result.uploaded} · 충돌 사본 ${result.conflicts}${result.removed ? " · 다른 장치에서 삭제 " + result.removed : ""}${result.projectConflicts ? " · 작품 정보 충돌 " + result.projectConflicts + "개 (.lof/project-conflicts에 보관)" : ""}`,
+        `동기화 완료 · 받음 ${result.downloaded} · 보냄 ${result.uploaded} · 충돌 사본 ${result.conflicts}${result.fileConflicts ? " (.lof/file-conflicts에 보관)" : ""}${result.removed ? " · 다른 장치에서 삭제 " + result.removed : ""}${result.projectConflicts ? " · 작품 정보 충돌 " + result.projectConflicts + "개 (.lof/project-conflicts에 보관)" : ""}`,
       );
     } catch (e) {
       report(e);
@@ -3814,16 +3813,16 @@ export default function App() {
             >
               {prefs.theme === "dark" ? <Sun size={20} /> : <Moon size={20} />}
             </button>
-            {LIBRARY_SYNC_ENABLED && <button
-              title="서버 동기화"
-              aria-label="서버 동기화"
+            <button
+              title="실시간 동기화"
+              aria-label="실시간 동기화"
               aria-haspopup="dialog"
               aria-expanded={dialog?.type === "serverSync"}
               className={dialog?.type === "serverSync" ? "selected" : ""}
               onClick={attempt(() => openSettings("serverSync"))}
             >
               <Cloud size={20} />
-            </button>}
+            </button>
             <button
               title="설정"
               aria-label="설정"
@@ -4768,7 +4767,7 @@ export default function App() {
                     newProject: "새 이야기",
                     editProject: "소설 관리",
                     settings: "설정",
-                    serverSync: "서버 동기화",
+                    serverSync: "실시간 동기화",
                     history: "변경 이력",
                     document: "문서 관리",
                     deleteDoc: "영구 삭제",
@@ -5166,13 +5165,9 @@ export default function App() {
                 ))}
               </div>
             )}
-            {LIBRARY_SYNC_ENABLED && dialog.type === "serverSync" && (
+            {dialog.type === "serverSync" && (
               <div className="server-sync-content">
-                <section className="settings-section" aria-label="Lof Library 서버 연결">
-                  <h3><Cloud size={18} />Lof Library</h3>
-                  <p className="settings-description">Lof Library Daemon이 실행 중인 서버와 이 서재를 연결합니다.</p>
-                  {renderSyncConnections("server")}
-                </section>
+                <RealtimeSync onClose={() => setDialog(null)} />
               </div>
             )}
             {dialog.type === "settings" && (
@@ -5627,7 +5622,7 @@ export default function App() {
                 </section>
                 <section id="settings-connections" className="settings-section" hidden={settingsPage !== "connections"}>
                   <h3><FolderSync size={18} />파일 동기화</h3>
-                  {settingsPage === "connections" && renderSyncConnections("files")}
+                  {settingsPage === "connections" && renderSyncConnections()}
                 </section>
                 <section id="settings-api" className="settings-section" hidden={settingsPage !== "api"}>
                   <h3>

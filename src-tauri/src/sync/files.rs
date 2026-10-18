@@ -1,0 +1,644 @@
+//! 폴더·WebDAV·FTP의 서재 파일 원본을 마지막 동기화 해시와 비교해 양방향으로 반영한다.
+
+use super::file_remote::{self, FileRemote, Info, ID_FILE};
+use super::{latest, with_store, MAX_SYNC_BYTES};
+use crate::error::{fail, fail_invalid, hash_bytes, valid_id, LofError};
+use crate::store::{atomic_write_bytes, record_change, Store};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::fs;
+use std::io::Read;
+use std::path::Path;
+use std::sync::Mutex;
+use std::time::{Duration, UNIX_EPOCH};
+use uuid::Uuid;
+
+#[derive(Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Checkpoint {
+    remote_id: Option<String>,
+    #[serde(default)]
+    files: BTreeMap<String, String>,
+    #[serde(default)]
+    legacy_imported: bool,
+    #[serde(default)]
+    tags: BTreeMap<String, (String, String)>,
+    #[serde(default)]
+    identities: BTreeMap<String, String>,
+}
+
+struct Pair {
+    local: Option<String>,
+    remote: Option<String>,
+    local_info: Option<Info>,
+    remote_info: Option<Info>,
+    local_id: Option<String>,
+    remote_id: Option<String>,
+}
+
+fn identity(path: &str, bytes: &[u8]) -> Result<Option<String>, LofError> {
+    if path.ends_with("/project.json") {
+        let raw = std::str::from_utf8(bytes)
+            .map_err(|_| fail_invalid("작품 메타 정보의 문자 인코딩 오류"))?;
+        let project = crate::store::parse_project(raw)?;
+        Ok(project["id"]
+            .as_str()
+            .filter(|id| valid_id(id))
+            .map(|id| format!("project:{id}")))
+    } else if path.to_ascii_lowercase().ends_with(".md") {
+        let raw = std::str::from_utf8(bytes)
+            .map_err(|_| fail_invalid("Markdown 원고의 문자 인코딩 오류"))?;
+        let parsed = crate::markdown::read_markdown(raw)?;
+        Ok(parsed
+            .properties
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|id| valid_id(id))
+            .map(|id| format!("document:{id}")))
+    } else {
+        Ok(None)
+    }
+}
+
+// 이름 변경과 동시 편집이 겹쳐도 같은 ID의 문서를 두 경로에 만들지 않는다.
+fn rename_losers(
+    pairs: &BTreeMap<String, Pair>,
+    base: &BTreeMap<String, String>,
+) -> Result<HashSet<String>, LofError> {
+    let mut identities: HashMap<&str, BTreeSet<&str>> = HashMap::new();
+    let (mut local, mut remote) = (HashSet::new(), HashSet::new());
+    for (path, pair) in pairs {
+        for (id, seen) in [
+            (pair.local_id.as_deref(), &mut local),
+            (pair.remote_id.as_deref(), &mut remote),
+        ] {
+            if let Some(id) = id {
+                if !seen.insert(id) {
+                    return Err(fail_invalid("같은 ID의 작품 또는 문서가 여러 파일에 있습니다. 중복 파일을 확인해 주세요."));
+                }
+                identities.entry(id).or_default().insert(path);
+            }
+        }
+    }
+    let mut losers = HashSet::new();
+    for paths in identities.values().filter(|paths| paths.len() > 1) {
+        let new_paths: Vec<&str> = paths
+            .iter()
+            .copied()
+            .filter(|path| !base.contains_key(*path))
+            .collect();
+        let winner = if new_paths.len() == 1 {
+            new_paths[0]
+        } else {
+            *paths.last().unwrap()
+        };
+        for path in paths {
+            if *path != winner {
+                losers.insert((*path).to_string());
+            }
+        }
+    }
+    Ok(losers)
+}
+
+fn retry() -> LofError {
+    fail(
+        "동기화 중 파일이 변경되었습니다. 다음 주기에 다시 확인합니다.",
+        "SYNC_RETRY",
+    )
+}
+fn add(total: &mut Value, key: &str, count: usize) {
+    total[key] = json!(total[key].as_u64().unwrap_or(0) + count as u64);
+}
+
+pub(crate) fn read_local(root: &Path, path: &str) -> Result<Option<Vec<u8>>, LofError> {
+    let target = file_remote::safe_path(root, path)?;
+    let file = match fs::File::open(target) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    let mut bytes = Vec::new();
+    file.take(MAX_SYNC_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > MAX_SYNC_BYTES {
+        return Err(fail_invalid("동기화 파일이 50MB를 초과합니다."));
+    }
+    Ok(Some(bytes))
+}
+
+fn save(
+    store: &Mutex<Option<Store>>,
+    root: &Path,
+    key: &str,
+    state: &Checkpoint,
+) -> Result<(), LofError> {
+    let value = serde_json::to_value(state).map_err(|error| fail_invalid(error.to_string()))?;
+    with_store(store, root, |st| st.database()?.set(key, &value))
+}
+
+fn original(path: &str, bytes: &[u8]) -> Result<(), LofError> {
+    if path.rsplit('/').next() == Some("project.json") {
+        let raw = std::str::from_utf8(bytes)
+            .map_err(|_| fail_invalid("작품 메타 정보의 문자 인코딩 오류"))?;
+        crate::store::parse_project(raw)?;
+    } else if path.to_ascii_lowercase().ends_with(".md") {
+        let raw = std::str::from_utf8(bytes)
+            .map_err(|_| fail_invalid("Markdown 원고의 문자 인코딩이 올바르지 않습니다."))?;
+        crate::markdown::read_markdown(raw)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn apply_local(
+    store: &Mutex<Option<Store>>,
+    root: &Path,
+    path: &str,
+    bytes: Option<&[u8]>,
+    expected: Option<&str>,
+    modified: Option<i64>,
+) -> Result<(), LofError> {
+    with_store(store, root, |st| {
+        st.require_database()?;
+        let old = read_local(root, path)?;
+        if old.as_deref().map(hash_bytes).as_deref() != expected {
+            return Err(retry());
+        }
+        let target = file_remote::safe_path(root, path)?;
+        let project = path.rsplit('/').next() == Some("project.json");
+        match bytes {
+            Some(bytes) => {
+                original(path, bytes)?;
+                atomic_write_bytes(&target, bytes)?;
+                if let Some(seconds) = modified.filter(|seconds| *seconds >= 0) {
+                    let times = fs::FileTimes::new()
+                        .set_modified(UNIX_EPOCH + Duration::from_secs(seconds as u64));
+                    fs::OpenOptions::new()
+                        .write(true)
+                        .open(&target)?
+                        .set_times(times)?;
+                }
+                if project {
+                    let backup = path.strip_suffix("project.json").unwrap().to_string()
+                        + "project.backup.json";
+                    atomic_write_bytes(&file_remote::safe_path(root, &backup)?, bytes)?;
+                }
+            }
+            None => {
+                // 파일 하나만 삭제하고 작품 정보의 복구용 사본도 함께 정리한다.
+                if project {
+                    let backup = path.strip_suffix("project.json").unwrap().to_string()
+                        + "project.backup.json";
+                    let backup = file_remote::safe_path(root, &backup)?;
+                    if backup.try_exists()? {
+                        st.trash_path(&backup)?;
+                    }
+                }
+                st.trash_path(&target)?;
+                record_change(&target);
+            }
+        }
+        Ok(())
+    })
+}
+
+fn archive(
+    store: &Mutex<Option<Store>>,
+    root: &Path,
+    path: &str,
+    bytes: &[u8],
+) -> Result<bool, LofError> {
+    let relative = format!(".lof/file-conflicts/{}/{path}", hash_bytes(bytes));
+    with_store(store, root, |st| {
+        st.require_database()?;
+        let target = file_remote::safe_path(root, &relative)?;
+        if let Some(previous) = read_local(root, &relative)? {
+            if previous != bytes {
+                return Err(fail_invalid("기존 충돌 사본의 내용이 예상과 다릅니다."));
+            }
+            return Ok(false);
+        }
+        atomic_write_bytes(&target, bytes)?;
+        Ok(true)
+    })
+}
+
+// 삭제된 작품의 다른 쪽 원고가 편집 중이면, 작품 전체를 보존해 메타 정보만 사라지지 않게 한다.
+fn protected_projects(
+    pairs: &BTreeMap<String, Pair>,
+    base: &BTreeMap<String, String>,
+) -> HashSet<String> {
+    let mut protected = HashSet::new();
+    for (path, pair) in pairs {
+        let Some(folder) = path.strip_suffix("/project.json") else {
+            continue;
+        };
+        if !base.contains_key(path) || pair.local.is_some() == pair.remote.is_some() {
+            continue;
+        }
+        let prefix = format!("{folder}/");
+        let local_remains = pair.local.is_some();
+        if pairs
+            .iter()
+            .filter(|(path, _)| path.starts_with(&prefix))
+            .any(|(path, pair)| {
+                let current = if local_remains {
+                    &pair.local
+                } else {
+                    &pair.remote
+                };
+                current
+                    .as_ref()
+                    .is_some_and(|hash| base.get(path) != Some(hash))
+            })
+        {
+            protected.insert(folder.to_string());
+        }
+    }
+    protected
+}
+
+pub(super) fn sync(
+    store: &Mutex<Option<Store>>,
+    root: &Path,
+    config: &Value,
+    device: &str,
+) -> Result<Value, LofError> {
+    let connection = config["id"]
+        .as_str()
+        .filter(|id| valid_id(id))
+        .ok_or_else(|| fail_invalid("동기화 연결 ID 오류"))?;
+    let key = format!("file-sync-v1:{device}:{connection}");
+    let mut state: Checkpoint = with_store(store, root, |st| {
+        st.require_database()?;
+        st.poll_disk()?;
+        let list = st.list()?;
+        if list["warnings"]
+            .as_array()
+            .is_some_and(|warnings| !warnings.is_empty())
+        {
+            return Err(fail("서재에서 읽지 못한 파일이 있어 동기화를 중단했습니다. 서재의 경고를 확인해 주세요.", "SYNC_LOCAL_ERROR"));
+        }
+        if st.has_pending_disk_changes()? {
+            return Err(retry());
+        }
+        serde_json::from_value(st.database()?.get(&key)?.unwrap_or_else(|| json!({})))
+            .map_err(|error| fail_invalid(error.to_string()))
+    })?;
+    let mut total = json!({"downloaded":0,"conflicts":0,"projectConflicts":0,"projectsUpdated":0,"assetsUpdated":0,
+        "removed":0,"uploaded":0,"downloadedFiles":0,"uploadedBytes":0,"downloadedBytes":0,"cleanedFiles":0,"fileConflicts":0,"protocol":"files-v1"});
+    let mut remote = file_remote::lock(file_remote::connect(config, root)?)?;
+    if !state.legacy_imported {
+        let legacy = latest::receive(store, root, config, device)?;
+        for field in [
+            "downloaded",
+            "conflicts",
+            "projectConflicts",
+            "projectsUpdated",
+            "assetsUpdated",
+            "removed",
+            "downloadedFiles",
+            "downloadedBytes",
+        ] {
+            total[field] = legacy[field].clone();
+        }
+        state.legacy_imported = true;
+        save(store, root, &key, &state)?;
+    }
+    let result = run(
+        store,
+        root,
+        &key,
+        &mut state,
+        &mut *remote,
+        config["conflictPolicy"].as_str() == Some("latest"),
+        &mut total,
+    );
+    remote.close();
+    // 일부 파일만 반영된 뒤 통신에 실패해도 열린 서재와 로컬 이력을 갱신한다.
+    let refreshed = with_store(store, root, |st| {
+        st.poll_disk()?;
+        Ok(())
+    });
+    result?;
+    refreshed?;
+    Ok(total)
+}
+
+/// 실시간 피어도 파일 저장소와 같은 충돌·삭제·이름 변경 규칙을 사용한다.
+pub(crate) fn sync_peer(
+    store: &Mutex<Option<Store>>, root: &Path, peer: &str, remote: &mut dyn FileRemote,
+) -> Result<Value, LofError> {
+    let key = format!("realtime-files-v1:{peer}");
+    let mut state: Checkpoint = with_store(store, root, |st| {
+        st.require_database()?;
+        st.poll_disk()?;
+        let list = st.list()?;
+        if list["warnings"].as_array().is_some_and(|w| !w.is_empty()) || st.has_pending_disk_changes()? {
+            return Err(fail("서재의 파일 경고 또는 삭제 확인을 마친 뒤 다시 동기화합니다.", "SYNC_RETRY"));
+        }
+        serde_json::from_value(st.database()?.get(&key)?.unwrap_or_else(||json!({})))
+            .map_err(|e|fail_invalid(e.to_string()))
+    })?;
+    let mut total=json!({"downloaded":0,"uploaded":0,"removed":0,"fileConflicts":0,"conflicts":0,"protocol":"realtime-files-v1"});
+    let result=run(store,root,&key,&mut state,remote,false,&mut total);
+    let refreshed=with_store(store,root,|st| {st.poll_disk()?; Ok(())});
+    result?; refreshed?; Ok(total)
+}
+
+fn run(
+    store: &Mutex<Option<Store>>,
+    root: &Path,
+    key: &str,
+    state: &mut Checkpoint,
+    remote: &mut dyn FileRemote,
+    latest: bool,
+    total: &mut Value,
+) -> Result<(), LofError> {
+    let mut remote_files = remote.inventory()?;
+    if remote_files.remove(ID_FILE).is_some() {
+        let id = String::from_utf8(remote.read(ID_FILE)?)
+            .map_err(|_| fail_invalid("저장소 식별자 형식 오류"))?;
+        if Uuid::parse_str(&id).is_err() {
+            return Err(fail_invalid("저장소 식별자를 확인할 수 없습니다."));
+        }
+        if state
+            .remote_id
+            .as_ref()
+            .is_some_and(|previous| previous != &id)
+        {
+            return Err(fail("동기화 저장소가 새로 만들어졌거나 교체되었습니다. 저장소 경로를 확인한 뒤 연결을 다시 추가해 주세요.", "SYNC_REMOTE_RESET"));
+        }
+        state.remote_id = Some(id);
+    } else {
+        if state.remote_id.is_some() || !state.files.is_empty() {
+            return Err(fail("저장소 식별 파일이 사라져 동기화를 중단했습니다. 저장소 경로와 연결 상태를 확인해 주세요.", "SYNC_REMOTE_RESET"));
+        }
+        let id = Uuid::new_v4().to_string();
+        remote.write(ID_FILE, id.as_bytes(), None)?;
+        if remote.read(ID_FILE)? != id.as_bytes() {
+            return Err(retry());
+        }
+        state.remote_id = Some(id);
+    }
+    save(store, root, key, state)?;
+    let mut local_files = with_store(store, root, |_| file_remote::local_inventory(root))?;
+    local_files.remove(ID_FILE);
+    let names: BTreeSet<_> = local_files
+        .keys()
+        .chain(remote_files.keys())
+        .chain(state.files.keys())
+        .cloned()
+        .collect();
+    let mut folded = HashSet::new();
+    for path in &names {
+        if !file_remote::path_ok(path)
+            || !file_remote::included(path)
+            || !folded.insert(path.to_lowercase())
+        {
+            return Err(fail_invalid(
+                "동기화 경로가 올바르지 않거나 대소문자만 다른 파일이 있습니다.",
+            ));
+        }
+        for (index, _) in path.match_indices('/') {
+            if names.contains(&path[..index]) {
+                return Err(fail_invalid("동기화할 파일과 폴더의 경로가 겹칩니다."));
+            }
+        }
+    }
+    let mut pairs = BTreeMap::new();
+    for path in names {
+        remote.heartbeat()?;
+        let local_info = local_files.get(&path).cloned();
+        let (local, local_id) = if local_info.is_some() {
+            let bytes = with_store(store, root, |_| read_local(root, &path))?.ok_or_else(retry)?;
+            (Some(hash_bytes(&bytes)), identity(&path, &bytes)?)
+        } else {
+            (None, None)
+        };
+        let remote_info = remote_files.get(&path).cloned();
+        let mut remote_id = None;
+        let remote_hash = if let Some(info) = &remote_info {
+            let cached = info
+                .etag
+                .as_ref()
+                .filter(|tag| !tag.starts_with("W/"))
+                .and_then(|tag| {
+                    state
+                        .tags
+                        .get(&path)
+                        .filter(|(previous, _)| previous == tag)
+                });
+            match cached {
+                Some((_, hash)) => {
+                    remote_id = state.identities.get(&path).cloned();
+                    Some(hash.clone())
+                }
+                None => {
+                    let bytes = remote.read(&path)?;
+                    add(total, "downloadedBytes", bytes.len());
+                    add(total, "downloadedFiles", 1);
+                    remote_id = identity(&path, &bytes)?;
+                    Some(hash_bytes(&bytes))
+                }
+            }
+        } else {
+            None
+        };
+        pairs.insert(
+            path,
+            Pair {
+                local,
+                remote: remote_hash,
+                local_info,
+                remote_info,
+                local_id,
+                remote_id,
+            },
+        );
+    }
+    let protected = protected_projects(&pairs, &state.files);
+    let renamed = rename_losers(&pairs, &state.files)?;
+    if pairs.values().any(|pair| pair.local != pair.remote) {
+        // 파일 교체·삭제 전에 현재 원고를 관찰해 기기별 로컬 이력을 유지한다.
+        // 적용 중에는 목록을 다시 열지 않아 미완료 작품 메타 정보를 보정하지 않는다.
+        with_store(store, root, |st| {
+            let list = st.list()?;
+            for document in list["documents"].as_array().into_iter().flatten() {
+                if let Some(id) = document["id"].as_str() {
+                    st.read(id)?;
+                }
+            }
+            Ok(())
+        })?;
+    }
+    // 원고 삭제를 먼저, 작품 메타 정보 삭제를 마지막에 적용한다.
+    let mut paths: Vec<_> = pairs.keys().cloned().collect();
+    paths.sort_by_key(|path| (path.ends_with("/project.json"), path.clone()));
+    for path in paths {
+        let pair = &pairs[&path];
+        let base = state.files.get(&path);
+        let local = pair.local.as_deref();
+        let other = pair.remote.as_deref();
+        if renamed.contains(&path) {
+            let bytes = if local.is_some() {
+                with_store(store, root, |_| read_local(root, &path))?.ok_or_else(retry)?
+            } else {
+                remote.read(&path)?
+            };
+            let expected = local.or(other);
+            if Some(hash_bytes(&bytes)).as_deref() != expected {
+                return Err(retry());
+            }
+            if base.map(String::as_str) != expected && archive(store, root, &path, &bytes)? {
+                add(total, "conflicts", 1);
+                add(total, "fileConflicts", 1);
+            }
+            if local.is_some() {
+                apply_local(store, root, &path, None, local, None)?;
+                add(total, "removed", 1);
+            }
+            if let Some(info) = &pair.remote_info {
+                if Some(hash_bytes(&remote.read(&path)?)).as_deref() != other {
+                    return Err(retry());
+                }
+                remote.remove(&path, info)?;
+                add(total, "cleanedFiles", 1);
+            }
+            checkpoint(state, &path, None, None);
+            state.identities.remove(&path);
+            save(store, root, key, state)?;
+            continue;
+        }
+        if local == other {
+            checkpoint(state, &path, local, pair.remote_info.as_ref());
+            if let Some(id) = &pair.remote_id {
+                state.identities.insert(path.clone(), id.clone());
+            } else {
+                state.identities.remove(&path);
+            }
+            continue;
+        }
+        let protected = protected
+            .iter()
+            .any(|folder| path.starts_with(&format!("{folder}/")));
+        let take_remote = if protected && (local.is_none() || other.is_none()) {
+            other.is_some()
+        } else if base.map(String::as_str) == local {
+            true
+        } else if base.map(String::as_str) == other {
+            false
+        } else if local.is_none() || other.is_none() {
+            // 삭제와 편집이 동시에 발생하면 편집한 원본을 살린다.
+            other.is_some()
+        } else {
+            let take_remote = if latest {
+                (
+                    pair.remote_info.as_ref().and_then(|info| info.modified),
+                    other,
+                ) > (
+                    pair.local_info.as_ref().and_then(|info| info.modified),
+                    local,
+                )
+            } else {
+                other > local
+            };
+            if !latest {
+                let bytes = if take_remote {
+                    with_store(store, root, |_| read_local(root, &path))?.ok_or_else(retry)?
+                } else {
+                    remote.read(&path)?
+                };
+                let expected = if take_remote { local } else { other };
+                if Some(hash_bytes(&bytes)).as_deref() != expected {
+                    return Err(retry());
+                }
+                if archive(store, root, &path, &bytes)? {
+                    add(total, "conflicts", 1);
+                    add(total, "fileConflicts", 1);
+                }
+            }
+            take_remote
+        };
+        if take_remote {
+            let bytes = if other.is_some() {
+                Some(remote.read(&path)?)
+            } else {
+                None
+            };
+            if bytes.as_deref().map(hash_bytes).as_deref() != other {
+                return Err(retry());
+            }
+            apply_local(
+                store,
+                root,
+                &path,
+                bytes.as_deref(),
+                local,
+                pair.remote_info.as_ref().and_then(|info| info.modified),
+            )?;
+            if bytes.is_some() {
+                add(total, "downloaded", 1);
+            } else {
+                add(total, "removed", 1);
+            }
+            checkpoint(state, &path, other, pair.remote_info.as_ref());
+            if let Some(id) = &pair.remote_id {
+                state.identities.insert(path.clone(), id.clone());
+            } else {
+                state.identities.remove(&path);
+            }
+        } else {
+            let bytes = with_store(store, root, |_| read_local(root, &path))?;
+            if bytes.as_deref().map(hash_bytes).as_deref() != local {
+                return Err(retry());
+            }
+            if other.is_some() {
+                if Some(hash_bytes(&remote.read(&path)?)).as_deref() != other {
+                    return Err(retry());
+                }
+            } else if remote.exists(&path)? {
+                return Err(retry());
+            }
+            // 전송 직전에 서재가 바뀌거나 닫히지 않았는지도 확인한다.
+            with_store(store, root, |st| st.require_database())?;
+            if let Some(bytes) = bytes {
+                original(&path, &bytes)?;
+                remote.write(&path, &bytes, pair.remote_info.as_ref())?;
+                add(total, "uploaded", 1);
+                add(total, "uploadedBytes", bytes.len());
+            } else {
+                remote.remove(&path, pair.remote_info.as_ref().ok_or_else(retry)?)?;
+                add(total, "cleanedFiles", 1);
+            }
+            // 쓴 뒤의 ETag는 다음에 확인한다. 예전 값을 캐시하지 않는다.
+            checkpoint(state, &path, local, None);
+            if let Some(id) = &pair.local_id {
+                state.identities.insert(path.clone(), id.clone());
+            } else {
+                state.identities.remove(&path);
+            }
+        }
+        save(store, root, key, state)?;
+    }
+    save(store, root, key, state)?;
+    Ok(())
+}
+
+fn checkpoint(state: &mut Checkpoint, path: &str, hash: Option<&str>, info: Option<&Info>) {
+    state.tags.remove(path);
+    if let Some(hash) = hash {
+        state.files.insert(path.to_string(), hash.to_string());
+        if let Some(tag) = info
+            .and_then(|info| info.etag.as_ref())
+            .filter(|tag| !tag.starts_with("W/"))
+        {
+            state
+                .tags
+                .insert(path.to_string(), (tag.clone(), hash.to_string()));
+        }
+    } else {
+        state.files.remove(path);
+    }
+}
