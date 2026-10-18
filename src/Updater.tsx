@@ -44,14 +44,15 @@ export function useAppUpdater({ loaded, autoCheck, beforeInstall }: {
     };
   }, [loaded]);
 
-  const checkNow = useCallback(async () => {
+  // 설정 화면에서 직접 확인하면 결과가 그 화면에 표시되므로 오른쪽 아래 알림은 띄우지 않는다.
+  const checkNow = useCallback(async (manual = false) => {
     if (!configured || running.current) return;
     running.current = true;
     const current = generation.current;
     setPhase("checking");
     setError("");
     setAvailable(null);
-    setDismissed(false);
+    setDismissed(manual);
     const previous = updateRef.current;
     updateRef.current = null;
     try {
@@ -143,7 +144,7 @@ export function UpdateSettings({ updater, version, autoCheck, onAutoCheck }: {
       </label>
     </div>
     <div className="updater-actions">
-      <button type="button" disabled={!updater.configured || updater.busy} onClick={() => void updater.checkNow()}>
+      <button type="button" disabled={!updater.configured || updater.busy} onClick={() => void updater.checkNow(true)}>
         <RefreshCw size={14} />업데이트 확인
       </button>
       {updater.available && <button type="button" className="primary" disabled={updater.busy} onClick={() => void updater.install()}>
