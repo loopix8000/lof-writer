@@ -40,14 +40,9 @@ export const FONT_FAMILY_PRESETS = [
     value: '"Noto Sans KR", "Malgun Gothic", sans-serif',
   },
   {
-    id: "kopub-batang",
-    label: "바탕 (KoPubWorld바탕 / 바탕체)",
-    value: '"KoPubWorldBatang", "바탕", "바탕체", Batang, Georgia, serif',
-  },
-  {
     id: "ridi-batang",
     label: "리디바탕 (RIDIBatang)",
-    value: '"RIDIBatang", "KoPubWorldBatang", "바탕", Batang, serif',
+    value: '"RIDIBatang", "바탕", Batang, serif',
   },
   {
     id: "batang",
@@ -217,9 +212,9 @@ export const PLATFORM_STYLE_PRESETS = [
     id: "kakaopage-desktop",
     name: "카카오페이지",
     environment: "데스크톱",
-    description: "KoPubWorld바탕 · 세련된 좁은 단폭 (폭 400px · 줄간격 2.0)",
+    description: "바탕체 · 세련된 좁은 단폭 (폭 400px · 줄간격 2.0)",
     style: {
-      fontFamily: '"KoPubWorldBatang", "바탕", Batang, serif',
+      fontFamily: "바탕, 바탕체, Batang, NanumMyeongjo, serif",
       fontSize: 18,
       fontWeight: 300,
       letterSpacing: 0,
@@ -359,8 +354,14 @@ export function normalizeEditorStyle(prefs = {}, kind) {
   const isNoteKind = isNoteKindId(kind);
   const def = isNoteKind ? DEFAULT_NOTE_EDITOR_STYLE : DEFAULT_EDITOR_STYLE;
   const target = kind ? resolveKindPrefs(prefs, kind) : prefs || {};
+  let fontFamily = typeof target.fontFamily === "string" ? target.fontFamily : def.fontFamily;
+  // 이전 설정의 제외된 글꼴은 리디바탕 선택을 유지하거나 시스템 바탕체로 전환한다.
+  if (/\bKoPub(?:World)?Batang\b/i.test(fontFamily)) {
+    const presetId = /\bRIDIBatang\b/i.test(fontFamily) ? "ridi-batang" : "batang";
+    fontFamily = FONT_FAMILY_PRESETS.find((preset) => preset.id === presetId).value;
+  }
   return {
-    fontFamily: typeof target.fontFamily === "string" ? target.fontFamily : def.fontFamily,
+    fontFamily,
     fontSize: clampNum(target.fontSize, 6, 64, def.fontSize),
     fontWeight: clampNum(target.fontWeight, 100, 900, def.fontWeight),
     letterSpacing: Math.round(clampNum(target.letterSpacing, -0.1, 0.5, def.letterSpacing) * 100) / 100,

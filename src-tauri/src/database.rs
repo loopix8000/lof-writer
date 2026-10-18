@@ -200,6 +200,7 @@ impl LibraryDb {
         db.connection.pragma_update(None, "journal_mode", "WAL")?;
         db.connection
             .pragma_update(None, "wal_autocheckpoint", 500)?;
+        crate::library_sync_reset::migrate_database(&db.connection)?;
         db.recover_pending()?;
         Ok(db)
     }

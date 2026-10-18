@@ -1,3 +1,8 @@
+declare module "*.txt?raw" {
+  const text: string;
+  export default text;
+}
+
 declare module "*.mjs" {
   export function tableStart(source: string): number;
   export function plainText(text: string, options?: { preserveParagraphBreaks?: boolean }): string;

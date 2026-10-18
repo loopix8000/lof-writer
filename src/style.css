@@ -4638,12 +4638,32 @@ button.episode-tag[draggable]:active {
   color: #ffffff;
 }
 
+.font-licenses {
+  margin-top: 20px;
+}
+.font-licenses summary {
+  cursor: pointer;
+  padding: 6px 0;
+}
+.font-licenses > details {
+  margin-top: 6px;
+}
+.font-licenses pre {
+  max-height: 320px;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
 /* ---- 조판(Typesetting) 및 복사·내보내기 형식 스타일 ---- */
 @font-face {
   font-family: "LofSerifSymbols";
   src:
-    local("KoPubWorldBatang"),
-    local("KoPubBatang"),
     local("RIDIBatang"),
     local("MaruBuri"),
     local("NanumMyeongjo"),

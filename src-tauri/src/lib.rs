@@ -8,6 +8,7 @@ pub mod file_index;
 mod git_worker;
 mod git_history;
 mod library_watch;
+mod library_sync_reset;
 pub mod local_git;
 pub mod import;
 pub mod markdown;
@@ -1778,6 +1779,14 @@ pub fn run() {
     };
     if !settings.is_object() {
         settings = json!({});
+    }
+    if let Err(error) = library_sync_reset::migrate_settings(&config_file, &mut settings) {
+        MessageDialog::new()
+            .set_level(MessageLevel::Error)
+            .set_title("Lof Writer 시작 실패")
+            .set_description(format!("서버 연결 정보를 초기화하지 못했습니다: {}", error.message))
+            .show();
+        return;
     }
     // 허용 범위 밖의 기존 주기는 기본 1분으로 바꾸고 범위 안의 설정은 유지한다.
     let sync_interval = auto_sync::interval_seconds(&settings);

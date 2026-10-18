@@ -90,6 +90,7 @@ import PlatformPicker from "./PlatformPicker";
 import TagInput from "./TagInput";
 import PropertyPresetSettings from "./PropertyPresetSettings";
 import PinSettings from "./PinSettings";
+import FontLicenses from "./FontLicenses";
 import ContextMenu, { type MenuItem } from "./ContextMenu";
 import { useConfirm } from "./ConfirmDialog";
 import { useProjectSyncUpdates, useSyncFileUpdates } from "./useSyncFileUpdates";
@@ -5191,6 +5192,7 @@ export default function App() {
                   <UpdateSettings updater={updater} version={lib.version}
                     autoCheck={prefs.checkUpdatesOnStartup !== false}
                     onAutoCheck={(checked) => savePrefs({ checkUpdatesOnStartup: checked }).catch(report)} />
+                  <FontLicenses />
                 </section>
                 <section id="settings-security" className="settings-section" hidden={settingsPage !== "security"}>
                   {settingsPage === "security" && <PinSettings />}
