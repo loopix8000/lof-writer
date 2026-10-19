@@ -1,6 +1,6 @@
 [package]
 name = "lof-writer"
-version = "1.0.4-beta.6"
+version = "1.0.4-beta.7"
 description = "Local First Writing Tool"
 authors = ["Lof Writer"]
 license = "MIT"
