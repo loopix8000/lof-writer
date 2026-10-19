@@ -15,6 +15,7 @@ import TitleBar from "./app/TitleBar";
 import TypesettingSettings from "./app/TypesettingSettings";
 import { useDocumentImages } from "./app/useDocumentImages";
 import { useDocumentNotes } from "./app/useDocumentNotes";
+import { useEditorGroups } from "./app/useEditorGroups";
 import { usePreferences } from "./app/usePreferences";
 
 import {
@@ -64,11 +65,11 @@ import {
   migrateTypingPreferences,
   normalizeTextReplacements
 } from "../core/typing.mjs";
-import { cloneDocument, editDocument, globalView, initialNavigation, placeTab, requiresDocumentSource, withoutTab, type Destination, type Dialog, type EditorGroup, type EditorTab, type Navigation, type Side } from "./app/model";
+import { cloneDocument, editDocument, globalView, initialNavigation, requiresDocumentSource, type Destination, type Dialog, type EditorTab, type Navigation, type Side } from "./app/model";
 import { useConfirm } from "./ConfirmDialog";
 import ContextMenu, { type MenuItem } from "./ContextMenu";
 import { ImageViewer } from "./CoverImage";
-import { editorDropZone, type EditorDropZone } from "./editor-groups";
+import { type EditorDropZone } from "./editor-groups";
 import EditorScroll, { type EditorScrollPositions } from "./EditorScroll";
 import EpisodeBindingPicker from "./EpisodeBindingPicker";
 import EpisodeProperties, { statusItems } from "./EpisodeProperties";
@@ -203,14 +204,12 @@ export default function App() {
     [bookmarkJump, setBookmarkJump] = useState<{ docId: string; index: number; seq: number } | null>(null),
     // 레일의 전체 북마크 화면 검색어.
     [bookmarkQuery, setBookmarkQuery] = useState("");
-  const [editorTabs, setEditorTabs] = useState<EditorTab[]>([]),
-    [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[]; target?: string } | null>(null),
+  const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[]; target?: string } | null>(null),
     // 이름 바꾸기 입력칸. widget이면 위젯 보드의 연결 문서 목록에서, 아니면 파일 트리에서 받는다.
     [renaming, setRenaming] = useState<{ id: string; value: string; widget?: boolean } | null>(null),
     [dragTab, setDragTab] = useState(""),
     [dropZone, setDropZone] = useState<EditorDropZone | null>(null);
-  const editorTabsRef = useRef<EditorTab[]>([]),
-    renamingRef = useRef<{ id: string; value: string; widget?: boolean } | null>(null);
+  const renamingRef = useRef<{ id: string; value: string; widget?: boolean } | null>(null);
   const memoFlush = useRef<((options?: { closing?: boolean }) => Promise<void>) | null>(null);
   const memoManualSave = useRef<(() => Promise<void>) | null>(null);
   const imageCache = useRef(new Map<string, Promise<string | null>>());
@@ -237,46 +236,6 @@ export default function App() {
     togglePreview: () => void;
     report: (e: any) => void;
   }>(null!);
-  const updateTabs = useCallback((fn: (tabs: EditorTab[]) => EditorTab[]) => {
-    const next = fn(editorTabsRef.current);
-    if (next === editorTabsRef.current) return;
-    editorTabsRef.current = next;
-    setEditorTabs(next);
-  }, []);
-  // 분할 보기: 포커스된 그룹은 editorTabs/active가 맡고, 나머지 그룹은 split에 보관한다.
-  // 그룹을 오갈 때 두 값을 맞바꾸므로 기존 탭 동작은 포커스된 그룹에만 적용된다.
-  const [split, setSplit] = useState<EditorGroup | null>(null),
-    [focusedSide, setFocusedSide] = useState<Side>("left"),
-    [splitRatio, setSplitRatio] = useState(0.5),
-    [sideDoc, setSideDocState] = useState<Doc | null>(null);
-  const retainedDocuments = useRef(new Map<string, Doc>());
-  const setActive = useCallback((doc: Doc | null) => {
-    if (doc) retainedDocuments.current.set(doc.id, doc);
-    setActiveState(doc);
-  }, []);
-  const setSideDoc = useCallback((doc: Doc | null) => {
-    if (doc) retainedDocuments.current.set(doc.id, doc);
-    setSideDocState(doc);
-  }, []);
-  useEffect(() => {
-    const open = new Set([...editorTabs, ...(split?.tabs ?? [])].map((tab) => tab.id));
-    for (const id of retainedDocuments.current.keys())
-      if (!open.has(id)) retainedDocuments.current.delete(id);
-  }, [editorTabs, split]);
-  const splitRef = useRef<EditorGroup | null>(null),
-    groupsRef = useRef<HTMLDivElement>(null),
-    focusedSideRef = useRef<Side>(focusedSide);
-  focusedSideRef.current = focusedSide;
-  const updateSplit = useCallback(
-    (fn: (group: EditorGroup | null) => EditorGroup | null) => {
-      const next = fn(splitRef.current);
-      if (next === splitRef.current) return;
-      splitRef.current = next;
-      setSplit(next);
-      if (!next) setFocusedSide("left");
-    },
-    [],
-  );
   const [navigation, setNavigation] = useState<Navigation>(initialNavigation);
   const navigationRef = useRef(navigation);
   const libraryRef = useRef(lib);
@@ -312,6 +271,30 @@ export default function App() {
   const report = useCallback((e: any) => {
     setError(e.message || String(e));
   }, []);
+  const {
+    tabs: editorTabs, split, focusedSide, shownSide, sideSyncKey, groupsRef,
+    retainDocument, getRetainedDocument, clearRetainedDocuments, clearSideDocument,
+    pruneDocuments, resetGroups, commitOpenDocument, replaceDocumentId: replaceGroupDocumentId,
+    openDoc, pinTab, closeTab, closeTabs, cycleTab, moveTab,
+    focusOther, focusSide, openInGroup, openInTabs, splitTo, closeGroup, closeOtherGroup, moveToOther, closeSideTab,
+    checkSideDocument, groupStyle, getDropZone, startSash, resetSplitRatio,
+  } = useEditorGroups({
+    active,
+    documents: lib.documents,
+    workspaceOpen: view === "workspace",
+    visible: view === "workspace" && !memoOpen,
+    currentId: () => activeId.current,
+    currentDocument: () => draft.current?.doc ?? null,
+    flush: (options) => flush(options),
+    navigate: (id, pinned, beforeCommit) =>
+      navigate({ view: "workspace", projectId: "", documentId: id, pinned }, undefined, beforeCommit),
+    closeLastDocument,
+    report,
+  });
+  const setActive = useCallback((doc: Doc | null) => {
+    if (doc) retainDocument(doc);
+    setActiveState(doc);
+  }, [retainDocument]);
   useProjectSyncUpdates(loaded && projectId && (view === "project" || view === "workspace") ? `${projectId}:${view}` : "", report,
     (checking, available) => {
       setSyncChecking(checking);
@@ -337,16 +320,7 @@ export default function App() {
     }
     libraryRef.current = data;
     setLib(data);
-    const ids = new Set(data.documents.map((d) => d.id));
-    updateTabs((tabs) =>
-      tabs.every((t) => ids.has(t.id)) ? tabs : tabs.filter((t) => ids.has(t.id)),
-    );
-    updateSplit((group) => {
-      if (!group || group.tabs.every((t) => ids.has(t.id))) return group;
-      const tabs = group.tabs.filter((t) => ids.has(t.id));
-      if (!tabs.length) return null;
-      return { tabs, docId: ids.has(group.docId) ? group.docId : tabs[0].id };
-    });
+    pruneDocuments(new Set(data.documents.map((doc) => doc.id)));
     setLoaded(true);
     if (!projectRef.current && data.projects.length) {
       projectRef.current = data.projects[0].id;
@@ -367,7 +341,7 @@ export default function App() {
       }
     }
     return data;
-  }, [updateTabs, updateSplit]);
+  }, [pruneDocuments]);
   const projectReorder = useProjectReorder(libraryRef, lib.root, loaded && view === "library", busy, refresh, report);
   const flush = useCallback(async ({ auto = false, closing = false, skipMemo = false } = {}) => {
     if (!auto && !skipMemo) await memoFlush.current?.({ closing });
@@ -543,9 +517,9 @@ export default function App() {
     const offFlush = window.lof.onFlush(async () => {
       await flush({ closing: true });
       // 트레이에서 돌아오거나 다른 탭을 다시 열 때도 예전 본문을 되살리지 않는다.
-      retainedDocuments.current.clear();
+      clearRetainedDocuments();
       if (draft.current) setActive(draft.current.doc);
-      setSideDoc(null);
+      clearSideDocument();
     });
     const updateAutoSync = (status: AutoSyncStatus) => {
       setAutoSync(previous => previous.phase === status.phase && previous.message === status.message &&
@@ -567,12 +541,7 @@ export default function App() {
     gitActivity();
     d.doc = editDocument(d.doc, patch, markdownCopy);
     d.seq++;
-    // VS Code처럼 미리보기 탭을 편집하면 고정 탭이 된다.
-    updateTabs((tabs) =>
-      tabs.some((t) => t.id === d.doc.id && !t.pinned)
-        ? placeTab(tabs, d.doc.id, true, "")
-        : tabs,
-    );
+    pinTab(d.doc.id);
     setActive(cloneDocument(d.doc));
     setSaveStatus("편집 중");
     if (timer.current) clearTimeout(timer.current);
@@ -594,7 +563,7 @@ export default function App() {
     const fresh = destination.view === "workspace"
       ? await call<Doc>("readDocument", { id: destination.documentId }) : null;
     if (seq !== navigationSeq.current) return;
-    const retained = fresh ? retainedDocuments.current.get(fresh.id) : undefined;
+    const retained = fresh ? getRetainedDocument(fresh.id) : undefined;
     // 이미 열어 둔 탭의 본문은 유지하고, 안내줄에서 새 내용을 불러온다.
     const keepOlder = !!(fresh && retained && retained.revision !== fresh.revision);
     const doc = keepOlder ? retained! : fresh;
@@ -625,16 +594,11 @@ export default function App() {
     setNavigation(updated);
     setMemoOpen(false);
     if (doc) {
-      if (doc.projectId !== projectRef.current) updateSplit(() => null);
-      // 한 번 클릭한 문서는 미리보기 탭을 재사용하고, 명시적으로 열면 고정한다.
-      updateTabs((tabs) =>
-        placeTab(
-          doc.projectId === projectRef.current ? tabs : [],
-          doc.id,
-          destination.pinned === true,
-          activeId.current,
-        ),
-      );
+      commitOpenDocument(doc, {
+        sameProject: doc.projectId === projectRef.current,
+        pinned: destination.pinned === true,
+        after: activeId.current,
+      });
       draft.current = { doc, seq: keepOlder ? 1 : 0, saved: 0 };
       if (keepOlder) void call("saveDraft", { ...doc, expectedRevision: doc.revision }).catch(report);
       activeId.current = doc.id;
@@ -651,25 +615,8 @@ export default function App() {
     if (next.archive !== undefined) setArchive(next.archive);
     setDialog(null);
   }
-  async function openDoc(id: string, pinned = false) {
-    await navigate({ view: "workspace", projectId: "", documentId: id, pinned });
-  }
-  async function closeTab(id: string) {
-    const tabs = editorTabsRef.current,
-      index = tabs.findIndex((t) => t.id === id);
-    if (index < 0) return;
-    if (view === "workspace" && id === activeId.current) {
-      await flush({ closing: true, skipMemo: true });
-      const rest = tabs.filter((t) => t.id !== id),
-        next = rest[index] || rest[index - 1];
-      if (next) await openDoc(next.id, false);
-      else if (splitRef.current) return closeGroup();
-      else return closeLastTab();
-    }
-    updateTabs((current) => current.filter((t) => t.id !== id));
-  }
-  // 마지막 탭을 닫아도 작품 화면으로 넘어가지 않고 파일 트리가 있는 집필 화면을 유지한다.
-  async function closeLastTab() {
+  // 마지막 탭을 닫아도 파일 트리가 있는 집필 화면을 유지한다.
+  async function closeLastDocument(commit: () => void) {
     const seq = ++navigationSeq.current;
     await flush();
     if (seq !== navigationSeq.current) return;
@@ -678,108 +625,10 @@ export default function App() {
     conflictRef.current = false;
     setConflict(false);
     setActive(null);
-    updateTabs(() => []);
-  }
-  // 포커스를 다른 그룹으로 옮긴다. openId가 있으면 그 문서를 그 그룹에서 연다.
-  // 두 그룹을 맞바꾸는 일은 열 문서를 읽은 뒤 한 번에 한다. 먼저 바꾸면 옛 문서가 반대편 그룹에
-  // 잠깐 그려졌다가 바뀌어 화면이 깜빡이고 원고가 다시 만들어져 스크롤이 맨 위로 돌아간다.
-  async function focusOther(openId?: string, pinned = false) {
-    const other = splitRef.current;
-    if (!other) return;
-    await navigate(
-      { view: "workspace", projectId: "", documentId: openId ?? other.docId, pinned },
-      undefined,
-      () => {
-        const mine = { tabs: editorTabsRef.current, docId: activeId.current };
-        editorTabsRef.current = other.tabs;
-        setEditorTabs(other.tabs);
-        splitRef.current = mine;
-        setSplit(mine);
-        setFocusedSide((side) => (side === "left" ? "right" : "left"));
-        keepSideDoc();
-      },
-    );
-  }
-  // 포커스를 잃는 그룹은 방금 저장한 원고를 그대로 보여 준다. 다시 읽기를 기다리면 그 사이 원고가 사라진다.
-  function keepSideDoc() {
-    if (draft.current) setSideDoc(draft.current.doc);
-  }
-  async function focusSide(side: Side) {
-    if (splitRef.current && side !== focusedSideRef.current) await focusOther();
-  }
-  // 열 위치를 포커스와 별도로 지정한다. 트리에서 열면 원래 그룹의 탭을 유지한다.
-  async function openInGroup(id: string, side: Side, moveTab = false) {
-    if (splitRef.current) {
-      if (side === focusedSideRef.current) {
-        await openDoc(id, true);
-      } else {
-        await focusOther(id, true);
-        if (moveTab) updateSplit((group) => withoutTab(group, id));
-      }
-      return;
-    }
-    if (!activeId.current || !editorTabsRef.current.length) {
-      await openDoc(id, true);
-      return;
-    }
-    await navigate({ view: "workspace", projectId: "", documentId: id, pinned: true }, undefined, () => {
-      const mine = { tabs: editorTabsRef.current, docId: activeId.current };
-      editorTabsRef.current = [];
-      setEditorTabs([]);
-      updateSplit(() => (moveTab && mine.tabs.length > 1 ? withoutTab(mine, id) : mine));
-      setFocusedSide(side);
-      keepSideDoc();
-    });
-  }
-  // 오른쪽 그룹이 이미 있으면 그 자리에 열고, 없으면 새로 나눈다.
-  async function splitTo(id: string) {
-    await openInGroup(id, "right", true);
-  }
-  // 포커스된 그룹을 닫고 남은 그룹 하나로 돌아간다.
-  async function closeGroup() {
-    if (!splitRef.current) return;
-    await flush({ closing: true, skipMemo: true });
-    await focusOther();
-    updateSplit(() => null);
-  }
-  async function moveToOther(id: string) {
-    await focusOther(id, true);
-    updateSplit((group) => withoutTab(group, id));
-  }
-  function closeSideTab(id: string) {
-    updateSplit((group) => withoutTab(group, id));
-    if (sideDoc?.id === id) setSideDoc(null);
-  }
-  async function closeTabs(keep: (tab: EditorTab, index: number) => boolean, focusId?: string) {
-    const kept = editorTabsRef.current.filter(keep);
-    if (view === "workspace" && !kept.some((t) => t.id === activeId.current)) {
-      await flush({ closing: true, skipMemo: true });
-      if (focusId && kept.some((t) => t.id === focusId)) await openDoc(focusId, false);
-      else if (splitRef.current) return closeGroup();
-      else if (!kept.length) return closeLastTab();
-      else await openDoc(kept[0].id, false);
-    }
-    updateTabs((current) => current.filter((t) => kept.some((k) => k.id === t.id)));
-  }
-  async function cycleTab(direction: number) {
-    const tabs = editorTabsRef.current,
-      index = tabs.findIndex((t) => t.id === activeId.current);
-    if (tabs.length < 2 || index < 0) return;
-    await openDoc(tabs[(index + direction + tabs.length) % tabs.length].id, false);
-  }
-  function moveTab(from: string, to: string) {
-    updateTabs((tabs) => {
-      const a = tabs.findIndex((t) => t.id === from),
-        b = tabs.findIndex((t) => t.id === to);
-      if (a < 0 || b < 0 || a === b) return tabs;
-      const next = [...tabs];
-      next.splice(b, 0, ...next.splice(a, 1));
-      return next;
-    });
+    commit();
   }
   // 문서 ID가 바뀌었을 때(메모 이름 바꾸기) 탭·분할 보기·이동 기록이 새 ID를 가리키게 한다.
   function replaceDocId(oldId: string, newId: string) {
-    const swap = (id: string) => (id === oldId ? newId : id);
     const sessionStart = sessionStarts.current.get(oldId);
     if (oldId !== newId && sessionStart !== undefined) {
       sessionStarts.current.set(newId, sessionStart);
@@ -791,14 +640,7 @@ export default function App() {
       scrollPositions.current.delete(oldId);
     }
     if (activeId.current === oldId) activeId.current = newId;
-    updateTabs((tabs) =>
-      tabs.some((t) => t.id === oldId) ? tabs.map((t) => ({ ...t, id: swap(t.id) })) : tabs,
-    );
-    updateSplit((g) =>
-      g && (g.docId === oldId || g.tabs.some((t) => t.id === oldId))
-        ? { docId: swap(g.docId), tabs: g.tabs.map((t) => ({ ...t, id: swap(t.id) })) }
-        : g,
-    );
+    replaceGroupDocumentId(oldId, newId);
     const nav = navigationRef.current;
     if (nav.entries.some((e) => e.documentId === oldId)) {
       const next = {
@@ -901,8 +743,7 @@ export default function App() {
       conflictRef.current = false;
       setConflict(false);
       setActive(null);
-      updateTabs(() => []);
-      updateSplit(() => null);
+      resetGroups();
       projectRef.current = "";
       setProjectId("");
       resetNavigation();
@@ -1097,7 +938,7 @@ export default function App() {
       { label: "오른쪽 탭 닫기", disabled: index >= editorTabs.length - 1, action: attempt(() => closeTabs((_, i) => i <= index, t.id)) },
       { label: "모두 닫기", action: attempt(() => closeTabs(() => false)) },
       "separator",
-      { label: "탭 고정", disabled: t.pinned, action: () => updateTabs((tabs) => placeTab(tabs, t.id, true, "")) },
+      { label: "탭 고정", disabled: t.pinned, action: () => pinTab(t.id) },
       "separator",
       split
         ? { label: "다른 그룹으로 이동", action: attempt(() => moveToOther(t.id)) }
@@ -1118,7 +959,7 @@ export default function App() {
         await openDoc(t.id, true);
         closeSideTab(t.id);
       }) },
-      { label: "그룹 닫기", action: () => updateSplit(() => null) },
+      { label: "그룹 닫기", action: closeOtherGroup },
       "separator",
       { label: "파일 탐색기에서 표시", disabled: !doc, action: attempt(() => call("reveal", { id: t.id })) },
       { label: "경로 복사", disabled: !doc, action: attempt(() => copyPath(doc!)) },
@@ -1448,12 +1289,11 @@ export default function App() {
       if (!await call("chooseVault")) return;
       sessionStarts.current.clear();
       scrollPositions.current.clear();
-      retainedDocuments.current.clear();
+      clearRetainedDocuments();
       draft.current = null;
       activeId.current = "";
       setActive(null);
-      updateTabs(() => []);
-      updateSplit(() => null);
+      resetGroups();
       setMemoOpen(false);
       projectRef.current = "";
       setProjectId("");
@@ -1715,58 +1555,6 @@ export default function App() {
     else setSidebar((s) => !s);
   }, []);
   useEffect(() => setFocusTree(false), [focus]);
-  // 탭이 많아 스트립이 가로로 넘치면 새로 열린 탭이 화면 밖에 있어 열리지 않은 것처럼 보인다.
-  const currentTabId = active?.id;
-  useEffect(() => {
-    document
-      .querySelector<HTMLElement>(".editor-group.focused .editor-tab.current, .editor-groups:not(.split) .editor-tab.current")
-      ?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  }, [currentTabId, editorTabs.length]);
-  // 포커스되지 않은 그룹의 문서도 외부 변경을 안내하고, 불러오기를 눌렀을 때 반영한다.
-  const sideId = split?.docId || "",
-    sideRevision = lib.documents.find((d) => d.id === sideId)?.revision;
-  const [sideSyncKey, setSideSyncKey] = useState("");
-  const checkSideDocument = useSyncFileUpdates({
-    fileKey: sideDoc?.id ?? "",
-    enabled: !!sideId && sideDoc?.id === sideId && sideId !== active?.id,
-    canCheck: () => view === "workspace" && !memoOpen,
-    current: () => sideDoc ? { doc: sideDoc, version: sideDoc.revision } : null,
-    read: (doc: Doc) => call<Doc>("readDocument", { id: doc.id }),
-    pending: () => setSideSyncKey(sideDoc ? `${sideDoc.id}:${sideDoc.revision}` : ""),
-    apply: (doc) => { setSideDoc(doc); setSideSyncKey(""); },
-    report,
-  });
-  useEffect(() => {
-    if (!sideId || sideId === active?.id) return;
-    if (sideDoc?.id === sideId) {
-      void checkSideDocument().catch(report);
-      return;
-    }
-    const retained = retainedDocuments.current.get(sideId);
-    if (retained) { setSideDoc(retained); return; }
-    let canceled = false;
-    call<Doc>("readDocument", { id: sideId })
-      .then((d) => {
-        if (!canceled) setSideDoc(d);
-      })
-      .catch(report);
-    return () => {
-      canceled = true;
-    };
-  }, [sideId, sideRevision, sideDoc?.id, active?.id, report, checkSideDocument]);
-  const shownSide = !split
-    ? null
-    : split.docId === active?.id
-      ? active
-      : sideDoc?.id === split.docId
-        ? sideDoc
-        : null;
-  const groupStyle = (side: Side) =>
-    split
-      ? side === "left"
-        ? { flex: `0 0 calc(${splitRatio * 100}% - 2px)` }
-        : { flex: "1 1 0" }
-      : undefined;
   const sash = (
     <div
       key="sash"
@@ -1775,14 +1563,14 @@ export default function App() {
       aria-orientation="vertical"
       aria-label="편집기 그룹 크기 조절"
       onPointerDown={startSash}
-      onDoubleClick={() => setSplitRatio(0.5)}
+      onDoubleClick={resetSplitRatio}
     />
   );
   // 파일 트리는 놓은 그룹에 열고, 열린 탭은 그 그룹으로 옮긴다.
   function dragOverGroups(e: React.DragEvent) {
     const fromTree = !!dragTreeDoc.current;
     const zone = dragTab || fromTree
-      ? editorDropZone(e.target, e.clientX, groupsRef.current, !!splitRef.current, fromTree)
+      ? getDropZone(e.target, e.clientX, fromTree)
       : null;
     if (zone) {
       e.preventDefault();
@@ -1799,7 +1587,7 @@ export default function App() {
   function dropOnGroups(e: React.DragEvent) {
     const fromTree = !!dragTreeDoc.current;
     const id = dragTreeDoc.current || dragTab;
-    const zone = id ? editorDropZone(e.target, e.clientX, groupsRef.current, !!splitRef.current, fromTree) : null;
+    const zone = id ? getDropZone(e.target, e.clientX, fromTree) : null;
     if (!zone || !id) return;
     // 편집기 본문이 드래그한 파일을 텍스트로 삽입하기 전에 처리한다.
     e.preventDefault();
@@ -1811,11 +1599,6 @@ export default function App() {
     setDropZone(null);
     setDragTab("");
     attempt(() => (zone.tabs ? openInTabs(id, zone.side) : openInGroup(id, zone.side, !fromTree)))();
-  }
-  // 트리에서 끌어 그룹의 탭 막대에 놓으면 화면을 나누지 않고 그 그룹에 고정 탭으로 연다.
-  async function openInTabs(id: string, side: Side) {
-    if (splitRef.current) await openInGroup(id, side);
-    else await openDoc(id, true);
   }
   function manuscriptBoxForKind(kind: Kind = "episode") {
     const kindPrefs = resolveKindPrefs(prefs, kind);
@@ -2091,7 +1874,7 @@ export default function App() {
   function documentTabs(tabs: EditorTab[], currentId: string, groupFocused: boolean) {
     return tabs.map((tab) => {
       const doc = tab.id === active?.id ? active
-        : tab.id === shownSide?.id ? shownSide : retainedDocuments.current.get(tab.id);
+        : tab.id === shownSide?.id ? shownSide : getRetainedDocument(tab.id);
       if (!doc) return null;
       const visible = isWorkspace && tab.id === currentId;
       return <RetainedTab key={tab.id} visible={visible}>
@@ -2158,23 +1941,6 @@ export default function App() {
         {documentTabs(split.tabs, split.docId, false)}
       </section>
     );
-  }
-  function startSash(e: React.PointerEvent) {
-    e.preventDefault();
-    const box = groupsRef.current?.getBoundingClientRect();
-    if (!box) return;
-    const move = (ev: PointerEvent) =>
-      setSplitRatio(
-        Math.min(0.8, Math.max(0.2, (ev.clientX - box.left) / box.width)),
-      );
-    const up = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-      document.body.classList.remove("sash-dragging");
-    };
-    document.body.classList.add("sash-dragging");
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
   }
   const [previewOpen, setPreviewOpen] = useState(false);
   const chordAt = useRef(0);
@@ -2910,7 +2676,7 @@ export default function App() {
                       }}
                       onClick={attempt(() => openDoc(t.id, false))}
                       onDoubleClick={() =>
-                        updateTabs((tabs) => placeTab(tabs, t.id, true, ""))
+                        pinTab(t.id)
                       }
                       onMouseDown={(e) => {
                         if (e.button === 1) e.preventDefault();
