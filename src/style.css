@@ -1226,6 +1226,11 @@ body.sidebar-resizing * {
   min-width: 0;
   background: var(--surface);
 }
+.workspace-empty {
+  flex: 1;
+  display: grid;
+  place-items: center;
+}
 .editor-tabs {
   display: flex;
   height: 39px;

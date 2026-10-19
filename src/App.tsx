@@ -773,9 +773,21 @@ export default function App() {
         next = rest[index] || rest[index - 1];
       if (next) await openDoc(next.id, false);
       else if (splitRef.current) return closeGroup();
-      else await goView("project");
+      else return closeLastTab();
     }
     updateTabs((current) => current.filter((t) => t.id !== id));
+  }
+  // 마지막 탭을 닫아도 작품 화면으로 넘어가지 않고 파일 트리가 있는 집필 화면을 유지한다.
+  async function closeLastTab() {
+    const seq = ++navigationSeq.current;
+    await flush();
+    if (seq !== navigationSeq.current) return;
+    draft.current = null;
+    activeId.current = "";
+    conflictRef.current = false;
+    setConflict(false);
+    setActive(null);
+    updateTabs(() => []);
   }
   // 포커스를 다른 그룹으로 옮긴다. openId가 있으면 그 문서를 그 그룹에서 연다.
   // 두 그룹을 맞바꾸는 일은 열 문서를 읽은 뒤 한 번에 한다. 먼저 바꾸면 옛 문서가 반대편 그룹에
@@ -850,7 +862,8 @@ export default function App() {
     if (view === "workspace" && !kept.some((t) => t.id === activeId.current)) {
       if (focusId && kept.some((t) => t.id === focusId)) await openDoc(focusId, false);
       else if (splitRef.current) return closeGroup();
-      else await goView("project");
+      else if (!kept.length) return closeLastTab();
+      else await openDoc(kept[0].id, false);
     }
     updateTabs((current) => current.filter((t) => kept.some((k) => k.id === t.id)));
   }
@@ -1913,6 +1926,8 @@ export default function App() {
   const charsWithSpaces = stats ? countForRule(stats, "spaces", countUnit) : 0;
   const goal = Number(writingRules.goal) || 0;
   const isWorkspace = view === "workspace" && !!active && !memoOpen;
+  // 모든 탭을 닫은 집필 화면. 파일 트리는 그대로 두고 편집 영역만 비운다.
+  const emptyWorkspace = view === "workspace" && !active && !memoOpen;
   // 문서를 연 집중 모드에서만 창을 작게 줄일 수 있다. 끄면 원래 최소 크기로 돌아간다.
   const compactWindow = focus && isWorkspace;
   useEffect(() => {
@@ -3852,7 +3867,7 @@ export default function App() {
         </nav>
         <div className="content-frame">
           {/* 문서 편집 화면에서는 탭이 제목 역할을 하므로 헤더를 숨긴다. */}
-          {!isWorkspace && !memoOpen && (
+          {!isWorkspace && !emptyWorkspace && !memoOpen && (
             <header className="workspace-header">
               <strong>Lof Writer</strong>
               <span className="titlebar-path">
@@ -3936,7 +3951,7 @@ export default function App() {
             />
           </ResizableSidebar>
         )}
-        {isWorkspace && treeOpen && !searchOpen && (
+        {(isWorkspace || emptyWorkspace) && treeOpen && !searchOpen && (
           <ResizableSidebar label="파일 트리" className="file-tree" width={prefs.leftSidebarWidth}
             onResize={(width) => savePrefs({ leftSidebarWidth: width }).catch(report)}>
             <div className="panel-caption">
@@ -4172,7 +4187,16 @@ export default function App() {
             </div>
           </ResizableSidebar>
         )}
-        <main className={isWorkspace ? "workspace" : "main-page"}>
+        <main className={isWorkspace || emptyWorkspace ? "workspace" : "main-page"}>
+          {emptyWorkspace && (
+            <div className="workspace-empty">
+              <div className="empty-state">
+                <FileText size={32} />
+                <h3>열린 문서가 없습니다</h3>
+                <p>파일 트리에서 문서를 선택하세요.</p>
+              </div>
+            </div>
+          )}
           {view === "bookmarks" && bookmarksPage()}
           {view === "library" && (
             <>
