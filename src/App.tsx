@@ -1121,6 +1121,7 @@ export default function App() {
   }
   // 순서는 파일 트리에서 끌어서 바꾼다(treeRow).
   function docMenu(d: Doc): MenuItem[] {
+    const rawCopy = active?.id === d.id && (source || requiresDocumentSource(active));
     return [
       { label: "열기", action: attempt(() => openDoc(d.id, false)) },
       // 미리보기 탭을 바꾸지 않고 고정 탭으로 연다(더블클릭과 같다).
@@ -1158,11 +1159,8 @@ export default function App() {
       { label: "파일 탐색기에서 표시", shortcut: "Shift+Alt+R", action: attempt(() => call("reveal", { id: d.id })) },
       { label: "경로 복사", shortcut: "Shift+Alt+C", action: attempt(() => copyPath(d)) },
       {
-        label:
-          active?.id === d.id && (source || requiresDocumentSource(active))
-            ? "Markdown 원문 복사"
-            : "본문 복사",
-        action: attempt(() => copyDocManuscript(d)),
+        label: rawCopy ? "Markdown 원문 복사" : "본문 복사",
+        action: attempt(() => copyDocManuscript(d, rawCopy)),
       },
       {
         label: "Markdown 내보내기",
@@ -2137,7 +2135,8 @@ export default function App() {
                   ? "Markdown 원문 복사"
                   : "본문 복사"
               }
-              onClick={attempt(() => copyDocManuscript(active))}
+              // 분할 화면에서는 이 칸의 문서가 전체 활성 문서와 다를 수 있으므로 표시한 방식 그대로 복사한다.
+              onClick={attempt(() => copyDocManuscript(active, source || requiresDocumentSource(active)))}
             >
               <Copy size={18} />
             </button>
