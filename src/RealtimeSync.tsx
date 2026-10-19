@@ -276,7 +276,7 @@ export default function RealtimeSync({ onClose }: { onClose: () => void }) {
           <h3>동기화 그룹</h3>
           <p className="settings-description">페어링 코드로 가입한 장치끼리 P2P 방식으로 서로를 찾아 변경 내용을 동기화합니다.</p>
           {status.group && <div className="realtime-group">
-            <Users size={16} aria-hidden="true" /><span>그룹 <code>{groupLabel(status.group.id)}</code></span><span>장치 <strong>{status.group.members}</strong>대</span>
+            <Users size={16} aria-hidden="true" /><span>그룹 <code>{groupLabel(status.group.id)}</code></span><span>장치 <strong>{status.group.members}</strong>/10대</span>
             <div className="realtime-group-actions">
               {leaving ? <><span>이 장치를 그룹에서 뺄까요?</span>
                 <button type="button" disabled={!!action} onClick={leaveGroup}>{action === "leave" ? <Loader2 className="realtime-spinner" size={13} /> : <LogOut size={13} />}나가기</button>

@@ -187,6 +187,7 @@ fn begin_pair(
             let response=tokio::select!{
                 result=lof_realtime::request(&connection,Message::json(request))=>result.map_err(|error|{
                     let code=if error.starts_with("페어링 코드가 만료되었습니다."){"PAIR_CODE_EXPIRED"}
+                        else if error==group::FULL_MESSAGE{"GROUP_FULL"}
                         else if error.contains("코드"){"PAIR_CODE_REJECTED"}else{"PAIR_NETWORK"};
                     if code=="PAIR_NETWORK" {eprintln!("그룹 가입 응답 오류: {error}");fail("그룹 가입을 완료하지 못했습니다. 상대 앱과 인터넷 연결을 확인한 뒤 다시 시도해 주세요.",code)}else{fail(error,code)}
                 }),
@@ -500,6 +501,9 @@ fn join(app: &AppHandle, peer: &str, message: &Message) -> Result<Message, LofEr
         let group = group.as_mut().filter(|g| g.id() == expected).ok_or_else(|| {
             fail_invalid("코드를 만든 뒤 동기화 그룹이 변경되었습니다. 새 코드를 만들어 주세요.")
         })?;
+        if group.member(peer).is_none() && group.full() {
+            return Err(fail(group::FULL_MESSAGE, "GROUP_FULL"));
+        }
         let joined = group.update(&key, peer, remote_vault, &name, storage, false);
         Ok((group.clone(), joined))
     })?;
@@ -1336,6 +1340,9 @@ pub fn command(app: &AppHandle, method: &str, args: &Value) -> Result<Value, Lof
                 .get_or_insert_with(|| Group::create(&key, &local_vault, &device_name(), false));
             if current.member(&own).is_none_or(|me| me.vault != local_vault) {
                 current.update(&key, &own, &local_vault, &device_name(), false, false);
+            }
+            if current.full() {
+                return Err(fail(group::FULL_MESSAGE, "GROUP_FULL"));
             }
             Ok(current.clone())
         })?;
