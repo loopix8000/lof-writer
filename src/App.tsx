@@ -90,7 +90,7 @@ import PlatformPicker from "./PlatformPicker";
 import TagInput from "./TagInput";
 import PropertyPresetSettings from "./PropertyPresetSettings";
 import PinSettings from "./PinSettings";
-import FontLicenses from "./FontLicenses";
+import OpenSourceLicenses from "./OpenSourceLicenses";
 import ContextMenu, { type MenuItem } from "./ContextMenu";
 import { useConfirm } from "./ConfirmDialog";
 import { useProjectSyncUpdates, useSyncFileUpdates } from "./useSyncFileUpdates";
@@ -287,6 +287,7 @@ export default function App() {
       theme: "light",
       colorTheme: "modern",
       copyWithBlankLines: false,
+      hideCovers: false,
       autoCloseQuotes: true,
       autoCloseBrackets: true,
       smartBrackets: true,
@@ -3968,7 +3969,7 @@ export default function App() {
               }}
             >
               <div className="mini-cover">
-                {project?.coverData ? (
+                {project?.coverData && !prefs.hideCovers ? (
                   <CoverImage src={project.coverData} alt="작품 표지" />
                 ) : (
                   <Feather size={23} />
@@ -4188,7 +4189,7 @@ export default function App() {
                   {lib.projects
                     .map((p, i) => (
                       <button
-                        className={`project-card ${menu?.target === "project:" + p.id ? "context-target" : ""}`}
+                        className={`project-card ${prefs.hideCovers ? "no-cover" : ""} ${menu?.target === "project:" + p.id ? "context-target" : ""}`}
                         key={p.id}
                         onClick={attempt(() => goView("project", p.id))}
                         onContextMenu={(e) =>
@@ -4207,18 +4208,20 @@ export default function App() {
                           )
                         }
                       >
-                        <div className={`book-cover cover-${i % 4}`}>
-                          {p.coverData ? (
-                            <CoverImage src={p.coverData} alt={`${p.title} 표지`} />
-                          ) : (
-                            <>
-                              <Feather size={40} />
-                              <span>
-                                LOF / {String(i + 1).padStart(2, "0")}
-                              </span>
-                            </>
-                          )}
-                        </div>
+                        {!prefs.hideCovers && (
+                          <div className={`book-cover cover-${i % 4}`}>
+                            {p.coverData ? (
+                              <CoverImage src={p.coverData} alt={`${p.title} 표지`} />
+                            ) : (
+                              <>
+                                <Feather size={40} />
+                                <span>
+                                  LOF / {String(i + 1).padStart(2, "0")}
+                                </span>
+                              </>
+                            )}
+                          </div>
+                        )}
                         <div className="project-info">
                           <h3>{p.title}</h3>
                           <small>
@@ -4244,11 +4247,11 @@ export default function App() {
                   {/* 목록 맨 끝의 새 이야기 카드. 작품이 없으면 가운데의 '첫 이야기 만들기'만 보인다. */}
                   {lib.projects.length > 0 && (
                     <button
-                      className="project-card new-project-card"
+                      className={`project-card new-project-card ${prefs.hideCovers ? "no-cover" : ""}`}
                       onClick={() => setDialog({ type: "newProject", value: "" })}
                     >
                       <div className="book-cover new-cover">
-                        <Plus size={30} />
+                        <Plus size={prefs.hideCovers ? 18 : 30} />
                       </div>
                       <div className="project-info">
                         <h3>새 이야기</h3>
@@ -4369,7 +4372,7 @@ export default function App() {
                     </button>
                   </div>
                 </div>
-                <div className="hero-cover">
+                {!prefs.hideCovers && <div className="hero-cover">
                   {project.coverData ? (
                     <button
                       className="cover-zoom"
@@ -4389,7 +4392,7 @@ export default function App() {
                       <span>YOUR STORY</span>
                     </>
                   )}
-                </div>
+                </div>}
               </div>
               <div className="project-tabs">
                 <div className="row gap">
@@ -5204,7 +5207,7 @@ export default function App() {
                   <UpdateSettings updater={updater} version={lib.version}
                     autoCheck={prefs.checkUpdatesOnStartup !== false}
                     onAutoCheck={(checked) => savePrefs({ checkUpdatesOnStartup: checked }).catch(report)} />
-                  <FontLicenses />
+                  <OpenSourceLicenses />
                 </section>
                 <section id="settings-security" className="settings-section" hidden={settingsPage !== "security"}>
                   {settingsPage === "security" && <PinSettings />}
@@ -5270,6 +5273,14 @@ export default function App() {
                         <option value="dark">어둡게</option>
                       </select>
                     </label>
+                  </div>
+                  <div className="settings-toggles" style={{ marginTop: 14 }}>
+                    <SettingsToggle
+                      label="표지 숨기기"
+                      description="내 서재와 작품 화면에서 작품 표지를 표시하지 않습니다. 등록한 표지는 지우지 않습니다."
+                      checked={prefs.hideCovers === true}
+                      onChange={(checked) => savePrefs({ hideCovers: checked }).catch(report)}
+                    />
                   </div>
                   <PropertyPresetSettings presets={prefs.propertyPresets} tags={prefs.favoriteTags} onChange={savePrefs} />
                 </section>

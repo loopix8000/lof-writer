@@ -3279,6 +3279,17 @@ body.sash-dragging {
   border-color: var(--accent);
   color: var(--accent);
 }
+/* 표지 숨기기: 작품 카드를 제목 중심으로 줄이고 새 이야기 카드는 작은 점선 칸만 남긴다. */
+.project-card.no-cover {
+  min-height: 0;
+  align-items: center;
+}
+.new-project-card.no-cover .new-cover {
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  border-radius: 8px;
+}
 .new-project-card .project-info h3 {
   color: var(--muted);
 }
@@ -4641,17 +4652,49 @@ button.episode-tag[draggable]:active {
   color: #ffffff;
 }
 
-.font-licenses {
+.open-source-licenses {
   margin-top: 20px;
 }
-.font-licenses summary {
+.open-source-licenses summary {
   cursor: pointer;
   padding: 6px 0;
 }
-.font-licenses > details {
-  margin-top: 6px;
+.open-source-licenses details {
+  margin-top: 4px;
+  padding-left: 16px;
 }
-.font-licenses pre {
+.open-source-licenses details > .settings-description {
+  margin: 2px 0 6px;
+}
+.license-count {
+  margin-left: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.license-packages {
+  margin: 4px 0 8px;
+  padding: 8px 12px;
+  max-height: 320px;
+  overflow: auto;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.license-packages li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+.license-packages li > span:first-child {
+  overflow-wrap: anywhere;
+}
+.license-version {
+  color: var(--muted);
+  white-space: nowrap;
+}
+.open-source-licenses pre {
   max-height: 320px;
   overflow: auto;
   padding: 12px;

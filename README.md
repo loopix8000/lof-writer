@@ -164,4 +164,5 @@ Windows 배포본 빌드는 `npm run package`, MSI 생성은 `npm run package:ms
 
 앱에 포함된 리디바탕·Pretendard·본고딕에는 별도의 SIL Open Font License 1.1이 적용됩니다.
 저작권, 출처, 재배포 조건과 원문은 [내장 글꼴 라이선스](FONT_LICENSES.md)를 참고하세요.
-앱의 설정 → 앱 업데이트 → 내장 글꼴 라이선스에서도 고지와 전문을 확인할 수 있습니다.
+앱의 설정 → 앱 업데이트 → 오픈소스 라이선스에서 글꼴 고지와 전문, 앱에 포함된 npm·Rust 라이브러리의 라이선스 목록을 확인할 수 있습니다.
+의존성을 바꾼 뒤에는 `npm run licenses`로 라이브러리 목록을 다시 생성합니다.

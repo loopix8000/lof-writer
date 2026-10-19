@@ -21,6 +21,7 @@
     "mcp": "node scripts/mcp.mjs",
     "snapshot": "node scripts/snapshot.mjs",
     "package:dir": "node scripts/package-tauri.mjs dir",
+    "licenses": "node scripts/generate-licenses.mjs",
     "package:msi": "node scripts/package-tauri.mjs msi",
     "updater:prepare": "node scripts/prepare-updater.mjs",
     "updater:keygen": "node scripts/generate-updater-key.mjs",
