@@ -3,10 +3,8 @@ import BookmarksPage from "./app/BookmarksPage";
 import BrokenFiles from "./app/BrokenFiles";
 import { icons, labels } from "./app/document-ui";
 import DocumentLinksWidget from "./app/DocumentLinksWidget";
-import EpisodeDocList from "./app/EpisodeDocList";
-import FileTree, { EPISODE_GROUP } from "./app/FileTree";
+import FileTree from "./app/FileTree";
 import LibraryPage from "./app/LibraryPage";
-import MemoFolderTree from "./app/MemoFolderTree";
 import ProjectForm from "./app/ProjectForm";
 import ProjectPage from "./app/ProjectPage";
 import { type SettingsPage } from "./app/settings-pages";
@@ -15,12 +13,13 @@ import TitleBar from "./app/TitleBar";
 import TypesettingSettings from "./app/TypesettingSettings";
 import { useDocumentImages } from "./app/useDocumentImages";
 import { useDocumentNotes } from "./app/useDocumentNotes";
+import { composingError, useDocumentSession } from "./app/useDocumentSession";
 import { useEditorGroups } from "./app/useEditorGroups";
+import { useFileTree } from "./app/useFileTree";
 import { usePreferences } from "./app/usePreferences";
 
 import {
   Archive,
-  ArchiveRestore,
   Bookmark as BookmarkIcon,
   Check,
   Cloud,
@@ -46,7 +45,6 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  episodeNumbers,
   lineBreakDefault,
   normalizeStatus
 } from "../core/episode.mjs";
@@ -65,12 +63,12 @@ import {
   migrateTypingPreferences,
   normalizeTextReplacements
 } from "../core/typing.mjs";
-import { cloneDocument, editDocument, globalView, initialNavigation, requiresDocumentSource, type Destination, type Dialog, type EditorTab, type Navigation, type Side } from "./app/model";
+import { globalView, initialNavigation, requiresDocumentSource, sameDocumentContent, type Destination, type Dialog, type EditorTab, type Navigation, type Side } from "./app/model";
 import { useConfirm } from "./ConfirmDialog";
 import ContextMenu, { type MenuItem } from "./ContextMenu";
 import { ImageViewer } from "./CoverImage";
 import { type EditorDropZone } from "./editor-groups";
-import EditorScroll, { type EditorScrollPositions } from "./EditorScroll";
+import EditorScroll from "./EditorScroll";
 import EpisodeBindingPicker from "./EpisodeBindingPicker";
 import EpisodeProperties, { statusItems } from "./EpisodeProperties";
 import HistoryDialog from "./HistoryDialog";
@@ -81,6 +79,7 @@ import PlatformCount from "./PlatformCount";
 import PlatformPicker from "./PlatformPicker";
 import QuickNote, { quickNoteMarkdown, quickNoteTitle, type QuickNoteSource } from "./QuickNote";
 import RealtimeSync from "./RealtimeSync";
+import { ReleaseNotesDialog, ReleaseNotice, useReleaseNotice } from "./ReleaseNotes";
 import ResizableSidebar from "./ResizableSidebar";
 import RetainedTab from "./RetainedTab";
 import {
@@ -102,13 +101,10 @@ import {
   type WritingRules
 } from "./types";
 import { UpdateLock, UpdateNotice, useAppUpdater } from "./Updater";
-import { ReleaseNotesDialog, ReleaseNotice, useReleaseNotice } from "./ReleaseNotes";
-import { useGitActivity } from "./useGitActivity";
 import { useManuscriptCounts } from "./useManuscriptCounts";
 import { useProjectReorder } from "./useProjectReorder";
-import { readFileForClose, useProjectSyncUpdates, useSyncFileUpdates } from "./useSyncFileUpdates";
+import { useProjectSyncUpdates } from "./useSyncFileUpdates";
 import Writer from "./Writer";
-const composingError = "한글 입력 조합이 끝난 뒤 다시 저장해 주세요.";
 // 저장할 때마다 임시 원고를 먼저 쓰고 저장이 끝나면 지운다. 그 사이에 목록을 새로 읽으면
 // 편집 중인 원고의 임시본이 잡히므로, 앱을 연 뒤 지금 편집 중인 원고에 쓴 임시본은 복구 대상에서 뺀다.
 const appStartedAt = Date.now();
@@ -128,7 +124,6 @@ export default function App() {
     [loaded, setLoaded] = useState(false),
     [view, setView] = useState("library"),
     [projectId, setProjectId] = useState(""),
-    [active, setActiveState] = useState<Doc | null>(null),
     [tab, setTab] = useState<Kind>("episode"),
     [dialog, setDialog] = useState<Dialog | null>(null),
     [settingsPage, setSettingsPage] = useState<SettingsPage>("editor"),
@@ -140,8 +135,6 @@ export default function App() {
     // 토스트의 버튼(예: 속성 제거의 '실행 취소').
     [toastAction, setToastAction] = useState<{ label: string; run: () => void } | null>(null),
     [error, setError] = useState(""),
-    [saveStatus, setSaveStatus] = useState("저장됨"),
-    [conflict, setConflict] = useState(false),
     [source, setSource] = useState(false),
     // 편집 중인 원고에서 커서가 있는 줄 번호(상태줄에 보인다).
     [cursorLine, setCursorLine] = useState<number | null>(null),
@@ -179,37 +172,14 @@ export default function App() {
     [quickNote, setQuickNote] = useState<QuickNoteSource | null>(null),
     // 작품 삭제 확인: 작품 제목을 그대로 입력해야 삭제 버튼이 켜진다.
     [confirmTitle, setConfirmTitle] = useState(""),
-    // 플롯 트리에서 접어 둔 회차, 플롯을 끌어 놓을 대상(회차 ID, 연결 해제는 "").
-    // 트리에서 끄는 동안 놓을 곳: 파일을 연결할 회차 ID나 옮길 폴더("folder:경로").
-    [treeDrop, setTreeDrop] = useState<string | null>(null),
-    // 순서를 바꾸려고 끈 회차를 놓을 자리(그 회차 줄의 위·아래).
-    [episodeDrop, setEpisodeDrop] = useState<{ id: string; after: boolean } | null>(null),
-    // 파일 트리에서 Shift·Ctrl+클릭으로 고른 문서(트리에 보이는 순서). 비어 있으면 한 줄씩 다룬다.
-    [treeSelection, setTreeSelection] = useState<string[]>([]),
-    // 메모 영역의 memo/ 폴더 목록, 펼친 폴더, 이름을 바꾸는 폴더.
-    [memoEntries, setMemoEntries] = useState<{ path: string; name: string; type: string }[]>([]),
-    [memoOpenFolders, setMemoOpenFolders] = useState<Set<string>>(new Set()),
-    [folderRenaming, setFolderRenaming] = useState<{ path: string; value: string } | null>(null),
-    // 파일 트리의 탭(에피소드·문서. 문서 탭에 'memo' 키를 쓴다)과 탭마다의 검색어.
-    [treeTab, setTreeTab] = useState<"episode" | "memo">("episode"),
-    [treeQuery, setTreeQuery] = useState({ episode: "", memo: "" }),
-    // 문서 탭의 보기 범위(전체 문서·현재 회차만), 현재 회차, 현재 회차 보기에서 접어 둔 묶음.
-    [docScope, setDocScope] = useState<"all" | "episode">("all"),
-    [treeEpisodeId, setTreeEpisodeId] = useState(""),
-    [closedDocGroups, setClosedDocGroups] = useState<Set<Kind>>(new Set()),
-    // 회차가 많은 작품에서 펼친 회차 묶음(묶음 첫 회차의 목록 위치).
-    [openEpisodeGroups, setOpenEpisodeGroups] = useState<Set<number>>(new Set()),
     // 위젯 보드 자리에 펼친 목록(위젯·북마크·조판 설정), 목록에서 고른 북마크(문단 순서).
     [rightView, setRightView] = useState<"widgets" | "bookmarks" | "typesetting">("widgets"),
     [bookmarkJump, setBookmarkJump] = useState<{ docId: string; index: number; seq: number } | null>(null),
     // 레일의 전체 북마크 화면 검색어.
     [bookmarkQuery, setBookmarkQuery] = useState("");
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[]; target?: string } | null>(null),
-    // 이름 바꾸기 입력칸. widget이면 위젯 보드의 연결 문서 목록에서, 아니면 파일 트리에서 받는다.
-    [renaming, setRenaming] = useState<{ id: string; value: string; widget?: boolean } | null>(null),
     [dragTab, setDragTab] = useState(""),
     [dropZone, setDropZone] = useState<EditorDropZone | null>(null);
-  const renamingRef = useRef<{ id: string; value: string; widget?: boolean } | null>(null);
   const memoFlush = useRef<((options?: { closing?: boolean }) => Promise<void>) | null>(null);
   const memoManualSave = useRef<(() => Promise<void>) | null>(null);
   const imageCache = useRef(new Map<string, Promise<string | null>>());
@@ -217,14 +187,6 @@ export default function App() {
   const memoApi = useRef<{ open: (space: string, path: string, pinned?: boolean) => Promise<void> } | null>(null);
   // 전역 단축키에서 늘 최신 검색 함수를 부르도록 한다.
   const searchActions = useRef({ openQuick: () => {}, openSearch: () => {} });
-  // 트리에서 끌고 있는 것. dragTreeDoc은 편집기 그룹에 놓아 열 문서, dragEpisodes는 순서를 바꿀 회차(보관함 밖),
-  // dragFileDocs는 문서 탭의 파일(플롯·메모), dragFolder는 doc/ 폴더 경로다. 여러 줄을 골랐으면 고른 것을 함께 끈다.
-  const dragTreeDoc = useRef("");
-  const dragEpisodes = useRef<string[]>([]);
-  const dragFileDocs = useRef<string[]>([]);
-  const dragFolder = useRef("");
-  // Shift+클릭 범위 선택의 기준 줄(마지막으로 그냥 누르거나 Ctrl+클릭한 줄).
-  const selectionAnchor = useRef("");
   const closeMenu = useCallback(() => setMenu(null), []);
   const closeViewer = useCallback(() => setViewer(null), []);
   const switchWasOpen = useRef(false);
@@ -239,26 +201,17 @@ export default function App() {
   const [navigation, setNavigation] = useState<Navigation>(initialNavigation);
   const navigationRef = useRef(navigation);
   const libraryRef = useRef(lib);
-  const draft = useRef<{ doc: Doc; seq: number; saved: number } | null>(null),
-    saveChain = useRef(Promise.resolve()),
-    timer = useRef<ReturnType<typeof setTimeout> | null>(null),
-    composing = useRef(false),
-    conflictRef = useRef(false),
-    projectRef = useRef(""),
-    activeId = useRef(""),
-    refreshSeq = useRef(0),
+  const projectRef = useRef("");
+  const documentMove = useRef<Promise<void> | null>(null);
+  const refreshSeq = useRef(0),
     initialized = useRef(false),
     navigationSeq = useRef(0),
     toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // 앱에서 문서를 처음 열었을 때의 글자 수를 문서별로 유지한다.
-  const sessionStarts = useRef(new Map<string, number>());
-  const scrollPositions = useRef<EditorScrollPositions>(new Map());
   const pendingWriting = useRef(new Map<string, WritingRules>()),
     writingQueue = useRef(Promise.resolve()),
     // 조판 설정을 열 때 우측 사이드바가 닫혀 있었으면, 조판 설정을 닫을 때 사이드바도 다시 닫는다.
     typesettingOpenedRight = useRef(false);
   const project = lib.projects.find((p) => p.id === projectId);
-  const checkOpenDocRef = useRef<((askAgain?: boolean) => Promise<void>) | null>(null);
   const message = useCallback((text: string, action?: { label: string; run: () => void }) => {
     setToast(text);
     setToastAction(action ?? null);
@@ -271,6 +224,23 @@ export default function App() {
   const report = useCallback((e: any) => {
     setError(e.message || String(e));
   }, []);
+  const session = useDocumentSession({
+    loaded, visible: view === "workspace" && !memoOpen, memoOpen,
+    flushMemo: (options) => memoFlush.current?.(options),
+    waitForWriting: () => writingQueue.current,
+    pendingDocumentMove: () => documentMove.current,
+    saveMemoManually: () => memoManualSave.current?.(),
+    retainDocument: (doc) => retainDocument(doc),
+    clearRetainedDocuments: () => clearRetainedDocuments(),
+    clearSideDocument: () => clearSideDocument(),
+    pinTab: (id) => pinTab(id),
+    onDocumentIdChanged: handleDocumentIdChange,
+    onSaved: () => setError((e) => e === composingError ? "" : e),
+    refresh: () => refresh(), openDoc: (id, pinned) => openDoc(id, pinned),
+    message, report,
+  });
+  const { active, saveStatus, conflict, flush, flushForClose, waitForSave, reconcileDocuments,
+    manualSave, edit, composition, checkOpenDocument, writeMeta, resolveConflict } = session;
   const {
     tabs: editorTabs, split, focusedSide, shownSide, sideSyncKey, groupsRef,
     retainDocument, getRetainedDocument, clearRetainedDocuments, clearSideDocument,
@@ -283,18 +253,32 @@ export default function App() {
     documents: lib.documents,
     workspaceOpen: view === "workspace",
     visible: view === "workspace" && !memoOpen,
-    currentId: () => activeId.current,
-    currentDocument: () => draft.current?.doc ?? null,
+    currentId: session.currentId,
+    currentDocument: session.currentDocument,
+    pendingDocumentMove: () => documentMove.current,
     flush: (options) => flush(options),
     navigate: (id, pinned, beforeCommit) =>
       navigate({ view: "workspace", projectId: "", documentId: id, pinned }, undefined, beforeCommit),
     closeLastDocument,
     report,
   });
-  const setActive = useCallback((doc: Doc | null) => {
-    if (doc) retainDocument(doc);
-    setActiveState(doc);
-  }, [retainDocument]);
+  const fileTree = useFileTree({
+    library: lib, active, projectId, view, archive, menuTarget: menu?.target,
+    getLibrary: () => libraryRef.current,
+    currentProjectId: () => projectRef.current,
+    currentDocument: session.currentDocument,
+    flush: () => flush(), refresh: () => refresh(),
+    moveDocuments,
+    openDoc, closeTab, closeSideTab,
+    writeMeta, patchDoc, archiveDoc, archiveDocs, copyPath, docMenu, openMenu,
+    onDelete: (ids) => setDialog({ type: "deleteDoc", ids }),
+    remapDocuments: (before, from, to) => remapDocs(before, from, to),
+    showTree: () => { if (focusRef.current) setFocusTree(true); else setSidebar(true); },
+    onDragStart: () => setDragTab(""), onDragEnd: () => setDropZone(null),
+    confirm: (options) => confirm({ ...options, icon: <Trash2 size={15} /> }),
+    message, report,
+  });
+  const { docs, count, numberOf, startRename, plotItems, addDocFile, loadMemoFolders } = fileTree;
   useProjectSyncUpdates(loaded && projectId && (view === "project" || view === "workspace") ? `${projectId}:${view}` : "", report,
     (checking, available) => {
       setSyncChecking(checking);
@@ -320,127 +304,27 @@ export default function App() {
     }
     libraryRef.current = data;
     setLib(data);
-    pruneDocuments(new Set(data.documents.map((doc) => doc.id)));
+    // 폴더 이동이 새 ID를 탭·세션에 반영할 때까지 기존 탭을 정리하지 않는다.
+    if (!documentMove.current) pruneDocuments(new Set(data.documents.map((doc) => doc.id)));
     setLoaded(true);
     if (!projectRef.current && data.projects.length) {
       projectRef.current = data.projects[0].id;
       setProjectId(projectRef.current);
     }
-    const d = draft.current;
-    if (d) {
-      const meta = data.documents.find((x) => x.id === d.doc.id);
-      if (meta && (meta.revision !== d.doc.revision ||
-          (meta.fingerprint !== d.doc.fingerprint && d.seq === d.saved))) {
-        void checkOpenDocRef.current?.().catch(report);
-      } else if (meta && d.seq === d.saved &&
-          (meta.title !== d.doc.title || meta.path !== d.doc.path || meta.relPath !== d.doc.relPath)) {
-        // 본문은 그대로인데 이름만 바뀐 경우(회차 번호가 바뀌어 '003화 …' 이름이 따라 바뀐 경우 등).
-        // 편집 중인 원고에도 반영해야 다음 저장 때 예전 이름으로 되돌리지 않는다.
-        d.doc = cloneDocument(d.doc, { title: meta.title, path: meta.path, relPath: meta.relPath });
-        setActive(cloneDocument(d.doc));
-      }
-    }
+    reconcileDocuments(data.documents);
     return data;
-  }, [pruneDocuments]);
+  }, [pruneDocuments, reconcileDocuments]);
   const projectReorder = useProjectReorder(libraryRef, lib.root, loaded && view === "library", busy, refresh, report);
-  const flush = useCallback(async ({ auto = false, closing = false, skipMemo = false } = {}) => {
-    if (!auto && !skipMemo) await memoFlush.current?.({ closing });
-    await writingQueue.current;
-    if (timer.current) clearTimeout(timer.current);
-    const run = async () => {
-      const d = draft.current;
-      if (!d) return;
-      const loadExternalOnClose = async (onlyIfChanged = false) => {
-        if (composing.current) throw Error(composingError);
-        const seq = d.seq;
-        const fresh = await readFileForClose(() => call<Doc>("readDocument", { id: d.doc.id }));
-        if (draft.current !== d || d.seq !== seq || composing.current)
-          throw Error("닫는 동안 원고가 변경되었습니다. 다시 닫아 주세요.");
-        if (onlyIfChanged && !conflictRef.current && fresh.revision === d.doc.revision) return false;
-        await call("clearDraft", { id: d.doc.id });
-        if (draft.current !== d || d.seq !== seq || composing.current)
-          throw Error("닫는 동안 원고가 변경되었습니다. 다시 닫아 주세요.");
-        d.doc = fresh;
-        d.saved = seq;
-        conflictRef.current = false;
-        setConflict(false);
-        setActive(fresh);
-        setSaveStatus("저장됨");
-        return true;
-      };
-      // 닫기는 파일의 최신 내용을 채택하며, 일반 저장은 기존 충돌 처리를 유지한다.
-      if (closing && await loadExternalOnClose(true)) return;
-      if (d.seq === d.saved) return;
-      const seq = d.seq,
-        payload = { ...d.doc, expectedRevision: d.doc.revision };
-      await call("saveDraft", payload);
-      if (conflictRef.current) {
-        if (closing) { await loadExternalOnClose(); return; }
-        if (auto) return;
-        throw Error(
-          "변경 충돌을 해결해 주세요. 입력한 원고는 임시 저장되어 있습니다.",
-        );
-      }
-      if (composing.current) {
-        // Autosave waits for compositionend, which schedules the next flush.
-        if (auto) return;
-        throw Error(composingError);
-      }
-      setSaveStatus("저장 중");
-      try {
-        const saved = await call<Doc>("saveDocument", payload);
-        if (draft.current === d) {
-          d.saved = seq;
-          // 메모는 이름이 바뀌면 파일 경로로 만든 ID도 바뀐다.
-          if (saved.id !== d.doc.id) replaceDocId(d.doc.id, saved.id);
-          d.doc = cloneDocument(d.doc, {
-            id: saved.id,
-            path: saved.path,
-            relPath: saved.relPath,
-            revision: saved.revision,
-            fingerprint: saved.fingerprint,
-            updatedAt: saved.updatedAt,
-          });
-          setActive(cloneDocument(d.doc));
-          setError((e) => (e === composingError ? "" : e));
-          setSaveStatus(d.seq === seq ? "저장됨" : "편집 중");
-          if (d.seq === seq) await call("clearDraft", { id: d.doc.id });
-        }
-      } catch (e: any) {
-        if (closing && e.code === "CONFLICT") { await loadExternalOnClose(); return; }
-        setSaveStatus(e.code === "CONFLICT" ? "변경 충돌" : "저장 실패");
-        if (e.code === "CONFLICT") {
-          conflictRef.current = true;
-          setConflict(true);
-        }
-        throw e;
-      }
-    };
-    const task = saveChain.current.then(run);
-    saveChain.current = task.catch(() => {});
-    return task;
-  }, []);
-  const gitActivity = useGitActivity(async () => {
-    await flush();
-    const pending = draft.current;
-    return !composing.current && !conflictRef.current && (!pending || pending.seq === pending.saved);
-  }, report);
   const updater = useAppUpdater({
     loaded,
     autoCheck: prefs.checkUpdatesOnStartup !== false,
     beforeInstall: async () => {
       if (busy) throw Error("진행 중인 작업이 끝난 뒤 다시 시도해 주세요.");
-      if (composing.current) throw Error(composingError);
-      await flush();
-      const pending = draft.current;
-      if (composing.current || (pending && pending.seq !== pending.saved))
-        throw Error("원고 저장을 완료한 뒤 다시 시도해 주세요.");
+      await session.prepareForInstall();
     },
   });
   const releaseNotice = useReleaseNotice(lib.version, loaded, prefs.setupComplete === true);
   const [releaseNotesOpen, setReleaseNotesOpen] = useState(false);
-  // 변경 이력: 자동 저장은 이력을 남기지 않는다. 본문을 고친 문서를 기억해 두었다가 작업의 끝(입력이 멈춤,
-  // 다른 문서로 옮김, Ctrl+S, 앱 종료)에 저장소가 지금 원고를 이력으로 남기게 한다. 남길지는 설정의 규칙으로 저장소가 정한다.
   const [confirm, confirmDialog] = useConfirm();
   // 실시간 동기화가 그룹 방식으로 바뀌며 이전 장치 연결을 초기화했다면 서재를 연 뒤 한 번 안내한다.
   const resetNoticeShown = useRef(false);
@@ -460,67 +344,12 @@ export default function App() {
       if (reconnect) await openSettings("serverSync");
     }).catch(report);
   }, [loaded]);
-  const checkOpenDocument = useSyncFileUpdates({
-    fileKey: active?.id ?? "",
-    enabled: loaded && !!active,
-    canCheck: () => view === "workspace" && !memoOpen && !composing.current,
-    current: () => {
-      const d = draft.current;
-      return d ? { doc: d.doc, version: `${d.seq}:${d.doc.revision}` } : null;
-    },
-    beforeRead: () => saveChain.current,
-    read: (doc: Doc) => call<Doc>("readDocument", { id: doc.id }),
-    pending: () => {
-      if (timer.current) clearTimeout(timer.current);
-      conflictRef.current = true;
-      setConflict(true);
-      const d = draft.current;
-      if (d) {
-        if (d.seq === d.saved) d.seq++;
-        void call("saveDraft", { ...d.doc, expectedRevision: d.doc.revision }).catch(report);
-      }
-      setSaveStatus("외부 변경 있음");
-    },
-    apply: async (doc) => {
-      const previous = draft.current;
-      if (previous?.doc.id !== doc.id) return;
-      const previousSeq = previous.seq;
-      await call("clearDraft", { id: doc.id });
-      if (draft.current !== previous || previous.seq !== previousSeq) return;
-      draft.current = { doc, seq: 0, saved: 0 };
-      conflictRef.current = false;
-      setActive(doc);
-      setConflict(false);
-      setSaveStatus("저장됨");
-      message("동기화된 새 내용을 불러왔습니다.");
-    },
-    report,
-  });
-  checkOpenDocRef.current = checkOpenDocument;
-  // 직접 저장은 현재 문서의 Git 기록에 수동 저장 표시를 남긴다.
-  const manualSave = useCallback(async () => {
-    await flush();
-    if (memoOpen) {
-      await memoManualSave.current?.();
-    } else {
-      const id = draft.current?.doc.id;
-      if (id) await call("checkpointDocument", { id, force: true });
-    }
-    await call("requestSyncNow");
-  }, [flush, memoOpen]);
   useEffect(() => {
     refresh().catch(report);
     const off = window.lof.onChange(() => {
-      if (saveChain.current)
-        saveChain.current.then(() => refresh()).catch(report);
+      waitForSave().then(() => refresh()).catch(report);
     });
-    const offFlush = window.lof.onFlush(async () => {
-      await flush({ closing: true });
-      // 트레이에서 돌아오거나 다른 탭을 다시 열 때도 예전 본문을 되살리지 않는다.
-      clearRetainedDocuments();
-      if (draft.current) setActive(draft.current.doc);
-      clearSideDocument();
-    });
+    const offFlush = window.lof.onFlush(flushForClose);
     const updateAutoSync = (status: AutoSyncStatus) => {
       setAutoSync(previous => previous.phase === status.phase && previous.message === status.message &&
         previous.hasConnections === status.hasConnections &&
@@ -534,27 +363,7 @@ export default function App() {
       offFlush();
       offAutoSync?.();
     };
-  }, [refresh, flush, report]);
-  function edit(patch: Partial<Doc>, markdownCopy?: boolean) {
-    const d = draft.current;
-    if (!d) return;
-    gitActivity();
-    d.doc = editDocument(d.doc, patch, markdownCopy);
-    d.seq++;
-    pinTab(d.doc.id);
-    setActive(cloneDocument(d.doc));
-    setSaveStatus("편집 중");
-    if (timer.current) clearTimeout(timer.current);
-    if (!composing.current)
-      timer.current = setTimeout(() => flush({ auto: true }).catch(report), 650);
-  }
-  function composition(value: boolean) {
-    gitActivity();
-    composing.current = value;
-    if (timer.current) clearTimeout(timer.current);
-    if (!value)
-      timer.current = setTimeout(() => flush({ auto: true }).catch(report), 800);
-  }
+  }, [refresh, flushForClose, waitForSave, report]);
   // beforeCommit은 문서를 읽은 뒤 화면 상태를 바꾸기 직전에 부른다. 같은 렌더에 묶여 중간 상태가 그려지지 않는다.
   async function navigate(destination: Destination, historyIndex?: number, beforeCommit?: () => void) {
     const seq = ++navigationSeq.current;
@@ -565,7 +374,7 @@ export default function App() {
     if (seq !== navigationSeq.current) return;
     const retained = fresh ? getRetainedDocument(fresh.id) : undefined;
     // 이미 열어 둔 탭의 본문은 유지하고, 안내줄에서 새 내용을 불러온다.
-    const keepOlder = !!(fresh && retained && retained.revision !== fresh.revision);
+    const keepOlder = !!(fresh && retained && retained.revision !== fresh.revision && !sameDocumentContent(retained, fresh));
     const doc = keepOlder ? retained! : fresh;
     const next: Destination = doc
       ? { view: "workspace", projectId: doc.projectId, documentId: doc.id, tab: doc.kind, archive: doc.archived }
@@ -597,15 +406,9 @@ export default function App() {
       commitOpenDocument(doc, {
         sameProject: doc.projectId === projectRef.current,
         pinned: destination.pinned === true,
-        after: activeId.current,
+        after: session.currentId(),
       });
-      draft.current = { doc, seq: keepOlder ? 1 : 0, saved: 0 };
-      if (keepOlder) void call("saveDraft", { ...doc, expectedRevision: doc.revision }).catch(report);
-      activeId.current = doc.id;
-      setActive(doc);
-      setSaveStatus(keepOlder ? "외부 변경 있음" : "저장됨");
-      setConflict(keepOlder);
-      conflictRef.current = keepOlder;
+      session.commitDocument(doc, keepOlder);
     }
     const id = globalView(next.view) ? projectRef.current : next.projectId;
     setProjectId(id);
@@ -620,27 +423,12 @@ export default function App() {
     const seq = ++navigationSeq.current;
     await flush();
     if (seq !== navigationSeq.current) return;
-    draft.current = null;
-    activeId.current = "";
-    conflictRef.current = false;
-    setConflict(false);
-    setActive(null);
+    session.closeDocument();
     commit();
   }
   // 문서 ID가 바뀌었을 때(메모 이름 바꾸기) 탭·분할 보기·이동 기록이 새 ID를 가리키게 한다.
-  function replaceDocId(oldId: string, newId: string) {
-    const sessionStart = sessionStarts.current.get(oldId);
-    if (oldId !== newId && sessionStart !== undefined) {
-      sessionStarts.current.set(newId, sessionStart);
-      sessionStarts.current.delete(oldId);
-    }
-    const scrollPosition = scrollPositions.current.get(oldId);
-    if (oldId !== newId && scrollPosition) {
-      scrollPositions.current.set(newId, scrollPosition);
-      scrollPositions.current.delete(oldId);
-    }
-    if (activeId.current === oldId) activeId.current = newId;
-    replaceGroupDocumentId(oldId, newId);
+  function handleDocumentIdChange(oldId: string, newId: string, location?: Doc) {
+    replaceGroupDocumentId(oldId, newId, location);
     const nav = navigationRef.current;
     if (nav.entries.some((e) => e.documentId === oldId)) {
       const next = {
@@ -651,18 +439,6 @@ export default function App() {
       };
       navigationRef.current = next;
       setNavigation(next);
-    }
-  }
-  // 열려 있는 문서는 편집 중인 원고에 반영하고, 아니면 파일에 바로 저장한다.
-  async function writeMeta(id: string, patch: Partial<Doc>) {
-    if (draft.current?.doc.id === id) {
-      edit(patch);
-      await flush();
-    } else {
-      await flush();
-      const doc = await call<Doc>("readDocument", { id });
-      const saved = await call<Doc>("saveDocument", { id, ...patch, expectedRevision: doc.revision });
-      if (saved.id !== id) replaceDocId(id, saved.id);
     }
   }
   async function patchDoc(id: string, patch: Partial<Doc>) {
@@ -677,20 +453,6 @@ export default function App() {
   async function bindDocument(id: string, episodeId: string | null) {
     await patchDoc(id, { episodeId });
     message(episodeId ? "에피소드에 연결했습니다." : "연결을 해제했습니다. 독립 문서로 보관됩니다.");
-  }
-  async function commitRename() {
-    const r = renamingRef.current;
-    if (!r) return;
-    renamingRef.current = null;
-    setRenaming(null);
-    const title = r.value.trim(),
-      doc = libraryRef.current.documents.find((d) => d.id === r.id);
-    if (!doc || !title || title === doc.title) return;
-    await patchDoc(r.id, { title });
-  }
-  function startRename(doc: Doc, widget = false) {
-    renamingRef.current = { id: doc.id, value: doc.title, widget };
-    setRenaming(renamingRef.current);
   }
   async function archiveDoc(doc: Doc) {
     await archiveDocs([doc], !doc.archived);
@@ -718,11 +480,7 @@ export default function App() {
     for (const doc of docs) {
       await closeTab(doc.id);
       closeSideTab(doc.id);
-      if (draft.current?.doc.id === doc.id) {
-        draft.current = null;
-        conflictRef.current = false;
-        setConflict(false);
-      }
+      session.discardDraft(doc.id);
       await call("deleteDocument", { id: doc.id });
     }
     await refresh();
@@ -739,10 +497,7 @@ export default function App() {
     await flush();
     if (projectRef.current === id) {
       await goView("library");
-      draft.current = null;
-      conflictRef.current = false;
-      setConflict(false);
-      setActive(null);
+      session.detachDocument();
       resetGroups();
       projectRef.current = "";
       setProjectId("");
@@ -787,9 +542,10 @@ export default function App() {
   }
   async function copyDocManuscript(targetDoc: Doc, rawMarkdown?: boolean) {
     await flush();
+    const current = session.currentDocument();
     const latest =
-      draft.current?.doc.id === targetDoc.id
-        ? draft.current.doc
+      current?.id === targetDoc.id
+        ? current
         : await call<Doc>("readDocument", { id: targetDoc.id });
     const copyAsMarkdown =
       rawMarkdown ??
@@ -868,7 +624,6 @@ export default function App() {
     if (recent) await openDoc(recent.id);
     else await goView("project", id);
   }
-  // 순서는 파일 트리에서 끌어서 바꾼다(treeRow).
   function docMenu(d: Doc): MenuItem[] {
     const rawCopy = active?.id === d.id && (source || requiresDocumentSource(active));
     return [
@@ -965,86 +720,6 @@ export default function App() {
       { label: "경로 복사", disabled: !doc, action: attempt(() => copyPath(doc!)) },
     ];
   }
-  // 파일 트리 다중 선택. d가 고른 줄 가운데 하나이고 둘 이상 골랐으면 고른 문서 전부, 아니면 d 하나를 다룬다.
-  function selectionFor(d: Doc): Doc[] {
-    if (treeSelection.length < 2 || !treeSelection.includes(d.id)) return [d];
-    return treeSelection
-      .map((id) => lib.documents.find((x) => x.id === id))
-      .filter((x): x is Doc => !!x);
-  }
-  // 트리에 보이는 줄 순서(접힌 폴더·묶음 안은 빼고)로 기준 줄부터 누른 줄까지 고른다.
-  function selectTreeRange(row: HTMLElement, id: string) {
-    const ids = [...(row.closest(".tree-panel")?.querySelectorAll<HTMLElement>("[data-doc-id]") ?? [])].map(
-      (el) => el.dataset.docId!,
-    );
-    let from = ids.indexOf(selectionAnchor.current || active?.id || "");
-    const to = ids.indexOf(id);
-    if (to < 0) return;
-    if (from < 0) {
-      from = to;
-      selectionAnchor.current = id;
-    }
-    setTreeSelection(ids.slice(Math.min(from, to), Math.max(from, to) + 1));
-  }
-  function toggleTreeSelection(id: string) {
-    setTreeSelection((sel) => {
-      const base = sel.length ? sel : selectionAnchor.current ? [selectionAnchor.current] : [];
-      return base.includes(id) ? base.filter((x) => x !== id) : [...base, id];
-    });
-    selectionAnchor.current = id;
-  }
-  // 여러 문서를 고르고 우클릭한 메뉴. 회차만 골랐으면 집필 상태도 한 번에 바꾼다.
-  function selectionMenu(docs: Doc[]): MenuItem[] {
-    const episodes = docs.every((d) => d.kind === "episode"),
-      archived = docs.every((d) => d.archived),
-      status = new Set(docs.map((d) => normalizeStatus(d.status))),
-      done = () => setTreeSelection([]);
-    return [
-      { label: `문서 ${docs.length}개 선택됨`, disabled: true, action: () => {} },
-      ...(episodes
-        ? ([
-            "separator",
-            // 상태가 섞여 있으면 어느 항목도 막지 않는다.
-            ...statusItems([...status][0], (next) =>
-              attempt(async () => {
-                for (const d of docs)
-                  if (normalizeStatus(d.status) !== next) await writeMeta(d.id, { status: next });
-                await refresh();
-                done();
-                if (next === "completed")
-                  message("원고 보호 모드로 전환되었습니다. 집필 완료된 에피소드는 편집이 제한됩니다.");
-              })(),
-            ).map((item) => (item === "separator" || status.size === 1 ? item : { ...item, disabled: false })),
-          ] as MenuItem[])
-        : []),
-      "separator",
-      archived
-        ? { label: "보관 해제", action: attempt(async () => { done(); await archiveDocs(docs, false); }) }
-        : { label: "보관함으로 이동", shortcut: "Delete", action: attempt(async () => { done(); await archiveDocs(docs, true); }) },
-      {
-        label: "영구 삭제",
-        shortcut: "Shift+Delete",
-        danger: true,
-        action: () => setDialog({ type: "deleteDoc", ids: docs.map((d) => d.id) }),
-      },
-    ];
-  }
-  function treeKey(e: React.KeyboardEvent, d: Doc) {
-    const docs = selectionFor(d);
-    if (e.key === "Escape" && treeSelection.length) setTreeSelection([]);
-    else if (e.key === "F2" && docs.length === 1) startRename(d);
-    else if (e.key === "Delete" && e.shiftKey)
-      setDialog({ type: "deleteDoc", ids: docs.map((x) => x.id) });
-    else if (e.key === "Delete" && docs.some((x) => !x.archived))
-      attempt(async () => {
-        setTreeSelection([]);
-        await archiveDocs(docs, true);
-      })();
-    else if (e.shiftKey && e.altKey && e.code === "KeyR") attempt(() => call("reveal", { id: d.id }))();
-    else if (e.shiftKey && e.altKey && e.code === "KeyC") attempt(() => copyPath(d))();
-    else return;
-    e.preventDefault();
-  }
   // 작품 페이지로 새로 들어올 때는 항상 에피소드 목록에서 시작한다.
   // 뒤로/앞으로 이동은 navigate에 저장된 탭을 그대로 넘긴다.
   async function goView(next: "library" | "project" | "bookmarks", id = projectId) {
@@ -1092,181 +767,23 @@ export default function App() {
     else setSidebar(true);
     if (!opts.title) startRename(doc);
   }
-  // 지금 보고 있는 회차(또는 지금 문서가 연결된 회차).
-  function currentEpisode(): Doc | undefined {
-    const a = draft.current?.doc;
-    if (a?.kind === "episode") return a;
-    return a?.episodeId
-      ? libraryRef.current.documents.find((d) => d.id === a.episodeId && d.kind === "episode")
-      : undefined;
-  }
-  const episodeNumber = (ep: Doc) => /^episodes\/(\d+)/.exec(ep.relPath || "")?.[1] ?? "";
-  // 에피소드 우클릭: 그 회차에 연결된 플롯·메모를 doc/ 바로 아래에 만든다.
-  function plotItems(ep: Doc): MenuItem[] {
-    return [
-      { label: "이 회차에 플롯 만들기", disabled: archive, action: attempt(() => addDocFile("", "plot", ep)) },
-      { label: "이 회차에 메모 만들기", disabled: archive, action: attempt(() => addDocFile("", "memo", ep)) },
-    ];
-  }
-  // 문서 추가 메뉴: 플롯·메모. 회차를 보고 있으면 그 회차에 연결해 만드는 항목도 함께 보인다.
-  function docCreateMenu(folder: string): MenuItem[] {
-    const ep = currentEpisode();
-    return [
-      { label: "플롯", disabled: archive, action: attempt(() => addDocFile(folder, "plot")) },
-      { label: "메모", disabled: archive, action: attempt(() => addDocFile(folder, "memo")) },
-      ...(ep
-        ? ([
-            "separator",
-            {
-              label: `플롯 (${episodeNumber(ep)}화에 연결)`,
-              disabled: archive,
-              action: attempt(() => addDocFile(folder, "plot", ep)),
-            },
-            {
-              label: `메모 (${episodeNumber(ep)}화에 연결)`,
-              disabled: archive,
-              action: attempt(() => addDocFile(folder, "memo", ep)),
-            },
-          ] as MenuItem[])
-        : []),
-    ];
-  }
-  // 문서·폴더를 끌어 다른 폴더(빈 곳이면 doc/ 맨 위)에 놓으면 그 폴더로 옮긴다.
-  // 같은 폴더로 옮기거나 폴더를 자기 안으로 옮기는 것은 받지 않는다.
-  const parentOfRel = (p: string) => p.slice(0, Math.max(0, p.lastIndexOf("/")));
-  function folderDropProps(folder: string) {
-    const key = "folder:" + folder;
-    // 옮길 경로: 끈 파일(여러 개면 이미 그 폴더에 있는 것은 빼고)이나 끈 폴더.
-    const paths = () => {
-      if (dragFileDocs.current.length)
-        return dragFileDocs.current
-          .map((id) => libraryRef.current.documents.find((x) => x.id === id)?.relPath?.slice(4) ?? "")
-          .filter((p) => p && parentOfRel(p) !== folder);
-      const from = dragFolder.current;
-      return from && from !== folder && !folder.startsWith(from + "/") && parentOfRel(from) !== folder ? [from] : [];
-    };
-    const canDrop = () => paths().length > 0;
-    return {
-      onDragOver: (e: React.DragEvent) => {
-        if (!canDrop()) return;
-        e.preventDefault();
-        e.stopPropagation();
-        e.dataTransfer.dropEffect = "move";
-        setTreeDrop(key);
-      },
-      onDragLeave: (e: React.DragEvent) => {
-        if (!e.currentTarget.contains(e.relatedTarget as Node))
-          setTreeDrop((t) => (t === key ? null : t));
-      },
-      onDrop: (e: React.DragEvent) => {
-        if (!canDrop()) return;
-        e.preventDefault();
-        e.stopPropagation();
-        const moving = paths();
-        dragFileDocs.current = [];
-        dragFolder.current = "";
-        setTreeDrop(null);
-        setTreeSelection([]);
-        attempt(() => moveDocPaths(moving, folder))();
-      },
-    };
-  }
-  // doc/ 안의 문서나 폴더(paths)를 다른 폴더(to, 맨 위는 "")로 옮긴다. 여러 개면 파일만 차례로 옮기고,
-  // 서재·폴더 목록은 다 옮긴 뒤 한 번만 다시 읽는다(항목마다 읽으면 하나씩 옮겨지며 늦어진다).
-  async function moveDocPaths(paths: string[], to: string) {
-    if (!paths.length) return;
-    await flush();
-    const moved: { path: string; next: string; inside: Doc[] }[] = [];
-    for (const path of paths) {
-      const from = "doc/" + path,
-        inside = libraryRef.current.documents.filter(
-          (d) =>
-            d.projectId === projectRef.current &&
-            (d.relPath === from || d.relPath?.startsWith(from + "/")),
-        );
-      const r = await call<{ path: string }>("memoMove", { space: projectRef.current, path, to });
-      moved.push({ path, next: r.path, inside });
+  // 트리가 파일을 옮기고 서재를 다시 읽은 뒤 열린 원고의 위치 정보를 갱신한다.
+  async function moveDocuments(action: () => Promise<void>) {
+    while (documentMove.current) await documentMove.current;
+    let finish!: () => void;
+    documentMove.current = new Promise<void>(resolve => { finish = resolve; });
+    try {
+      await action();
+    } finally {
+      documentMove.current = null;
+      finish();
+      await refresh();
     }
-    await refresh();
-    for (const m of moved) remapDocs(m.inside, "doc/" + m.path, "doc/" + m.next);
-    const rename = (p: string) => {
-      const m = moved.find((x) => p === x.path || p.startsWith(x.path + "/"));
-      return m ? m.next + p.slice(m.path.length) : p;
-    };
-    setMemoOpenFolders((old) => new Set([...[...old].map(rename), ...(to ? [to] : [])]));
-    await loadMemoFolders();
   }
-  // 문서 ID를 유지한 채 파일 경로와 열린 원고의 위치 정보만 갱신한다.
-  async function remapMovedDocs(before: Doc[], from: string, to: string) {
-    await refresh();
-    remapDocs(before, from, to);
-  }
-  // 서재를 다시 읽은 뒤에 부른다.
   function remapDocs(before: Doc[], from: string, to: string) {
-    for (const d of before) {
-      const rel = to + d.relPath!.slice(from.length),
-        next = libraryRef.current.documents.find(
-          (x) => x.projectId === projectRef.current && x.relPath === rel,
-        );
-      if (!next) continue;
-      if (next.id !== d.id) replaceDocId(d.id, next.id);
-      if (draft.current?.doc.id === d.id) {
-        draft.current.doc = { ...draft.current.doc, id: next.id, path: next.path, relPath: rel };
-        setActive({ ...draft.current.doc });
-      }
-    }
+    session.remapDocuments(before, from, to, libraryRef.current.documents, projectRef.current);
   }
-  // 에피소드 탭의 회차 줄에 놓기. 회차를 끌면 줄의 위쪽 절반이면 그 앞으로, 아래쪽 절반이면 그 뒤로 순서를 옮기고,
-  // 문서 탭의 파일(플롯·메모)을 끌면 그 회차에 연결한다. 여러 개를 골라 끌었으면 함께 옮기거나 연결한다.
-  function episodeDropProps(ep: Doc) {
-    const reordering = () =>
-      dragEpisodes.current.length > 0 && !dragEpisodes.current.includes(ep.id) && !ep.archived;
-    const after = (e: React.DragEvent) => {
-      const r = e.currentTarget.getBoundingClientRect();
-      return e.clientY > r.top + r.height / 2;
-    };
-    return {
-      onDragOver: (e: React.DragEvent) => {
-        const reorder = reordering();
-        if (!reorder && !dragFileDocs.current.length) return;
-        e.preventDefault();
-        e.stopPropagation();
-        e.dataTransfer.dropEffect = "move";
-        if (!reorder) return setTreeDrop(ep.id);
-        const a = after(e);
-        setEpisodeDrop((o) => (o?.id === ep.id && o.after === a ? o : { id: ep.id, after: a }));
-      },
-      onDragLeave: (e: React.DragEvent) => {
-        if (e.currentTarget.contains(e.relatedTarget as Node)) return;
-        setTreeDrop((t) => (t === ep.id ? null : t));
-        setEpisodeDrop((o) => (o?.id === ep.id ? null : o));
-      },
-      onDrop: (e: React.DragEvent) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const reorder = reordering(),
-          episodeIds = dragEpisodes.current,
-          fileIds = dragFileDocs.current,
-          a = after(e);
-        dragEpisodes.current = [];
-        dragFileDocs.current = [];
-        setTreeDrop(null);
-        setEpisodeDrop(null);
-        setTreeSelection([]);
-        if (reorder) return attempt(() => moveEpisodes(episodeIds, ep.id, a))();
-        const binding = libraryRef.current.documents.filter((d) => fileIds.includes(d.id) && d.episodeId !== ep.id);
-        if (!binding.length) return;
-        attempt(async () => {
-          for (const d of binding) await writeMeta(d.id, { episodeId: ep.id });
-          await refresh();
-          message(binding.length > 1 ? `문서 ${binding.length}개를 에피소드에 연결했습니다.` : "에피소드에 연결했습니다.");
-        })();
-      },
-    };
-  }
-  useEffect(() => {
-    if (view === "workspace" && projectId) loadMemoFolders().catch(() => {});
-  }, [view, projectId, lib]);
+
   async function openSettings(type: "settings" | "serverSync" = "settings") {
     await flush();
     const s = await call("settings");
@@ -1287,12 +804,8 @@ export default function App() {
     try {
       await flush();
       if (!await call("chooseVault")) return;
-      sessionStarts.current.clear();
-      scrollPositions.current.clear();
       clearRetainedDocuments();
-      draft.current = null;
-      activeId.current = "";
-      setActive(null);
+      session.resetVault();
       resetGroups();
       setMemoOpen(false);
       projectRef.current = "";
@@ -1323,45 +836,6 @@ export default function App() {
     await flush();
     if (!active) return;
     setDialog({ type: "history" });
-  }
-  async function resolveConflict() {
-    const d = draft.current;
-    if (!d) return;
-    const copy = await call<Doc>("createDocument", {
-      projectId: d.doc.projectId,
-      kind: d.doc.kind,
-      title: d.doc.title + " (내 편집 사본)",
-      body: d.doc.body,
-    });
-    await call("clearDraft", { id: d.doc.id });
-    draft.current = null;
-    conflictRef.current = false;
-    setConflict(false);
-    await refresh();
-    await openDoc(copy.id, true);
-    message("내 편집을 새 문서로 보존했습니다. 기존 문서도 유지됩니다.");
-  }
-  // 순서는 회차에만 있고 에피소드 탭에서 끌어서 바꾼다. 플롯·메모는 파일 트리의 파일이라 순서 없이 폴더로만 옮긴다.
-  // 회차들(ids)을 지금 순서 그대로 묶어 다른 회차(targetId)의 앞이나 뒤(after)로 옮긴다. 바뀐 목록을 한 번에 저장하면
-  // 저장소가 0, 1, 2…로 다시 매기고 파일 이름 번호도 맞춘다.
-  async function moveEpisodes(ids: string[], targetId: string, after: boolean) {
-    await flush();
-    const target = libraryRef.current.documents.find((d) => d.id === targetId && d.kind === "episode");
-    if (!target || ids.includes(targetId)) return;
-    const items = libraryRef.current.documents.filter(
-        (d) => d.projectId === target.projectId && d.kind === "episode" && !d.archived,
-      ),
-      moving = items.filter((d) => ids.includes(d.id)),
-      next = items.filter((d) => !ids.includes(d.id)),
-      at = next.findIndex((d) => d.id === targetId);
-    if (at < 0 || !moving.length) return;
-    next.splice(at + (after ? 1 : 0), 0, ...moving);
-    if (next.every((d, i) => d.id === items[i].id)) return;
-    await call("reorderDocuments", {
-      projectId: target.projectId,
-      ids: next.map((d) => d.id),
-    });
-    await refresh();
   }
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -1454,7 +928,7 @@ export default function App() {
   async function openSearchResult(r: SearchResult, m: SearchMatch, pinned = false) {
     setMemoOpen(false);
     await openDoc(r.id, pinned);
-    if (activeId.current !== r.id) return;
+    if (session.currentId() !== r.id) return;
     setReveal({
       docId: r.id,
       query: searchQuery,
@@ -1473,7 +947,7 @@ export default function App() {
     }
     await flush();
     await openDoc(id, true);
-    if (!quote || activeId.current !== id) return;
+    if (!quote || session.currentId() !== id) return;
     setReveal({ docId: id, query: quote, index: 0, caseSensitive: true, seq: Date.now() });
   }
   // 원고 이미지: 작품의 assets/에 저장하고, 원고에는 원고 파일 기준 상대 경로(예: ../assets/그림.png)로 쓴다.
@@ -1493,43 +967,16 @@ export default function App() {
     });
   }
   const noteMarks = useDocumentNotes(active, lib);
-  const docs = lib.documents.filter(
-      (d) => d.projectId === projectId && d.archived === archive,
-    ),
-    count = (kind: Kind) => docs.filter((d) => d.kind === kind).length;
-  // 목록과 원고 머리의 번호. 회차는 일반 에피소드만 001부터 세고, 프롤로그 등은 유형 이름을 쓴다.
-  const episodeNo = episodeNumbers(
-    docs.filter((d) => d.kind === "episode").map((d) => (d.id === active?.id ? active : d)),
-  );
-  const numberOf = (d: Doc) =>
-    d.kind === "episode"
-      ? (episodeNo.get(d.id) ?? "")
-      : String(docs.filter((x) => x.kind === d.kind).findIndex((x) => x.id === d.id) + 1).padStart(3, "0");
-  // 다른 곳(검색, 탭, 회차 우클릭으로 만든 플롯 등)에서 문서를 열면 그 문서가 있는 탭으로 옮긴다.
-  // 현재 회차는 마지막으로 연 회차이거나, 연 문서가 연결된 회차다.
-  useEffect(() => {
-    if (!active) return;
-    setTreeTab(active.kind === "episode" ? "episode" : "memo");
-    const episodeId = active.kind === "episode" ? active.id : active.episodeId;
-    if (episodeId) setTreeEpisodeId(episodeId);
-    // 연 회차가 접힌 묶음 안에 있으면 그 묶음을 펼친다.
-    const at = docs.filter((d) => d.kind === "episode").findIndex((d) => d.id === active.id);
-    if (at >= 0) {
-      const start = at - (at % EPISODE_GROUP);
-      setOpenEpisodeGroups((old) => (old.has(start) ? old : new Set([...old, start])));
-    }
-  }, [active?.id, active?.kind, active?.episodeId]);
-  const treeMatch = (text: string, query: string) => text.toLowerCase().includes(query.trim().toLowerCase());
   const writingRules = useMemo(() => normalizeWriting(project?.writing || prefs.defaultWriting), [project?.writing, prefs.defaultWriting]);
   const counter = useManuscriptCounts({
     scope: lib.root, id: active?.id, body: active?.body ?? null, rules: writingRules, onError: report,
     onBaseline: (scope, id, count) => {
-      if (libraryRef.current.root === scope && !sessionStarts.current.has(id)) sessionStarts.current.set(id, count);
+      if (libraryRef.current.root === scope) session.recordBaseline(id, count);
     },
   });
   const stats = counter.stats;
   const sessionCount = active && stats
-    ? Math.max(0, stats.utf16WithoutSpaces - (sessionStarts.current.get(active.id) ?? stats.utf16WithoutSpaces))
+    ? session.sessionDelta(active.id, stats.utf16WithoutSpaces)
     : 0;
   // 원고 보호: 집필 완료인 회차는 제목과 본문을 고칠 수 없다(상태는 바꿀 수 있다).
   const isProtected = active?.kind === "episode" && normalizeStatus(active.status) === "completed";
@@ -1568,7 +1015,7 @@ export default function App() {
   );
   // 파일 트리는 놓은 그룹에 열고, 열린 탭은 그 그룹으로 옮긴다.
   function dragOverGroups(e: React.DragEvent) {
-    const fromTree = !!dragTreeDoc.current;
+    const fromTree = !!fileTree.draggedDocument();
     const zone = dragTab || fromTree
       ? getDropZone(e.target, e.clientX, fromTree)
       : null;
@@ -1585,17 +1032,14 @@ export default function App() {
     );
   }
   function dropOnGroups(e: React.DragEvent) {
-    const fromTree = !!dragTreeDoc.current;
-    const id = dragTreeDoc.current || dragTab;
+    const fromTree = !!fileTree.draggedDocument();
+    const id = fileTree.draggedDocument() || dragTab;
     const zone = id ? getDropZone(e.target, e.clientX, fromTree) : null;
     if (!zone || !id) return;
     // 편집기 본문이 드래그한 파일을 텍스트로 삽입하기 전에 처리한다.
     e.preventDefault();
     e.stopPropagation();
-    dragTreeDoc.current = "";
-    dragFileDocs.current = [];
-    dragEpisodes.current = [];
-    setTreeDrop(null);
+    fileTree.finishEditorDrop();
     setDropZone(null);
     setDragTab("");
     attempt(() => (zone.tabs ? openInTabs(id, zone.side) : openInGroup(id, zone.side, !fromTree)))();
@@ -1767,7 +1211,7 @@ export default function App() {
             </div>
           </div>
         )}
-        <EditorScroll key={active.id} documentId={active.id} positions={scrollPositions.current} visible={visible}>
+        <EditorScroll key={active.id} documentId={active.id} positions={session.scrollPositions} visible={visible}>
           <article className={manuscriptClassName} style={manuscriptStyle}>
             <div className="document-kind">
               {labels[active.kind]} · {numberOf(active)}
@@ -1974,14 +1418,14 @@ export default function App() {
       if (e.code === "KeyK" && !e.shiftKey && !e.altKey)
         chordAt.current = Date.now();
       else if (e.code === "Backslash" && !e.shiftKey && !e.altKey)
-        splitTo(activeId.current).catch(report);
+        splitTo(session.currentId()).catch(report);
       else if ((e.code === "Digit1" || e.code === "Digit2") && !e.shiftKey && !e.altKey)
         focusSide(e.code === "Digit1" ? "left" : "right").catch(report);
       else if (e.code === "KeyB" && !e.shiftKey) {
         if (e.altKey) setRight((r) => !r);
         else toggleTree();
       } else if (e.code === "KeyW" && !e.shiftKey && !e.altKey)
-        closeTab(activeId.current).catch(report);
+        closeTab(session.currentId()).catch(report);
       else if (e.key === "PageDown" || (e.key === "Tab" && !e.shiftKey))
         cycleTab(1).catch(report);
       else if (e.key === "PageUp" || (e.key === "Tab" && e.shiftKey))
@@ -1993,154 +1437,6 @@ export default function App() {
     window.addEventListener("keydown", handler, true);
     return () => window.removeEventListener("keydown", handler, true);
   }, [isWorkspace]);
-  // 트리의 문서 한 줄. 회차 줄은 끌어서 순서를 바꾸고 파일(플롯·메모)을 놓아 연결한다.
-  // 파일 줄은 끌어서 회차에 연결하거나 다른 폴더로 옮긴다.
-  function treeRow(
-    d: Doc,
-    marker: React.ReactNode,
-    opts: {
-      depth?: number;
-      badge?: string;
-      // 문서 영역에서 이 줄 위에 놓으면 옮길 폴더(이 문서가 있는 폴더).
-      dropFolder?: string;
-    } = {},
-  ) {
-    const episode = d.kind === "episode";
-    const style = opts.depth ? { paddingLeft: 8 + opts.depth * 16 } : undefined;
-    const dropMark =
-      episodeDrop?.id === d.id
-        ? episodeDrop.after ? "drop-after" : "drop-before"
-        : episode && treeDrop === d.id ? "drop-target" : "";
-    const selected = treeSelection.length > 1 && treeSelection.includes(d.id);
-    const className = `tree-item ${d.id === active?.id ? "current" : ""} ${selected ? "multi-selected" : ""} ${menu?.target === d.id ? "context-target" : ""} ${dropMark}`;
-    if (renaming?.id === d.id && !renaming.widget)
-      return (
-        <div key={d.id} className={`${className} renaming`} style={style}>
-          {marker}
-          <input
-            className="tree-rename"
-            aria-label="새 이름"
-            autoFocus
-            value={renaming.value}
-            onFocus={(e) => e.currentTarget.select()}
-            onChange={(e) => {
-              renamingRef.current = { id: d.id, value: e.target.value };
-              setRenaming(renamingRef.current);
-            }}
-            onKeyDown={(e) => {
-              e.stopPropagation();
-              if (e.key === "Enter") attempt(commitRename)();
-              else if (e.key === "Escape") {
-                renamingRef.current = null;
-                setRenaming(null);
-              }
-            }}
-            onBlur={attempt(commitRename)}
-          />
-        </div>
-      );
-    return (
-      <button
-        key={d.id}
-        className={className}
-        style={style}
-        data-doc-id={d.id}
-        aria-selected={selected || undefined}
-        // Shift+클릭은 범위를 고르고, Ctrl+클릭은 한 줄씩 넣고 뺀다. 그냥 누르면 고른 것을 풀고 연다.
-        onMouseDown={(e) => {
-          if (e.shiftKey) e.preventDefault();
-        }}
-        onClick={(e) => {
-          if (e.shiftKey) return selectTreeRange(e.currentTarget, d.id);
-          if (e.ctrlKey || e.metaKey) return toggleTreeSelection(d.id);
-          selectionAnchor.current = d.id;
-          setTreeSelection([]);
-          attempt(() => openDoc(d.id, false))();
-        }}
-        onDoubleClick={(e) => {
-          if (!e.shiftKey && !e.ctrlKey && !e.metaKey) attempt(() => openDoc(d.id, true))();
-        }}
-        onKeyDown={(e) => treeKey(e, d)}
-        onContextMenu={(e) => {
-          const docs = selectionFor(d);
-          // 고른 줄 전체가 메뉴 대상이므로 우클릭한 줄 하나를 따로 표시하지 않는다.
-          if (docs.length > 1) return openMenu(e, selectionMenu(docs), ":selection");
-          setTreeSelection([]);
-          openMenu(e, docMenu(d), d.id);
-        }}
-        draggable
-        onDragStart={(e) => {
-          const docs = selectionFor(d);
-          if (docs.length < 2) setTreeSelection([]);
-          dragTreeDoc.current = d.id;
-          dragFileDocs.current = docs.filter((x) => x.kind !== "episode").map((x) => x.id);
-          dragEpisodes.current = docs.filter((x) => x.kind === "episode" && !x.archived).map((x) => x.id);
-          setDragTab("");
-          e.dataTransfer.effectAllowed = "copyMove";
-          e.dataTransfer.setData("application/x-lof-document", d.id);
-        }}
-        onDragEnd={() => {
-          dragTreeDoc.current = "";
-          dragFileDocs.current = [];
-          dragEpisodes.current = [];
-          setTreeDrop(null);
-          setEpisodeDrop(null);
-          setDropZone(null);
-        }}
-        {...(episode ? episodeDropProps(d) : {})}
-        {...(opts.dropFolder !== undefined ? folderDropProps(opts.dropFolder) : {})}
-      >
-        {marker}
-        <span>{d.title}</span>
-        {d.kind === "episode" && normalizeStatus(d.status) === "completed" && (
-          <Check size={12} aria-label="집필 완료" />
-        )}
-        {opts.badge && (
-          <small className="tree-badge" title={`${opts.badge}화에 연결됨`}>
-            {opts.badge}화
-          </small>
-        )}
-        {/* 호버하면 줄 오른쪽 끝에 겹쳐 뜨는 버튼(줄 높이와 글자 위치는 그대로). */}
-        <span className="tree-actions">
-          <span
-            className="tree-action"
-            role="button"
-            tabIndex={-1}
-            title={d.archived ? "보관 해제" : "보관함으로 이동"}
-            aria-label={`${d.title} ${d.archived ? "보관 해제" : "보관"}`}
-            onClick={(e) => {
-              e.stopPropagation();
-              attempt(() => archiveDoc(d))();
-            }}
-            onDoubleClick={(e) => e.stopPropagation()}
-          >
-            {d.archived ? <ArchiveRestore size={14} /> : <Archive size={14} />}
-          </span>
-        </span>
-      </button>
-    );
-  }
-
-  // 문서 영역(doc/)에 플롯·메모를 만든다. folder가 있으면 그 폴더에, ep가 있으면 그 회차에 연결한다.
-  // 보던 화면은 그대로 두고 트리에서 이름을 받는다. widget이면 위젯 보드에서 바로 이름을 받는다.
-  async function addDocFile(folder: string, kind: "plot" | "memo", ep?: Doc, widget = false) {
-    await flush();
-    const doc = await call<Doc>("createDocument", {
-      projectId: projectRef.current,
-      kind,
-      folder: folder || undefined,
-      title: kind === "plot" ? "새 플롯" : "새 메모",
-      episodeId: ep?.id,
-      manualLineBreak: false,
-    });
-    await refresh();
-    await loadMemoFolders();
-    if (widget) return startRename(doc, true);
-    if (folder) setMemoOpenFolders((old) => new Set([...old, folder]));
-    if (focusRef.current) setFocusTree(true);
-    else setSidebar(true);
-    startRename(doc);
-  }
   // 퀵 노트: 고른 문장과 메모를 문서 영역 맨 위에 메모 문서로 만든다. 쓰던 원고에서 벗어나지 않도록 메모는 열지 않고,
   // 알림의 '열기'로 열 수 있게 한다.
   async function saveQuickNote(note: QuickNoteSource, memo: string, title: string) {
@@ -2172,90 +1468,6 @@ export default function App() {
     setRightView("typesetting");
   }
 
-  const docIcon = (d: Doc) =>
-    d.kind === "memo" ? <StickyNote size={15} /> : <FileText size={15} />;
-  // ---- 문서 영역: doc/ 폴더 트리 ----
-  async function loadMemoFolders() {
-    const pid = projectRef.current;
-    if (!pid) return;
-    const r = await call<{ entries: { path: string; name: string; type: string }[] }>("memoTree", {
-      space: pid,
-    });
-    if (projectRef.current === pid) setMemoEntries(r.entries);
-  }
-  const memoMenuItems = (folder: string): MenuItem[] => [
-    ...docCreateMenu(folder),
-    "separator",
-    { label: "폴더 추가", disabled: archive, action: attempt(() => addMemoFolder(folder)) },
-  ];
-  const memoCreateMenu = (folder: string): MenuItem[] => memoMenuItems(folder);
-  async function addMemoFolder(parent: string) {
-    const r = await call<{ path: string }>("memoCreateFolder", {
-      space: projectRef.current,
-      parent,
-      name: "새 폴더",
-    });
-    await loadMemoFolders();
-    if (parent) setMemoOpenFolders((old) => new Set([...old, parent]));
-    setFolderRenaming({ path: r.path, value: r.path.slice(r.path.lastIndexOf("/") + 1) });
-  }
-  // 폴더 이름을 바꾸면 안의 메모 ID(경로로 만든다)가 바뀌므로, 열려 있는 탭과 편집 중인 원고를 새 ID로 옮긴다.
-  async function renameMemoFolder(path: string, name: string) {
-    const old = path.slice(path.lastIndexOf("/") + 1);
-    if (!name.trim() || name.trim() === old) return;
-    await flush();
-    const prefix = "doc/" + path + "/",
-      inside = libraryRef.current.documents.filter(
-        (d) => d.projectId === projectRef.current && d.relPath?.startsWith(prefix),
-      );
-    const r = await call<{ path: string }>("memoRename", {
-      space: projectRef.current,
-      path,
-      name: name.trim(),
-    });
-    await remapMovedDocs(inside, "doc/" + path, "doc/" + r.path);
-    setMemoOpenFolders(
-      (old) => new Set([...old].map((p) => (p === path || p.startsWith(path + "/") ? r.path + p.slice(path.length) : p))),
-    );
-    await loadMemoFolders();
-  }
-  // 폴더를 지우면 안의 메모까지 휴지통으로 간다. 열려 있던 탭은 먼저 닫는다.
-  async function removeMemoFolder(path: string) {
-    const prefix = "doc/" + path + "/",
-      inside = libraryRef.current.documents.filter(
-        (d) => d.projectId === projectRef.current && d.relPath?.startsWith(prefix),
-      );
-    const name = path.slice(path.lastIndexOf("/") + 1);
-    const ok = await confirm({
-      title: "폴더 삭제",
-      message: `'${name}' 폴더${inside.length ? `와 안의 문서 ${inside.length}개` : ""}를 휴지통으로 옮길까요?`,
-      confirmLabel: "휴지통으로 옮기기",
-      danger: true,
-      icon: <Trash2 size={15} />,
-    });
-    if (!ok) return;
-    await flush();
-    for (const d of inside) await closeTab(d.id);
-    for (const d of inside) closeSideTab(d.id);
-    await call("memoRemove", { space: projectRef.current, path });
-    await refresh();
-    await loadMemoFolders();
-  }
-
-  // 작품·트리 탭·보관함·문서 범위가 바뀌면 고른 줄이 화면에서 사라지므로 선택을 푼다.
-  useEffect(() => {
-    setTreeSelection([]);
-  }, [projectId, treeTab, archive, docScope]);
-  // 파일 트리 검색어에 맞는 에피소드(번호나 제목)와 문서(제목). Enter를 누르면 첫 번째 것을 연다.
-  const treeEpisodes = docs.filter(
-      (d) => d.kind === "episode" && (!treeQuery.episode.trim() || treeMatch(`${numberOf(d)} ${d.title}`, treeQuery.episode)),
-    ),
-    treeDocs = docs.filter(
-      (d) =>
-        d.kind !== "episode" &&
-        (docScope === "all" || d.episodeId === treeEpisodeId) &&
-        (!treeQuery.memo.trim() || treeMatch(d.title, treeQuery.memo)),
-    );
   // 충돌이나 저장 실패로 남은 임시본은 그대로 알린다.
   const saving = !conflict && saveStatus !== "저장 실패",
     recoverable = (lib.drafts || []).filter(
@@ -2462,59 +1674,7 @@ export default function App() {
           </ResizableSidebar>
         )}
         {(isWorkspace || emptyWorkspace) && treeOpen && !searchOpen && (<FileTree
-          brokenFiles={<BrokenFiles
-            lib={lib}
-            projectId={projectId}
-            attempt={attempt}
-            message={message}
-            openDoc={openDoc}
-            menu={menu}
-            openMenu={openMenu}
-            refresh={refresh}
-          />}
-          episodeDocuments={<EpisodeDocList
-            numberOf={numberOf}
-            menu={menu}
-            openMenu={openMenu}
-            archive={archive}
-            attempt={attempt}
-            treeRow={treeRow}
-            query={treeQuery.memo}
-            docs={docs}
-            treeEpisodeId={treeEpisodeId}
-            treeMatch={treeMatch}
-            closedDocGroups={closedDocGroups}
-            setClosedDocGroups={setClosedDocGroups}
-            addDocFile={addDocFile}
-            docIcon={docIcon}
-          />}
-          folderTree={<MemoFolderTree
-            docs={docs}
-            treeMatch={treeMatch}
-            memoEntries={memoEntries}
-            attempt={attempt}
-            menu={menu}
-            treeDrop={treeDrop}
-            folderDropProps={folderDropProps}
-            openMenu={openMenu}
-            docCreateMenu={docCreateMenu}
-            addMemoFolder={addMemoFolder}
-            lib={lib}
-            treeRow={treeRow}
-            docIcon={docIcon}
-            query={treeQuery.memo}
-            memoOpenFolders={memoOpenFolders}
-            folderRenaming={folderRenaming}
-            setFolderRenaming={setFolderRenaming}
-            renameMemoFolder={renameMemoFolder}
-            dragFolder={dragFolder}
-            setTreeDrop={setTreeDrop}
-            setMemoOpenFolders={setMemoOpenFolders}
-            memoMenuItems={memoMenuItems}
-            projectRef={projectRef}
-            removeMemoFolder={removeMemoFolder}
-            episodeNumber={episodeNumber}
-          />}
+          tree={fileTree}
           prefs={prefs}
           savePrefs={savePrefs}
           report={report}
@@ -2525,33 +1685,19 @@ export default function App() {
           project={project}
           lib={lib}
           projectId={projectId}
-          treeTab={treeTab}
-          setTreeTab={setTreeTab}
-          dragFileDocs={dragFileDocs}
-          count={count}
-          docScope={docScope}
-          setDocScope={setDocScope}
-          treeQuery={treeQuery}
-          setTreeQuery={setTreeQuery}
-          treeDocs={treeDocs}
-          treeEpisodes={treeEpisodes}
-          attempt={attempt}
-          openDoc={openDoc}
           archive={archive}
-          openMenu={openMenu}
-          docCreateMenu={docCreateMenu}
-          addMemoFolder={addMemoFolder}
-          createDoc={createDoc}
-          openEpisodeGroups={openEpisodeGroups}
-          setOpenEpisodeGroups={setOpenEpisodeGroups}
-          dragEpisodes={dragEpisodes}
-          treeRow={treeRow}
-          numberOf={numberOf}
-          treeDrop={treeDrop}
-          memoCreateMenu={memoCreateMenu}
-          folderDropProps={folderDropProps}
-          memoEntries={memoEntries}
           setArchive={setArchive}
+          createDoc={createDoc}
+          brokenFiles={<BrokenFiles
+            lib={lib}
+            projectId={projectId}
+            attempt={attempt}
+            message={message}
+            openDoc={openDoc}
+            menu={menu}
+            openMenu={openMenu}
+            refresh={refresh}
+          />}
         />)}
         <main className={isWorkspace || emptyWorkspace ? "workspace" : "main-page"}>
           {emptyWorkspace && (
@@ -2839,15 +1985,11 @@ export default function App() {
             {<DocumentLinksWidget
               active={active}
               lib={lib}
-              renaming={renaming}
-              renamingRef={renamingRef}
-              setRenaming={setRenaming}
+              tree={fileTree}
               attempt={attempt}
-              commitRename={commitRename}
               menu={menu}
               openDoc={openDoc}
               openMenu={openMenu}
-              startRename={startRename}
               docMenu={docMenu}
               archive={archive}
               addDocFile={addDocFile}
@@ -3017,16 +2159,7 @@ export default function App() {
             />)}
             {dialog.type === "history" && active && (
               <HistoryDialog documentId={active.id} report={report} onRestore={async (id, name) => {
-                await flush();
-                const current = draft.current;
-                if (!current || current.doc.id !== id) throw Error("열린 문서가 바뀌었습니다. 이력을 다시 열어 주세요.");
-                const restored = await call<Doc & { historyWarning?: string }>("restore", {
-                  id, name, expectedRevision: current.doc.revision,
-                });
-                if (restored.id !== id) replaceDocId(id, restored.id);
-                draft.current = { doc: restored, seq: 0, saved: 0 };
-                setActive(restored);
-                setDialog(null);
+                const restored = await session.restoreHistory(id, name, () => setDialog(null));
                 await refresh();
                 message(restored.historyWarning ?? "이전 원고를 복원했습니다. 복원 전 원고와 복원 결과를 모두 이력에 남겼습니다.");
               }} />
@@ -3083,7 +2216,7 @@ export default function App() {
                         className="danger-solid"
                         onClick={attempt(async () => {
                           setDialog(null);
-                          setTreeSelection([]);
+                          fileTree.clearSelection();
                           await deleteDocs(targets);
                         })}
                       >
@@ -3173,11 +2306,7 @@ export default function App() {
                         });
                         await call("clearDraft", { id: d.id });
                         await refresh();
-                        if (draft.current?.doc.id === d.id) {
-                          draft.current = null;
-                          conflictRef.current = false;
-                          setConflict(false);
-                        }
+                        session.discardDraft(d.id);
                         await openDoc(copy.id, true);
                         message("임시 원고를 새 문서로 복구했습니다.");
                       })}

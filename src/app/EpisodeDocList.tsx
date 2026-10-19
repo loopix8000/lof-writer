@@ -5,53 +5,19 @@ import {
   ChevronRight
 } from "lucide-react";
 import { Fragment } from "react";
-import { type MenuItem } from "../ContextMenu";
-import {
-  type Doc,
-  type Kind
-} from "../types";
 
-import type * as React from "react";
+import { type RenderTreeRow } from "./file-tree-model";
+import { documentIcon as docIcon } from "./FileTreeRow";
+import type { FileTreeController } from "./useFileTree";
 
-type Props = {
-  docs: Doc[];
-  treeEpisodeId: string;
-  treeMatch: (text: string, query: string) => boolean;
-  numberOf: (d: Doc) => any;
-  closedDocGroups: Set<Kind>;
-  menu: { x: number; y: number; items: MenuItem[]; target?: string; } | null;
-  setClosedDocGroups: React.Dispatch<React.SetStateAction<Set<Kind>>>;
-  openMenu: (e: React.MouseEvent, items: MenuItem[], target?: string) => void;
-  archive: boolean;
-  attempt: (fn: () => Promise<any>) => () => Promise<any>;
-  addDocFile: (folder: string, kind: "plot" | "memo", ep?: Doc, widget?: boolean) => Promise<void>;
-  treeRow: (d: Doc, marker: React.ReactNode, opts?: { depth?: number; badge?: string; dropFolder?: string; }) => React.JSX.Element;
-  docIcon: (d: Doc) => React.JSX.Element;
-  query: string;
-};
+export default function EpisodeDocList({ tree, treeRow }: { tree: FileTreeController; treeRow: RenderTreeRow }) {
+  const { numberOf, closedDocGroups, openMenu, attempt, addDocFile } = tree;
+  const archive = tree.archive;
+  const query = tree.treeQuery.memo;
 
-export default function EpisodeDocList({
-  docs,
-  treeEpisodeId,
-  treeMatch,
-  numberOf,
-  closedDocGroups,
-  menu,
-  setClosedDocGroups,
-  openMenu,
-  archive,
-  attempt,
-  addDocFile,
-  treeRow,
-  docIcon,
-  query,
-}: Props) {
-
-
-  const ep = docs.find((d) => d.id === treeEpisodeId && d.kind === "episode");
+  const ep = tree.boundEpisode;
   if (!ep) return <div className="tree-empty">에피소드를 열면 연결된 문서가 여기에 보입니다</div>;
-  const bound = docs.filter((d) => d.kind !== "episode" && d.episodeId === ep.id),
-    shown = bound.filter((d) => !query.trim() || treeMatch(d.title, query));
+  const bound = tree.boundDocuments, shown = tree.treeDocs;
   return (
     <>
       <div className="episode-doc-caption">
@@ -67,16 +33,9 @@ export default function EpisodeDocList({
         return (
           <Fragment key={kind}>
             <button
-              className={`tree-item doc-group ${menu?.target === "group-" + kind ? "context-target" : ""}`}
+              className={`tree-item doc-group ${tree.menuTarget === "group-" + kind ? "context-target" : ""}`}
               aria-expanded={open}
-              onClick={() =>
-                setClosedDocGroups((old) => {
-                  const next = new Set(old);
-                  if (next.has(kind)) next.delete(kind);
-                  else next.add(kind);
-                  return next;
-                })
-              }
+              onClick={() => tree.toggleDocGroup(kind)}
               onContextMenu={(e) =>
                 openMenu(
                   e,

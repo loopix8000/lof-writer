@@ -10,6 +10,34 @@ export function cloneDocument(doc: Doc, patch: Partial<Doc> = {}): Doc {
   if (cached && cached.body === next.body) documentSourceCache.set(next, cached);
   return next;
 }
+// 파일 위치·회차 순서·저장 버전이 달라져도 원고와 속성이 같으면 편집 충돌이 아니다.
+const documentLocationKeys = new Set([
+  "path", "relPath", "order", "revision", "fingerprint", "updatedAt", "characters", "platformCharacters",
+]);
+function sameValue(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (!a || !b || typeof a !== "object" || typeof b !== "object") return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  if (Array.isArray(a) && Array.isArray(b))
+    return a.length === b.length && a.every((value, index) => sameValue(value, b[index]));
+  const left = a as Record<string, unknown>, right = b as Record<string, unknown>;
+  return [...new Set([...Object.keys(left), ...Object.keys(right)])].every(key => sameValue(left[key], right[key]));
+}
+export function sameDocumentContent(a: Doc, b: Doc): boolean {
+  return [...new Set([...Object.keys(a), ...Object.keys(b)])]
+    .filter(key => !documentLocationKeys.has(key))
+    .every(key => sameValue(a[key as keyof Doc], b[key as keyof Doc]));
+}
+export function updateDocumentLocation(doc: Doc, next: Doc): Doc {
+  return cloneDocument(doc, {
+    id: next.id, path: next.path, relPath: next.relPath, order: next.order,
+    revision: next.revision, fingerprint: next.fingerprint, updatedAt: next.updatedAt,
+  });
+}
+// 이동 후 목록에는 본문이 없으므로 저장 버전을 채택하지 않고 위치만 갱신한다.
+export function relocateDocument(doc: Doc, next: Doc): Doc {
+  return cloneDocument(doc, { id: next.id, path: next.path, relPath: next.relPath });
+}
 export function requiresDocumentSource(doc: Doc) {
   const cached = documentSourceCache.get(doc);
   if (cached?.body === doc.body) return cached.required;

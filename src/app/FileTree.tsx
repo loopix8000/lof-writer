@@ -18,100 +18,46 @@ import { type MenuItem } from "../ContextMenu";
 import CoverImage from "../CoverImage";
 import ResizableSidebar from "../ResizableSidebar";
 import {
-  type Doc,
   type Kind,
   type Library,
   type Project
 } from "../types";
 
-// 파일 트리에서 회차가 많으면 이 단위로 묶어 접는다.
-export const EPISODE_GROUP = 20;
+import EpisodeDocList from "./EpisodeDocList";
+import { EPISODE_GROUP, type RenderTreeRow } from "./file-tree-model";
+import FileTreeRow from "./FileTreeRow";
+import MemoFolderTree from "./MemoFolderTree";
+import type { FileTreeController } from "./useFileTree";
 
 type Props = {
+  tree: FileTreeController;
   prefs: Record<string, any>;
-  savePrefs: (p: Record<string, any>) => Promise<void>;
-  report: (e: any) => void;
-  menu: { x: number; y: number; items: MenuItem[]; target?: string; } | null;
+  savePrefs: (patch: Record<string, any>) => Promise<void>;
+  report: (error: any) => void;
+  menu: { x: number; y: number; items: MenuItem[]; target?: string } | null;
   switchWasOpen: React.RefObject<boolean>;
-  setMenu: React.Dispatch<React.SetStateAction<{ x: number; y: number; items: MenuItem[]; target?: string; } | null>>;
+  setMenu: React.Dispatch<React.SetStateAction<Props["menu"]>>;
   projectMenu: () => MenuItem[];
   project: Project | undefined;
   lib: Library;
   projectId: string;
-  treeTab: "episode" | "memo";
-  setTreeTab: React.Dispatch<React.SetStateAction<"episode" | "memo">>;
-  dragFileDocs: React.RefObject<string[]>;
-  count: (kind: Kind) => number;
-  docScope: "episode" | "all";
-  setDocScope: React.Dispatch<React.SetStateAction<"episode" | "all">>;
-  treeQuery: { episode: string; memo: string; };
-  setTreeQuery: React.Dispatch<React.SetStateAction<{ episode: string; memo: string; }>>;
-  treeDocs: Doc[];
-  treeEpisodes: Doc[];
-  attempt: (fn: () => Promise<any>) => () => Promise<any>;
-  openDoc: (id: string, pinned?: boolean) => Promise<void>;
   archive: boolean;
-  openMenu: (e: React.MouseEvent, items: MenuItem[], target?: string) => void;
-  docCreateMenu: (folder: string) => MenuItem[];
-  addMemoFolder: (parent: string) => Promise<void>;
-  createDoc: (kind: Kind, opts?: { title?: string; episodeId?: string; }) => Promise<void>;
-  openEpisodeGroups: Set<number>;
-  setOpenEpisodeGroups: React.Dispatch<React.SetStateAction<Set<number>>>;
-  dragEpisodes: React.RefObject<string[]>;
-  treeRow: (d: Doc, marker: React.ReactNode, opts?: { depth?: number; badge?: string; dropFolder?: string; }) => React.JSX.Element;
-  numberOf: (d: Doc) => any;
-  treeDrop: string | null;
-  memoCreateMenu: (folder: string) => MenuItem[];
-  folderDropProps: (folder: string) => { onDragOver: (e: React.DragEvent) => void; onDragLeave: (e: React.DragEvent) => void; onDrop: (e: React.DragEvent) => void; };
-  memoEntries: { path: string; name: string; type: string; }[];
   setArchive: React.Dispatch<React.SetStateAction<boolean>>;
-  folderTree: React.ReactNode;
-  episodeDocuments: React.ReactNode;
+  createDoc: (kind: Kind, options?: { title?: string; episodeId?: string }) => Promise<void>;
   brokenFiles: React.ReactNode;
 };
-
 export default function FileTree({
-  prefs,
-  savePrefs,
-  report,
-  menu,
-  switchWasOpen,
-  setMenu,
-  projectMenu,
-  project,
-  lib,
-  projectId,
-  treeTab,
-  setTreeTab,
-  dragFileDocs,
-  count,
-  docScope,
-  setDocScope,
-  treeQuery,
-  setTreeQuery,
-  treeDocs,
-  treeEpisodes,
-  attempt,
-  openDoc,
-  archive,
-  openMenu,
-  docCreateMenu,
-  addMemoFolder,
-  createDoc,
-  openEpisodeGroups,
-  setOpenEpisodeGroups,
-  dragEpisodes,
-  treeRow,
-  numberOf,
-  treeDrop,
-  memoCreateMenu,
-  folderDropProps,
-  memoEntries,
-  setArchive,
-  folderTree,
-  episodeDocuments,
-  brokenFiles,
+  tree, prefs, savePrefs, report, menu, switchWasOpen, setMenu, projectMenu,
+  project, lib, projectId, archive, setArchive, createDoc, brokenFiles,
 }: Props) {
+  const {
+    treeTab, docScope, treeQuery, treeDocs, treeEpisodes, count, attempt,
+    openMenu, docCreateMenu, addMemoFolder, openEpisodeGroups, numberOf,
+    treeDrop, memoCreateMenu, folderDropProps, memoEntries,
+  } = tree;
+  const treeRow: RenderTreeRow = (doc, marker, options) => <FileTreeRow key={doc.id} doc={doc} marker={marker} options={options} tree={tree} />;
+  const folderTree = <MemoFolderTree tree={tree} treeRow={treeRow} />;
+  const episodeDocuments = <EpisodeDocList tree={tree} treeRow={treeRow} />;
 
   return (
     <ResizableSidebar label="파일 트리" className="file-tree" width={prefs.leftSidebarWidth}
@@ -176,11 +122,9 @@ export default function FileTree({
             role="tab"
             aria-selected={treeTab === tab}
             className={treeTab === tab ? "active" : ""}
-            onClick={() => setTreeTab(tab)}
+            onClick={() => tree.setTab(tab)}
             // 문서를 끌어 에피소드 탭에 올리면 탭을 바꿔 회차 위에 놓을 수 있게 한다.
-            onDragEnter={() => {
-              if (tab === "episode" && dragFileDocs.current.length) setTreeTab("episode");
-            }}
+            onDragEnter={() => tree.enterTab(tab)}
           >
             {tab === "memo" ? "문서" : labels.episode}
             <small>{tab === "memo" ? count("plot") + count("memo") : count("episode")}</small>
@@ -195,7 +139,7 @@ export default function FileTree({
               role="radio"
               aria-checked={docScope === scope}
               className={docScope === scope ? "active" : ""}
-              onClick={() => setDocScope(scope)}
+              onClick={() => tree.setScope(scope)}
             >
               {label}
             </button>
@@ -211,23 +155,15 @@ export default function FileTree({
             aria-label={treeTab === "memo" ? "문서 검색" : "에피소드 검색"}
             onChange={(e) => {
               const value = e.target.value;
-              setTreeQuery((q) => ({ ...q, [treeTab]: value }));
+              tree.updateQuery(treeTab, value);
             }}
-            onKeyDown={(e) => {
-              if (e.key === "Escape" && treeQuery[treeTab]) {
-                e.stopPropagation();
-                setTreeQuery((q) => ({ ...q, [treeTab]: "" }));
-              } else if (e.key === "Enter" && treeQuery[treeTab].trim()) {
-                const first = (treeTab === "memo" ? treeDocs : treeEpisodes)[0];
-                if (first) attempt(() => openDoc(first.id, false))();
-              }
-            }}
+            onKeyDown={tree.searchKey}
           />
           {treeQuery[treeTab] && (
             <button
               aria-label="검색어 지우기"
               title="검색어 지우기"
-              onClick={() => setTreeQuery((q) => ({ ...q, [treeTab]: "" }))}
+              onClick={() => tree.updateQuery(treeTab, "")}
             >
               <X size={13} />
             </button>
@@ -271,13 +207,7 @@ export default function FileTree({
               const start = g * EPISODE_GROUP,
                 items = treeEpisodes.slice(start, start + EPISODE_GROUP),
                 open = openEpisodeGroups.has(start);
-              const toggle = (next: boolean) =>
-                setOpenEpisodeGroups((old) => {
-                  const set = new Set(old);
-                  if (next) set.add(start);
-                  else set.delete(start);
-                  return set;
-                });
+              const toggle = (next: boolean) => tree.setEpisodeGroup(start, next);
               return (
                 <Fragment key={start}>
                   <button
@@ -285,9 +215,7 @@ export default function FileTree({
                     aria-expanded={open}
                     onClick={() => toggle(!open)}
                     // 문서나 회차를 끌어 접힌 묶음에 올리면 펼쳐서 회차 위에 놓을 수 있게 한다.
-                    onDragEnter={() => {
-                      if ((dragFileDocs.current.length || dragEpisodes.current.length) && !open) toggle(true);
-                    }}
+                    onDragEnter={() => tree.enterEpisodeGroup(start)}
                   >
                     {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                     <span>
@@ -349,4 +277,5 @@ export default function FileTree({
       </div>
     </ResizableSidebar>
   );
+
 }

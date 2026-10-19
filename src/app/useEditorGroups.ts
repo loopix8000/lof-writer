@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties, type Poin
 import { editorDropZone } from "../editor-groups";
 import { call, type Doc } from "../types";
 import { useSyncFileUpdates } from "../useSyncFileUpdates";
-import { placeTab, withoutTab, type EditorGroup, type EditorTab, type Side } from "./model";
+import { placeTab, relocateDocument, sameDocumentContent, withoutTab, type EditorGroup, type EditorTab, type Side } from "./model";
 
 type Options = {
   active: Doc | null;
@@ -11,6 +11,7 @@ type Options = {
   visible: boolean;
   currentId: () => string;
   currentDocument: () => Doc | null;
+  pendingDocumentMove: () => Promise<void> | null;
   flush: (options?: { closing?: boolean; skipMemo?: boolean }) => Promise<void>;
   // 저장과 읽기를 마친 뒤 beforeCommit과 편집 문서 변경을 같은 렌더에 반영한다.
   navigate: (id: string, pinned: boolean, beforeCommit?: () => void) => Promise<void>;
@@ -97,7 +98,15 @@ export function useEditorGroups(options: Options) {
     updateTabs((tabs) => tabs.some((tab) => tab.id === id && !tab.pinned) ? placeTab(tabs, id, true, "") : tabs);
   }, [updateTabs]);
 
-  const replaceDocumentId = useCallback((oldId: string, newId: string) => {
+  const replaceDocumentId = useCallback((oldId: string, newId: string, location?: Doc) => {
+    const retained = retainedDocuments.current.get(oldId);
+    if (retained) {
+      const next = relocateDocument(retained, location ?? { ...retained, id: newId });
+      if (oldId !== newId) retainedDocuments.current.delete(oldId);
+      retainedDocuments.current.set(newId, next);
+    }
+    setSideDocState(doc => doc?.id === oldId ? relocateDocument(doc, location ?? { ...doc, id: newId }) : doc);
+    setSideSyncKey(key => key.startsWith(oldId + ":") ? newId + key.slice(oldId.length) : key);
     const swap = (id: string) => id === oldId ? newId : id;
     updateTabs((tabs) => tabs.some((tab) => tab.id === oldId)
       ? tabs.map((tab) => ({ ...tab, id: swap(tab.id) })) : tabs);
@@ -242,9 +251,15 @@ export function useEditorGroups(options: Options) {
   const checkSideDocument = useSyncFileUpdates({
     fileKey: sideDoc?.id ?? "",
     enabled: !!sideId && sideDoc?.id === sideId && sideId !== options.active?.id,
-    canCheck: () => latest.current.visible,
+    canCheck: () => latest.current.visible && !latest.current.pendingDocumentMove(),
     current: () => sideDoc ? { doc: sideDoc, version: sideDoc.revision } : null,
     read: (doc: Doc) => call<Doc>("readDocument", { id: doc.id }),
+    reconcile: (doc) => {
+      if (!sideDoc || !sameDocumentContent(sideDoc, doc)) return false;
+      setSideDoc(doc);
+      setSideSyncKey("");
+      return true;
+    },
     pending: () => setSideSyncKey(sideDoc ? `${sideDoc.id}:${sideDoc.revision}` : ""),
     apply: (doc) => { setSideDoc(doc); setSideSyncKey(""); },
     report: options.report,

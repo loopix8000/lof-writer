@@ -41,6 +41,8 @@ type Options<T> = {
   read: (doc: T) => Promise<T>;
   beforeRead?: () => Promise<unknown>;
   pending?: () => void;
+  // 본문을 바꾸지 않는 위치·순서 변경을 안전하게 반영한 경우 안내를 생략한다.
+  reconcile?: (doc: T) => boolean;
   apply: (doc: T) => Promise<void> | void;
   report: (error: any) => void;
 };
@@ -68,6 +70,7 @@ export function useSyncFileUpdates<T extends SyncedFile>(options: Options<T>) {
       const current = latest.current.current();
       if (!current || current.version !== snapshot.version) return;
       if (fresh.revision === current.doc.revision) { noticed.current.delete(key); return; }
+      if (!loadLatest && latest.current.reconcile?.(fresh)) { noticed.current.delete(key); return; }
       if (!loadLatest) {
         // 자동 확인에서는 본문을 유지하고, 안내줄을 눌렀을 때만 새 내용을 불러온다.
         const change = `${current.doc.revision}\n${fresh.revision}`;

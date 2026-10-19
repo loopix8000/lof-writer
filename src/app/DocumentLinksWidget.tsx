@@ -10,21 +10,18 @@ import {
   type Doc,
   type Library
 } from "../types";
+import type { FileTreeController } from "./useFileTree";
 
 import type * as React from "react";
 
 type Props = {
   active: Doc | null;
   lib: Library;
-  renaming: { id: string; value: string; widget?: boolean; } | null;
-  renamingRef: React.RefObject<{ id: string; value: string; widget?: boolean; } | null>;
-  setRenaming: React.Dispatch<React.SetStateAction<{ id: string; value: string; widget?: boolean; } | null>>;
+  tree: Pick<FileTreeController, "renaming" | "startRename" | "commitRename" | "changeRename" | "cancelRename">;
   attempt: (fn: () => Promise<any>) => () => Promise<any>;
-  commitRename: () => Promise<void>;
   menu: { x: number; y: number; items: MenuItem[]; target?: string; } | null;
   openDoc: (id: string, pinned?: boolean) => Promise<void>;
   openMenu: (e: React.MouseEvent, items: MenuItem[], target?: string) => void;
-  startRename: (doc: Doc, widget?: boolean) => void;
   docMenu: (d: Doc) => MenuItem[];
   archive: boolean;
   addDocFile: (folder: string, kind: "plot" | "memo", ep?: Doc, widget?: boolean) => Promise<void>;
@@ -33,19 +30,16 @@ type Props = {
 export default function DocumentLinksWidget({
   active,
   lib,
-  renaming,
-  renamingRef,
-  setRenaming,
+  tree,
   attempt,
-  commitRename,
   menu,
   openDoc,
   openMenu,
-  startRename,
   docMenu,
   archive,
   addDocFile,
 }: Props) {
+  const { renaming, commitRename, startRename } = tree;
   const isPlotMemo = (d: Doc) => d.kind === "memo";
 
   if (!active) return null;
@@ -70,15 +64,13 @@ export default function DocumentLinksWidget({
           value={renaming.value}
           onFocus={(e) => e.currentTarget.select()}
           onChange={(e) => {
-            renamingRef.current = { id: d.id, value: e.target.value, widget: true };
-            setRenaming(renamingRef.current);
+            tree.changeRename(e.target.value);
           }}
           onKeyDown={(e) => {
             e.stopPropagation();
             if (e.key === "Enter") attempt(commitRename)();
             else if (e.key === "Escape") {
-              renamingRef.current = null;
-              setRenaming(null);
+              tree.cancelRename();
             }
           }}
           onBlur={attempt(commitRename)}

@@ -1,0 +1,406 @@
+import { useCallback, useRef, useState } from "react";
+import type { EditorScrollPositions } from "../EditorScroll";
+import { call, type Doc } from "../types";
+import { useGitActivity } from "../useGitActivity";
+import { readFileForClose, useSyncFileUpdates } from "../useSyncFileUpdates";
+import { cloneDocument, editDocument, relocateDocument, sameDocumentContent, updateDocumentLocation } from "./model";
+
+export const composingError = "한글 입력 조합이 끝난 뒤 다시 저장해 주세요.";
+type FlushOptions = { auto?: boolean; closing?: boolean; skipMemo?: boolean };
+type Options = {
+  loaded: boolean;
+  visible: boolean;
+  memoOpen: boolean;
+  flushMemo: (options: { closing?: boolean }) => Promise<void> | undefined;
+  waitForWriting: () => Promise<void>;
+  pendingDocumentMove: () => Promise<void> | null;
+  saveMemoManually: () => Promise<void> | undefined;
+  retainDocument: (doc: Doc) => void;
+  clearRetainedDocuments: () => void;
+  clearSideDocument: () => void;
+  pinTab: (id: string) => void;
+  onDocumentIdChanged: (oldId: string, newId: string, location?: Doc) => void;
+  onSaved: () => void;
+  refresh: () => Promise<unknown>;
+  openDoc: (id: string, pinned: boolean) => Promise<void>;
+  message: (text: string) => void;
+  report: (error: any) => void;
+};
+
+// 원고와 저장 버전은 이 훅 안에서만 변경한다. 화면 이동은 저장 완료 뒤 commitDocument를 호출한다.
+export function useDocumentSession(options: Options) {
+  const latest = useRef(options); latest.current = options;
+  const [active, setActiveState] = useState<Doc | null>(null);
+  const [saveStatus, setSaveStatus] = useState("저장됨");
+  const [conflict, setConflict] = useState(false);
+  const draft = useRef<{ doc: Doc; base: Doc; seq: number; saved: number } | null>(null);
+  const saveChain = useRef(Promise.resolve());
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const composing = useRef(false);
+  const conflictRef = useRef(false);
+  const activeId = useRef("");
+  // 앱에서 문서를 처음 열었을 때의 글자 수를 문서별로 유지한다.
+  const sessionStarts = useRef(new Map<string, number>());
+  const scrollPositions = useRef<EditorScrollPositions>(new Map());
+  const report = useCallback((error: any) => latest.current.report(error), []);
+  const message = useCallback((text: string) => latest.current.message(text), []);
+  const pinTab = (id: string) => latest.current.pinTab(id);
+  const setActive = useCallback((doc: Doc | null) => {
+    if (doc) latest.current.retainDocument(doc);
+    setActiveState(doc);
+  }, []);
+  const flush = useCallback(async ({ auto = false, closing = false, skipMemo = false }: FlushOptions = {}) => {
+    if (!auto && !skipMemo) await latest.current.flushMemo({ closing });
+    await latest.current.waitForWriting();
+    if (timer.current) clearTimeout(timer.current);
+    const run = async () => {
+      const moving = latest.current.pendingDocumentMove();
+      if (moving) await moving;
+      const d = draft.current;
+      if (!d) return;
+      const loadExternalOnClose = async (onlyIfChanged = false) => {
+        if (composing.current) throw Error(composingError);
+        const seq = d.seq;
+        const fresh = await readFileForClose(() => call<Doc>("readDocument", { id: d.doc.id }));
+        if (draft.current !== d || d.seq !== seq || composing.current)
+          throw Error("닫는 동안 원고가 변경되었습니다. 다시 닫아 주세요.");
+        if (onlyIfChanged && !conflictRef.current && fresh.revision === d.doc.revision) return false;
+        await call("clearDraft", { id: d.doc.id });
+        if (draft.current !== d || d.seq !== seq || composing.current)
+          throw Error("닫는 동안 원고가 변경되었습니다. 다시 닫아 주세요.");
+        d.doc = fresh;
+        d.base = fresh;
+        d.saved = seq;
+        conflictRef.current = false;
+        setConflict(false);
+        setActive(fresh);
+        setSaveStatus("저장됨");
+        return true;
+      };
+      // 닫기는 파일의 최신 내용을 채택하며, 일반 저장은 기존 충돌 처리를 유지한다.
+      if (closing && await loadExternalOnClose(true)) return;
+      if (d.seq === d.saved) return;
+      const seq = d.seq,
+        payload = { ...d.doc, expectedRevision: d.doc.revision };
+      await call("saveDraft", payload);
+      if (conflictRef.current) {
+        if (closing) { await loadExternalOnClose(); return; }
+        if (auto) return;
+        throw Error(
+          "변경 충돌을 해결해 주세요. 입력한 원고는 임시 저장되어 있습니다.",
+        );
+      }
+      if (composing.current) {
+        // 조합이 끝나면 composition에서 다음 자동 저장을 예약한다.
+        if (auto) return;
+        throw Error(composingError);
+      }
+      setSaveStatus("저장 중");
+      try {
+        let saved: Doc;
+        try {
+          saved = await call<Doc>("saveDocument", payload);
+        } catch (error: any) {
+          if (error.code !== "CONFLICT") throw error;
+          // 변경 알림보다 저장이 먼저 도착한 경우도 마지막 저장 원고로 확인한다.
+          const fresh = await call<Doc>("readDocument", { id: d.doc.id });
+          if (draft.current !== d || !sameDocumentContent(d.base, fresh)) throw error;
+          d.base = fresh;
+          d.doc = updateDocumentLocation(d.doc, fresh);
+          conflictRef.current = false;
+          setConflict(false);
+          if (composing.current) {
+            setSaveStatus("편집 중");
+            if (auto) return;
+            throw Error(composingError);
+          }
+          saved = await call<Doc>("saveDocument", {
+            ...updateDocumentLocation(payload, fresh), expectedRevision: fresh.revision,
+          });
+        }
+        if (draft.current === d) {
+          d.saved = seq;
+          d.base = saved;
+          // 메모는 이름이 바뀌면 파일 경로로 만든 ID도 바뀐다.
+          if (saved.id !== d.doc.id) replaceDocId(d.doc.id, saved.id);
+          d.doc = cloneDocument(d.doc, {
+            id: saved.id,
+            path: saved.path,
+            relPath: saved.relPath,
+            revision: saved.revision,
+            fingerprint: saved.fingerprint,
+            updatedAt: saved.updatedAt,
+          });
+          setActive(cloneDocument(d.doc));
+          latest.current.onSaved();
+          setSaveStatus(d.seq === seq ? "저장됨" : "편집 중");
+          if (d.seq === seq) await call("clearDraft", { id: d.doc.id });
+        }
+      } catch (e: any) {
+        if (closing && e.code === "CONFLICT") { await loadExternalOnClose(); return; }
+        setSaveStatus(e.code === "CONFLICT" ? "변경 충돌" : "저장 실패");
+        if (e.code === "CONFLICT") {
+          conflictRef.current = true;
+          setConflict(true);
+        }
+        throw e;
+      }
+    };
+    const task = saveChain.current.then(run);
+    saveChain.current = task.catch(() => {});
+    return task;
+  }, []);
+  // 자동 저장은 별도 이력을 남기지 않는다. 입력이 멈추고 저장이 끝나면 저장소의 규칙에 따라 이력을 남긴다.
+  const gitActivity = useGitActivity(async () => {
+    await flush();
+    const pending = draft.current;
+    return !composing.current && !conflictRef.current && (!pending || pending.seq === pending.saved);
+  }, report);
+  const checkOpenDocument = useSyncFileUpdates({
+    fileKey: active?.id ?? "",
+    enabled: options.loaded && !!active,
+    canCheck: () => latest.current.visible && !composing.current && !latest.current.pendingDocumentMove(),
+    current: () => {
+      const d = draft.current;
+      return d ? { doc: d.doc, version: `${d.seq}:${d.doc.revision}` } : null;
+    },
+    beforeRead: () => saveChain.current,
+    read: (doc: Doc) => call<Doc>("readDocument", { id: doc.id }),
+    reconcile: (doc) => {
+      const d = draft.current;
+      // 마지막 저장 원고와 비교해 위치만 갱신하고, 저장하지 않은 입력은 그대로 남긴다.
+      if (!d || !sameDocumentContent(d.base, doc)) return false;
+      d.base = doc;
+      d.doc = updateDocumentLocation(d.doc, doc);
+      conflictRef.current = false;
+      setConflict(false);
+      setActive(cloneDocument(d.doc));
+      setSaveStatus(d.seq === d.saved ? "저장됨" : "편집 중");
+      if (d.seq !== d.saved && !composing.current) {
+        if (timer.current) clearTimeout(timer.current);
+        timer.current = setTimeout(() => flush({ auto: true }).catch(report), 650);
+      }
+      return true;
+    },
+    pending: () => {
+      if (timer.current) clearTimeout(timer.current);
+      conflictRef.current = true;
+      setConflict(true);
+      const d = draft.current;
+      if (d) {
+        if (d.seq === d.saved) d.seq++;
+        void call("saveDraft", { ...d.doc, expectedRevision: d.doc.revision }).catch(report);
+      }
+      setSaveStatus("외부 변경 있음");
+    },
+    apply: async (doc) => {
+      const previous = draft.current;
+      if (previous?.doc.id !== doc.id) return;
+      const previousSeq = previous.seq;
+      await call("clearDraft", { id: doc.id });
+      if (draft.current !== previous || previous.seq !== previousSeq) return;
+      draft.current = { doc, base: doc, seq: 0, saved: 0 };
+      conflictRef.current = false;
+      setActive(doc);
+      setConflict(false);
+      setSaveStatus("저장됨");
+      message("동기화된 새 내용을 불러왔습니다.");
+    },
+    report,
+  });
+  // 직접 저장은 현재 문서의 Git 기록에 수동 저장 표시를 남긴다.
+  const manualSave = useCallback(async () => {
+    const memoOpen = latest.current.memoOpen;
+    await flush();
+    if (memoOpen) {
+      await latest.current.saveMemoManually();
+    } else {
+      const id = draft.current?.doc.id;
+      if (id) await call("checkpointDocument", { id, force: true });
+    }
+    await call("requestSyncNow");
+  }, [flush]);
+  function edit(patch: Partial<Doc>, markdownCopy?: boolean) {
+    const d = draft.current;
+    if (!d) return;
+    gitActivity();
+    d.doc = editDocument(d.doc, patch, markdownCopy);
+    d.seq++;
+    pinTab(d.doc.id);
+    setActive(cloneDocument(d.doc));
+    setSaveStatus("편집 중");
+    if (timer.current) clearTimeout(timer.current);
+    if (!composing.current)
+      timer.current = setTimeout(() => flush({ auto: true }).catch(report), 650);
+  }
+  function composition(value: boolean) {
+    gitActivity();
+    composing.current = value;
+    if (timer.current) clearTimeout(timer.current);
+    if (!value)
+      timer.current = setTimeout(() => flush({ auto: true }).catch(report), 800);
+  }
+  const reconcileDocuments = useCallback((documents: Doc[]) => {
+    const d = draft.current;
+    if (d) {
+      const meta = documents.find((x) => x.id === d.doc.id);
+      if (meta && (meta.revision !== d.doc.revision ||
+          (meta.fingerprint !== d.doc.fingerprint && d.seq === d.saved))) {
+        void checkOpenDocument().catch(report);
+      } else if (meta && d.seq === d.saved &&
+          (meta.title !== d.doc.title || meta.path !== d.doc.path || meta.relPath !== d.doc.relPath)) {
+        // 본문은 그대로인데 이름만 바뀐 경우(회차 번호가 바뀌어 '003화 …' 이름이 따라 바뀐 경우 등).
+        // 편집 중인 원고에도 반영해야 다음 저장 때 예전 이름으로 되돌리지 않는다.
+        d.doc = cloneDocument(d.doc, { title: meta.title, path: meta.path, relPath: meta.relPath });
+        setActive(cloneDocument(d.doc));
+      }
+    }
+  }, [checkOpenDocument, report, setActive]);
+
+  function replaceDocId(oldId: string, newId: string, location?: Doc) {
+    const sessionStart = sessionStarts.current.get(oldId);
+    if (oldId !== newId && sessionStart !== undefined) {
+      sessionStarts.current.set(newId, sessionStart);
+      sessionStarts.current.delete(oldId);
+    }
+    const scrollPosition = scrollPositions.current.get(oldId);
+    if (oldId !== newId && scrollPosition) {
+      scrollPositions.current.set(newId, scrollPosition);
+      scrollPositions.current.delete(oldId);
+    }
+    if (activeId.current === oldId) activeId.current = newId;
+    latest.current.onDocumentIdChanged(oldId, newId, location);
+  }
+
+  // 열려 있는 문서는 편집 중인 원고에 반영하고, 아니면 파일에 바로 저장한다.
+  async function writeMeta(id: string, patch: Partial<Doc>) {
+    if (draft.current?.doc.id === id) {
+      edit(patch);
+      await flush();
+    } else {
+      await flush();
+      const doc = await call<Doc>("readDocument", { id });
+      const saved = await call<Doc>("saveDocument", { id, ...patch, expectedRevision: doc.revision });
+      if (saved.id !== id) replaceDocId(id, saved.id);
+    }
+  }
+  // 트리가 파일을 옮기고 서재를 다시 읽은 뒤 열린 원고의 위치 정보를 갱신한다.
+  function remapDocuments(before: Doc[], from: string, to: string, documents: Doc[], projectId: string) {
+    for (const d of before) {
+      const rel = to + d.relPath!.slice(from.length),
+        next = documents.find(
+          (x) => x.projectId === projectId && x.relPath === rel,
+        );
+      if (!next) continue;
+      replaceDocId(d.id, next.id, next);
+      if (draft.current?.doc.id === d.id) {
+        draft.current.doc = relocateDocument(draft.current.doc, next);
+        draft.current.base = relocateDocument(draft.current.base, next);
+        setActive(cloneDocument(draft.current.doc));
+      }
+    }
+  }
+
+  async function resolveConflict() {
+    const d = draft.current;
+    if (!d) return;
+    const copy = await call<Doc>("createDocument", {
+      projectId: d.doc.projectId,
+      kind: d.doc.kind,
+      title: d.doc.title + " (내 편집 사본)",
+      body: d.doc.body,
+    });
+    await call("clearDraft", { id: d.doc.id });
+    draft.current = null;
+    conflictRef.current = false;
+    setConflict(false);
+    await latest.current.refresh();
+    await latest.current.openDoc(copy.id, true);
+    message("내 편집을 새 문서로 보존했습니다. 기존 문서도 유지됩니다.");
+  }
+
+  function commitDocument(doc: Doc, keepOlder: boolean) {
+    draft.current = { doc, base: doc, seq: keepOlder ? 1 : 0, saved: 0 };
+    if (keepOlder) void call("saveDraft", { ...doc, expectedRevision: doc.revision }).catch(report);
+    activeId.current = doc.id;
+    setActive(doc);
+    setSaveStatus(keepOlder ? "외부 변경 있음" : "저장됨");
+    setConflict(keepOlder);
+    conflictRef.current = keepOlder;
+  }
+
+  function discardDraft(id?: string) {
+    if (id !== undefined && draft.current?.doc.id !== id) return;
+    draft.current = null;
+    conflictRef.current = false;
+    setConflict(false);
+  }
+
+  function detachDocument() {
+    discardDraft();
+    setActive(null);
+  }
+
+  function closeDocument() {
+    detachDocument();
+    activeId.current = "";
+  }
+
+  function resetVault() {
+    sessionStarts.current.clear();
+    scrollPositions.current.clear();
+    draft.current = null;
+    activeId.current = "";
+    setActive(null);
+  }
+
+  const waitForSave = useCallback(() => saveChain.current, []);
+  const currentId = useCallback(() => activeId.current, []);
+  const currentDocument = useCallback(() => draft.current?.doc ?? null, []);
+
+  const flushForClose = useCallback(async () => {
+    await flush({ closing: true });
+    // 트레이에서 돌아오거나 다른 탭을 다시 열 때도 예전 본문을 되살리지 않는다.
+    latest.current.clearRetainedDocuments();
+    if (draft.current) setActive(draft.current.doc);
+    latest.current.clearSideDocument();
+  }, [flush, setActive]);
+
+  async function prepareForInstall() {
+    if (composing.current) throw Error(composingError);
+    await flush();
+    const pending = draft.current;
+    if (composing.current || (pending && pending.seq !== pending.saved))
+      throw Error("원고 저장을 완료한 뒤 다시 시도해 주세요.");
+  }
+
+  async function restoreHistory(id: string, name: string, afterCommit: () => void) {
+    await flush();
+    const current = draft.current;
+    if (!current || current.doc.id !== id) throw Error("열린 문서가 바뀌었습니다. 이력을 다시 열어 주세요.");
+    const restored = await call<Doc & { historyWarning?: string }>("restore", {
+      id, name, expectedRevision: current.doc.revision,
+    });
+    if (restored.id !== id) replaceDocId(id, restored.id);
+    draft.current = { doc: restored, base: restored, seq: 0, saved: 0 };
+    setActive(restored);
+    afterCommit();
+    return restored;
+  }
+
+  function recordBaseline(id: string, count: number) {
+    if (!sessionStarts.current.has(id)) sessionStarts.current.set(id, count);
+  }
+
+  function sessionDelta(id: string, count: number) {
+    return Math.max(0, count - (sessionStarts.current.get(id) ?? count));
+  }
+
+  return {
+    active, saveStatus, conflict, scrollPositions: scrollPositions.current,
+    currentId, currentDocument, waitForSave, flush, flushForClose, manualSave, prepareForInstall,
+    edit, composition, checkOpenDocument, reconcileDocuments, commitDocument,
+    discardDraft, detachDocument, closeDocument, resetVault, replaceDocId, writeMeta,
+    remapDocuments, resolveConflict, restoreHistory, recordBaseline, sessionDelta,
+  };
+}
