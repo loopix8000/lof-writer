@@ -1260,6 +1260,7 @@ body.sidebar-resizing * {
   background: var(--surface);
 }
 .workspace-empty {
+  position: relative;
   flex: 1;
   display: grid;
   place-items: center;

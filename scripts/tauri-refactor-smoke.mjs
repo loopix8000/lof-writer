@@ -192,7 +192,7 @@ try {
   await check("1. 그룹 분할·양쪽 포커스·본문 보존·크기 조절", async () => {
     await page.keyboard.press("Control+Backslash");
     await expect(main.locator(".editor-groups.split > .editor-group")).toHaveCount(2);
-    await expect(focused()).toHaveAttribute("data-side", "right");
+    await expect(focused()).toHaveAttribute("data-split-group", "right");
     await page.keyboard.press("Control+1");
     await expect(title()).toHaveValue(docs[0].title);
     await expect(writer()).toContainText("전환 전 작성한 한글 원고");

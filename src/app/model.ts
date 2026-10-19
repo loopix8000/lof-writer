@@ -75,18 +75,7 @@ export type Destination = {
 export type Navigation = { entries: Destination[]; index: number };
 // 편집기 탭. VS Code처럼 고정되지 않은 탭(미리보기)은 다음 문서를 열 때 재사용된다.
 export type EditorTab = { id: string; pinned: boolean };
-export type EditorGroup = { tabs: EditorTab[]; docId: string };
-export type Side = import("../editor-groups").EditorSide;
-export function withoutTab(group: EditorGroup | null, id: string): EditorGroup | null {
-  if (!group) return group;
-  const index = group.tabs.findIndex((t) => t.id === id);
-  if (index < 0) return group;
-  const tabs = group.tabs.filter((t) => t.id !== id);
-  if (!tabs.length) return null;
-  const docId =
-    group.docId === id ? (tabs[index] || tabs[index - 1]).id : group.docId;
-  return { tabs, docId };
-}
+export type Side = import("../split/layout").GroupId;
 export function placeTab(tabs: EditorTab[], id: string, pinned: boolean, after: string) {
   const index = tabs.findIndex((t) => t.id === id);
   if (index >= 0)

@@ -68,7 +68,6 @@ import { globalView, initialNavigation, requiresDocumentSource, sameDocumentCont
 import { useConfirm } from "./ConfirmDialog";
 import ContextMenu, { type MenuItem } from "./ContextMenu";
 import { ImageViewer } from "./CoverImage";
-import { type EditorDropZone } from "./editor-groups";
 import EditorScroll from "./EditorScroll";
 import EpisodeBindingPicker from "./EpisodeBindingPicker";
 import EpisodeProperties, { statusItems } from "./EpisodeProperties";
@@ -83,7 +82,10 @@ import RealtimeSync from "./RealtimeSync";
 import { ReleaseNotesDialog, ReleaseNotice, useReleaseNotice } from "./ReleaseNotes";
 import ResizableSidebar from "./ResizableSidebar";
 import { initializeWorkspaceState, flushWorkspaceState, workspaceKey } from "./workspace-state";
-import { editorSides, editorSashStyle, hasEditorRows } from "./editor-groups";
+import { groupShortcutIndex } from "./split/layout";
+import { splitMenuItems } from "./split/menu";
+import { groupAttributes, tabBarAttributes, type SplitDrag } from "./split/controller";
+import SplitArea from "./split/SplitArea";
 import RetainedTab from "./RetainedTab";
 import {
   QuickOpen,
@@ -182,7 +184,7 @@ export default function App() {
     [bookmarkQuery, setBookmarkQuery] = useState("");
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[]; target?: string } | null>(null),
     [dragTab, setDragTab] = useState(""),
-    [dropZone, setDropZone] = useState<EditorDropZone | null>(null);
+    [emptyDrop, setEmptyDrop] = useState(false);
   const memoFlush = useRef<((options?: { closing?: boolean }) => Promise<void>) | null>(null);
   const memoManualSave = useRef<(() => Promise<void>) | null>(null);
   const imageCache = useRef(new Map<string, Promise<string | null>>());
@@ -196,8 +198,8 @@ export default function App() {
   const tabActions = useRef<{
     closeTab: (id: string) => Promise<void>;
     cycleTab: (direction: number) => Promise<void>;
-    splitTo: (id: string) => Promise<void>;
-    focusSide: (side: Side) => Promise<void>;
+    splitTo: (id: string) => Promise<unknown>;
+    focusGroupAt: (index: number) => Promise<void>;
     togglePreview: () => void;
     report: (e: any) => void;
   }>(null!);
@@ -245,12 +247,12 @@ export default function App() {
   const { active, saveStatus, conflict, flush, flushForClose, waitForSave, reconcileDocuments,
     manualSave, edit, composition, checkOpenDocument, writeMeta, resolveConflict } = session;
   const {
-    tabs: editorTabs, split, groups, sides, focusedSide, pending: sideSyncKeys, checks: sideChecks, groupsRef, gridStyle,
+    area, tabs: editorTabs, split, groups, sides, focusedSide, pending: sideSyncKeys, checks: sideChecks,
     retainDocument, getRetainedDocument, clearRetainedDocuments, clearSideDocument,
     pruneDocuments, resetGroups, commitOpenDocument, replaceDocumentId: replaceGroupDocumentId, getProjectDocument,
     openDoc, openLinked, pinTab, closeTab, closeTabs, cycleTab, moveTab,
-    focusOther, focusSide, openInGroup, splitTo, closeGroup, closeOtherGroup, moveToOther, closeSideTab,
-    groupStyle, getDropZone, startSash, resetSplitRatio,
+    focusOther, focusSide, focusGroupAt, openInGroup, splitTo, canSplit, closeGroup, closeOtherGroup, moveToOther, closeSideTab,
+    groupStyle,
   } = useEditorGroups({
     active,
     documents: lib.documents,
@@ -279,7 +281,7 @@ export default function App() {
     onDelete: (ids) => setDialog({ type: "deleteDoc", ids }),
     remapDocuments: (before, from, to) => remapDocs(before, from, to),
     showTree: () => { if (focusRef.current) setFocusTree(true); else setSidebar(true); },
-    onDragStart: () => setDragTab(""), onDragEnd: () => setDropZone(null),
+    onDragStart: () => setDragTab(""), onDragEnd: () => area.clearDropZone(),
     confirm: (options) => confirm({ ...options, icon: <Trash2 size={15} /> }),
     message, report,
   });
@@ -375,7 +377,7 @@ export default function App() {
     };
   }, [refresh, flushForClose, waitForSave, report]);
   // beforeCommit은 문서를 읽은 뒤 화면 상태를 바꾸기 직전에 부른다. 같은 렌더에 묶여 중간 상태가 그려지지 않는다.
-  async function navigate(destination: Destination, historyIndex?: number, beforeCommit?: () => void) {
+  async function navigate(destination: Destination, historyIndex?: number, beforeCommit?: () => boolean | void) {
     const seq = ++navigationSeq.current;
     await flush();
     if (seq !== navigationSeq.current) return;
@@ -391,7 +393,7 @@ export default function App() {
       : { ...destination, projectId: globalView(destination.view) ? "" : destination.projectId };
     if (!globalView(next.view) && !libraryRef.current.projects.some(p => p.id === next.projectId))
       throw Error("작품을 찾을 수 없습니다.");
-    beforeCommit?.();
+    if (beforeCommit?.() === false) return;
     // Commit the history cursor only after saving and loading both succeed.
     const previous = navigationRef.current;
     const entries = previous.entries.map((entry, index) => index === previous.index
@@ -429,12 +431,12 @@ export default function App() {
     setDialog(null);
   }
   // 마지막 탭을 닫아도 파일 트리가 있는 집필 화면을 유지한다.
-  async function closeLastDocument(commit: () => void) {
+  async function closeLastDocument(commit: () => boolean | void) {
     const seq = ++navigationSeq.current;
     await flush();
     if (seq !== navigationSeq.current) return;
+    if (commit() === false) return;
     session.closeDocument();
-    commit();
   }
   // 문서 ID가 바뀌었을 때(메모 이름 바꾸기) 탭·분할 보기·이동 기록이 새 ID를 가리키게 한다.
   function handleDocumentIdChange(oldId: string, newId: string, location?: Doc) {
@@ -706,10 +708,11 @@ export default function App() {
       "separator",
       { label: "탭 고정", disabled: t.pinned, action: () => pinTab(t.id) },
       "separator",
-      { label: focusedSide.endsWith("right") ? "왼쪽으로 분할" : "오른쪽으로 분할", shortcut: "Ctrl+\\", action: attempt(() => splitTo(t.id)) },
-      { label: focusedSide.startsWith("bottom") ? "위로 분할" : "아래로 분할", action: attempt(() => splitTo(t.id, "down")) },
-      ...(split ? [{ label: "다른 그룹으로 이동", action: attempt(() => moveToOther(t.id)) }] : []),
-      { label: "그룹 닫기", disabled: !split, action: attempt(closeGroup) },
+      ...splitMenuItems({
+        focused: true, split, canSplit: (direction) => canSplit(focusedSide, direction),
+        splitTo: (direction) => attempt(() => splitTo(t.id, direction))(),
+        moveToOther: attempt(() => moveToOther(t.id)), closeGroup: attempt(closeGroup),
+      }),
       "separator",
       { label: "파일 탐색기에서 표시", disabled: !doc, action: attempt(() => call("reveal", { id: t.id })) },
       { label: "경로 복사", disabled: !doc, action: attempt(() => copyPath(doc!)) },
@@ -721,13 +724,11 @@ export default function App() {
     return [
       { label: "열기", action: attempt(() => focusOther(t.id, false, side)) },
       { label: "닫기", action: () => closeSideTab(t.id, side) },
-      { label: side.endsWith("right") ? "왼쪽으로 분할" : "오른쪽으로 분할", action: attempt(() => splitTo(t.id, "right", side)) },
-      { label: side.startsWith("bottom") ? "위로 분할" : "아래로 분할", action: attempt(() => splitTo(t.id, "down", side)) },
-      { label: "다른 그룹으로 이동", action: attempt(async () => {
-        await openDoc(t.id, true);
-        closeSideTab(t.id, side);
-      }) },
-      { label: "그룹 닫기", action: () => closeOtherGroup(side) },
+      ...splitMenuItems({
+        focused: false, split: true, canSplit: (direction) => canSplit(side, direction),
+        splitTo: (direction) => attempt(() => splitTo(t.id, direction, side))(),
+        moveToOther: attempt(() => openInGroup(t.id, focusedSide, true, side)), closeGroup: () => closeOtherGroup(side),
+      }),
       "separator",
       { label: "파일 탐색기에서 표시", disabled: !doc, action: attempt(() => call("reveal", { id: t.id })) },
       { label: "경로 복사", disabled: !doc, action: attempt(() => copyPath(doc!)) },
@@ -1007,6 +1008,13 @@ export default function App() {
   const isWorkspace = view === "workspace" && !!active && !memoOpen;
   // 모든 탭을 닫은 집필 화면. 파일 트리는 그대로 두고 편집 영역만 비운다.
   const emptyWorkspace = view === "workspace" && !active && !memoOpen;
+  // 빈 화면 위에서 끌기를 취소하거나 다른 곳에 놓아도 놓기 표시를 지운다.
+  useEffect(() => {
+    if (!emptyDrop) return;
+    const clear = () => setEmptyDrop(false);
+    window.addEventListener("dragend", clear); window.addEventListener("drop", clear);
+    return () => { window.removeEventListener("dragend", clear); window.removeEventListener("drop", clear); };
+  }, [emptyDrop]);
   // 문서를 연 집중 모드에서만 창을 작게 줄일 수 있다. 끄면 원래 최소 크기로 돌아간다.
   const compactWindow = focus && isWorkspace;
   useEffect(() => {
@@ -1020,48 +1028,17 @@ export default function App() {
     else setSidebar((s) => !s);
   }, []);
   useEffect(() => setFocusTree(false), [focus]);
-  const sash = (axis: "x" | "y") => (
-    <div
-      key={`sash-${axis}`}
-      className={`group-sash grid-sash ${axis === "y" ? "horizontal" : ""}`}
-      style={editorSashStyle(axis, sides)}
-      role="separator"
-      aria-orientation={axis === "x" ? "vertical" : "horizontal"}
-      aria-label="편집기 그룹 크기 조절"
-      onPointerDown={(event) => startSash(event, axis)}
-      onDoubleClick={() => resetSplitRatio(axis)}
-    />
-  );
   // 파일 트리는 놓은 그룹에 열고, 열린 탭은 그 그룹으로 옮긴다.
-  function dragOverGroups(e: React.DragEvent) {
-    const fromTree = !!fileTree.draggedDocument();
-    const zone = dragTab || fromTree
-      ? getDropZone(e.target, e.clientX, fromTree, e.clientY, dragSide.current)
-      : null;
-    if (zone) {
-      e.preventDefault();
-      e.stopPropagation();
-      e.dataTransfer.dropEffect = fromTree ? "copy" : "move";
-    }
-    setDropZone((prev) =>
-      prev && zone && prev.side === zone.side && prev.tabs === zone.tabs && prev.left === zone.left &&
-      prev.top === zone.top && prev.width === zone.width && prev.height === zone.height
-        ? prev
-        : zone,
-    );
+  function draggedToGroups(): SplitDrag<EditorTab> | null {
+    const treeId = fileTree.draggedDocument();
+    if (treeId) return { tab: { id: treeId, pinned: true }, fromTree: true, source: focusedSide };
+    return dragTab ? { tab: { id: dragTab, pinned: true }, fromTree: false, source: dragSide.current } : null;
   }
-  function dropOnGroups(e: React.DragEvent) {
-    const fromTree = !!fileTree.draggedDocument();
-    const id = fileTree.draggedDocument() || dragTab;
-    const zone = id ? getDropZone(e.target, e.clientX, fromTree, e.clientY, dragSide.current) : null;
-    if (!zone || !id) return;
-    // 편집기 본문이 드래그한 파일을 텍스트로 삽입하기 전에 처리한다.
-    e.preventDefault();
-    e.stopPropagation();
+  // 편집기 본문이 드래그한 파일을 텍스트로 삽입하기 전에 처리한다.
+  function droppedOnGroups(run: () => Promise<unknown>) {
     fileTree.finishEditorDrop();
-    setDropZone(null);
     setDragTab("");
-    attempt(() => openInGroup(id, zone.side, !fromTree, fromTree ? undefined : dragSide.current))();
+    attempt(run)();
   }
   function manuscriptBoxForKind(kind: Kind = "episode") {
     const kindPrefs = resolveKindPrefs(prefs, kind);
@@ -1354,16 +1331,16 @@ export default function App() {
     return (
       <section
         key={side}
-        data-side={side}
+        {...groupAttributes(side)}
         className="editor-group inactive"
         style={groupStyle(side)}
       >
-        <div className="editor-tabs" role="tablist" aria-label="다른 그룹의 열린 문서">
+        <div className="editor-tabs" {...tabBarAttributes} role="tablist" aria-label="다른 그룹의 열린 문서">
           {group.tabs.map((t) => {
             const meta =
               t.id === active.id ? active : lib.documents.find((d) => d.id === t.id);
             if (!meta) return null;
-            const current = t.id === group.docId,
+            const current = t.id === group.current,
               Icon = icons[meta.kind],
               title = meta.title || "제목 없음";
             return (
@@ -1378,7 +1355,13 @@ export default function App() {
                 onDoubleClick={attempt(() => focusOther(t.id, true, side))}
                 draggable
                 onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; dragSide.current = side; setDragTab(t.id); }}
-                onDragEnd={() => { setDragTab(""); setDropZone(null); }}
+                onDragEnd={() => { setDragTab(""); area.clearDropZone(); }}
+                onDragOver={(e) => { if (dragTab && dragSide.current === side) e.preventDefault(); }}
+                onDrop={(e) => {
+                  if (!dragTab || dragSide.current !== side) return;
+                  e.preventDefault(); e.stopPropagation();
+                  moveTab(dragTab, t.id, side); setDragTab("");
+                }}
                 onMouseDown={(e) => {
                   if (e.button === 1) e.preventDefault();
                 }}
@@ -1404,14 +1387,14 @@ export default function App() {
             );
           })}
         </div>
-        {documentTabs(group.tabs, group.docId, false, side)}
+        {documentTabs(group.tabs, group.current, false, side)}
       </section>
     );
   }
   const [previewOpen, setPreviewOpen] = useState(false);
   const chordAt = useRef(0);
   const togglePreview = () => setPreviewOpen((open) => !open);
-  tabActions.current = { closeTab, cycleTab, splitTo, focusSide, togglePreview, report };
+  tabActions.current = { closeTab, cycleTab, splitTo, focusGroupAt, togglePreview, report };
   useEffect(() => {
     if (!isWorkspace) return;
     // VS Code 배치: Ctrl+B 기본 사이드바(파일 트리), Ctrl+Alt+B 보조 사이드바(메모 보드).
@@ -1426,7 +1409,7 @@ export default function App() {
         return;
       }
       if (["Control", "Shift", "Alt", "Meta"].includes(e.key)) return;
-      const { closeTab, cycleTab, splitTo, focusSide, togglePreview, report } =
+      const { closeTab, cycleTab, splitTo, focusGroupAt, togglePreview, report } =
         tabActions.current;
       const chord = chordAt.current && Date.now() - chordAt.current < 1500;
       chordAt.current = 0;
@@ -1441,8 +1424,8 @@ export default function App() {
         chordAt.current = Date.now();
       else if (e.code === "Backslash" && !e.shiftKey && !e.altKey)
         splitTo(session.currentId()).catch(report);
-      else if (/^Digit[1-4]$/.test(e.code) && !e.shiftKey && !e.altKey)
-        focusSide(editorSides[Number(e.code.slice(-1)) - 1]).catch(report);
+      else if (groupShortcutIndex(e.code) >= 0 && !e.shiftKey && !e.altKey)
+        focusGroupAt(groupShortcutIndex(e.code)).catch(report);
       else if (e.code === "KeyB" && !e.shiftKey) {
         if (e.altKey) setRight((r) => !r);
         else toggleTree();
@@ -1724,7 +1707,28 @@ export default function App() {
         />)}
         <main className={isWorkspace || emptyWorkspace ? "workspace" : "main-page"}>
           {emptyWorkspace && (
-            <div className="workspace-empty">
+            // 열린 문서가 없을 때도 파일 트리의 문서를 끌어 놓으면 바로 연다.
+            <div
+              className="workspace-empty"
+              onDragOver={(e) => {
+                if (!fileTree.draggedDocument()) return;
+                e.preventDefault();
+                e.dataTransfer.dropEffect = "copy";
+                setEmptyDrop(true);
+              }}
+              onDragLeave={(e) => {
+                if (!e.currentTarget.contains(e.relatedTarget as Node)) setEmptyDrop(false);
+              }}
+              onDrop={(e) => {
+                const id = fileTree.draggedDocument();
+                setEmptyDrop(false);
+                if (!id) return;
+                e.preventDefault();
+                fileTree.finishEditorDrop();
+                attempt(() => openDoc(id, true))();
+              }}
+            >
+              {emptyDrop && <div className="group-drop-zone" style={{ left: 0, top: 0, width: "100%" }} />}
               <div className="empty-state">
                 <FileText size={32} />
                 <h3>열린 문서가 없습니다</h3>
@@ -1778,36 +1782,39 @@ export default function App() {
           />)}
           {active && (
             <>
-              <div
-                className={`editor-groups ${split ? "split" : ""} ${previewOpen ? "with-preview" : ""}`}
+              <SplitArea
+                split={area}
+                drag={draggedToGroups}
+                onDrop={droppedOnGroups}
+                className={previewOpen ? "with-preview" : ""}
                 hidden={!isWorkspace}
-                inert={!isWorkspace}
-                onDragOverCapture={dragOverGroups}
-                onDragLeave={(e) => {
-                  if (!e.currentTarget.contains(e.relatedTarget as Node)) setDropZone(null);
-                }}
-                onDropCapture={dropOnGroups}
+                after={previewOpen && (
+                  <MobilePreview
+                    title={active.title}
+                    label={`${labels[active.kind]} · ${numberOf(active)}`}
+                    body={active.body}
+                    manualLineBreak={!!active.manualLineBreak}
+                    dark={prefs.theme === "dark"}
+                    device={prefs.previewDevice || "iphone"}
+                    fontSize={Number(prefs.previewFontSize) || 16}
+                    onDevice={(previewDevice) =>
+                      savePrefs({ previewDevice }).catch(report)
+                    }
+                    onFontSize={(previewFontSize) =>
+                      savePrefs({ previewFontSize }).catch(report)
+                    }
+                    onClose={() => setPreviewOpen(false)}
+                  />
+                )}
               >
-              <div className="editor-workspace" ref={groupsRef} style={gridStyle}>
-              {dropZone && (
-                <div
-                  className="group-drop-zone"
-                  style={{
-                    left: dropZone.left,
-                    top: dropZone.top,
-                    width: dropZone.width,
-                    ...(dropZone.height !== undefined && { height: dropZone.height, bottom: "auto" }),
-                  }}
-                />
-              )}
               {sides.map(side => side !== focusedSide ? sideGroup(side) : (
               <section
                 key={focusedSide}
-                data-side={focusedSide}
+                {...groupAttributes(focusedSide)}
                 className={`editor-group ${split ? "focused" : ""}`}
                 style={groupStyle(focusedSide)}
               >
-              <div className="editor-tabs" role="tablist" aria-label="열린 문서">
+              <div className="editor-tabs" {...tabBarAttributes} role="tablist" aria-label="열린 문서">
                 {editorTabs.map((t, index) => {
                   const doc =
                     t.id === active.id
@@ -1833,7 +1840,7 @@ export default function App() {
                       }}
                       onDragEnd={() => {
                         setDragTab("");
-                        setDropZone(null);
+                        area.clearDropZone();
                       }}
                       onDragOver={(e) => {
                         if (dragTab) e.preventDefault();
@@ -1883,28 +1890,7 @@ export default function App() {
               {documentTabs(editorTabs, active.id, true)}
               </section>
               ))}
-              {sides.some(side => side.endsWith("left")) && sides.some(side => side.endsWith("right")) && sash("x")}
-              {hasEditorRows(sides) && sash("y")}
-              </div>
-              {previewOpen && (
-                <MobilePreview
-                  title={active.title}
-                  label={`${labels[active.kind]} · ${numberOf(active)}`}
-                  body={active.body}
-                  manualLineBreak={!!active.manualLineBreak}
-                  dark={prefs.theme === "dark"}
-                  device={prefs.previewDevice || "iphone"}
-                  fontSize={Number(prefs.previewFontSize) || 16}
-                  onDevice={(previewDevice) =>
-                    savePrefs({ previewDevice }).catch(report)
-                  }
-                  onFontSize={(previewFontSize) =>
-                    savePrefs({ previewFontSize }).catch(report)
-                  }
-                  onClose={() => setPreviewOpen(false)}
-                />
-              )}
-              </div>
+              </SplitArea>
               <footer className="editor-footer" hidden={!isWorkspace}>
                 <span>
                   {active.kind === "episode"

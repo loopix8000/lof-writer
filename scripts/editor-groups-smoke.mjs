@@ -118,7 +118,7 @@ try {
 
   await page.keyboard.press("Control+Backslash");
   await expect(page.locator(".content-shell .editor-groups.split > .editor-group")).toHaveCount(2);
-  await expect(page.locator(".content-shell .editor-group.focused")).toHaveAttribute("data-side", "right");
+  await expect(page.locator(".content-shell .editor-group.focused")).toHaveAttribute("data-split-group", "right");
   await page.keyboard.press("Control+1");
   await expect(title()).toHaveValue(docs[0].title);
   await expect(writer()).toContainText("탭 전환 전에 작성한 한글 원고");

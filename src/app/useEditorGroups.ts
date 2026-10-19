@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useRef, useState, type PointerEvent } from "react";
-import { editorDropZone, editorGridStyle, editorGroupStyle, editorSides, isEditorSide, oppositeSide, verticalSide } from "../editor-groups";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { groupIds, isGroupId, resolveLayout, type SplitDirection, type SplitLayout } from "../split/layout";
+import type { SplitGroups } from "../split/controller";
+import { useSplitGroups } from "../split/useSplitGroups";
 import { call, type Doc } from "../types";
 import { useSyncFileUpdates } from "../useSyncFileUpdates";
-import { readWorkspaceState, saveWorkspaceState, workspaceKey } from "../workspace-state";
-import { placeTab, relocateDocument, sameDocumentContent, withoutTab, type EditorGroup, type EditorTab, type Side } from "./model";
+import { copyWorkspaceScroll, readWorkspaceState, saveWorkspaceState, workspaceKey } from "../workspace-state";
+import { placeTab, relocateDocument, sameDocumentContent, type EditorTab, type Side } from "./model";
 
 type Options = {
   active: Doc | null;
@@ -15,40 +17,23 @@ type Options = {
   currentDocument: () => Doc | null;
   pendingDocumentMove: () => Promise<void> | null;
   flush: (options?: { closing?: boolean; skipMemo?: boolean }) => Promise<void>;
-  navigate: (id: string, pinned: boolean, beforeCommit?: () => void) => Promise<void>;
-  closeLastDocument: (commit: () => void) => Promise<void>;
+  navigate: (id: string, pinned: boolean, beforeCommit?: () => boolean | void) => Promise<void>;
+  closeLastDocument: (commit: () => boolean | void) => Promise<void>;
   report: (error: unknown) => void;
 };
-type Groups = Partial<Record<Side, EditorGroup>>;
-type Layout = { groups: Groups; focusedSide: Side; x: number; y: number };
+// 작품별로 저장하는 배치. 예전 버전과 같게 그룹의 현재 문서를 docId로 둔다.
+type SavedGroup = { tabs: EditorTab[]; docId: string };
+type Layout = { groups: Partial<Record<Side, SavedGroup>>; focusedSide: Side; tree?: SplitLayout; x?: number; y?: number };
+const tabFor = (id: string): EditorTab => ({ id, pinned: true });
 
+// 집필 화면의 분할 그룹. 분할 규칙은 공통 컨트롤러가 맡고, 여기서는 문서 열기·작품별 저장·다른 그룹의 문서 동기화를 잇는다.
 export function useEditorGroups(options: Options) {
   const latest = useRef(options); latest.current = options;
-  const [tabs, setTabs] = useState<EditorTab[]>([]);
-  const [groups, setGroups] = useState<Groups>({});
-  const [focusedSide, setFocusedSide] = useState<Side>("left");
-  const [ratios, setRatios] = useState({ x: 0.5, y: 0.5 });
   const [, renderDocuments] = useState(0);
   const [pending, setPending] = useState<Partial<Record<Side, string>>>({});
-  const tabsRef = useRef<EditorTab[]>([]), groupsState = useRef<Groups>({});
-  const focusedSideRef = useRef<Side>("left");
-  const groupsRef = useRef<HTMLDivElement>(null);
   const retainedDocuments = useRef(new Map<string, Doc>());
   const projectKey = useRef("");
   const linkedOpenSeq = useRef(0);
-  const stopResizing = useRef<(() => void) | null>(null);
-  const ratiosRef = useRef(ratios); ratiosRef.current = ratios;
-  const updateTabs = useCallback((update: (tabs: EditorTab[]) => EditorTab[]) => {
-    const next = update(tabsRef.current);
-    if (next === tabsRef.current) return;
-    tabsRef.current = next; setTabs(next);
-  }, []);
-  const updateGroups = useCallback((update: (groups: Groups) => Groups) => {
-    const next = update(groupsState.current);
-    if (next === groupsState.current) return;
-    groupsState.current = next; setGroups(next);
-  }, []);
-  const focus = (side: Side) => { focusedSideRef.current = side; setFocusedSide(side); };
   const retainDocument = useCallback((doc: Doc) => { retainedDocuments.current.set(doc.id, doc); }, []);
   const getRetainedDocument = useCallback((id: string) => retainedDocuments.current.get(id), []);
   const clearRetainedDocuments = useCallback(() => retainedDocuments.current.clear(), []);
@@ -56,15 +41,34 @@ export function useEditorGroups(options: Options) {
   const setSideDoc = useCallback((doc: Doc) => {
     retainedDocuments.current.set(doc.id, doc); renderDocuments(value => value + 1);
   }, []);
+  const split = useSplitGroups<EditorTab>({
+    key: tab => tab.id,
+    currentKey: () => latest.current.currentId(),
+    place: (tabs, tab, pinned, after) => placeTab(tabs, tab.id, pinned, after),
+    // 포커스를 떠나는 문서는 다른 그룹에서 계속 보이도록 붙잡아 둔다.
+    activate: (tab, pinned, commit) => latest.current.navigate(tab.id, pinned, () => {
+      if (!commit()) return false;
+      const doc = latest.current.currentDocument(); if (doc) retainDocument(doc);
+    }),
+    closeLast: commit => latest.current.closeLastDocument(commit),
+    flush: () => latest.current.flush({ closing: true, skipMemo: true }),
+    copyScroll: (from, to, tabs) => {
+      if (projectKey.current) copyWorkspaceScroll(projectKey.current, from, to, tabs.map(tab => tab.id));
+    },
+    epoch: () => projectKey.current,
+    interactive: () => latest.current.workspaceOpen,
+  });
+  const { mapTabs, updateTabs, reset, snapshot, state } = split;
   function currentLayout(): Layout {
-    const all = { ...groupsState.current };
-    if (tabsRef.current.length && latest.current.currentId())
-      all[focusedSideRef.current] = { tabs: tabsRef.current, docId: latest.current.currentId() };
-    return { groups: all, focusedSide: focusedSideRef.current, ...ratiosRef.current };
+    const all = snapshot(), { focused, layout } = state();
+    return {
+      groups: Object.fromEntries(Object.entries(all).map(([id, group]) => [id, { tabs: group!.tabs, docId: group!.current }])),
+      focusedSide: focused,
+      tree: resolveLayout(layout, groupIds.filter(id => all[id])),
+    };
   }
   function rememberLayout() {
-    if (!projectKey.current) return;
-    saveWorkspaceState(projectKey.current, { layout: currentLayout() });
+    if (projectKey.current) saveWorkspaceState(projectKey.current, { layout: currentLayout() });
   }
   const getProjectDocument = useCallback((projectId: string): string | undefined => {
     const key = workspaceKey(latest.current.root, projectId);
@@ -72,61 +76,51 @@ export function useEditorGroups(options: Options) {
     const layout = key === projectKey.current ? currentLayout() : readWorkspaceState(key).layout as Layout | undefined;
     if (!layout) return;
     const available = new Set(latest.current.documents.filter(doc => doc.projectId === projectId).map(doc => doc.id));
-    const focused = isEditorSide(layout.focusedSide) ? layout.focusedSide : "left";
-    for (const side of [focused, ...editorSides.filter(side => side !== focused)]) {
+    const focused = isGroupId(layout.focusedSide) ? layout.focusedSide : groupIds[0];
+    for (const side of [focused, ...groupIds.filter(side => side !== focused)]) {
       const group = layout.groups?.[side];
       if (!group || !Array.isArray(group.tabs)) continue;
       const tabs = group.tabs.filter(tab => tab && available.has(tab.id));
       if (tabs.length) return tabs.some(tab => tab.id === group.docId) ? group.docId : tabs[0].id;
     }
   }, []);
-  useEffect(rememberLayout, [tabs, groups, focusedSide, ratios, options.active?.id]);
+  useEffect(rememberLayout, [split.groups, split.focused, split.layout, options.active?.id]);
   useEffect(() => {
-    const open = new Set([...tabs, ...Object.values(groups).flatMap(group => group?.tabs ?? [])].map(tab => tab.id));
+    const open = new Set(Object.values(split.groups).flatMap(group => group?.tabs ?? []).map(tab => tab.id));
     for (const id of retainedDocuments.current.keys()) if (!open.has(id)) retainedDocuments.current.delete(id);
-  }, [tabs, groups]);
-  const pruneDocuments = useCallback((ids: Set<string>) => {
-    updateTabs(tabs => tabs.every(tab => ids.has(tab.id)) ? tabs : tabs.filter(tab => ids.has(tab.id)));
-    updateGroups(groups => Object.values(groups).every(group => group!.tabs.every(tab => ids.has(tab.id))) ? groups : Object.fromEntries(Object.entries(groups).flatMap(([side, group]) => {
-      const tabs = group!.tabs.filter(tab => ids.has(tab.id));
-      return tabs.length ? [[side, { tabs, docId: ids.has(group!.docId) ? group!.docId : tabs[0].id }]] : [];
-    })));
-  }, [updateTabs, updateGroups]);
-  const resetGroups = useCallback(() => {
-    projectKey.current = "";
-    updateTabs(() => []); updateGroups(() => ({}));
-    focusedSideRef.current = "left"; setFocusedSide("left");
-  }, [updateTabs, updateGroups]);
+  }, [split.groups]);
+  const pruneDocuments = useCallback((ids: Set<string>) => mapTabs(tab => ids.has(tab.id) ? tab : null), [mapTabs]);
+  const resetGroups = useCallback(() => { projectKey.current = ""; reset({}, groupIds[0]); }, [reset]);
+  // 다른 작품의 문서를 열면 그 작품에 저장해 둔 배치로 바꾼다.
   const commitOpenDocument = useCallback((doc: Doc, { pinned, after }: { sameProject: boolean; pinned: boolean; after: string }) => {
     const key = workspaceKey(latest.current.root, doc.projectId);
-    if (projectKey.current !== key) {
-      rememberLayout();
-      projectKey.current = key;
-      const saved = readWorkspaceState(key).layout as Layout | undefined;
-      const available = new Set(latest.current.documents.filter(d => d.projectId === doc.projectId).map(d => d.id));
-      const restored: Groups = {};
-      for (const side of editorSides) {
-        const group = saved?.groups?.[side];
-        if (!group || !Array.isArray(group.tabs)) continue;
-        const kept = group.tabs.filter(t => t && available.has(t.id)).map(t => ({ id: t.id, pinned: t.pinned !== false }));
-        if (kept.length) restored[side] = { tabs: kept, docId: kept.some(t => t.id === group.docId) ? group.docId : kept[0].id };
-      }
-      const previousSide = isEditorSide(saved?.focusedSide) ? saved.focusedSide : "left";
-      const already = restored[previousSide]?.tabs.some(t => t.id === doc.id) ? previousSide
-        : editorSides.find(side => restored[side]?.tabs.some(t => t.id === doc.id));
-      const side = already ?? (isEditorSide(saved?.focusedSide) ? saved.focusedSide : "left");
-      const mine = restored[side]; delete restored[side];
-      updateGroups(() => restored); focus(side);
-      const clamp = (n: number | undefined) => Number.isFinite(n) ? Math.min(0.8, Math.max(0.2, n!)) : 0.5;
-      setRatios({ x: clamp(saved?.x), y: clamp(saved?.y) });
-      updateTabs(() => placeTab(mine?.tabs ?? [], doc.id, pinned, ""));
-    } else updateTabs(tabs => placeTab(tabs, doc.id, pinned, after));
-  }, [updateTabs, updateGroups]);
+    if (projectKey.current === key) { updateTabs(tabs => placeTab(tabs, doc.id, pinned, after)); return; }
+    rememberLayout();
+    projectKey.current = key;
+    const saved = readWorkspaceState(key).layout as Layout | undefined;
+    const available = new Set(latest.current.documents.filter(d => d.projectId === doc.projectId).map(d => d.id));
+    const restored: SplitGroups<EditorTab> = {};
+    for (const side of groupIds) {
+      const group = saved?.groups?.[side];
+      if (!group || !Array.isArray(group.tabs)) continue;
+      const seen = new Set<string>();
+      const kept = group.tabs.filter(t => {
+        if (!t || !available.has(t.id) || seen.has(t.id)) return false;
+        seen.add(t.id); return true;
+      }).map(t => ({ id: t.id, pinned: t.pinned !== false }));
+      if (kept.length) restored[side] = { tabs: kept, current: kept.some(t => t.id === group.docId) ? group.docId : kept[0].id };
+    }
+    const previous = isGroupId(saved?.focusedSide) ? saved.focusedSide : groupIds[0];
+    const focused = restored[previous]?.tabs.some(t => t.id === doc.id) ? previous
+      : groupIds.find(side => restored[side]?.tabs.some(t => t.id === doc.id)) ?? previous;
+    restored[focused] = { tabs: placeTab(restored[focused]?.tabs ?? [], doc.id, pinned, ""), current: doc.id };
+    reset(restored, focused, saved?.tree, saved?.x, saved?.y);
+  }, [updateTabs, reset]);
   const pinTab = useCallback((id: string) => updateTabs(tabs => placeTab(tabs, id, true, "")), [updateTabs]);
   const replaceDocumentId = useCallback((oldId: string, newId: string, location?: Doc) => {
     if (oldId !== newId && projectKey.current) {
       const scroll = { ...readWorkspaceState(projectKey.current).scroll };
-      for (const side of editorSides) {
+      for (const side of groupIds) {
         const oldKey = `${side}\n${oldId}`, newKey = `${side}\n${newId}`;
         if (scroll[oldKey]) { scroll[newKey] = scroll[oldKey]; delete scroll[oldKey]; }
       }
@@ -137,128 +131,27 @@ export function useEditorGroups(options: Options) {
       retainedDocuments.current.delete(oldId);
       retainedDocuments.current.set(newId, relocateDocument(retained, location ?? { ...retained, id: newId }));
     }
-    const swap = (id: string) => id === oldId ? newId : id;
-    updateTabs(tabs => tabs.map(tab => ({ ...tab, id: swap(tab.id) })));
-    updateGroups(groups => Object.fromEntries(Object.entries(groups).map(([side, group]) =>
-      [side, { docId: swap(group!.docId), tabs: group!.tabs.map(tab => ({ ...tab, id: swap(tab.id) })) }])));
-  }, [updateTabs, updateGroups]);
+    mapTabs(tab => tab.id === oldId ? { ...tab, id: newId } : tab);
+  }, [mapTabs]);
   const openDoc = useCallback(async (id: string, pinned = false) => { await latest.current.navigate(id, pinned); }, []);
-  const otherSide = () => {
-    const opposite = oppositeSide(focusedSideRef.current);
-    return groupsState.current[opposite] ? opposite : editorSides.find(side => groupsState.current[side]);
-  };
-  async function focusOther(openId?: string, pinned = false, targetSide = otherSide()) {
-    if (!targetSide || targetSide === focusedSideRef.current) return;
-    const other = groupsState.current[targetSide];
-    if (!other && !openId) return;
-    await latest.current.navigate(openId ?? other!.docId, pinned, () => {
-      const mine = { tabs: tabsRef.current, docId: latest.current.currentId() }, oldSide = focusedSideRef.current;
-      const doc = latest.current.currentDocument(); if (doc) retainDocument(doc);
-      updateTabs(() => other?.tabs ?? []);
-      updateGroups(groups => {
-        const next = { ...groups }; delete next[targetSide];
-        if (mine.tabs.length) next[oldSide] = mine;
-        return next;
-      });
-      focus(targetSide);
-    });
-  }
-  async function focusSide(side: Side) { if (groupsState.current[side]) await focusOther(undefined, false, side); }
-  async function openInGroup(id: string, side: Side, moveTab = false, sourceSide = focusedSideRef.current) {
-    const splitting = sourceSide === focusedSideRef.current && !groupsState.current[side] && side !== focusedSideRef.current;
-    if (!latest.current.currentId() || !tabsRef.current.length) { await openDoc(id, true); return; }
-    if (side === focusedSideRef.current) await openDoc(id, true);
-    else await focusOther(id, true, side);
-    if (moveTab && sourceSide !== side && focusedSideRef.current === side)
-      updateGroups(groups => {
-        const next = { ...groups }, source = groups[sourceSide];
-        // 마지막 탭을 나누면 원래 그룹에도 남겨 두어 두 원고를 나란히 볼 수 있다.
-        if (source && (!splitting || source.tabs.length > 1)) {
-          const remaining = withoutTab(source, id);
-          if (remaining) next[sourceSide] = remaining; else delete next[sourceSide];
-        }
-        return next;
-      });
-  }
+  // 연결 문서는 포커스를 옮기지 않고 옆 그룹에 연다.
   async function openLinked(id: string, pinned = false) {
-    const seq = ++linkedOpenSeq.current, key = projectKey.current;
+    const seq = ++linkedOpenSeq.current, key = projectKey.current, focused = state().focused, current = latest.current.currentId();
     await latest.current.flush();
     const fresh = await call<Doc>("readDocument", { id });
-    if (seq !== linkedOpenSeq.current || key !== projectKey.current) return;
-    const side = editorSides.find(side => side !== focusedSideRef.current && groupsState.current[side]?.tabs.some(t => t.id === id))
-      ?? oppositeSide(focusedSideRef.current);
+    if (seq !== linkedOpenSeq.current || key !== projectKey.current || state().focused !== focused || latest.current.currentId() !== current) return;
     const retained = getRetainedDocument(id);
     setSideDoc(retained && !sameDocumentContent(retained, fresh) ? retained : fresh);
-    updateGroups(groups => ({ ...groups, [side]: {
-      tabs: placeTab(groups[side]?.tabs ?? [], id, pinned, groups[side]?.docId ?? ""), docId: id,
-    } }));
+    split.openBeside({ id, pinned }, pinned);
   }
-  async function splitTo(id: string, direction: "right" | "down" = "right", fromSide?: Side) {
-    if (fromSide && fromSide !== focusedSideRef.current) await focusOther(id, false, fromSide);
-    if (fromSide && fromSide !== focusedSideRef.current) return;
-    await openInGroup(id, direction === "down" ? verticalSide(focusedSideRef.current) : oppositeSide(focusedSideRef.current), true);
-  }
-  async function closeGroup() {
-    const side = focusedSideRef.current;
-    if (!otherSide()) return;
-    await latest.current.flush({ closing: true, skipMemo: true });
-    await focusOther();
-    if (focusedSideRef.current !== side) closeOtherGroup(side);
-  }
-  function closeOtherGroup(side = otherSide()) {
-    if (!side) return;
-    updateGroups(groups => { const next = { ...groups }; delete next[side]; return next; });
-  }
-  async function closeTab(id: string) {
-    const list = tabsRef.current, index = list.findIndex(tab => tab.id === id);
-    if (index < 0) return;
-    if (latest.current.workspaceOpen && id === latest.current.currentId()) {
-      await latest.current.flush({ closing: true, skipMemo: true });
-      const rest = list.filter(tab => tab.id !== id), next = rest[index] ?? rest[index - 1];
-      if (next) await openDoc(next.id);
-      else if (otherSide()) return closeGroup();
-      else return latest.current.closeLastDocument(() => updateTabs(() => []));
-    }
-    updateTabs(tabs => tabs.filter(tab => tab.id !== id));
-  }
-  async function closeTabs(keep: (tab: EditorTab, index: number) => boolean, focusId?: string) {
-    const kept = tabsRef.current.filter(keep);
-    if (latest.current.workspaceOpen && !kept.some(tab => tab.id === latest.current.currentId())) {
-      await latest.current.flush({ closing: true, skipMemo: true });
-      if (focusId && kept.some(tab => tab.id === focusId)) await openDoc(focusId);
-      else if (otherSide()) return closeGroup();
-      else if (!kept.length) return latest.current.closeLastDocument(() => updateTabs(() => []));
-      else await openDoc(kept[0].id);
-    }
-    updateTabs(tabs => tabs.filter(tab => kept.some(kept => kept.id === tab.id)));
-  }
-  async function moveToOther(id: string) {
-    const source = focusedSideRef.current;
-    await focusOther(id, true);
-    if (source !== focusedSideRef.current) closeSideTab(id, source);
-  }
-  function closeSideTab(id: string, side?: Side) {
-    updateGroups(groups => Object.fromEntries(Object.entries(groups).flatMap(([key, group]) => {
-      const next = !side || side === key ? withoutTab(group!, id) : group;
-      return next ? [[key, next]] : [];
-    })));
-  }
-  async function cycleTab(direction: number) {
-    const tabs = tabsRef.current, index = tabs.findIndex(tab => tab.id === latest.current.currentId());
-    if (tabs.length > 1 && index >= 0) await openDoc(tabs[(index + direction + tabs.length) % tabs.length].id);
-  }
-  const moveTab = useCallback((from: string, to: string) => updateTabs(tabs => {
-    const a = tabs.findIndex(tab => tab.id === from), b = tabs.findIndex(tab => tab.id === to);
-    if (a < 0 || b < 0 || a === b) return tabs;
-    const next = [...tabs]; next.splice(b, 0, ...next.splice(a, 1)); return next;
-  }), [updateTabs]);
   useEffect(() => {
     document.querySelector<HTMLElement>(".editor-group.focused .editor-tab.current")?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  }, [options.active?.id, tabs.length]);
+  }, [options.active?.id, split.tabs.length]);
 
-  // 각 그룹의 외부 변경 안내와 읽기는 독립적으로 유지한다.
+  // 각 그룹의 외부 변경 안내와 읽기는 독립적으로 유지한다. 포커스된 그룹은 편집 세션이 맡는다.
   function useSideDocument(side: Side) {
-    const id = groups[side]?.docId ?? "", doc = getRetainedDocument(id);
+    const group = side === split.focused ? undefined : split.groups[side];
+    const id = group?.current ?? "", doc = getRetainedDocument(id);
     const revision = options.documents.find(d => d.id === id)?.revision;
     const check = useSyncFileUpdates({
       fileKey: id, enabled: !!id && !!doc && id !== options.active?.id,
@@ -283,36 +176,22 @@ export function useEditorGroups(options: Options) {
     }, [id, revision, !!doc, check]);
     return check;
   }
-  const leftCheck = useSideDocument("left"), rightCheck = useSideDocument("right");
-  const bottomLeftCheck = useSideDocument("bottom-left"), bottomRightCheck = useSideDocument("bottom-right");
-  const checks = { left: leftCheck, right: rightCheck, "bottom-left": bottomLeftCheck, "bottom-right": bottomRightCheck };
-  const sides = editorSides.filter(side => side === focusedSide || groups[side]);
-  function getDropZone(target: EventTarget | null, x: number, fromTree: boolean, y: number, sourceSide?: Side) {
-    return editorDropZone(target, x, groupsRef.current, sides.length > 1, fromTree, y, sides, sourceSide);
-  }
-  function startSash(event: PointerEvent, axis: "x" | "y" = "x") {
-    event.preventDefault();
-    const box = groupsRef.current?.getBoundingClientRect(); if (!box) return;
-    stopResizing.current?.();
-    const move = (event: globalThis.PointerEvent) => setRatios(ratios => ({ ...ratios,
-      [axis]: Math.min(0.8, Math.max(0.2, axis === "x" ? (event.clientX - box.left) / box.width : (event.clientY - box.top) / box.height)),
-    }));
-    const up = () => {
-      window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up);
-      document.body.classList.remove("sash-dragging", "sash-dragging-horizontal"); stopResizing.current = null;
-    };
-    stopResizing.current = up;
-    document.body.classList.add(axis === "x" ? "sash-dragging" : "sash-dragging-horizontal");
-    window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
-  }
-  useEffect(() => () => stopResizing.current?.(), []);
+  // 그룹 ID 목록은 고정이므로 매 렌더 같은 순서로 훅을 부른다.
+  const checks = Object.fromEntries(groupIds.map(side => [side, useSideDocument(side)])) as Record<Side, ReturnType<typeof useSideDocument>>;
   return {
-    tabs, groups, sides, split: sides.length > 1, focusedSide, groupsRef, pending, checks,
+    area: split, tabs: split.tabs, groups: split.groups, sides: split.order, split: split.split, focusedSide: split.focused,
+    pending, checks, groupStyle: split.groupStyle,
     retainDocument, getRetainedDocument, clearRetainedDocuments, clearSideDocument,
     pruneDocuments, resetGroups, commitOpenDocument, replaceDocumentId, getProjectDocument,
-    openDoc, openLinked, pinTab, closeTab, closeTabs, cycleTab, moveTab,
-    focusOther, focusSide, openInGroup, splitTo, closeGroup, closeOtherGroup, moveToOther, closeSideTab,
-    gridStyle: editorGridStyle(sides, ratios.x, ratios.y), groupStyle: (side: Side) => editorGroupStyle(side, sides),
-    getDropZone, startSash, resetSplitRatio: (axis: "x" | "y" = "x") => setRatios(r => ({ ...r, [axis]: 0.5 })),
+    openDoc, openLinked, pinTab, cycleTab: split.cycleTab, canSplit: split.canSplit,
+    closeTab: split.closeTab, closeTabs: split.closeTabs, moveTab: split.moveTab,
+    focusOther: (id?: string, pinned = false, side?: Side, closeSource = false) =>
+      split.focusOther(id ? tabFor(id) : undefined, pinned, side, closeSource),
+    focusSide: split.focusGroup, focusGroupAt: split.focusGroupAt, closeGroup: split.closeGroup, closeOtherGroup: split.closeOtherGroup,
+    openInGroup: (id: string, side: Side, move = false, source?: Side, direction?: SplitDirection) =>
+      split.openInGroup(tabFor(id), side, move, source, direction),
+    splitTo: (id: string, direction?: SplitDirection, from?: Side) => split.splitTo(tabFor(id), direction, from),
+    moveToOther: (id: string) => split.moveToOther(tabFor(id)),
+    closeSideTab: (id: string, side?: Side) => split.closeOtherTab(id, side),
   };
 }

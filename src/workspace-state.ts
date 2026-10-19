@@ -33,6 +33,18 @@ export function saveWorkspaceState(key: string, patch: WorkspaceState) {
   timer = setTimeout(() => { void flushWorkspaceState().catch(reportError); }, 500);
 }
 
+// 그룹을 옮겨도 탭별 읽던 위치는 새 위치로 함께 가져간다. 원래 그룹의 기록도 유지한다.
+export function copyWorkspaceScroll(scope: string, from: string, to: string, ids: string[]) {
+  if (from === to) return;
+  const scroll = { ...readWorkspaceState(scope).scroll };
+  for (const id of ids) {
+    const position = scroll[`${from}\n${id}`];
+    if (position) scroll[`${to}\n${id}`] = position;
+    else delete scroll[`${to}\n${id}`];
+  }
+  saveWorkspaceState(scope, { scroll });
+}
+
 export async function flushWorkspaceState(): Promise<void> {
   clearTimeout(timer);
   if (saving) { await saving; return flushWorkspaceState(); }
