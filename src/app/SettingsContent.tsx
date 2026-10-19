@@ -26,6 +26,7 @@ import {
 } from "../types";
 import type { useAppUpdater } from "../Updater";
 import { UpdateSettings } from "../Updater";
+import { ReleaseHistory } from "../ReleaseNotes";
 import AutocompleteSettings from "./AutocompleteSettings";
 import { settingPages, type SettingsPage } from "./settings-pages";
 
@@ -113,6 +114,7 @@ export default function SettingsContent({
             <UpdateSettings updater={updater} version={lib.version}
               autoCheck={prefs.checkUpdatesOnStartup !== false}
               onAutoCheck={(checked) => savePrefs({ checkUpdatesOnStartup: checked }).catch(report)} />
+            <ReleaseHistory version={lib.version} />
             <OpenSourceLicenses />
           </section>
           <section id="settings-security" className="settings-section" hidden={settingsPage !== "security"}>

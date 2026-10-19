@@ -101,6 +101,7 @@ import {
   type WritingRules
 } from "./types";
 import { UpdateLock, UpdateNotice, useAppUpdater } from "./Updater";
+import { ReleaseNotesDialog, ReleaseNotice, useReleaseNotice } from "./ReleaseNotes";
 import { useGitActivity } from "./useGitActivity";
 import { useManuscriptCounts } from "./useManuscriptCounts";
 import { useProjectReorder } from "./useProjectReorder";
@@ -462,6 +463,8 @@ export default function App() {
         throw Error("원고 저장을 완료한 뒤 다시 시도해 주세요.");
     },
   });
+  const releaseNotice = useReleaseNotice(lib.version, loaded, prefs.setupComplete === true);
+  const [releaseNotesOpen, setReleaseNotesOpen] = useState(false);
   // 변경 이력: 자동 저장은 이력을 남기지 않는다. 본문을 고친 문서를 기억해 두었다가 작업의 끝(입력이 멈춤,
   // 다른 문서로 옮김, Ctrl+S, 앱 종료)에 저장소가 지금 원고를 이력으로 남기게 한다. 남길지는 설정의 규칙으로 저장소가 정한다.
   const [confirm, confirmDialog] = useConfirm();
@@ -3462,6 +3465,9 @@ export default function App() {
         setSettingsPage("updates");
         openSettings().catch(report);
       }} />
+      {releaseNotice.visible && <ReleaseNotice version={lib.version}
+        onOpen={() => setReleaseNotesOpen(true)} onClose={releaseNotice.dismiss} />}
+      {releaseNotesOpen && <ReleaseNotesDialog version={lib.version} onClose={() => setReleaseNotesOpen(false)} />}
     </div>
     <UpdateLock phase={updater.phase} />
     </>

@@ -5139,6 +5139,186 @@ button.episode-tag[draggable]:active {
   margin: 10px 0 0;
   font-size: 13px;
 }
+/* 업데이트 직후 한 번만 오른쪽 위(제목 표시줄 아래)에 작게 띄운다. */
+.release-notice {
+  position: fixed;
+  top: 52px;
+  right: 16px;
+  z-index: 60;
+  display: flex;
+  align-items: flex-start;
+  max-width: 300px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  box-shadow: 0 4px 18px #0002;
+  background: var(--surface);
+  font-size: 12px;
+  animation: release-notice-in 0.18s ease-out;
+}
+@keyframes release-notice-in {
+  from { opacity: 0; transform: translateY(-6px); }
+}
+.release-notice-open {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 4px 10px 12px;
+  border: 0;
+  background: none;
+  color: var(--text);
+  text-align: left;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.release-notice-open svg {
+  margin-top: 2px;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.release-notice-open small {
+  display: block;
+  color: var(--accent);
+  font-size: 11px;
+}
+.release-notice-open:hover small {
+  text-decoration: underline;
+}
+.release-notice-close {
+  padding: 8px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+}
+.modal.release-notes-modal {
+  width: 560px;
+}
+.release-notes-modal .modal-header {
+  margin-bottom: 12px;
+}
+.release-notes-body {
+  font-size: 13px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.release-notes-body > :first-child {
+  margin-top: 0;
+}
+.release-notes-body :is(h4, h5, h6) {
+  margin: 16px 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.release-notes-body :is(p, ul, ol, blockquote, pre) {
+  margin: 6px 0;
+}
+.release-notes-body :is(ul, ol) {
+  padding-left: 20px;
+}
+.release-notes-body code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--sidebar);
+  font-size: 12px;
+}
+.release-notes-body pre {
+  padding: 10px;
+  overflow: auto;
+  border-radius: 6px;
+  background: var(--sidebar);
+}
+.release-notes-body pre code {
+  padding: 0;
+}
+.release-notes-body blockquote {
+  padding-left: 10px;
+  border-left: 3px solid var(--border);
+  color: var(--muted);
+}
+.release-link {
+  text-decoration: underline dotted;
+}
+.release-history {
+  margin-top: 20px;
+}
+.release-history > summary {
+  cursor: pointer;
+  padding: 6px 0;
+}
+.release-history-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.release-history-head button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 3px 9px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.release-history-head .spin {
+  animation: release-spin 0.9s linear infinite;
+}
+@keyframes release-spin {
+  to { transform: rotate(360deg); }
+}
+.release-list {
+  margin: 8px 0 0;
+  padding: 0;
+  max-height: 420px;
+  overflow: auto;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.release-list li + li {
+  border-top: 1px solid var(--border);
+}
+.release-list summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  cursor: pointer;
+  list-style: none;
+  font-size: 13px;
+}
+.release-list summary::-webkit-details-marker {
+  display: none;
+}
+.release-chevron {
+  color: var(--muted);
+  transform: rotate(-90deg);
+  transition: transform 0.12s;
+}
+.release-list details[open] .release-chevron {
+  transform: none;
+}
+.release-version {
+  font-weight: 600;
+}
+.release-badge {
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.release-badge.current {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.release-date {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
+}
+.release-list .release-notes-body {
+  padding: 0 14px 12px 34px;
+}
 /* 원고 북마크: 문단 왼쪽 여백의 리본. 문단 높이만큼 누를 자리를 두고, 리본은 첫 줄에 그린다.
    리본의 진하기는 문단에 둔 변수로 정한다. 북마크한 문단은 늘 보이고, 나머지는 왼쪽 여백에 마우스를 올렸을 때만
    흐리게 보인다. 그때 그 문단(bookmark-target)의 글을 강조해 어느 문단에 붙을지 보여 준다. */
