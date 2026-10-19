@@ -1,116 +1,87 @@
-import { Fragment, useState, useEffect, useRef, useCallback, useMemo } from "react";
-import { useManuscriptCounts } from "./useManuscriptCounts";
-import { useProjectReorder } from "./useProjectReorder";
-import { useGitActivity } from "./useGitActivity";
-import HistoryDialog from "./HistoryDialog";
-import CoverImage, { ImageViewer } from "./CoverImage";
-import { editorDropZone, type EditorDropZone } from "./editor-groups";
+import BookmarkList from "./app/BookmarkList";
+import BookmarksPage from "./app/BookmarksPage";
+import BrokenFiles from "./app/BrokenFiles";
+import { icons, labels } from "./app/document-ui";
+import DocumentLinksWidget from "./app/DocumentLinksWidget";
+import EpisodeDocList from "./app/EpisodeDocList";
+import FileTree, { EPISODE_GROUP } from "./app/FileTree";
+import LibraryPage from "./app/LibraryPage";
+import MemoFolderTree from "./app/MemoFolderTree";
+import ProjectForm from "./app/ProjectForm";
+import ProjectPage from "./app/ProjectPage";
+import { type SettingsPage } from "./app/settings-pages";
+import SettingsContent from "./app/SettingsContent";
+import TitleBar from "./app/TitleBar";
+import TypesettingSettings from "./app/TypesettingSettings";
+import { useDocumentImages } from "./app/useDocumentImages";
+import { useDocumentNotes } from "./app/useDocumentNotes";
+import { usePreferences } from "./app/usePreferences";
+
 import {
-  BookOpen,
-  FileQuestion,
-  FileWarning,
-  Library as LibraryIcon,
-  FolderOpen,
-  Folder,
-  FilePlus,
-  FolderPlus,
-  Settings,
-  Search,
-  Plus,
-  ArrowLeft,
-  ArrowRight,
-  FileText,
-  StickyNote,
-  History,
-  Download,
-  Upload,
-  Check,
-  Cloud,
-  FolderSync,
-  HardDrive,
-  RefreshCw,
-  Code2,
-  Maximize,
-  Smartphone,
-  ChevronRight,
-  ChevronDown,
-  MoreHorizontal,
   Archive,
   ArchiveRestore,
-  Trash2,
-  Sun,
-  Moon,
-  X,
-  Feather,
-  Copy,
-  Pilcrow,
-  Sparkles,
-  LockKeyhole,
   Bookmark as BookmarkIcon,
+  Check,
+  Cloud,
+  Code2,
+  Copy,
+  Download,
+  FileText,
+  FolderOpen,
+  HardDrive,
+  History,
+  Library as LibraryIcon,
+  Maximize,
+  Moon,
+  MoreHorizontal,
+  Pilcrow,
+  Search,
+  Settings,
+  Smartphone,
+  StickyNote,
+  Sun,
+  Trash2,
+  X
 } from "lucide-react";
-import Writer from "./Writer";
-import EditorScroll, { type EditorScrollPositions } from "./EditorScroll";
-import RetainedTab from "./RetainedTab";
-import ResizableSidebar from "./ResizableSidebar";
-import { useAppUpdater, UpdateSettings, UpdateNotice, UpdateLock } from "./Updater";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  call,
-  type Doc,
-  type Library,
-  type Kind,
-  type Project,
-  type WritingRules,
-  type AutoSyncStatus,
-  type SyncConnection,
-} from "./types";
-import {
-  countForRule,
-  requiresSource,
-  plainText,
-} from "../core/text.mjs";
-import {
-  DEFAULT_EDITOR_STYLE,
-  DEFAULT_NOTE_EDITOR_STYLE,
-  TYPESETTING_KINDS,
-  FONT_FAMILY_PRESETS,
-  WIDTH_PRESETS,
-  PLATFORM_STYLE_PRESETS,
-  DIVIDER_STYLES,
-  resolveKindPrefs,
-  normalizeEditorStyle,
-  replaceManuscriptSymbols,
-} from "../core/typesetting.mjs";
-import {
-  DEFAULT_TEXT_REPLACEMENTS,
-  normalizeTextReplacements,
-  migrateTypingPreferences,
-} from "../core/typing.mjs";
-import { normalizeWriting, writingName } from "../core/platforms.mjs";
-import PlatformCount from "./PlatformCount";
-import PlatformPicker from "./PlatformPicker";
-import TagInput from "./TagInput";
-import PropertyPresetSettings from "./PropertyPresetSettings";
-import PinSettings from "./PinSettings";
-import OpenSourceLicenses from "./OpenSourceLicenses";
-import ContextMenu, { type MenuItem } from "./ContextMenu";
-import { useConfirm } from "./ConfirmDialog";
-import { readFileForClose, useProjectSyncUpdates, useSyncFileUpdates } from "./useSyncFileUpdates";
-import SyncStatus from "./SyncStatus";
-import SyncConnections from "./SyncConnections";
-import RealtimeSync from "./RealtimeSync";
-import EpisodeProperties, { statusItems } from "./EpisodeProperties";
-import EpisodeBindingPicker from "./EpisodeBindingPicker";
-import {
-  STATUS_SHORT,
-  normalizeStatus,
   episodeNumbers,
   lineBreakDefault,
-  lineBreakLabel,
+  normalizeStatus
 } from "../core/episode.mjs";
-import MobilePreview from "./MobilePreview";
+import { normalizeWriting, writingName } from "../core/platforms.mjs";
+import {
+  countForRule,
+  plainText,
+  requiresSource,
+} from "../core/text.mjs";
+import {
+  normalizeEditorStyle,
+  replaceManuscriptSymbols,
+  resolveKindPrefs
+} from "../core/typesetting.mjs";
+import {
+  migrateTypingPreferences,
+  normalizeTextReplacements
+} from "../core/typing.mjs";
+import { cloneDocument, editDocument, globalView, initialNavigation, placeTab, requiresDocumentSource, withoutTab, type Destination, type Dialog, type EditorGroup, type EditorTab, type Navigation, type Side } from "./app/model";
+import { useConfirm } from "./ConfirmDialog";
+import ContextMenu, { type MenuItem } from "./ContextMenu";
+import { ImageViewer } from "./CoverImage";
+import { editorDropZone, type EditorDropZone } from "./editor-groups";
+import EditorScroll, { type EditorScrollPositions } from "./EditorScroll";
+import EpisodeBindingPicker from "./EpisodeBindingPicker";
+import EpisodeProperties, { statusItems } from "./EpisodeProperties";
+import HistoryDialog from "./HistoryDialog";
 import MemoSession from "./MemoSession";
+import MobilePreview from "./MobilePreview";
+import { noteLinkTarget, type NoteMark } from "./note-links";
+import PlatformCount from "./PlatformCount";
+import PlatformPicker from "./PlatformPicker";
 import QuickNote, { quickNoteMarkdown, quickNoteTitle, type QuickNoteSource } from "./QuickNote";
-import { firstQuote, noteLink, noteLinkTarget, type NoteMark } from "./note-links";
+import RealtimeSync from "./RealtimeSync";
+import ResizableSidebar from "./ResizableSidebar";
+import RetainedTab from "./RetainedTab";
 import {
   QuickOpen,
   SearchPanel,
@@ -118,27 +89,24 @@ import {
   type SearchMatch,
   type SearchResult,
 } from "./SearchViews";
+import SyncConnections from "./SyncConnections";
+import SyncStatus from "./SyncStatus";
+import {
+  call,
+  type AutoSyncStatus,
+  type Doc,
+  type Kind,
+  type Library,
+  type SyncConnection,
+  type WritingRules
+} from "./types";
+import { UpdateLock, UpdateNotice, useAppUpdater } from "./Updater";
+import { useGitActivity } from "./useGitActivity";
+import { useManuscriptCounts } from "./useManuscriptCounts";
+import { useProjectReorder } from "./useProjectReorder";
+import { readFileForClose, useProjectSyncUpdates, useSyncFileUpdates } from "./useSyncFileUpdates";
+import Writer from "./Writer";
 const composingError = "한글 입력 조합이 끝난 뒤 다시 저장해 주세요.";
-const labels = { episode: "에피소드", plot: "플롯", memo: "메모" };
-const icons = { episode: BookOpen, plot: FileText, memo: StickyNote };
-// 파일 트리에서 회차가 이보다 많으면 이 단위로 묶어 접는다.
-const EPISODE_GROUP = 20;
-// 특정 작품에 매이지 않는 화면(서재, 전체 북마크). 이동해도 보던 작품은 그대로 둔다.
-const globalView = (view: string) => view === "library" || view === "bookmarks";
-// 숨겨진 탭의 도구 막대를 준비할 때도 본문을 다시 분석하지 않는다.
-const documentSourceCache = new WeakMap<Doc, { body: string; required: boolean }>();
-function cloneDocument(doc: Doc, patch: Partial<Doc> = {}): Doc {
-  const next = { ...doc, ...patch }, cached = documentSourceCache.get(doc);
-  if (cached && cached.body === next.body) documentSourceCache.set(next, cached);
-  return next;
-}
-function requiresDocumentSource(doc: Doc) {
-  const cached = documentSourceCache.get(doc);
-  if (cached?.body === doc.body) return cached.required;
-  const required = requiresSource(doc.body);
-  documentSourceCache.set(doc, { body: doc.body, required });
-  return required;
-}
 // 저장할 때마다 임시 원고를 먼저 쓰고 저장이 끝나면 지운다. 그 사이에 목록을 새로 읽으면
 // 편집 중인 원고의 임시본이 잡히므로, 앱을 연 뒤 지금 편집 중인 원고에 쓴 임시본은 복구 대상에서 뺀다.
 const appStartedAt = Date.now();
@@ -151,95 +119,9 @@ const empty: Library = {
   preferences: {},
   version: "",
 };
-type Dialog = {
-  type: string;
-  kind?: Kind;
-  value?: string;
-  // 여러 문서를 한 번에 다루는 대화상자(파일 트리 다중 선택의 영구 삭제).
-  ids?: string[];
-  description?: string;
-  tags?: string[];
-  writing?: WritingRules;
-  manualLineBreak?: boolean | null;
-};
-type Destination = {
-  // bookmarks는 서재처럼 작품에 매이지 않는 전체 북마크 화면이다.
-  view: "library" | "project" | "workspace" | "bookmarks";
-  projectId: string;
-  documentId?: string;
-  tab?: Kind;
-  archive?: boolean;
-  pinned?: boolean;
-};
-type Navigation = { entries: Destination[]; index: number };
-// 편집기 탭. VS Code처럼 고정되지 않은 탭(미리보기)은 다음 문서를 열 때 재사용된다.
-type EditorTab = { id: string; pinned: boolean };
-type EditorGroup = { tabs: EditorTab[]; docId: string };
-type Side = "left" | "right";
-function withoutTab(group: EditorGroup | null, id: string): EditorGroup | null {
-  if (!group) return group;
-  const index = group.tabs.findIndex((t) => t.id === id);
-  if (index < 0) return group;
-  const tabs = group.tabs.filter((t) => t.id !== id);
-  if (!tabs.length) return null;
-  const docId =
-    group.docId === id ? (tabs[index] || tabs[index - 1]).id : group.docId;
-  return { tabs, docId };
-}
-function placeTab(tabs: EditorTab[], id: string, pinned: boolean, after: string) {
-  const index = tabs.findIndex((t) => t.id === id);
-  if (index >= 0)
-    return pinned && !tabs[index].pinned
-      ? tabs.map((t, i) => (i === index ? { ...t, pinned: true } : t))
-      : tabs;
-  const previewIndex = pinned ? -1 : tabs.findIndex((t) => !t.pinned);
-  if (previewIndex >= 0)
-    return tabs.map((t, i) => (i === previewIndex ? { id, pinned } : t));
-  const anchor = tabs.findIndex((t) => t.id === after);
-  const next = [...tabs];
-  next.splice(anchor < 0 ? next.length : anchor + 1, 0, { id, pinned });
-  return next;
-}
-const initialNavigation = (): Navigation => ({
-  entries: [{ view: "library", projectId: "" }], index: 0,
-});
-const settingPages = [
-  { id: "editor", label: "기본 설정", icon: Settings },
-  { id: "typesetting", label: "조판 형식", icon: Pilcrow },
-  { id: "autocomplete", label: "자동 완성", icon: Sparkles },
-  { id: "defaults", label: "작품 기본값", icon: BookOpen },
-  { id: "storage", label: "보관 및 이력", icon: HardDrive },
-  { id: "connections", label: "파일 동기화", icon: FolderSync },
-  { id: "api", label: "MCP / API", icon: Code2 },
-  { id: "security", label: "앱 잠금", icon: LockKeyhole },
-  { id: "updates", label: "앱 업데이트", icon: Download },
-] as const;
-function SettingsToggle({ label, description, checked, onChange }: {
-  label: string;
-  description: string;
-  checked: boolean;
-  onChange: (checked: boolean) => void;
-}) {
-  return (
-    <label className="settings-toggle">
-      <span><span>{label}</span><small>{description}</small></span>
-      <input type="checkbox" role="switch" aria-label={label} checked={checked}
-        onChange={(e) => onChange(e.target.checked)} />
-    </label>
-  );
-}
-// VS Code 레이아웃 토글 아이콘: 패널이 열려 있으면 해당 영역을 채운다.
-function LayoutIcon({ side, open }: { side: "left" | "right"; open: boolean }) {
-  const x = side === "left" ? 2.5 : 10;
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
-      <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" fill="none" stroke="currentColor" />
-      <rect x={x} y="3" width="3.5" height="10" fill={open ? "currentColor" : "none"} />
-      <path d={side === "left" ? "M6 3v10" : "M10 3v10"} stroke="currentColor" />
-    </svg>
-  );
-}
+
 export default function App() {
+  const { prefs, setPrefs, prefsRef, savePrefs, saveKindPrefs } = usePreferences();
   const [lib, setLib] = useState<Library>(empty),
     [loaded, setLoaded] = useState(false),
     [view, setView] = useState("library"),
@@ -247,7 +129,7 @@ export default function App() {
     [active, setActiveState] = useState<Doc | null>(null),
     [tab, setTab] = useState<Kind>("episode"),
     [dialog, setDialog] = useState<Dialog | null>(null),
-    [settingsPage, setSettingsPage] = useState<(typeof settingPages)[number]["id"]>("editor"),
+    [settingsPage, setSettingsPage] = useState<SettingsPage>("editor"),
     [typesettingKind, setTypesettingKind] = useState<"episode" | "document">("episode"),
     [newRepFrom, setNewRepFrom] = useState(""),
     [newRepTo, setNewRepTo] = useState(""),
@@ -282,20 +164,6 @@ export default function App() {
       seq: number;
     } | null>(null),
     [archive, setArchive] = useState(false),
-    [prefs, setPrefs] = useState<Record<string, any>>({
-      ...DEFAULT_EDITOR_STYLE,
-      goal: 3000,
-      theme: "light",
-      colorTheme: "modern",
-      copyWithBlankLines: false,
-      hideCovers: false,
-      autoCloseQuotes: true,
-      autoCloseBrackets: true,
-      smartBrackets: true,
-      autoSymbolReplacement: true,
-      autoDividerReplacement: true,
-      quoteStyle: "straight",
-    }),
     [connections, setConnections] = useState<SyncConnection[]>([]),
     [autoSync, setAutoSync] = useState<AutoSyncStatus>({ phase: "idle", message: "" }),
     [syncChecking, setSyncChecking] = useState(false),
@@ -307,8 +175,6 @@ export default function App() {
     [commonMemoPath, setCommonMemoPath] = useState(""),
     // 본문 우클릭 '메모 추가'로 연 퀵 노트 창.
     [quickNote, setQuickNote] = useState<QuickNoteSource | null>(null),
-    // 지금 원고를 출처 링크로 인용한 메모. 원고 왼쪽 여백에 메모 아이콘으로 보여 준다.
-    [noteMarks, setNoteMarks] = useState<Record<string, NoteMark[]>>({}),
     // 작품 삭제 확인: 작품 제목을 그대로 입력해야 삭제 버튼이 켜진다.
     [confirmTitle, setConfirmTitle] = useState(""),
     // 플롯 트리에서 접어 둔 회차, 플롯을 끌어 놓을 대상(회차 ID, 연결 해제는 "").
@@ -346,7 +212,6 @@ export default function App() {
     renamingRef = useRef<{ id: string; value: string; widget?: boolean } | null>(null);
   const memoFlush = useRef<((options?: { closing?: boolean }) => Promise<void>) | null>(null);
   const memoManualSave = useRef<(() => Promise<void>) | null>(null);
-  // 원고 이미지 경로별로 읽은 data URL(작품·원고 경로·이미지 경로가 키).
   const imageCache = useRef(new Map<string, Promise<string | null>>());
   // 메모 화면에서 메모를 여는 함수(빠른 열기에서 공용 메모를 고를 때).
   const memoApi = useRef<{ open: (space: string, path: string, pinned?: boolean) => Promise<void> } | null>(null);
@@ -433,9 +298,7 @@ export default function App() {
     // 조판 설정을 열 때 우측 사이드바가 닫혀 있었으면, 조판 설정을 닫을 때 사이드바도 다시 닫는다.
     typesettingOpenedRight = useRef(false);
   const project = lib.projects.find((p) => p.id === projectId);
-  const prefsRef = useRef(prefs);
   const checkOpenDocRef = useRef<((askAgain?: boolean) => Promise<void>) | null>(null);
-  prefsRef.current = prefs;
   const message = useCallback((text: string, action?: { label: string; run: () => void }) => {
     setToast(text);
     setToastAction(action ?? null);
@@ -699,10 +562,7 @@ export default function App() {
     const d = draft.current;
     if (!d) return;
     gitActivity();
-    const previousPolicy = documentSourceCache.get(d.doc);
-    d.doc = cloneDocument(d.doc, patch);
-    const required = markdownCopy ?? (patch.body === undefined ? previousPolicy?.required : undefined);
-    if (required !== undefined) documentSourceCache.set(d.doc, { body: d.doc.body, required });
+    d.doc = editDocument(d.doc, patch, markdownCopy);
     d.seq++;
     // VS Code처럼 미리보기 탭을 편집하면 고정 탭이 된다.
     updateTabs((tabs) =>
@@ -710,9 +570,7 @@ export default function App() {
         ? placeTab(tabs, d.doc.id, true, "")
         : tabs,
     );
-    const nextActive = { ...d.doc };
-    if (required !== undefined) documentSourceCache.set(nextActive, { body: nextActive.body, required });
-    setActive(nextActive);
+    setActive(cloneDocument(d.doc));
     setSaveStatus("편집 중");
     if (timer.current) clearTimeout(timer.current);
     if (!composing.current)
@@ -1565,61 +1423,6 @@ export default function App() {
   useEffect(() => {
     if (view === "workspace" && projectId) loadMemoFolders().catch(() => {});
   }, [view, projectId, lib]);
-  async function savePrefs(p: Record<string, any>) {
-    let payload = p;
-    if (
-      !p.typesettingByKind &&
-      (p.fontSize !== undefined || p.lineHeight !== undefined) &&
-      prefsRef.current.typesettingByKind?.episode
-    ) {
-      const epSync: Record<string, any> = {};
-      if (p.fontSize !== undefined) epSync.fontSize = p.fontSize;
-      if (p.lineHeight !== undefined) epSync.lineHeight = p.lineHeight;
-      payload = {
-        ...p,
-        typesettingByKind: {
-          ...prefsRef.current.typesettingByKind,
-          episode: {
-            ...prefsRef.current.typesettingByKind.episode,
-            ...epSync,
-          },
-        },
-      };
-    }
-    setPrefs((old) => ({ ...old, ...payload }));
-    await call("setPreferences", payload);
-  }
-  async function saveKindPrefs(kind: Kind | "document", patch: Record<string, any>) {
-    const targetKey = kind === "episode" ? "episode" : "document";
-    const currentByKind =
-      prefsRef.current.typesettingByKind && typeof prefsRef.current.typesettingByKind === "object"
-        ? prefsRef.current.typesettingByKind
-        : {};
-    const prevForKind =
-      targetKey === "document"
-        ? currentByKind.document && typeof currentByKind.document === "object"
-          ? currentByKind.document
-          : currentByKind.plot && typeof currentByKind.plot === "object"
-            ? currentByKind.plot
-            : currentByKind.memo && typeof currentByKind.memo === "object"
-              ? currentByKind.memo
-              : {}
-        : currentByKind.episode && typeof currentByKind.episode === "object"
-          ? currentByKind.episode
-          : {};
-    const nextByKind = {
-      ...currentByKind,
-      [targetKey]: {
-        ...prevForKind,
-        ...patch,
-      },
-    };
-    const fullPatch: Record<string, any> =
-      targetKey === "episode"
-        ? { ...patch, typesettingByKind: nextByKind }
-        : { typesettingByKind: nextByKind };
-    await savePrefs(fullPatch);
-  }
   async function openSettings(type: "settings" | "serverSync" = "settings") {
     await flush();
     const s = await call("settings");
@@ -1832,42 +1635,7 @@ export default function App() {
   }
   // 원고 이미지: 작품의 assets/에 저장하고, 원고에는 원고 파일 기준 상대 경로(예: ../assets/그림.png)로 쓴다.
   // 화면에 그릴 data URL은 경로마다 한 번만 읽고, 찾지 못한 경로는 다음에 다시 찾는다.
-  function docImages(doc: Doc, editable: boolean) {
-    const relPath = doc.relPath || libraryRef.current.documents.find((d) => d.id === doc.id)?.relPath || "";
-    const up = "../".repeat(Math.max(0, relPath.split("/").length - 1));
-    return {
-      resolve: (src: string) => {
-        const key = `${doc.projectId}\n${relPath}\n${src}`;
-        let hit = imageCache.current.get(key);
-        if (!hit) {
-          hit = call<string | null>("readImage", { projectId: doc.projectId, docPath: relPath, src })
-            .catch(() => null)
-            .then((url) => {
-              if (!url) imageCache.current.delete(key);
-              return url;
-            });
-          imageCache.current.set(key, hit);
-        }
-        return hit;
-      },
-      save: editable
-        ? async (file?: { name: string; data: string }) => {
-            try {
-              const saved = await call<{ path: string; name: string } | null>("saveImage", {
-                projectId: doc.projectId,
-                ...file,
-              });
-              if (!saved) return null;
-              const stem = saved.name.replace(/\.[^.]+$/, "");
-              return { src: up + saved.path, alt: stem === "image" ? "" : stem };
-            } catch (e) {
-              report(e);
-              return null;
-            }
-          }
-        : undefined,
-    };
-  }
+  const docImages = useDocumentImages(libraryRef, report);
   // 원고 여백의 메모 아이콘: 메모가 하나면 바로 열고, 여럿이면 고를 수 있게 메뉴를 띄운다.
   function openNotes(list: NoteMark[], at: { x: number; y: number }) {
     if (list.length === 1) return attempt(() => openDoc(list[0].id, true))();
@@ -1881,37 +1649,7 @@ export default function App() {
       })),
     });
   }
-  // 지금 원고를 출처 링크로 인용한 메모를 찾는다. 다른 플롯·메모가 바뀌면 다시 찾는다.
-  const noteScan = active
-    ? lib.documents
-        .filter((d) => d.projectId === active.projectId && d.kind !== "episode" && d.id !== active.id)
-        .map((d) => d.id + d.updatedAt + d.archived)
-        .join()
-    : "";
-  useEffect(() => {
-    const id = active?.id,
-      projectId = active?.projectId;
-    if (!id) return;
-    let canceled = false;
-    (async () => {
-      const found = await call<{ results: { id: string; archived: boolean }[] }>("searchText", {
-        query: noteLink(id),
-        projectId,
-        caseSensitive: true,
-      });
-      const list: NoteMark[] = [];
-      for (const hit of found.results || []) {
-        if (hit.id === id || hit.archived) continue;
-        const doc = await call<Doc>("readDocument", { id: hit.id });
-        const text = firstQuote(doc.body);
-        if (text) list.push({ id: doc.id, title: doc.title, text });
-      }
-      if (!canceled) setNoteMarks((previous) => ({ ...previous, [id]: list }));
-    })().catch(() => {});
-    return () => {
-      canceled = true;
-    };
-  }, [active?.id, noteScan]);
+  const noteMarks = useDocumentNotes(active, lib);
   const docs = lib.documents.filter(
       (d) => d.projectId === projectId && d.archived === archive,
     ),
@@ -2613,7 +2351,7 @@ export default function App() {
       </button>
     );
   }
-  const isPlotMemo = (d: Doc) => d.kind === "memo";
+
   // 문서 영역(doc/)에 플롯·메모를 만든다. folder가 있으면 그 폴더에, ep가 있으면 그 회차에 연결한다.
   // 보던 화면은 그대로 두고 트리에서 이름을 받는다. widget이면 위젯 보드에서 바로 이름을 받는다.
   async function addDocFile(folder: string, kind: "plot" | "memo", ep?: Doc, widget = false) {
@@ -2651,254 +2389,7 @@ export default function App() {
     await loadMemoFolders();
     message("메모가 저장되었습니다", { label: "열기", run: attempt(() => openDoc(doc.id, true)) });
   }
-  // 회차에서는 연결된 플롯·메모를, 플롯·메모에서는 연결된 회차를 보여 준다.
-  // 누르면 미리보기로 열고, 더블클릭하면 탭을 고정하며, 우클릭으로 이름을 바꾼다.
-  function documentLinksWidget() {
-    if (!active) return null;
-    const ep =
-      active.kind === "episode"
-        ? active
-        : active.episodeId
-          ? lib.documents.find(
-              (d) => d.id === active.episodeId && d.kind === "episode" && d.projectId === active.projectId,
-            )
-          : undefined;
-    const icon = (d: Doc) =>
-      d.kind === "episode" ? <BookOpen size={15} /> : isPlotMemo(d) ? <StickyNote size={15} /> : <FileText size={15} />;
-    const item = (d: Doc) =>
-      renaming?.id === d.id && renaming.widget ? (
-        <div key={d.id} className="memo-card renaming">
-          {icon(d)}
-          <input
-            className="tree-rename"
-            aria-label="새 이름"
-            autoFocus
-            value={renaming.value}
-            onFocus={(e) => e.currentTarget.select()}
-            onChange={(e) => {
-              renamingRef.current = { id: d.id, value: e.target.value, widget: true };
-              setRenaming(renamingRef.current);
-            }}
-            onKeyDown={(e) => {
-              e.stopPropagation();
-              if (e.key === "Enter") attempt(commitRename)();
-              else if (e.key === "Escape") {
-                renamingRef.current = null;
-                setRenaming(null);
-              }
-            }}
-            onBlur={attempt(commitRename)}
-          />
-        </div>
-      ) : (
-        <button
-          className={`memo-card ${d.id === active.id ? "current" : ""} ${menu?.target === "widget-" + d.id ? "context-target" : ""}`}
-          key={d.id}
-          title={d.relPath}
-          onClick={attempt(() => openDoc(d.id))}
-          onDoubleClick={attempt(() => openDoc(d.id, true))}
-          onContextMenu={(e) =>
-            openMenu(
-              e,
-              [{ label: "이름 바꾸기", action: () => startRename(d, true) }, "separator", ...docMenu(d)],
-              "widget-" + d.id,
-            )
-          }
-        >
-          {icon(d)}
-          <span>{d.title}</span>
-          <ChevronRight size={12} />
-        </button>
-      );
-    if (active.kind !== "episode") {
-      return (
-        <section className="widget episode-plots">
-          <div className="widget-title">
-            <span>연결된 문서</span>
-            <small>{ep ? 1 : 0}</small>
-          </div>
-          {ep ? item(ep) : <p className="widget-empty">연결된 문서가 없습니다.</p>}
-        </section>
-      );
-    }
-    const linked = lib.documents.filter(
-      (d) => d.kind !== "episode" && d.projectId === active.projectId && d.episodeId === active.id && !d.archived,
-    );
-    const plots = linked.filter((d) => !isPlotMemo(d)),
-      memos = linked.filter(isPlotMemo);
-    // 제목 줄의 + 버튼: 이 회차에 연결된 플롯·메모를 만들고 위젯에서 바로 이름을 받는다.
-    const add = (kind: "plot" | "memo") => (
-      <button
-        className="widget-quick-add"
-        aria-label={kind === "plot" ? "이 회차에 플롯 만들기" : "이 회차에 메모 만들기"}
-        title={kind === "plot" ? "이 회차에 플롯 만들기" : "이 회차에 메모 만들기"}
-        disabled={archive}
-        onClick={attempt(() => addDocFile("", kind, active, true))}
-      >
-        <Plus size={14} />
-      </button>
-    );
-    return (
-      <section className="widget episode-plots">
-        <div className="widget-title">
-          <span>이 회차의 플롯</span>
-          <span className="widget-title-tools">
-            <small>{plots.length}</small>
-            {add("plot")}
-          </span>
-        </div>
-        {plots.map(item)}
-        {!plots.length && <p className="widget-empty">연결된 플롯이 없습니다.</p>}
-        <div className="widget-title widget-subtitle">
-          <span>이 회차의 메모</span>
-          <span className="widget-title-tools">
-            <small>{memos.length}</small>
-            {add("memo")}
-          </span>
-        </div>
-        {memos.map(item)}
-        {!memos.length && <p className="widget-empty">연결된 메모가 없습니다.</p>}
-      </section>
-    );
-  }
-  // 위젯 보드 자리에 펼치는 북마크 목록. 누르면 그 문단으로 옮겨 간다.
-  function bookmarkList() {
-    if (!active) return null;
-    const list = active.bookmarks || [];
-    return (
-      <section className="widget bookmark-widget">
-        <div className="widget-title">
-          <span>이 문서의 북마크</span>
-          <small>{list.length}</small>
-        </div>
-        {list.map((b) => (
-          <div className="bookmark-item" key={b.index}>
-            <button
-              className="bookmark-jump"
-              title={b.text}
-              onClick={() => setBookmarkJump({ docId: active.id, index: b.index, seq: Date.now() })}
-            >
-              <BookmarkIcon size={13} />
-              <span>{b.text || "빈 문단"}</span>
-            </button>
-            <button
-              className="bookmark-remove"
-              aria-label="북마크 지우기"
-              title="북마크 지우기"
-              onClick={() => edit({ bookmarks: list.filter((x) => x.index !== b.index) })}
-            >
-              <X size={13} />
-            </button>
-          </div>
-        ))}
-        {!list.length && <p className="widget-empty">원고 왼쪽 여백을 누르면 그 문단에 북마크를 붙입니다.</p>}
-      </section>
-    );
-  }
-  // 레일의 북마크 화면: 모든 작품의 원고에 붙인 북마크를 작품·문서별로 모아 본다. 누르면 그 문단으로 옮겨 간다.
-  function bookmarksPage() {
-    // 열려 있는 문서는 저장 전의 북마크까지 보이도록 편집 중인 원고 쪽을 쓴다.
-    const marksOf = (d: Doc) => (d.id === active?.id ? active.bookmarks : d.bookmarks) || [];
-    const q = bookmarkQuery.trim().toLowerCase();
-    let total = 0;
-    const groups = lib.projects
-      .map((p) => {
-        const pdocs = lib.documents.filter((d) => d.projectId === p.id && !d.archived);
-        const numbers = episodeNumbers(pdocs.filter((d) => d.kind === "episode"));
-        const docs = pdocs
-          .map((d) => {
-            const all = marksOf(d),
-              label = d.kind === "episode" ? `${numbers.get(d.id) ?? ""} ${d.title}`.trim() : d.title,
-              hit = !q || p.title.toLowerCase().includes(q) || label.toLowerCase().includes(q);
-            total += all.length;
-            return { d, label, all, marks: all.filter((b) => hit || b.text.toLowerCase().includes(q)) };
-          })
-          .filter((x) => x.marks.length)
-          // 회차를 먼저, 그다음 플롯·메모를 둔다(같은 유형 안에서는 서재 순서).
-          .sort((a, b) => Number(a.d.kind !== "episode") - Number(b.d.kind !== "episode"));
-        return { p, docs, count: docs.reduce((n, x) => n + x.marks.length, 0) };
-      })
-      .filter((g) => g.docs.length);
-    const jump = (d: Doc, index: number) =>
-      attempt(async () => {
-        await openDoc(d.id, true);
-        setBookmarkJump({ docId: d.id, index, seq: Date.now() });
-      })();
-    return (
-      <div className="bookmarks-page">
-        <div className="page-hero">
-          <h1>
-            북마크 <small>{total}개</small>
-          </h1>
-          <p>모든 작품의 원고에 붙인 북마크를 모아 봅니다.</p>
-          {total > 0 && (
-            <label className="tree-search bookmarks-search">
-              <Search size={14} />
-              <input
-                value={bookmarkQuery}
-                placeholder="작품, 문서 제목, 문단 글로 찾기"
-                aria-label="북마크 검색"
-                onChange={(e) => setBookmarkQuery(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Escape" && bookmarkQuery) {
-                    e.stopPropagation();
-                    setBookmarkQuery("");
-                  }
-                }}
-              />
-              {bookmarkQuery && (
-                <button aria-label="검색어 지우기" title="검색어 지우기" onClick={() => setBookmarkQuery("")}>
-                  <X size={13} />
-                </button>
-              )}
-            </label>
-          )}
-        </div>
-        {groups.map(({ p, docs, count }) => (
-          <section className="bookmark-project" key={p.id}>
-            <h2>
-              {p.title || "제목 없는 작품"} <small>{count}</small>
-            </h2>
-            {docs.map(({ d, label, all, marks }) => (
-              <div className="bookmark-doc" key={d.id}>
-                <button className="bookmark-doc-title" title={d.relPath} onClick={attempt(() => openDoc(d.id, true))}>
-                  {d.kind === "episode" ? <BookOpen size={14} /> : docIcon(d)}
-                  <span>{label}</span>
-                  <small>{marks.length}</small>
-                </button>
-                {marks.map((b) => (
-                  <div className="bookmark-item" key={b.index}>
-                    <button className="bookmark-jump" title={b.text} onClick={() => jump(d, b.index)}>
-                      <BookmarkIcon size={13} />
-                      <span>{b.text || "빈 문단"}</span>
-                    </button>
-                    <button
-                      className="bookmark-remove"
-                      aria-label="북마크 지우기"
-                      title="북마크 지우기"
-                      onClick={attempt(() => patchDoc(d.id, { bookmarks: all.filter((x) => x.index !== b.index) }))}
-                    >
-                      <X size={13} />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            ))}
-          </section>
-        ))}
-        {!total && (
-          <div className="empty-state">
-            <div className="empty-icon">
-              <BookmarkIcon size={34} />
-            </div>
-            <h2>아직 북마크가 없습니다</h2>
-            <p>원고 왼쪽 여백을 누르면 그 문단에 북마크를 붙일 수 있습니다.</p>
-          </div>
-        )}
-        {total > 0 && !groups.length && <div className="tree-empty bookmarks-none">검색 결과가 없습니다</div>}
-      </div>
-    );
-  }
+
   // 조판 버튼: 위젯 보드 자리에 조판 설정을 펼치거나 접는다.
   function toggleTypesettingPanel() {
     if (right && rightView === "typesetting") {
@@ -2911,466 +2402,7 @@ export default function App() {
     setRight(true);
     setRightView("typesetting");
   }
-  // 조판 설정. 설정 창에서는 문서 타입 탭으로 대상을 고르고, 우측 사이드바에서는 열린 문서의 타입을 고친다.
-  function typesettingSettings(targetKind: "episode" | "document", inPanel = false) {
-    const targetKindInfo =
-      TYPESETTING_KINDS.find((k) => k.id === targetKind) || TYPESETTING_KINDS[0];
-    const kindEditorStyle = normalizeEditorStyle(prefs, targetKind);
-    const allWidthItems = WIDTH_PRESETS.flatMap((g) => g.items);
-    const updateTargetPrefs = (patch: Record<string, any>) =>
-      saveKindPrefs(targetKind, patch).catch(report);
-    const resetTargetPrefs = () => {
-      const isNote = targetKind === "document";
-      const defPatch = isNote
-        ? { ...DEFAULT_NOTE_EDITOR_STYLE }
-        : { ...DEFAULT_EDITOR_STYLE };
-      saveKindPrefs(targetKind, defPatch)
-        .then(() =>
-          message(
-            `'${targetKindInfo.label}' 조판을 ${isNote ? "메모장 기본값" : "원고 기본값"}으로 초기화했습니다.`,
-          ),
-        )
-        .catch(report);
-    };
-    return (
-      <>
-        <div className="typesetting-kind-bar">
-          {inPanel ? (
-            <strong className="typesetting-kind-current">{targetKindInfo.label}</strong>
-          ) : (
-            <div className="typesetting-kind-tabs" role="tablist" aria-label="조판 대상 문서 타입">
-              {TYPESETTING_KINDS.map((k) => {
-                const KIcon = k.id === "episode" ? BookOpen : FileText;
-                const selected = targetKind === k.id;
-                return (
-                  <button
-                    key={k.id}
-                    type="button"
-                    role="tab"
-                    aria-selected={selected}
-                    className={`typesetting-kind-tab ${selected ? "active" : ""}`}
-                    onClick={() => setTypesettingKind(k.id)}
-                  >
-                    <KIcon size={15} />
-                    <span>{k.label}</span>
-                  </button>
-                );
-              })}
-            </div>
-          )}
-          <div className="typesetting-kind-meta">
-            <span>{targetKindInfo.description}</span>
-            <div className="row gap">
-              <button type="button" onClick={resetTargetPrefs}>
-                {targetKind === "episode" ? "원고 기본값 초기화" : "메모장 기본값 초기화"}
-              </button>
-            </div>
-          </div>
-        </div>
 
-        <h3>{targetKindInfo.label} · 플랫폼·환경 조판 프리셋</h3>
-        <p className="settings-description">
-          현재 선택한 <strong>{targetKindInfo.label}</strong> 문서 타입에 조판 프리셋을 한 번에 적용합니다.
-        </p>
-        <div className="preset-grid">
-          {PLATFORM_STYLE_PRESETS.map((preset) => (
-            <button
-              key={preset.id}
-              type="button"
-              className="preset-card"
-              // 사이드바에서는 이름만 보이고 설명은 마우스를 올리면 보여 준다.
-              title={inPanel ? preset.description : undefined}
-              onClick={() => {
-                updateTargetPrefs(preset.style);
-                message(
-                  `'${targetKindInfo.label}'에 '${preset.name} (${preset.environment})' 조판 프리셋을 적용했습니다.`,
-                );
-              }}
-            >
-              <strong>
-                {preset.name} <small>({preset.environment})</small>
-              </strong>
-              {!inPanel && <small>{preset.description}</small>}
-            </button>
-          ))}
-        </div>
-
-        <div className="settings-subsection">
-          <h3>{targetKindInfo.label} · 문단·본문 조판 세부 설정</h3>
-          <p className="settings-description">
-            글꼴, 자간, 단락 간격, 첫 줄 들여쓰기, 정렬, 구분선 모양을 세밀하게 조정합니다.
-          </p>
-          <div className="settings-grid">
-            <label>
-              본문 글꼴
-              <select
-                aria-label="본문 글꼴"
-                value={kindEditorStyle.fontFamily}
-                onChange={(e) =>
-                  updateTargetPrefs({ fontFamily: e.target.value })
-                }
-              >
-                {FONT_FAMILY_PRESETS.map((f) => (
-                  <option key={f.id || "default"} value={f.value}>
-                    {f.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              글자 크기 (px)
-              <input
-                type="number"
-                min={12}
-                max={36}
-                step={1}
-                aria-label="조판 글자 크기"
-                value={kindEditorStyle.fontSize}
-                onChange={(e) =>
-                  updateTargetPrefs({
-                    fontSize: Math.min(36, Math.max(12, Number(e.target.value) || 18)),
-                  })
-                }
-              />
-            </label>
-            <label>
-              글자 굵기
-              <select
-                aria-label="글자 굵기"
-                value={kindEditorStyle.fontWeight}
-                onChange={(e) =>
-                  updateTargetPrefs({ fontWeight: Number(e.target.value) })
-                }
-              >
-                {[300, 400, 500, 600, 700].map((w) => (
-                  <option key={w} value={w}>
-                    {w === 300 ? "300 (가는 글씨)" : w === 400 ? "400 (보통)" : w === 500 ? "500 (중간)" : w === 600 ? "600 (약간 굵게)" : "700 (굵게)"}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              자간 (em)
-              <input
-                type="number"
-                min={-0.1}
-                max={0.25}
-                step={0.01}
-                aria-label="자간"
-                value={kindEditorStyle.letterSpacing}
-                onChange={(e) =>
-                  updateTargetPrefs({
-                    letterSpacing: Number(e.target.value) || 0,
-                  })
-                }
-              />
-            </label>
-            <label>
-              줄 간격 (행간)
-              <input
-                type="number"
-                min={1.2}
-                max={3.5}
-                step={0.05}
-                aria-label="조판 줄 간격"
-                value={kindEditorStyle.lineHeight}
-                onChange={(e) =>
-                  updateTargetPrefs({
-                    lineHeight: Number(e.target.value) || 2,
-                  })
-                }
-              />
-            </label>
-            <label>
-              단락 간격 (em)
-              <input
-                type="number"
-                min={0}
-                max={3.5}
-                step={0.05}
-                aria-label="단락 간격"
-                value={kindEditorStyle.blockGap}
-                onChange={(e) =>
-                  updateTargetPrefs({
-                    blockGap: Math.max(0, Number(e.target.value) || 0),
-                  })
-                }
-              />
-            </label>
-            <label>
-              첫 줄 들여쓰기 (em)
-              <select
-                aria-label="첫 줄 들여쓰기"
-                value={kindEditorStyle.indent}
-                onChange={(e) =>
-                  updateTargetPrefs({ indent: Number(e.target.value) })
-                }
-              >
-                <option value={0}>없음 (0em)</option>
-                <option value={0.5}>반 칸 (0.5em)</option>
-                <option value={1}>한 칸 (1em · 종이책/노벨피아)</option>
-                <option value={1.5}>한 칸 반 (1.5em)</option>
-                <option value={2}>두 칸 (2em)</option>
-              </select>
-            </label>
-            <label>
-              문단 정렬
-              <select
-                aria-label="문단 정렬"
-                value={kindEditorStyle.textAlign}
-                onChange={(e) =>
-                  updateTargetPrefs({ textAlign: e.target.value })
-                }
-              >
-                <option value="left">왼쪽 정렬</option>
-                <option value="justify">양쪽 정렬 (종이책 조판)</option>
-                <option value="center">가운데 정렬</option>
-                <option value="right">오른쪽 정렬</option>
-              </select>
-            </label>
-            <label>
-              구분선 모양
-              <select
-                aria-label="구분선 모양"
-                value={kindEditorStyle.dividerStyle}
-                onChange={(e) =>
-                  updateTargetPrefs({ dividerStyle: e.target.value })
-                }
-              >
-                {DIVIDER_STYLES.map((d) => (
-                  <option key={d.id} value={d.id}>
-                    {d.label} — {d.description}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              구분선 상하 여백 (em)
-              <input
-                type="number"
-                min={0.25}
-                max={5}
-                step={0.25}
-                aria-label="구분선 상하 여백"
-                value={kindEditorStyle.dividerPaddingY}
-                onChange={(e) =>
-                  updateTargetPrefs({
-                    dividerPaddingY: Math.max(0.25, Number(e.target.value) || 1.5),
-                  })
-                }
-              />
-            </label>
-          </div>
-          <div className="settings-toggles" style={{ marginTop: 16 }}>
-            <SettingsToggle
-              label="강제 줄바꿈(Shift+Enter) 뒤 들여쓰기"
-              description="단락 안에서 강제로 줄을 바꾼 다음 줄에도 첫 줄 들여쓰기 폭을 똑같이 적용합니다."
-              checked={kindEditorStyle.hardBreakIndent}
-              onChange={(checked) =>
-                updateTargetPrefs({ hardBreakIndent: checked })
-              }
-            />
-            <SettingsToggle
-              label="동양식 세리프 문장 부호"
-              description="본문이 고딕 글꼴이어도 곡선 따옴표(“ ” ‘ ’), 낫표(「 」 『 』), 말줄임표(…)를 명조 글리프로 조판합니다."
-              checked={kindEditorStyle.serifSymbols}
-              onChange={(checked) =>
-                updateTargetPrefs({ serifSymbols: checked })
-              }
-            />
-          </div>
-        </div>
-
-        <div className="settings-subsection">
-          <h3>{targetKindInfo.label} · 원고지 폭 · 용지 · 쪽 보기</h3>
-          <p className="settings-description">
-            원고 영역의 최대 폭을 종이 규격·모바일·태블릿 단말기에 맞추거나 A4 쪽 보기로 전환합니다.
-          </p>
-          <div className="settings-grid">
-            <label>
-              단말기 / 용지 폭 프리셋
-              <select
-                aria-label="단말기 및 용지 폭 프리셋"
-                value={
-                  allWidthItems.some((w) => w.width === kindEditorStyle.editorMaxWidth)
-                    ? String(kindEditorStyle.editorMaxWidth)
-                    : "custom"
-                }
-                onChange={(e) => {
-                  if (e.target.value !== "custom") {
-                    updateTargetPrefs({ editorMaxWidth: Number(e.target.value) });
-                  }
-                }}
-              >
-                <option value="custom">직접 지정 ({kindEditorStyle.editorMaxWidth}px)</option>
-                {WIDTH_PRESETS.map((group) => (
-                  <optgroup key={group.group} label={group.group}>
-                    {group.items.map((w) => (
-                      <option key={w.id} value={w.width}>
-                        {w.label}
-                      </option>
-                    ))}
-                  </optgroup>
-                ))}
-              </select>
-            </label>
-            <label>
-              원고 최대 너비 (px)
-              <input
-                type="number"
-                min={350}
-                max={3000}
-                step={10}
-                aria-label="원고 최대 너비"
-                value={kindEditorStyle.editorMaxWidth}
-                onChange={(e) =>
-                  updateTargetPrefs({
-                    editorMaxWidth: Math.min(3000, Math.max(350, Number(e.target.value) || 760)),
-                  })
-                }
-              />
-            </label>
-            <label>
-              원고 좌우 여백 (단계)
-              <input
-                type="number"
-                min={0}
-                max={10}
-                step={1}
-                aria-label="원고 좌우 여백"
-                value={kindEditorStyle.editorPaddingX}
-                onChange={(e) =>
-                  updateTargetPrefs({
-                    editorPaddingX: Math.min(10, Math.max(0, Number(e.target.value) || 0)),
-                  })
-                }
-              />
-            </label>
-            <label>
-              원고지 배경색 / 글자색
-              <div className="color-pair-row">
-                <input
-                  type="color"
-                  aria-label="원고지 배경색"
-                  title="원고지 배경색"
-                  value={kindEditorStyle.textareaBgColor || "#ffffff"}
-                  onChange={(e) =>
-                    updateTargetPrefs({ textareaBgColor: e.target.value })
-                  }
-                />
-                <input
-                  type="color"
-                  aria-label="본문 글자색"
-                  title="본문 글자색"
-                  value={kindEditorStyle.editorTextColor || "#222222"}
-                  onChange={(e) =>
-                    updateTargetPrefs({ editorTextColor: e.target.value })
-                  }
-                />
-                {(kindEditorStyle.textareaBgColor || kindEditorStyle.editorTextColor) && (
-                  <button
-                    type="button"
-                    onClick={() =>
-                      updateTargetPrefs({ textareaBgColor: "", editorTextColor: "" })
-                    }
-                  >
-                    초기화
-                  </button>
-                )}
-              </div>
-            </label>
-          </div>
-          <div className="settings-toggles" style={{ marginTop: 16 }}>
-            <SettingsToggle
-              label="A4 인쇄 규격 쪽 보기 (210mm × 297mm)"
-              description="원고 영역을 실제 A4 인쇄 시트(여백 20mm·15mm)와 페이지 구분선으로 표시합니다."
-              checked={kindEditorStyle.pageViewEnabled}
-              onChange={(checked) =>
-                updateTargetPrefs({ pageViewEnabled: checked })
-              }
-            />
-          </div>
-        </div>
-      </>
-    );
-  }
-  // 확인이 필요한 파일: 파일이 없어진 문서와, 회차·플롯 폴더에 있지만 연결되지 않은 파일.
-  // 자동 복구로 이을 수 없었던 것만 남는다. 무엇을 할지는 사용자가 고른다.
-  function brokenFiles() {
-    const missing = (lib.missing || []).filter((m) => m.projectId === projectId),
-      unlinked = (lib.unlinked || []).filter((u) => u.projectId === projectId);
-    if (!missing.length && !unlinked.length) return null;
-    const relink = (m: { id: string; title: string }): MenuItem[] => [
-      ...(unlinked.length
-        ? unlinked.map((u) => ({
-            label: `이 파일에 연결: ${u.path}`,
-            action: attempt(async () => {
-              await call("relinkDocument", { projectId, id: m.id, path: u.path });
-              await refresh();
-              message(`'${m.title}'을(를) ${u.path}에 다시 연결했습니다.`);
-            }),
-          }))
-        : [{ label: "연결할 수 있는 파일이 없습니다", disabled: true, action: () => {} }]),
-      "separator",
-      {
-        label: "목록에서 빼기 (파일은 건드리지 않음)",
-        danger: true,
-        action: attempt(async () => {
-          await call("forgetDocument", { projectId, id: m.id });
-          await refresh();
-        }),
-      },
-    ];
-    const adopt = (u: { path: string }): MenuItem[] => [
-      ...(["episode"] as const).map((kind) => ({
-        label: "에피소드로 등록",
-        action: attempt(async () => {
-          const doc = await call<Doc>("adoptFile", { projectId, path: u.path, kind });
-          await refresh();
-          await openDoc(doc.id, true);
-        }),
-      })),
-      "separator",
-      {
-        label: "파일 탐색기에서 표시",
-        action: attempt(() => call("revealFile", { projectId, path: u.path })),
-      },
-    ];
-    return (
-      <section className="tree-section broken-files">
-        <div className="tree-heading">
-          <span>확인이 필요한 파일</span>
-          <small>{missing.length + unlinked.length}</small>
-        </div>
-        {missing.map((m) => (
-          <button
-            key={"missing-" + m.id}
-            className={`tree-item ${menu?.target === "missing-" + m.id ? "context-target" : ""}`}
-            title={`${m.path} 파일을 찾을 수 없습니다. 눌러서 다른 파일에 연결하거나 목록에서 뺄 수 있습니다.`}
-            onClick={(e) => openMenu(e, relink(m), "missing-" + m.id)}
-            onContextMenu={(e) => openMenu(e, relink(m), "missing-" + m.id)}
-          >
-            <FileWarning size={15} />
-            <span>{m.title || "제목 없음"}</span>
-            <small className="tree-count">파일 없음</small>
-          </button>
-        ))}
-        {unlinked.map((u) => (
-          <button
-            key={"unlinked-" + u.path}
-            className={`tree-item ${menu?.target === "unlinked-" + u.path ? "context-target" : ""}`}
-            title={`${u.path} 파일이 목록에 연결되어 있지 않습니다. 눌러서 회차나 플롯으로 등록할 수 있습니다.`}
-            onClick={(e) => openMenu(e, adopt(u), "unlinked-" + u.path)}
-            onContextMenu={(e) => openMenu(e, adopt(u), "unlinked-" + u.path)}
-          >
-            <FileQuestion size={15} />
-            <span>{u.path.slice(u.path.lastIndexOf("/") + 1)}</span>
-            <small className="tree-count">연결 안 됨</small>
-          </button>
-        ))}
-      </section>
-    );
-  }
   const docIcon = (d: Doc) =>
     d.kind === "memo" ? <StickyNote size={15} /> : <FileText size={15} />;
   // ---- 문서 영역: doc/ 폴더 트리 ----
@@ -3440,218 +2472,7 @@ export default function App() {
     await refresh();
     await loadMemoFolders();
   }
-  // 검색어가 있으면 제목이 맞는 문서와 그 문서를 담은 폴더만 펼쳐서 보여 준다.
-  function memoFolderTree(query = "") {
-    const files = docs.filter((d) => d.kind !== "episode" && (!query.trim() || treeMatch(d.title, query))),
-      folders = memoEntries.filter(
-        (e) =>
-          e.type === "folder" &&
-          (!query.trim() || files.some((d) => (d.relPath || "").startsWith("doc/" + e.path + "/"))),
-      );
-    const parentOf = (p: string) => p.slice(0, Math.max(0, p.lastIndexOf("/")));
-    const level = (parent: string, depth: number): React.ReactNode => {
-      const subFolders = folders
-        .filter((f) => parentOf(f.path) === parent)
-        .sort((a, b) => a.name.localeCompare(b.name, "ko", { numeric: true }));
-      const here = files.filter((d) => parentOf((d.relPath || "").slice(4)) === parent);
-      return (
-        <>
-          {subFolders.map((f) => {
-            const open = !!query.trim() || memoOpenFolders.has(f.path),
-              style = { paddingLeft: 8 + depth * 16 };
-            if (folderRenaming?.path === f.path)
-              return (
-                <div key={"folder-" + f.path} className="tree-item renaming" style={style}>
-                  <Folder size={15} />
-                  <input
-                    className="tree-rename"
-                    aria-label="새 폴더 이름"
-                    autoFocus
-                    value={folderRenaming.value}
-                    onFocus={(e) => e.currentTarget.select()}
-                    onChange={(e) => setFolderRenaming({ path: f.path, value: e.target.value })}
-                    onKeyDown={(e) => {
-                      e.stopPropagation();
-                      if (e.key === "Enter") e.currentTarget.blur();
-                      else if (e.key === "Escape") setFolderRenaming(null);
-                    }}
-                    onBlur={(e) => {
-                      const value = e.currentTarget.value;
-                      setFolderRenaming(null);
-                      attempt(() => renameMemoFolder(f.path, value))();
-                    }}
-                  />
-                </div>
-              );
-            return (
-              <Fragment key={"folder-" + f.path}>
-                <button
-                  className={`tree-item memo-folder ${menu?.target === "folder-" + f.path ? "context-target" : ""} ${treeDrop === "folder:" + f.path ? "drop-target" : ""}`}
-                  style={style}
-                  title={f.path}
-                  draggable
-                  onDragStart={(e) => {
-                    dragFolder.current = f.path;
-                    e.dataTransfer.effectAllowed = "move";
-                  }}
-                  onDragEnd={() => {
-                    dragFolder.current = "";
-                    setTreeDrop(null);
-                  }}
-                  {...folderDropProps(f.path)}
-                  onClick={() =>
-                    setMemoOpenFolders((old) => {
-                      const next = new Set(old);
-                      if (next.has(f.path)) next.delete(f.path);
-                      else next.add(f.path);
-                      return next;
-                    })
-                  }
-                  onKeyDown={(e) => {
-                    if (e.key === "F2") {
-                      e.preventDefault();
-                      setFolderRenaming({ path: f.path, value: f.name });
-                    }
-                  }}
-                  onContextMenu={(e) =>
-                    openMenu(
-                      e,
-                      [
-                        ...memoMenuItems(f.path),
-                        "separator",
-                        {
-                          label: "이름 바꾸기",
-                          shortcut: "F2",
-                          action: () => setFolderRenaming({ path: f.path, value: f.name }),
-                        },
-                        {
-                          label: "파일 탐색기에서 표시",
-                          action: attempt(() =>
-                            call("memoReveal", { space: projectRef.current, path: f.path }),
-                          ),
-                        },
-                        "separator",
-                        { label: "폴더 삭제", danger: true, action: attempt(() => removeMemoFolder(f.path)) },
-                      ],
-                      "folder-" + f.path,
-                    )
-                  }
-                >
-                  {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                  {open ? <FolderOpen size={15} /> : <Folder size={15} />}
-                  <span>{f.name}</span>
-                  <span className="tree-actions">
-                    <span
-                      className="tree-action"
-                      role="button"
-                      tabIndex={-1}
-                      title="문서 추가"
-                      aria-label={`${f.name} 폴더에 문서 추가`}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        openMenu(e, docCreateMenu(f.path), "folder-" + f.path);
-                      }}
-                    >
-                      <FilePlus size={14} />
-                    </span>
-                    <span
-                      className="tree-action"
-                      role="button"
-                      tabIndex={-1}
-                      title="폴더 추가"
-                      aria-label={`${f.name} 폴더 안에 폴더 추가`}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        attempt(() => addMemoFolder(f.path))();
-                      }}
-                    >
-                      <FolderPlus size={14} />
-                    </span>
-                    <span
-                      className="tree-action"
-                      role="button"
-                      tabIndex={-1}
-                      title="폴더 삭제"
-                      aria-label={`${f.name} 폴더 삭제`}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        attempt(() => removeMemoFolder(f.path))();
-                      }}
-                    >
-                      <Trash2 size={14} />
-                    </span>
-                  </span>
-                </button>
-                {open && level(f.path, depth + 1)}
-              </Fragment>
-            );
-          })}
-          {here.map((d) => {
-            const ep = d.episodeId
-              ? lib.documents.find((x) => x.id === d.episodeId && x.kind === "episode")
-              : undefined;
-            return treeRow(d, docIcon(d), {
-              depth,
-              badge: ep ? episodeNumber(ep) : undefined,
-              dropFolder: parent,
-            });
-          })}
-        </>
-      );
-    };
-    return level("", 0);
-  }
-  // 문서 탭의 '현재 회차만' 보기: 현재 회차에 연결된 플롯·메모를 유형별로 묶는다.
-  function episodeDocList(query: string) {
-    const ep = docs.find((d) => d.id === treeEpisodeId && d.kind === "episode");
-    if (!ep) return <div className="tree-empty">에피소드를 열면 연결된 문서가 여기에 보입니다</div>;
-    const bound = docs.filter((d) => d.kind !== "episode" && d.episodeId === ep.id),
-      shown = bound.filter((d) => !query.trim() || treeMatch(d.title, query));
-    return (
-      <>
-        <div className="episode-doc-caption">
-          <span title={ep.title}>
-            {numberOf(ep)} {ep.title}에 연결된 문서
-          </span>
-          <small>연결 문서 {bound.length}개</small>
-        </div>
-        {(["plot", "memo"] as const).map((kind) => {
-          const items = shown.filter((d) => d.kind === kind),
-            open = !closedDocGroups.has(kind);
-          if (query.trim() && !items.length) return null;
-          return (
-            <Fragment key={kind}>
-              <button
-                className={`tree-item doc-group ${menu?.target === "group-" + kind ? "context-target" : ""}`}
-                aria-expanded={open}
-                onClick={() =>
-                  setClosedDocGroups((old) => {
-                    const next = new Set(old);
-                    if (next.has(kind)) next.delete(kind);
-                    else next.add(kind);
-                    return next;
-                  })
-                }
-                onContextMenu={(e) =>
-                  openMenu(
-                    e,
-                    [{ label: `이 회차에 ${labels[kind]} 만들기`, disabled: archive, action: attempt(() => addDocFile("", kind, ep)) }],
-                    "group-" + kind,
-                  )
-                }
-              >
-                {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                <b>{labels[kind]}</b>
-                <small>{items.length}</small>
-              </button>
-              {open && items.map((d) => treeRow(d, docIcon(d), { depth: 1 }))}
-            </Fragment>
-          );
-        })}
-        {query.trim() && !shown.length && <div className="tree-empty">검색 결과가 없습니다</div>}
-      </>
-    );
-  }
+
   // 작품·트리 탭·보관함·문서 범위가 바뀌면 고른 줄이 화면에서 사라지므로 선택을 푼다.
   useEffect(() => {
     setTreeSelection([]);
@@ -3666,15 +2487,6 @@ export default function App() {
         (docScope === "all" || d.episodeId === treeEpisodeId) &&
         (!treeQuery.memo.trim() || treeMatch(d.title, treeQuery.memo)),
     );
-  const [winMaximized, setWinMaximized] = useState(false);
-  useEffect(() => {
-    const syncMax = () => {
-      window.lof.windowIsMaximized?.().then(setWinMaximized).catch(() => {});
-    };
-    syncMax();
-    window.addEventListener("resize", syncMax);
-    return () => window.removeEventListener("resize", syncMax);
-  }, []);
   // 충돌이나 저장 실패로 남은 임시본은 그대로 알린다.
   const saving = !conflict && saveStatus !== "저장 실패",
     recoverable = (lib.drafts || []).filter(
@@ -3686,120 +2498,17 @@ export default function App() {
       className={`app ${prefs.theme === "dark" ? "dark" : ""} ${prefs.colorTheme === "bakery" ? "bakery" : ""} ${focus ? "focus-mode" : ""}`}
       inert={updater.locked}
     >
-      <header
-        className="titlebar"
-        data-tauri-drag-region
-        onMouseDown={(e) => {
-          if (e.button === 0 && !(e.target as HTMLElement).closest("button")) {
-            if (e.detail === 2) {
-              window.lof.windowToggleMaximize?.().then(setWinMaximized).catch(() => {});
-            } else {
-              window.lof.windowStartDragging?.().catch(() => {});
-            }
-          }
-        }}
-      >
-        <div className="titlebar-content" data-tauri-drag-region>
-          <div className="history-navigation" role="group" aria-label="화면 이동">
-          <button aria-label="뒤로가기" title="뒤로가기"
-            disabled={navigation.index === 0}
-            onClick={attempt(() => travel(-1))}>
-            <ArrowLeft size={19} />
-          </button>
-          <button aria-label="앞으로가기" title="앞으로가기"
-            disabled={navigation.index === navigation.entries.length - 1}
-            onClick={attempt(() => travel(1))}>
-            <ArrowRight size={19} />
-          </button>
-          </div>
-          <div className="layout-controls start">
-            <button
-              aria-label="파일 트리 표시/숨기기"
-              title="파일 트리 표시/숨기기 (Ctrl+B)"
-              aria-pressed={treeOpen}
-              disabled={!isWorkspace}
-              onClick={toggleTree}
-            >
-              <LayoutIcon side="left" open={treeOpen} />
-            </button>
-          </div>
-          <div className="layout-controls end">
-            <button
-              aria-label="위젯 보드 표시/숨기기"
-              title="위젯 보드 표시/숨기기 (Ctrl+Alt+B)"
-              aria-pressed={right && !focus}
-              disabled={!isWorkspace || focus}
-              onClick={() => setRight((r) => !r)}
-            >
-              <LayoutIcon side="right" open={right && !focus} />
-            </button>
-          </div>
-        </div>
-        {window.lof.windowClose && (
-          <div className="window-controls" role="group" aria-label="창 제어">
-            <button
-              type="button"
-              className="window-control"
-              aria-label="최소화"
-              title="최소화"
-              onClick={() => window.lof.windowMinimize?.()}
-            >
-              <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
-                <path d="M 1,5.5 L 9,5.5" stroke="currentColor" strokeWidth="1" shapeRendering="crispEdges" />
-              </svg>
-            </button>
-            <button
-              type="button"
-              className="window-control"
-              aria-label={winMaximized ? "이전 크기로 복원" : "최대화"}
-              title={winMaximized ? "이전 크기로 복원" : "최대화"}
-              onClick={() =>
-                window.lof.windowToggleMaximize?.().then(setWinMaximized).catch(() => {})
-              }
-            >
-              {winMaximized ? (
-                <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
-                  <path
-                    d="M 2.5,2.5 L 2.5,0.5 L 9.5,0.5 L 9.5,7.5 L 7.5,7.5 M 0.5,2.5 L 7.5,2.5 L 7.5,9.5 L 0.5,9.5 Z"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1"
-                    shapeRendering="crispEdges"
-                  />
-                </svg>
-              ) : (
-                <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
-                  <rect
-                    x="1.5"
-                    y="1.5"
-                    width="7"
-                    height="7"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1"
-                    shapeRendering="crispEdges"
-                  />
-                </svg>
-              )}
-            </button>
-            <button
-              type="button"
-              className="window-control close"
-              aria-label="닫기"
-              title="닫기"
-              onClick={() => window.lof.windowClose?.()}
-            >
-              <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
-                <path
-                  d="M 1,1 L 9,9 M 9,1 L 1,9"
-                  stroke="currentColor"
-                  strokeWidth="1.1"
-                />
-              </svg>
-            </button>
-          </div>
-        )}
-      </header>
+      <TitleBar
+        navigation={navigation}
+        attempt={attempt}
+        travel={travel}
+        treeOpen={treeOpen}
+        isWorkspace={isWorkspace}
+        toggleTree={toggleTree}
+        right={right}
+        focus={focus}
+        setRight={setRight}
+      />
       {error && (
         <div className="error-banner" role="alert">
           <span>{error}</span>
@@ -3983,242 +2692,98 @@ export default function App() {
             />
           </ResizableSidebar>
         )}
-        {(isWorkspace || emptyWorkspace) && treeOpen && !searchOpen && (
-          <ResizableSidebar label="파일 트리" className="file-tree" width={prefs.leftSidebarWidth}
-            onResize={(width) => savePrefs({ leftSidebarWidth: width }).catch(report)}>
-            <div className="panel-caption">
-              <span>
-                <FolderOpen size={15} />
-                파일 트리
-              </span>
-            </div>
-            <button
-              className={`project-switch ${menu?.target === "project-switch" ? "open" : ""}`}
-              aria-haspopup="menu"
-              aria-expanded={menu?.target === "project-switch"}
-              title="작품 전환"
-              onMouseDown={() => {
-                // 메뉴는 바깥 mousedown에서 먼저 닫히므로, 열려 있었는지 기억해 토글한다.
-                switchWasOpen.current = menu?.target === "project-switch";
-              }}
-              onClick={(e) => {
-                if (switchWasOpen.current) {
-                  switchWasOpen.current = false;
-                  return;
-                }
-                const box = e.currentTarget.getBoundingClientRect();
-                setMenu({
-                  x: box.left,
-                  y: box.bottom + 4,
-                  items: projectMenu(),
-                  target: "project-switch",
-                });
-              }}
-            >
-              <div className="mini-cover">
-                {project?.coverData && !prefs.hideCovers ? (
-                  <CoverImage src={project.coverData} alt="작품 표지" />
-                ) : (
-                  <Feather size={23} />
-                )}
-              </div>
-              <span>
-                <b>{project?.title}</b>
-                <small>
-                  {
-                    lib.documents.filter(
-                      (d) =>
-                        d.projectId === projectId &&
-                        d.kind === "episode" &&
-                        !d.archived,
-                    ).length
-                  }
-                  편
-                </small>
-              </span>
-              <ChevronDown size={15} />
-            </button>
-            {/* 에피소드와 문서(doc/ 폴더: 플롯·메모)를 탭으로 나눈다. 문서 탭에 'memo' 키를 쓴다. */}
-            <div className="tree-tabs" role="tablist" aria-label="파일 트리 보기">
-              {(["episode", "memo"] as const).map((tab) => (
-                <button
-                  key={tab}
-                  role="tab"
-                  aria-selected={treeTab === tab}
-                  className={treeTab === tab ? "active" : ""}
-                  onClick={() => setTreeTab(tab)}
-                  // 문서를 끌어 에피소드 탭에 올리면 탭을 바꿔 회차 위에 놓을 수 있게 한다.
-                  onDragEnter={() => {
-                    if (tab === "episode" && dragFileDocs.current.length) setTreeTab("episode");
-                  }}
-                >
-                  {tab === "memo" ? "문서" : labels.episode}
-                  <small>{tab === "memo" ? count("plot") + count("memo") : count("episode")}</small>
-                </button>
-              ))}
-            </div>
-            {treeTab === "memo" && (
-              <div className="doc-scope" role="radiogroup" aria-label="문서 보기 범위">
-                {([["all", "전체 문서"], ["episode", "현재 회차만"]] as const).map(([scope, label]) => (
-                  <button
-                    key={scope}
-                    role="radio"
-                    aria-checked={docScope === scope}
-                    className={docScope === scope ? "active" : ""}
-                    onClick={() => setDocScope(scope)}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            )}
-            <div className="tree-search-row">
-              <label className="tree-search">
-                <Search size={14} />
-                <input
-                  value={treeQuery[treeTab]}
-                  placeholder={treeTab === "memo" ? "문서 검색" : "에피소드 검색"}
-                  aria-label={treeTab === "memo" ? "문서 검색" : "에피소드 검색"}
-                  onChange={(e) => {
-                    const value = e.target.value;
-                    setTreeQuery((q) => ({ ...q, [treeTab]: value }));
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === "Escape" && treeQuery[treeTab]) {
-                      e.stopPropagation();
-                      setTreeQuery((q) => ({ ...q, [treeTab]: "" }));
-                    } else if (e.key === "Enter" && treeQuery[treeTab].trim()) {
-                      const first = (treeTab === "memo" ? treeDocs : treeEpisodes)[0];
-                      if (first) attempt(() => openDoc(first.id, false))();
-                    }
-                  }}
-                />
-                {treeQuery[treeTab] && (
-                  <button
-                    aria-label="검색어 지우기"
-                    title="검색어 지우기"
-                    onClick={() => setTreeQuery((q) => ({ ...q, [treeTab]: "" }))}
-                  >
-                    <X size={13} />
-                  </button>
-                )}
-              </label>
-              {treeTab === "memo" && docScope === "all" && (
-                // 문서 추가(플롯·메모를 고름)와 폴더 추가는 doc/ 바로 아래에 만든다.
-                <>
-                  <button
-                    className="tree-search-action"
-                    aria-label="문서 추가"
-                    title="문서 추가"
-                    disabled={archive}
-                    onClick={(e) => openMenu(e, docCreateMenu(""), "doc-add")}
-                  >
-                    <FilePlus size={16} />
-                  </button>
-                  <button
-                    className="tree-search-action"
-                    aria-label="폴더 추가"
-                    title="폴더 추가"
-                    disabled={archive}
-                    onClick={attempt(() => addMemoFolder(""))}
-                  >
-                    <FolderPlus size={16} />
-                  </button>
-                </>
-              )}
-            </div>
-            {/* 탭을 바꿔도 끌던 문서가 이어지도록 두 탭 모두 그려 두고 숨긴다. */}
-            <div className="tree-scroll">
-              <section
-                className="tree-section tree-panel"
-                hidden={treeTab !== "episode"}
-                onContextMenu={(e) =>
-                  openMenu(e, [{ label: "새 에피소드", disabled: archive, action: attempt(() => createDoc("episode")) }])
-                }
-              >
-                {!treeQuery.episode.trim() && treeEpisodes.length > EPISODE_GROUP
-                  ? Array.from({ length: Math.ceil(treeEpisodes.length / EPISODE_GROUP) }, (_, g) => {
-                      const start = g * EPISODE_GROUP,
-                        items = treeEpisodes.slice(start, start + EPISODE_GROUP),
-                        open = openEpisodeGroups.has(start);
-                      const toggle = (next: boolean) =>
-                        setOpenEpisodeGroups((old) => {
-                          const set = new Set(old);
-                          if (next) set.add(start);
-                          else set.delete(start);
-                          return set;
-                        });
-                      return (
-                        <Fragment key={start}>
-                          <button
-                            className="tree-item episode-group"
-                            aria-expanded={open}
-                            onClick={() => toggle(!open)}
-                            // 문서나 회차를 끌어 접힌 묶음에 올리면 펼쳐서 회차 위에 놓을 수 있게 한다.
-                            onDragEnter={() => {
-                              if ((dragFileDocs.current.length || dragEpisodes.current.length) && !open) toggle(true);
-                            }}
-                          >
-                            {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                            <span>
-                              {start + 1} - {start + items.length}화
-                            </span>
-                          </button>
-                          {open &&
-                            items.map((d) =>
-                              treeRow(d, <span className="episode-number">{numberOf(d)}</span>),
-                            )}
-                        </Fragment>
-                      );
-                    })
-                  : treeEpisodes.map((d) =>
-                      treeRow(d, <span className="episode-number">{numberOf(d)}</span>),
-                    )}
-                {!treeEpisodes.length && (
-                  <div className="tree-empty">
-                    {treeQuery.episode.trim() ? "검색 결과가 없습니다" : "아직 에피소드가 없습니다"}
-                  </div>
-                )}
-              </section>
-              <section
-                className={`tree-section tree-panel ${docScope === "all" && treeDrop === "folder:" ? "drop-target" : ""}`}
-                hidden={treeTab !== "memo"}
-                onContextMenu={(e) => docScope === "all" && openMenu(e, memoCreateMenu(""))}
-                {...(docScope === "all" ? folderDropProps("") : {})}
-              >
-                {docScope === "all" ? (
-                  <>
-                    {memoFolderTree(treeQuery.memo)}
-                    {treeQuery.memo.trim()
-                      ? !treeDocs.length && <div className="tree-empty">검색 결과가 없습니다</div>
-                      : count("plot") + count("memo") === 0 &&
-                        !memoEntries.some((e) => e.type === "folder") && (
-                          <div className="tree-empty">아직 문서가 없습니다</div>
-                        )}
-                  </>
-                ) : (
-                  episodeDocList(treeQuery.memo)
-                )}
-              </section>
-              {brokenFiles()}
-            </div>
-            <div className="tree-footer">
-              {treeTab === "episode" && !archive && (
-                <button className="episode-add" onClick={attempt(() => createDoc("episode"))}>
-                  <Plus size={16} />
-                  새 에피소드
-                </button>
-              )}
-              <button
-                className="archive-toggle"
-                onClick={() => setArchive((a) => !a)}
-              >
-                <Archive size={14} />
-                {archive ? "현재 문서 보기" : "보관함 보기"}
-              </button>
-            </div>
-          </ResizableSidebar>
-        )}
+        {(isWorkspace || emptyWorkspace) && treeOpen && !searchOpen && (<FileTree
+          brokenFiles={<BrokenFiles
+            lib={lib}
+            projectId={projectId}
+            attempt={attempt}
+            message={message}
+            openDoc={openDoc}
+            menu={menu}
+            openMenu={openMenu}
+            refresh={refresh}
+          />}
+          episodeDocuments={<EpisodeDocList
+            numberOf={numberOf}
+            menu={menu}
+            openMenu={openMenu}
+            archive={archive}
+            attempt={attempt}
+            treeRow={treeRow}
+            query={treeQuery.memo}
+            docs={docs}
+            treeEpisodeId={treeEpisodeId}
+            treeMatch={treeMatch}
+            closedDocGroups={closedDocGroups}
+            setClosedDocGroups={setClosedDocGroups}
+            addDocFile={addDocFile}
+            docIcon={docIcon}
+          />}
+          folderTree={<MemoFolderTree
+            docs={docs}
+            treeMatch={treeMatch}
+            memoEntries={memoEntries}
+            attempt={attempt}
+            menu={menu}
+            treeDrop={treeDrop}
+            folderDropProps={folderDropProps}
+            openMenu={openMenu}
+            docCreateMenu={docCreateMenu}
+            addMemoFolder={addMemoFolder}
+            lib={lib}
+            treeRow={treeRow}
+            docIcon={docIcon}
+            query={treeQuery.memo}
+            memoOpenFolders={memoOpenFolders}
+            folderRenaming={folderRenaming}
+            setFolderRenaming={setFolderRenaming}
+            renameMemoFolder={renameMemoFolder}
+            dragFolder={dragFolder}
+            setTreeDrop={setTreeDrop}
+            setMemoOpenFolders={setMemoOpenFolders}
+            memoMenuItems={memoMenuItems}
+            projectRef={projectRef}
+            removeMemoFolder={removeMemoFolder}
+            episodeNumber={episodeNumber}
+          />}
+          prefs={prefs}
+          savePrefs={savePrefs}
+          report={report}
+          menu={menu}
+          switchWasOpen={switchWasOpen}
+          setMenu={setMenu}
+          projectMenu={projectMenu}
+          project={project}
+          lib={lib}
+          projectId={projectId}
+          treeTab={treeTab}
+          setTreeTab={setTreeTab}
+          dragFileDocs={dragFileDocs}
+          count={count}
+          docScope={docScope}
+          setDocScope={setDocScope}
+          treeQuery={treeQuery}
+          setTreeQuery={setTreeQuery}
+          treeDocs={treeDocs}
+          treeEpisodes={treeEpisodes}
+          attempt={attempt}
+          openDoc={openDoc}
+          archive={archive}
+          openMenu={openMenu}
+          docCreateMenu={docCreateMenu}
+          addMemoFolder={addMemoFolder}
+          createDoc={createDoc}
+          openEpisodeGroups={openEpisodeGroups}
+          setOpenEpisodeGroups={setOpenEpisodeGroups}
+          dragEpisodes={dragEpisodes}
+          treeRow={treeRow}
+          numberOf={numberOf}
+          treeDrop={treeDrop}
+          memoCreateMenu={memoCreateMenu}
+          folderDropProps={folderDropProps}
+          memoEntries={memoEntries}
+          setArchive={setArchive}
+        />)}
         <main className={isWorkspace || emptyWorkspace ? "workspace" : "main-page"}>
           {emptyWorkspace && (
             <div className="workspace-empty">
@@ -4229,311 +2794,50 @@ export default function App() {
               </div>
             </div>
           )}
-          {view === "bookmarks" && bookmarksPage()}
-          {view === "library" && (
-            <>
-              <div className="page-hero">
-                <h1>
-                  내 서재 <small>{lib.projects.length}작품</small>
-                </h1>
-                <p>이야기에 집중하세요.</p>
-              </div>
-              {!loaded ? (
-                <div className="empty-state">내 서재를 여는 중...</div>
-              ) : (
-                <div className="project-grid" aria-busy={projectReorder.saving || undefined}>
-                  {lib.projects
-                    .map((p, i) => (
-                      <button
-                        className={`project-card ${prefs.hideCovers ? "no-cover" : ""} ${menu?.target === "project:" + p.id ? "context-target" : ""} ${projectReorder.cardClass(p.id)}`}
-                        key={p.id}
-                        {...projectReorder.cardProps(p.id)}
-                        onClick={attempt(() => goView("project", p.id))}
-                        onContextMenu={(e) =>
-                          openMenu(
-                            e,
-                            [
-                              { label: "열기", action: attempt(() => goView("project", p.id)) },
-                              "separator",
-                              {
-                                label: "작품 삭제",
-                                danger: true,
-                                action: () => askDeleteProject(p.id),
-                              },
-                            ],
-                            "project:" + p.id,
-                          )
-                        }
-                      >
-                        {!prefs.hideCovers && (
-                          <div className={`book-cover cover-${i % 4}`}>
-                            {p.coverData ? (
-                              <CoverImage src={p.coverData} alt={`${p.title} 표지`} />
-                            ) : (
-                              <>
-                                <Feather size={40} />
-                                <span>
-                                  LOF / {String(i + 1).padStart(2, "0")}
-                                </span>
-                              </>
-                            )}
-                          </div>
-                        )}
-                        <div className="project-info">
-                          <h3>{p.title}</h3>
-                          <small>
-                            {
-                              lib.documents.filter(
-                                (d) =>
-                                  d.projectId === p.id &&
-                                  d.kind === "episode" &&
-                                  !d.archived,
-                              ).length
-                            }
-                            편
-                          </small>
-                          <div className="card-tags">
-                            {(p.tags || []).map((t) => (
-                              <span key={t}>#{t}</span>
-                            ))}
-                          </div>
-                          {p.description && <p>{p.description}</p>}
-                        </div>
-                      </button>
-                    ))}
-                  {/* 목록 맨 끝의 새 이야기 카드. 작품이 없으면 가운데의 '첫 이야기 만들기'만 보인다. */}
-                  {lib.projects.length > 0 && (
-                    <button
-                      className={`project-card new-project-card ${prefs.hideCovers ? "no-cover" : ""} ${projectReorder.cardClass(null)}`}
-                      {...projectReorder.cardProps(null)}
-                      onClick={() => setDialog({ type: "newProject", value: "" })}
-                    >
-                      <div className="book-cover new-cover">
-                        <Plus size={prefs.hideCovers ? 18 : 30} />
-                      </div>
-                      <div className="project-info">
-                        <h3>새 이야기</h3>
-                        <small>시작하기</small>
-                      </div>
-                    </button>
-                  )}
-                  {!lib.projects.length && (
-                    <div className="empty-state">
-                      <div className="empty-icon">
-                        <BookOpen size={38} />
-                      </div>
-                      <h2>첫 이야기를 시작해 볼까요?</h2>
-                      <p>
-                        작품을 만들고 회차별로 원고를 정리하세요.
-                        <br />
-                        계정 없이, 인터넷 없이 사용할 수 있습니다.
-                      </p>
-                      <button
-                        className="primary"
-                        onClick={() =>
-                          setDialog({ type: "newProject", value: "" })
-                        }
-                      >
-                        <Plus size={16} />첫 이야기 만들기
-                      </button>
-                    </div>
-                  )}
-                </div>
-              )}
-              <div className="library-footer">
-                <button
-                  disabled={busy}
-                  onClick={attempt(chooseVault)}
-                >
-                  <FolderOpen size={15} />
-                  다른 서재 열기
-                </button>
-                <span title={lib.root}>{lib.root}</span>
-                <button onClick={attempt(() => call("reveal"))}>
-                  폴더에서 보기 <ChevronRight size={13} />
-                </button>
-              </div>
-            </>
-          )}
-          {view === "project" && project && (
-            <div className="project-page">
-              <button
-                className="back-link"
-                onClick={attempt(() => goView("library"))}
-              >
-                <ArrowLeft size={16} />
-                내 서재
-              </button>
-              <div className="project-hero">
-                <div>
-                  <div className="eyebrow">
-                    {docs.filter((d) => d.kind === "episode").length}편
-                  </div>
-                  <h1>{project.title}</h1>
-                  {project.description && <p>{project.description}</p>}
-                  <div className="project-tags">
-                    {(project.tags || []).map((t) => (
-                      <span className="tag-chip" key={t}>
-                        #{t}
-                      </span>
-                    ))}
-                    <button
-                      aria-label="작품 태그 편집"
-                      onClick={() =>
-                        setDialog({
-                          type: "editProject",
-                          value: project.title,
-                          description: project.description,
-                          tags: project.tags || [],
-                          manualLineBreak: project.manualLineBreak ?? null,
-                          writing: normalizeWriting(
-                            project.writing || prefs.defaultWriting,
-                          ),
-                        })
-                      }
-                    >
-                      <Plus size={13} />
-                      태그 추가
-                    </button>
-                  </div>
-                  <div className="row gap">
-                    <button
-                      onClick={() =>
-                        setDialog({
-                          type: "editProject",
-                          value: project.title,
-                          description: project.description,
-                          tags: project.tags || [],
-                          manualLineBreak: project.manualLineBreak ?? null,
-                          writing: normalizeWriting(
-                            project.writing || prefs.defaultWriting,
-                          ),
-                        })
-                      }
-                    >
-                      <Settings size={16} />
-                      소설 관리하기
-                    </button>
-                    <button
-                      onClick={attempt(async () => {
-                        const result = await call("importFiles", { projectId });
-                        if (result) {
-                          await refresh();
-                          message(
-                            `${result.count}편 가져옴${result.warnings.length ? " · " + result.warnings.join(" / ") : ""}`,
-                          );
-                        }
-                      })}
-                    >
-                      <Upload size={16} />
-                      원고 가져오기
-                    </button>
-                  </div>
-                </div>
-                {!prefs.hideCovers && <div className="hero-cover">
-                  {project.coverData ? (
-                    <button
-                      className="cover-zoom"
-                      title="표지 크게 보기"
-                      onClick={() =>
-                        setViewer({ src: project.coverData!, alt: `${project.title} 표지` })
-                      }
-                    >
-                      <CoverImage
-                        src={project.coverData}
-                        alt={`${project.title} 표지`}
-                      />
-                    </button>
-                  ) : (
-                    <>
-                      <Feather size={62} />
-                      <span>YOUR STORY</span>
-                    </>
-                  )}
-                </div>}
-              </div>
-              <div className="project-tabs">
-                <div className="row gap">
-                  {(["episode", "plot", "memo"] as Kind[]).map((kind) => {
-                    const Icon = icons[kind];
-                    return (
-                      <button
-                        key={kind}
-                        className={tab === kind ? "selected" : ""}
-                        onClick={() => setTab(kind)}
-                      >
-                        <Icon size={16} />
-                        {labels[kind]}
-                        <small>{count(kind)}</small>
-                      </button>
-                    );
-                  })}
-                </div>
-                <div className="row gap">
-                  <button
-                    title="보관함"
-                    aria-label="보관함"
-                    className={archive ? "selected" : ""}
-                    onClick={() => setArchive((a) => !a)}
-                  >
-                    <Archive size={16} />
-                  </button>
-                  <button
-                    title="본문 검색 (Ctrl+Shift+F)"
-                    aria-label="본문 검색"
-                    onClick={openSearch}
-                  >
-                    <Search size={17} />
-                  </button>
-                  <button
-                    className="primary"
-                    onClick={attempt(() => createDoc(tab))}
-                  >
-                    <Plus size={16} />
-                    {tab === "episode" ? "새 에피소드 쓰기" : `${labels[tab]} 추가`}
-                  </button>
-                </div>
-              </div>
-              <div className="episode-list">
-                {docs
-                  .filter((d) => d.kind === tab)
-                  .map((d, i) => (
-                    <button
-                      className="episode-row"
-                      key={d.id}
-                      onClick={attempt(() => openDoc(d.id))}
-                      onDoubleClick={attempt(() => openDoc(d.id, true))}
-                    >
-                      <span className={`list-number${/^\d/.test(numberOf(d)) ? "" : " named"}`}>
-                        {numberOf(d)}
-                      </span>
-                      <b>{d.title}</b>
-                      {(d.archived || d.kind === "episode") && (
-                        <span
-                          className={`status-chip ${!d.archived && normalizeStatus(d.status) === "completed" ? "complete" : ""}`}
-                        >
-                          {d.archived ? "보관됨" : STATUS_SHORT[normalizeStatus(d.status)]}
-                        </span>
-                      )}
-                      <span className="episode-meta">
-                        {(d.platformCharacters ?? d.characters ?? 0).toLocaleString()}자
-                      </span>
-                      <time>
-                        {new Date(d.updatedAt).toLocaleDateString("ko-KR")}
-                      </time>
-                      <ChevronRight size={16} />
-                    </button>
-                  ))}
-                {!count(tab) && (
-                  <div className="empty-state">
-                    <FileText size={32} />
-                    <h3>아직 {labels[tab]}가 없습니다</h3>
-                    <p>새 문서를 만들거나 기존 원고를 가져오세요.</p>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
+          {view === "bookmarks" && <BookmarksPage
+            active={active}
+            bookmarkQuery={bookmarkQuery}
+            lib={lib}
+            attempt={attempt}
+            openDoc={openDoc}
+            setBookmarkJump={setBookmarkJump}
+            setBookmarkQuery={setBookmarkQuery}
+            patchDoc={patchDoc}
+          />}
+          {view === "library" && (<LibraryPage
+            lib={lib}
+            loaded={loaded}
+            projectReorder={projectReorder}
+            prefs={prefs}
+            menu={menu}
+            attempt={attempt}
+            goView={goView}
+            openMenu={openMenu}
+            askDeleteProject={askDeleteProject}
+            setDialog={setDialog}
+            busy={busy}
+            chooseVault={chooseVault}
+          />)}
+          {view === "project" && project && (<ProjectPage
+            attempt={attempt}
+            goView={goView}
+            docs={docs}
+            project={project}
+            setDialog={setDialog}
+            prefs={prefs}
+            refresh={refresh}
+            message={message}
+            setViewer={setViewer}
+            tab={tab}
+            setTab={setTab}
+            count={count}
+            archive={archive}
+            setArchive={setArchive}
+            openSearch={openSearch}
+            createDoc={createDoc}
+            openDoc={openDoc}
+            numberOf={numberOf}
+          />)}
           {active && (
             <>
               <div
@@ -4721,9 +3025,17 @@ export default function App() {
             </div>
             {rightView === "typesetting" ? (
               <div className="typesetting-panel">
-                {typesettingSettings(active.kind === "episode" ? "episode" : "document", true)}
+                {<TypesettingSettings
+                  prefs={prefs}
+                  saveKindPrefs={saveKindPrefs}
+                  report={report}
+                  message={message}
+                  setTypesettingKind={setTypesettingKind}
+                  targetKind={active.kind === "episode" ? "episode" : "document"}
+                  inPanel={true}
+                />}
               </div>
-            ) : rightView === "bookmarks" ? bookmarkList() : (
+            ) : rightView === "bookmarks" ? <BookmarkList active={active} setBookmarkJump={setBookmarkJump} edit={edit} /> : (
             <>
             <PlatformCount
               stats={stats}
@@ -4755,7 +3067,22 @@ export default function App() {
                 <small>자</small>
               </strong>
             </section>
-            {documentLinksWidget()}
+            {<DocumentLinksWidget
+              active={active}
+              lib={lib}
+              renaming={renaming}
+              renamingRef={renamingRef}
+              setRenaming={setRenaming}
+              attempt={attempt}
+              commitRename={commitRename}
+              menu={menu}
+              openDoc={openDoc}
+              openMenu={openMenu}
+              startRename={startRename}
+              docMenu={docMenu}
+              archive={archive}
+              addDocFile={addDocFile}
+            />}
             </>
             )}
           </aside>
@@ -4905,171 +3232,20 @@ export default function App() {
                 </button>
               </div>
             )}
-            {["newProject", "editProject"].includes(dialog.type) && (
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  (async () => {
-                    if (dialog.type === "newProject") {
-                      const p = await call<Project>("createProject", {
-                        title: dialog.value,
-                        description: dialog.description,
-                        tags: dialog.tags || [],
-                        manualLineBreak: dialog.manualLineBreak ?? null,
-                        writing:
-                          dialog.writing ||
-                          normalizeWriting(prefs.defaultWriting),
-                      });
-                      await refresh();
-                      await navigate({ view: "project", projectId: p.id, tab: "episode", archive: false });
-                    } else if (dialog.type === "editProject") {
-                      await call("updateProject", {
-                        id: projectId,
-                        title: dialog.value,
-                        description: dialog.description,
-                        tags: dialog.tags || [],
-                        manualLineBreak: dialog.manualLineBreak ?? null,
-                        writing:
-                          dialog.writing ||
-                          normalizeWriting(
-                            project?.writing || prefs.defaultWriting,
-                          ),
-                      });
-                      await refresh();
-                      setDialog(null);
-                    }
-                  })().catch(report);
-                }}
-              >
-                <label>
-                  제목
-                  <input
-                    autoFocus
-                    aria-label="새 제목"
-                    required
-                    maxLength={300}
-                    value={dialog.value || ""}
-                    onChange={(e) =>
-                      setDialog({ ...dialog, value: e.target.value })
-                    }
-                  />
-                </label>
-                <label>
-                  작품 소개
-                  <textarea
-                    rows={3}
-                    value={dialog.description || ""}
-                    onChange={(e) =>
-                      setDialog({ ...dialog, description: e.target.value })
-                    }
-                  />
-                </label>
-                <div className="form-field">
-                  <span>태그</span>
-                  <TagInput
-                    favorites={prefs.favoriteTags}
-                    tags={dialog.tags || []}
-                    onChange={(tags) => setDialog({ ...dialog, tags })}
-                  />
-                </div>
-                <PlatformPicker
-                  value={
-                    dialog.writing ||
-                    normalizeWriting(
-                      dialog.type === "editProject"
-                        ? project?.writing || prefs.defaultWriting
-                        : prefs.defaultWriting,
-                    )
-                  }
-                  onChange={(writing) => setDialog({ ...dialog, writing })}
-                />
-                <label>
-                  새 에피소드 줄바꿈 형식
-                  <select
-                    aria-label="작품의 새 에피소드 줄바꿈 형식"
-                    value={dialog.manualLineBreak == null ? "common" : String(dialog.manualLineBreak)}
-                    onChange={(e) =>
-                      setDialog({
-                        ...dialog,
-                        manualLineBreak: e.target.value === "common" ? null : e.target.value === "true",
-                      })
-                    }
-                  >
-                    <option value="common">공통 설정 따르기 ({lineBreakLabel(prefs.defaultManualLineBreak === true)})</option>
-                    <option value="false">자동 관리</option>
-                    <option value="true">수동 관리</option>
-                  </select>
-                </label>
-                <p className="muted">
-                  새로 만드는 에피소드에 적용합니다. 기존 에피소드는 상세 정보의 줄바꿈 속성에서 변경할 수 있습니다.
-                </p>
-                {dialog.type === "editProject" && project && (
-                  <div className="cover-manager">
-                    <div className="cover-preview">
-                      {project.coverData ? (
-                        <button
-                          className="cover-zoom"
-                          title="표지 크게 보기"
-                          onClick={() => setViewer({ src: project.coverData!, alt: "현재 표지" })}
-                        >
-                          <CoverImage src={project.coverData} alt="현재 표지" />
-                        </button>
-                      ) : (
-                        <Feather size={30} />
-                      )}
-                    </div>
-                    <div>
-                      <p>작품 표지</p>
-                      <button
-                        type="button"
-                        onClick={attempt(async () => {
-                          if (await call("chooseCover", { id: projectId })) {
-                            await refresh();
-                            message("표지를 저장했습니다.");
-                          }
-                        })}
-                      >
-                        <Upload size={15} />
-                        표지 업로드
-                      </button>
-                      {project.cover && (
-                        <button
-                          type="button"
-                          onClick={attempt(async () => {
-                            await call("removeCover", { id: projectId });
-                            await refresh();
-                            message("기본 표지로 바꿨습니다.");
-                          })}
-                        >
-                          기본 표지로
-                        </button>
-                      )}
-                      <small>
-                        PNG · JPEG · WebP / 원본 20MB 이하
-                      </small>
-                    </div>
-                  </div>
-                )}
-                <div className="modal-footer">
-                  {dialog.type === "editProject" && (
-                    <button
-                      type="button"
-                      className="danger-outline footer-start"
-                      onClick={() => askDeleteProject(projectId)}
-                    >
-                      <Trash2 size={15} />
-                      작품 삭제
-                    </button>
-                  )}
-                  <button type="button" onClick={() => setDialog(null)}>
-                    취소
-                  </button>
-                  <button type="submit" className="primary">
-                    {dialog.type === "editProject" ? "저장" : "만들기"}
-                  </button>
-                </div>
-              </form>
-            )}
+            {["newProject", "editProject"].includes(dialog.type) && (<ProjectForm
+              dialog={dialog}
+              prefs={prefs}
+              refresh={refresh}
+              navigate={navigate}
+              projectId={projectId}
+              project={project}
+              setDialog={setDialog}
+              report={report}
+              setViewer={setViewer}
+              attempt={attempt}
+              message={message}
+              askDeleteProject={askDeleteProject}
+            />)}
             {dialog.type === "history" && active && (
               <HistoryDialog documentId={active.id} report={report} onRestore={async (id, name) => {
                 await flush();
@@ -5248,527 +3424,37 @@ export default function App() {
                 <RealtimeSync onClose={() => setDialog(null)} />
               </div>
             )}
-            {dialog.type === "settings" && (
-              <>
-                <div className="settings-layout">
-                  <nav className="settings-nav" aria-label="설정 분류">
-                    {settingPages.map(({ id, label, icon: Icon }) => (
-                      <button key={id} type="button" aria-pressed={settingsPage === id}
-                        aria-controls={`settings-${id}`} onClick={() => setSettingsPage(id)}>
-                        <Icon size={16} /><span>{label}</span>
-                      </button>
-                    ))}
-                    <p>변경한 설정은<br />바로 저장됩니다.</p>
-                  </nav>
-                  <div className="settings-content" key={settingsPage}>
-                <section id="settings-updates" className="settings-section" hidden={settingsPage !== "updates"}>
-                  <UpdateSettings updater={updater} version={lib.version}
-                    autoCheck={prefs.checkUpdatesOnStartup !== false}
-                    onAutoCheck={(checked) => savePrefs({ checkUpdatesOnStartup: checked }).catch(report)} />
-                  <OpenSourceLicenses />
-                </section>
-                <section id="settings-security" className="settings-section" hidden={settingsPage !== "security"}>
-                  {settingsPage === "security" && <PinSettings />}
-                </section>
-                <section id="settings-editor" className="settings-section" hidden={settingsPage !== "editor"}>
-                  <h3>화면과 글꼴</h3>
-                  <p className="settings-description">편하게 읽고 쓸 수 있도록 집필 화면을 조정하세요.</p>
-                  <div className="settings-grid">
-                    <label>
-                      글자 크기
-                      <select
-                        aria-label="글자 크기"
-                        value={prefs.fontSize}
-                        onChange={(e) =>
-                          savePrefs({ fontSize: Number(e.target.value) }).catch(
-                            report,
-                          )
-                        }
-                      >
-                        {[14, 16, 18, 20, 22, 24].map((n) => (
-                          <option key={n} value={n}>
-                            {n}px
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label>
-                      줄 간격
-                      <select
-                        aria-label="줄 간격"
-                        value={prefs.lineHeight}
-                        onChange={(e) =>
-                          savePrefs({
-                            lineHeight: Number(e.target.value),
-                          }).catch(report)
-                        }
-                      >
-                        {[1.5, 1.8, 2, 2.2, 2.5].map((n) => (
-                          <option key={n} value={n}>
-                            {n}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label>
-                      색 테마
-                      <select aria-label="색 테마" value={prefs.colorTheme || "modern"}
-                        onChange={e => savePrefs({colorTheme: e.target.value}).catch(report)}>
-                        <option value="modern">Light Modern</option>
-                        <option value="bakery">Bakery</option>
-                      </select>
-                    </label>
-                    <label>
-                      화면
-                      <select
-                        aria-label="화면"
-                        value={prefs.theme}
-                        onChange={(e) =>
-                          savePrefs({ theme: e.target.value }).catch(report)
-                        }
-                      >
-                        <option value="light">밝게</option>
-                        <option value="dark">어둡게</option>
-                      </select>
-                    </label>
-                  </div>
-                  <div className="settings-toggles" style={{ marginTop: 14 }}>
-                    <SettingsToggle
-                      label="표지 숨기기"
-                      description="내 서재와 작품 화면에서 작품 표지를 표시하지 않습니다. 등록한 표지는 지우지 않습니다."
-                      checked={prefs.hideCovers === true}
-                      onChange={(checked) => savePrefs({ hideCovers: checked }).catch(report)}
-                    />
-                  </div>
-                  <PropertyPresetSettings presets={prefs.propertyPresets} tags={prefs.favoriteTags} onChange={savePrefs} />
-                </section>
-                <section id="settings-typesetting" className="settings-section" hidden={settingsPage !== "typesetting"}>
-                  {typesettingSettings(typesettingKind)}
-                </section>
-                <section id="settings-autocomplete" className="settings-section" hidden={settingsPage !== "autocomplete"}>
-                  {(() => {
-                    const rules = normalizeTextReplacements(prefs.textReplacements);
-                    const updateRules = (nextRules: typeof rules) =>
-                      savePrefs({ textReplacements: nextRules }).catch(report);
-                    const addRule = () => {
-                      const from = newRepFrom;
-                      const to = newRepTo;
-                      if (!from || !to) return;
-                      const next = [
-                        ...rules,
-                        {
-                          id: `custom-${Date.now()}`,
-                          from,
-                          to,
-                          enabled: true,
-                          label: newRepLabel.trim(),
-                        },
-                      ];
-                      setNewRepFrom("");
-                      setNewRepTo("");
-                      setNewRepLabel("");
-                      updateRules(next);
-                    };
-                    return (
-                      <>
-                        <h3>따옴표 · 괄호 · 말줄임 치환</h3>
-                        <p className="settings-description">
-                          집필 중 따옴표, 괄호, 말줄임표, 구분선을 입력할 때 자동으로 짝을 맞추거나 출판 부호로 치환합니다.
-                        </p>
-                        <div className="settings-toggles" style={{ marginTop: 14 }}>
-                          <SettingsToggle
-                            label="따옴표 자동 닫기"
-                            description="여는 따옴표를 입력하면 닫는 따옴표를 함께 넣고, 줄 끝 닫는 따옴표 앞에서 Enter를 누르면 다음 문단으로 빠져나갑니다."
-                            checked={prefs.autoCloseQuotes !== false}
-                            onChange={(checked) =>
-                              savePrefs({ autoCloseQuotes: checked }).catch(report)
-                            }
-                          />
-                          <SettingsToggle
-                            label="곡선 따옴표 사용"
-                            description="직선 따옴표를 입력하면 곡선 따옴표 “ ” ‘ ’로 바꿉니다. 끄면 직선 따옴표를 사용합니다."
-                            checked={prefs.quoteStyle === "curly"}
-                            onChange={(checked) =>
-                              savePrefs({ quoteStyle: checked ? "curly" : "straight" }).catch(report)
-                            }
-                          />
-                          <SettingsToggle
-                            label="괄호 자동 닫기"
-                            description="여는 괄호 ( [ { 〈 《 「 『 를 입력하면 짝이 되는 닫는 괄호를 함께 넣습니다."
-                            checked={prefs.autoCloseBrackets !== false}
-                            onChange={(checked) =>
-                              savePrefs({ autoCloseBrackets: checked }).catch(report)
-                            }
-                          />
-                          <SettingsToggle
-                            label="괄호 연속 입력 변환"
-                            description="빈 괄호 안에서 여는 괄호를 한 번 더 누르면 겹화살괄호·낫표·겹낫표((|) → 《|》, [|] → 「|」 → 『|』, {|} → 〈|〉 → 《|》)로 변환합니다."
-                            checked={prefs.smartBrackets !== false}
-                            onChange={(checked) =>
-                              savePrefs({ smartBrackets: checked }).catch(report)
-                            }
-                          />
-                          <SettingsToggle
-                            label="구분선 자동 변환"
-                            description="빈 줄에서 --- 또는 *** 를 입력하면 원고 구분선으로 즉시 변환합니다."
-                            checked={prefs.autoDividerReplacement !== false}
-                            onChange={(checked) =>
-                              savePrefs({ autoDividerReplacement: checked }).catch(report)
-                            }
-                          />
-                        </div>
-                        <div className="row gap" style={{ marginTop: 14, flexWrap: "wrap" }}>
-                          <button
-                            type="button"
-                            disabled={!active || isProtected}
-                            onClick={replaceActiveSymbols}
-                          >
-                            <Sparkles size={15} />
-                            현재 문서 따옴표 · 말줄임표 일괄 교정
-                          </button>
-                          <small className="muted">
-                            {active
-                              ? `열린 문서 '${active.title || "제목 없음"}'에 곡선 따옴표 설정과 활성화된 '...' 대치어를 적용합니다.`
-                              : "문서를 열면 곡선 따옴표 설정과 활성화된 '...' 대치어를 본문에 한 번에 적용할 수 있습니다."}
-                          </small>
-                        </div>
-
-                        <div className="settings-subsection">
-                          <div className="typesetting-scope-header">
-                            <h3>사용자 대치어</h3>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                savePrefs({
-                                  textReplacements: DEFAULT_TEXT_REPLACEMENTS.map((r) => ({ ...r })),
-                                })
-                                  .then(() => message("기본 대치어 목록으로 복원했습니다."))
-                                  .catch(report)
-                              }
-                            >
-                              <RefreshCw size={14} />
-                              기본 대치어 복원
-                            </button>
-                          </div>
-                          <p className="settings-description">
-                            자주 쓰는 특수 기호나 상용구를 등록해 두면, 입력어를 치는 즉시 대치어로 자동 변환합니다. 말줄임표도 아래 목록에서 변환 결과를 수정하거나 끌 수 있습니다.
-                          </p>
-                          <div className="settings-toggles" style={{ marginBottom: 14 }}>
-                            <SettingsToggle
-                              label="사용자 대치어 사용"
-                              description="집필 중 아래 목록에 켜져 있는 입력어가 완성되면 대치어로 즉시 바꿉니다."
-                              checked={prefs.autoSymbolReplacement !== false}
-                              onChange={(checked) =>
-                                savePrefs({ autoSymbolReplacement: checked }).catch(report)
-                              }
-                            />
-                          </div>
-                          <div className="replacement-add-row">
-                            <input
-                              type="text"
-                              aria-label="새 대치어 입력어"
-                              placeholder="입력어 (예: --, ->, ㅇㅇ)"
-                              value={newRepFrom}
-                              onChange={(e) => setNewRepFrom(e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter") {
-                                  e.preventDefault();
-                                  addRule();
-                                }
-                              }}
-                            />
-                            <span className="replacement-arrow" aria-hidden="true">
-                              →
-                            </span>
-                            <input
-                              type="text"
-                              aria-label="새 대치어 변환 결과"
-                              placeholder="대치어 (예: —, →, 상용구)"
-                              value={newRepTo}
-                              onChange={(e) => setNewRepTo(e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter") {
-                                  e.preventDefault();
-                                  addRule();
-                                }
-                              }}
-                            />
-                            <input
-                              type="text"
-                              aria-label="새 대치어 설명"
-                              placeholder="설명 (선택)"
-                              value={newRepLabel}
-                              onChange={(e) => setNewRepLabel(e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter") {
-                                  e.preventDefault();
-                                  addRule();
-                                }
-                              }}
-                            />
-                            <button
-                              type="button"
-                              className="primary"
-                              disabled={!newRepFrom || !newRepTo}
-                              onClick={addRule}
-                            >
-                              <Plus size={15} />
-                              추가
-                            </button>
-                          </div>
-                          <div className="replacement-list" role="list" aria-label="사용자 대치어 목록">
-                            {rules.map((rule, idx) => (
-                              <div
-                                key={rule.id || idx}
-                                role="listitem"
-                                className={`replacement-row ${rule.enabled ? "" : "disabled"}`}
-                              >
-                                <input
-                                  type="checkbox"
-                                  aria-label={`${rule.from} 대치어 사용`}
-                                  checked={rule.enabled}
-                                  onChange={(e) => {
-                                    const next = rules.map((r, i) =>
-                                      i === idx ? { ...r, enabled: e.target.checked } : r,
-                                    );
-                                    updateRules(next);
-                                  }}
-                                />
-                                <input
-                                  type="text"
-                                  className="replacement-from"
-                                  aria-label={`${idx + 1}번 입력어`}
-                                  value={rule.from}
-                                  onChange={(e) => {
-                                    const val = e.target.value;
-                                    if (!val) return;
-                                    const next = rules.map((r, i) =>
-                                      i === idx ? { ...r, from: val } : r,
-                                    );
-                                    updateRules(next);
-                                  }}
-                                />
-                                <span className="replacement-arrow" aria-hidden="true">
-                                  →
-                                </span>
-                                <input
-                                  type="text"
-                                  className="replacement-to"
-                                  aria-label={`${idx + 1}번 대치어`}
-                                  value={rule.to}
-                                  onChange={(e) => {
-                                    const next = rules.map((r, i) =>
-                                      i === idx ? { ...r, to: e.target.value } : r,
-                                    );
-                                    updateRules(next);
-                                  }}
-                                />
-                                <input
-                                  type="text"
-                                  className="replacement-label"
-                                  aria-label={`${idx + 1}번 대치어 설명`}
-                                  placeholder="설명"
-                                  value={rule.label || ""}
-                                  onChange={(e) => {
-                                    const next = rules.map((r, i) =>
-                                      i === idx ? { ...r, label: e.target.value } : r,
-                                    );
-                                    updateRules(next);
-                                  }}
-                                />
-                                <button
-                                  type="button"
-                                  className="replacement-delete"
-                                  aria-label={`${rule.from} 대치어 삭제`}
-                                  title="삭제"
-                                  onClick={() => {
-                                    const next = rules.filter((_, i) => i !== idx);
-                                    updateRules(next);
-                                  }}
-                                >
-                                  <Trash2 size={14} />
-                                </button>
-                              </div>
-                            ))}
-                            {!rules.length && (
-                              <p className="muted" style={{ padding: "12px 0", margin: 0 }}>
-                                등록된 대치어가 없습니다. 위 입력칸에서 새 대치어를 추가하거나 기본 대치어를 복원하세요.
-                              </p>
-                            )}
-                          </div>
-                        </div>
-                      </>
-                    );
-                  })()}
-                </section>
-                <section id="settings-storage" className="settings-section" hidden={settingsPage !== "storage"}>
-                  <h3>
-                    <StickyNote size={17} />
-                    공용 메모
-                  </h3>
-                  <div className="connection">
-                    <div>
-                      <b>공용 메모 폴더</b>
-                      <small>{commonMemoPath}</small>
-                    </div>
-                    <button
-                      onClick={attempt(async () => {
-                        const next = await call<string | null>("chooseCommonMemo");
-                        if (next) {
-                          setCommonMemoPath(next);
-                          message("공용 메모 폴더를 바꿨습니다.");
-                        }
-                      })}
-                    >
-                      <FolderOpen size={15} />
-                      위치 변경
-                    </button>
-                  </div>
-                  <p className="muted">
-                    여러 작품에서 함께 쓰는 메모를 이 폴더에 Markdown 파일로 보관합니다.
-                    기존 폴더를 고르면 안의 파일을 그대로 메모로 보여줍니다.
-                  </p>
-                </section>
-                <section className="settings-section" hidden={settingsPage !== "storage"}>
-                  <h3>
-                    <History size={17} />
-                    로컬 Git 기록
-                  </h3>
-                  <p role="status" className={lib.localGit?.message ? "pin-error" : "muted"}>
-                    {lib.localGit?.message ? `로컬 Git 기록 대기 · ${lib.localGit.message}`
-                      : lib.localGit?.ready ? "로컬 Git 기록 사용 중"
-                      : `기존 이력을 로컬 Git으로 옮기는 중 · ${lib.localGit?.importedHistory ?? 0}개 완료`}
-                  </p>
-                  <p className="settings-description">입력이 10초간 멈추고 원고 저장이 완료되면 로컬 Git에 기록합니다. 인터넷 연결이나 별도 Git 설치 없이 작동하며, 기존 원고와 변경 이력은 보존합니다.</p>
-                  <p className="settings-description">수동 저장 기록은 별도로 표시합니다. 모든 기록은 기간과 개수에 관계없이 그대로 보관하며, 자동으로 합치거나 삭제하지 않습니다. 이전 원고를 복원하면 현재 원고를 먼저 보존한 뒤 복원 결과를 새 기록으로 남깁니다.</p>
-                  <div className="history-actions">
-                    <button disabled={busy || !lib.localGit?.ready} onClick={attempt(async () => {
-                      setBusy(true);
-                      try {
-                        await flush();
-                        const result = await call<{ path: string }>("backupGitHistory");
-                        message("Git 이력 백업을 저장했습니다: " + result.path);
-                      } finally { setBusy(false); }
-                    })}>
-                      <HardDrive size={16} /> Git 이력 백업
-                    </button>
-                  </div>
-                </section>
-                <section id="settings-defaults" className="settings-section" hidden={settingsPage !== "defaults"}>
-                  <h3>새 작품의 기본 설정</h3>
-                  <p className="settings-description">새 작품을 만들 때 사용할 플랫폼과 목표 분량입니다.</p>
-                  <PlatformPicker
-                    value={normalizeWriting(prefs.defaultWriting)}
-                    onChange={(writing) =>
-                      savePrefs({ defaultWriting: writing }).catch(report)
-                    }
-                  />
-                </section>
-                <section className="settings-section" hidden={settingsPage !== "defaults"}>
-                  <fieldset className="linebreak-options">
-                    <legend>새 에피소드 줄바꿈</legend>
-                    <p className="settings-description">작품에서 별도로 지정하지 않으면 이 방식을 사용합니다.</p>
-                    <div className="linebreak-choices">
-                      {[false, true].map((manual) => (
-                        <label key={String(manual)} className={`linebreak-choice${(prefs.defaultManualLineBreak === true) === manual ? " selected" : ""}`}>
-                          <input type="radio" name="defaultLineBreak" value={String(manual)}
-                            checked={(prefs.defaultManualLineBreak === true) === manual}
-                            onChange={() => savePrefs({ defaultManualLineBreak: manual }).catch(report)} />
-                          <span>
-                            <strong>{lineBreakLabel(manual)}{!manual && <small>기본</small>}</strong>
-                            <span>{manual ? "단락 사이에 간격을 두지 않습니다." : "단락 사이에 간격을 둡니다."}</span>
-                            <span className="linebreak-keys"><kbd>Enter</kbd> {manual ? "줄바꿈" : "새 단락"}</span>
-                            {!manual && <span className="linebreak-keys"><kbd>Shift + Enter</kbd> 단락 안 줄바꿈</span>}
-                          </span>
-                        </label>
-                      ))}
-                    </div>
-                    <p className="settings-note">새로 만드는 에피소드에 적용됩니다. 기존 회차는 에피소드 속성에서 개별 변경할 수 있습니다.</p>
-                  </fieldset>
-                </section>
-                <section className="settings-section" hidden={settingsPage !== "defaults"}>
-                  <fieldset className="linebreak-options">
-                    <legend>자동 관리 본문 복사</legend>
-                    <p className="settings-description">자동 관리 중인 본문을 복사할 때 문단 사이에 빈 줄을 넣을지 선택합니다.</p>
-                    <div className="linebreak-choices">
-                      {[false, true].map((blankLines) => (
-                        <label key={String(blankLines)} className={`linebreak-choice${(prefs.copyWithBlankLines === true) === blankLines ? " selected" : ""}`}>
-                          <input type="radio" name="copyWithBlankLines" value={String(blankLines)}
-                            checked={(prefs.copyWithBlankLines === true) === blankLines}
-                            onChange={() => savePrefs({ copyWithBlankLines: blankLines }).catch(report)} />
-                          <span>
-                            <strong>{blankLines ? "빈 줄을 추가해 복사" : "기존 방식으로 복사"}{!blankLines && <small>기본</small>}</strong>
-                            <span>{blankLines ? "문단 사이에 빈 줄 한 줄을 넣어 복사합니다." : "문단 사이에 빈 줄을 추가하지 않고 복사합니다."}</span>
-                          </span>
-                        </label>
-                      ))}
-                    </div>
-                    <p className="settings-note">본문 전체 복사, 우클릭 복사와 Ctrl+C에 적용됩니다.</p>
-                  </fieldset>
-                </section>
-                <section id="settings-connections" className="settings-section" hidden={settingsPage !== "connections"}>
-                  <h3><FolderSync size={18} />파일 동기화</h3>
-                  {settingsPage === "connections" && renderSyncConnections()}
-                </section>
-                <section id="settings-api" className="settings-section" hidden={settingsPage !== "api"}>
-                  <h3>
-                    <Code2 size={18} />
-                    MCP / API
-                  </h3>
-                  <p className="muted">연결할 때 앱을 켜 두세요.</p>
-                  <div className="row gap">
-                    <button
-                      onClick={attempt(async () => {
-                        await call("mcpConfig");
-                        message("MCP 설정 JSON을 복사했습니다.");
-                      })}
-                    >
-                      <Copy size={15} />
-                      MCP 설정 복사
-                    </button>
-                    <button
-                      onClick={attempt(async () => {
-                        await call("copyApi");
-                        message("API 주소와 인증 키를 복사했습니다.");
-                      })}
-                    >
-                      <Copy size={15} />
-                      API 연결 정보 복사
-                    </button>
-                  </div>
-                  <div className="settings-subsection">
-                    <h3><Sparkles size={18} />AI 스킬</h3>
-                    <p className="settings-description">
-                      AI가 Lof Writer의 작품과 원고를 다룰 때 사용하는 스킬입니다.
-                      문서 조회·수정 방법과 API 안내를 함께 제공합니다.
-                    </p>
-                    <button disabled={skillDownloading} onClick={attempt(async () => {
-                      if (skillDownloading) return;
-                      setSkillDownloading(true);
-                      try {
-                        const path = await call<string | null>("downloadSkill");
-                        if (path) message("Lof Writer 스킬을 저장했습니다.");
-                      } finally {
-                        setSkillDownloading(false);
-                      }
-                    })}>
-                      <Download size={15} />
-                      {skillDownloading ? "저장 중…" : "스킬 다운로드"}
-                    </button>
-                    <p className="muted">
-                      ZIP 압축을 풀어 lof-writer 폴더를 사용하는 AI 도구의 스킬 폴더에 추가하세요.
-                      MCP 연결은 위의 설정으로 별도로 등록해 주세요.
-                    </p>
-                  </div>
-                </section>
-                  </div>
-                </div>
-                <footer className="settings-footer">
-                  <span>Lof Writer {lib.version}</span>
-                  <span title={lib.root}>내 서재 · {lib.root}</span>
-                </footer>
-              </>
-            )}
+            {dialog.type === "settings" && (<SettingsContent
+              settingsPage={settingsPage}
+              setSettingsPage={setSettingsPage}
+              updater={updater}
+              lib={lib}
+              prefs={prefs}
+              savePrefs={savePrefs}
+              report={report}
+              saveKindPrefs={saveKindPrefs}
+              message={message}
+              setTypesettingKind={setTypesettingKind}
+              typesettingKind={typesettingKind}
+              newRepFrom={newRepFrom}
+              newRepTo={newRepTo}
+              newRepLabel={newRepLabel}
+              setNewRepFrom={setNewRepFrom}
+              setNewRepTo={setNewRepTo}
+              setNewRepLabel={setNewRepLabel}
+              active={active}
+              isProtected={isProtected}
+              replaceActiveSymbols={replaceActiveSymbols}
+              commonMemoPath={commonMemoPath}
+              attempt={attempt}
+              setCommonMemoPath={setCommonMemoPath}
+              busy={busy}
+              setBusy={setBusy}
+              flush={flush}
+              renderSyncConnections={renderSyncConnections}
+              skillDownloading={skillDownloading}
+              setSkillDownloading={setSkillDownloading}
+            />)}
           </div>
         </div>
       )}

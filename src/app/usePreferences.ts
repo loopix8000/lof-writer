@@ -1,0 +1,79 @@
+import { useRef, useState } from "react";
+import { DEFAULT_EDITOR_STYLE } from "../../core/typesetting.mjs";
+import { call, type Kind } from "../types";
+
+export function usePreferences() {
+  const [prefs, setPrefs] = useState<Record<string, any>>({
+    ...DEFAULT_EDITOR_STYLE,
+    goal: 3000,
+    theme: "light",
+    colorTheme: "modern",
+    copyWithBlankLines: false,
+    hideCovers: false,
+    autoCloseQuotes: true,
+    autoCloseBrackets: true,
+    smartBrackets: true,
+    autoSymbolReplacement: true,
+    autoDividerReplacement: true,
+    quoteStyle: "straight",
+  });
+  const prefsRef = useRef(prefs);
+  prefsRef.current = prefs;
+  async function savePrefs(p: Record<string, any>) {
+    let payload = p;
+    if (
+      !p.typesettingByKind &&
+      (p.fontSize !== undefined || p.lineHeight !== undefined) &&
+      prefsRef.current.typesettingByKind?.episode
+    ) {
+      const epSync: Record<string, any> = {};
+      if (p.fontSize !== undefined) epSync.fontSize = p.fontSize;
+      if (p.lineHeight !== undefined) epSync.lineHeight = p.lineHeight;
+      payload = {
+        ...p,
+        typesettingByKind: {
+          ...prefsRef.current.typesettingByKind,
+          episode: {
+            ...prefsRef.current.typesettingByKind.episode,
+            ...epSync,
+          },
+        },
+      };
+    }
+    setPrefs((old) => ({ ...old, ...payload }));
+    await call("setPreferences", payload);
+  }
+  async function saveKindPrefs(kind: Kind | "document", patch: Record<string, any>) {
+    const targetKey = kind === "episode" ? "episode" : "document";
+    const currentByKind =
+      prefsRef.current.typesettingByKind && typeof prefsRef.current.typesettingByKind === "object"
+        ? prefsRef.current.typesettingByKind
+        : {};
+    const prevForKind =
+      targetKey === "document"
+        ? currentByKind.document && typeof currentByKind.document === "object"
+          ? currentByKind.document
+          : currentByKind.plot && typeof currentByKind.plot === "object"
+            ? currentByKind.plot
+            : currentByKind.memo && typeof currentByKind.memo === "object"
+              ? currentByKind.memo
+              : {}
+        : currentByKind.episode && typeof currentByKind.episode === "object"
+          ? currentByKind.episode
+          : {};
+    const nextByKind = {
+      ...currentByKind,
+      [targetKey]: {
+        ...prevForKind,
+        ...patch,
+      },
+    };
+    const fullPatch: Record<string, any> =
+      targetKey === "episode"
+        ? { ...patch, typesettingByKind: nextByKind }
+        : { typesettingByKind: nextByKind };
+    await savePrefs(fullPatch);
+  }
+
+  return { prefs, setPrefs, prefsRef, savePrefs, saveKindPrefs };
+}
