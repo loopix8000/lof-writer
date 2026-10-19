@@ -71,6 +71,7 @@ const methods = [
   "memoCreateFolder",
   "memoRename",
   "memoMove",
+  "memoArchiveFolder",
   "memoRemove",
   "memoReveal",
   "chooseCommonMemo",

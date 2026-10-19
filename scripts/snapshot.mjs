@@ -211,7 +211,7 @@ async function arrange(page, scene, demo, theme) {
       await openDocument(demo.plot);
       await page.locator(".editor-tab.current").click({ button: "right" });
       await page.getByRole("menuitem", { name: /^오른쪽으로 분할/ }).click();
-      await page.locator('.editor-group[data-side="left"] .editor-tab').filter({ has: page.getByText(doc.title, { exact: true }) }).click();
+      await page.locator('.editor-group[data-split-group="left"] .editor-tab').filter({ has: page.getByText(doc.title, { exact: true }) }).click();
       const groups = await page.locator(".editor-groups").boundingBox();
       const sash = await page.locator(".group-sash").boundingBox();
       await page.mouse.move(sash.x + sash.width / 2, sash.y + sash.height / 2);

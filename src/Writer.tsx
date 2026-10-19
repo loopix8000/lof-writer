@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 import { useEditor, useEditorState, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
@@ -290,6 +290,41 @@ function loadBookmarks(editor: Editor, list: Bookmark[] = []) {
       .setMeta("addToHistory", false),
   );
 }
+function FormatBar({ inactive, visible, children }: { inactive: boolean; visible: boolean; children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [stuck, setStuck] = useState(false);
+  useLayoutEffect(() => {
+    const bar = ref.current, scroll = bar?.closest<HTMLElement>(".editor-scroll");
+    if (!bar || !scroll || !visible) return;
+    let frame: number | undefined;
+    const update = () => {
+      frame = undefined;
+      if (!scroll.clientHeight) return;
+      const top = Number.parseFloat(getComputedStyle(bar).top) || 0;
+      const edge = scroll.getBoundingClientRect().top + scroll.clientTop + top;
+      setStuck(scroll.scrollTop > 0 && bar.getBoundingClientRect().top <= edge + 0.5);
+    };
+    const schedule = () => { if (frame === undefined) frame = requestAnimationFrame(update); };
+    // 실제 고정 위치를 기준으로 판단하며 스크롤이나 막대 높이는 변경하지 않는다.
+    update();
+    scroll.addEventListener("scroll", schedule, { passive: true });
+    const resize = new ResizeObserver(schedule);
+    resize.observe(scroll);
+    resize.observe(bar);
+    if (bar.parentElement) resize.observe(bar.parentElement);
+    return () => {
+      scroll.removeEventListener("scroll", schedule);
+      resize.disconnect();
+      if (frame !== undefined) cancelAnimationFrame(frame);
+    };
+  }, [inactive, visible]);
+  const hidden = inactive && stuck;
+  return <div ref={ref} className={`format-bar${inactive ? " inactive" : ""}${stuck ? " is-stuck" : ""}`}
+    aria-hidden={hidden || undefined} aria-disabled={inactive || undefined} inert={inactive}>
+    {children}
+  </div>;
+}
+
 export default function Writer({
   id,
   body,
@@ -708,6 +743,8 @@ export default function Writer({
     ["--editor-indent" as any]: `${style.indent}em`,
     ["--editor-text-align" as any]: style.textAlign,
     ["--editor-divider-padding-y" as any]: `${style.dividerPaddingY}em`,
+    ["--editor-divider-thickness" as any]: `${style.dividerThickness}px`,
+    ["--editor-divider-text" as any]: JSON.stringify(style.dividerText),
   };
 
   // 집필 화면의 우클릭 메뉴. 기본 메뉴 대신 잘라내기·복사·붙여넣기·메모 추가·이미지 삽입·전체 선택을 띄운다.
@@ -897,8 +934,8 @@ export default function Writer({
   return (
     <>
       <EditorFind editor={editor} enabled={visible && !inactive} />
-      {/* 다른 그룹의 원고는 도구를 흐리게만 하고 클릭은 막대로 넘긴다. 막대를 누르면 그 그룹으로 옮겨 간다. */}
-      <div className={`format-bar${inactive ? " inactive" : ""}`} aria-disabled={inactive || undefined}>
+      {/* 다른 그룹의 막대도 원래 위치에서는 표시하고 상단에 고정됐을 때만 숨긴다. */}
+      <FormatBar inactive={inactive} visible={visible}>
         {tools.map((t) => (
           <button
             key={t.label}
@@ -954,7 +991,7 @@ export default function Writer({
             />
           </>
         )}
-      </div>
+      </FormatBar>
       {tables && editable && visible && (
         <BubbleMenu
           editor={editor}

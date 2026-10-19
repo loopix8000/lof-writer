@@ -264,6 +264,36 @@ export default function TypesettingSettings({ prefs, saveKindPrefs, report, mess
             </select>
           </label>
           <label>
+            구분선 두께 (px)
+            <input
+              type="number"
+              min={0.5}
+              max={6}
+              step={0.5}
+              aria-label="구분선 두께"
+              value={kindEditorStyle.dividerThickness}
+              onChange={(e) => updateTargetPrefs({ dividerThickness: Number(e.target.value) || 2 })}
+            />
+          </label>
+          <label>
+            장면 구분 문자
+            <input
+              key={`${targetKind}-${kindEditorStyle.dividerText}`}
+              type="text"
+              aria-label="장면 구분 문자"
+              maxLength={100}
+              placeholder="***"
+              defaultValue={kindEditorStyle.dividerText}
+              onBlur={(e) => {
+                const dividerText = e.currentTarget.value.trim() || "***";
+                e.currentTarget.value = dividerText;
+                updateTargetPrefs({ dividerText });
+              }}
+              onKeyDown={(e) => { if (e.key === "Enter" && !e.nativeEvent.isComposing) e.currentTarget.blur(); }}
+            />
+            <small>본문 복사에 사용합니다. 모양을 ‘직접 입력’으로 선택하면 원고에도 표시합니다.</small>
+          </label>
+          <label>
             구분선 상하 여백 (em)
             <input
               type="number"

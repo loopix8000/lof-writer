@@ -22,6 +22,8 @@ export const DEFAULT_EDITOR_STYLE = {
   ...DEFAULT_DESKTOP_EDITOR_STYLE,
   serifSymbols: true,
   dividerStyle: "solid",
+  dividerThickness: 2,
+  dividerText: "***",
   dividerPaddingY: 2,
   pageViewEnabled: false,
   pageViewFlow: "vertical",
@@ -278,6 +280,7 @@ export const DIVIDER_STYLES = [
   { id: "short", label: "짧은 구분선", description: "가운데 정렬된 짧은 실선" },
   { id: "ornament", label: "장식 구분선", description: "선 가운데에 별표 장식 배치" },
   { id: "stars", label: "3-별표 장식 (⁂)", description: "선 없이 가운데 3-별표 문양만 표시" },
+  { id: "custom", label: "직접 입력", description: "지정한 장면 구분 문자 표시" },
 ];
 
 export const DEFAULT_NOTE_EDITOR_STYLE = {
@@ -296,6 +299,8 @@ export const DEFAULT_NOTE_EDITOR_STYLE = {
   editorTextColor: "",
   serifSymbols: false,
   dividerStyle: "solid",
+  dividerThickness: 2,
+  dividerText: "***",
   dividerPaddingY: 1,
   pageViewEnabled: false,
   pageViewFlow: "vertical",
@@ -378,9 +383,13 @@ export function normalizeEditorStyle(prefs = {}, kind) {
     editorTextColor: typeof target.editorTextColor === "string" ? target.editorTextColor.trim() : "",
     serifSymbols:
       typeof target.serifSymbols === "boolean" ? target.serifSymbols : def.serifSymbols,
-    dividerStyle: ["solid", "short", "ornament", "stars"].includes(target.dividerStyle)
+    dividerStyle: DIVIDER_STYLES.some((style) => style.id === target.dividerStyle)
       ? target.dividerStyle
       : def.dividerStyle,
+    dividerThickness: Math.round(clampNum(target.dividerThickness, 0.5, 6, def.dividerThickness) * 2) / 2,
+    dividerText: typeof target.dividerText === "string"
+      ? target.dividerText.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, " ").trim().slice(0, 100) || def.dividerText
+      : def.dividerText,
     dividerPaddingY: Math.round(clampNum(target.dividerPaddingY, 0, 4, def.dividerPaddingY) * 100) / 100,
     pageViewEnabled: target.pageViewEnabled === true,
     pageViewFlow: ["vertical", "responsive"].includes(target.pageViewFlow) ? target.pageViewFlow : "vertical",

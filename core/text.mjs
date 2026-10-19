@@ -31,7 +31,7 @@ export function splitSoftBreaks(markdown, hardBreaks) {
   return out.join("\n");
 }
 
-export function plainText(markdown, { preserveParagraphBreaks = false } = {}) {
+export function plainText(markdown, { preserveParagraphBreaks = false, dividerText = "" } = {}) {
   function walk(tokens) {
     return tokens
       .map((t) => {
@@ -41,7 +41,9 @@ export function plainText(markdown, { preserveParagraphBreaks = false } = {}) {
             Math.max(0, (preserveParagraphBreaks ? breaks : Math.floor(breaks / 2)) - 1),
           );
         }
-        if (t.type === "br" || t.type === "hr") return "\n";
+        if (t.type === "br") return "\n";
+        // 복사할 때만 구분 문자를 넣고, 글자 수 계산에는 기존의 빈 줄을 사용한다.
+        if (t.type === "hr") return dividerText + "\n";
         if (t.type === "list")
           return t.items.map((i) => walk(i.tokens).replace(/\n$/, "")).join("\n") + "\n";
         if (t.type === "table")

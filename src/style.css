@@ -563,6 +563,7 @@ h1 small {
 }
 .project-card {
   position: relative;
+  cursor: default;
   border: 1px solid transparent;
   padding: 12px;
   text-align: left;
@@ -579,7 +580,6 @@ h1 small {
   box-shadow: 0 6px 26px #00000008;
 }
 .project-card[draggable="true"] {
-  cursor: grab;
   user-select: none;
 }
 .project-card.project-dragging {
@@ -1040,6 +1040,9 @@ body.sidebar-resizing * {
   color: var(--text);
   font-weight: 500;
 }
+.tree-item.is-completed > span:not(.episode-number):not(.tree-actions) {
+  font-weight: 700;
+}
 .episode-number {
   color: var(--text);
   font-size: 13px;
@@ -1257,6 +1260,7 @@ body.sidebar-resizing * {
   background: var(--surface);
 }
 .workspace-empty {
+  position: relative;
   flex: 1;
   display: grid;
   place-items: center;
@@ -1551,9 +1555,12 @@ body.sidebar-resizing * {
   color: var(--text);
   background: var(--soft);
 }
-.format-bar.inactive button {
-  opacity: 0.45;
+.format-bar.inactive {
   pointer-events: none;
+}
+.format-bar.inactive.is-stuck {
+  /* 고정 막대가 가리던 본문을 드러내되 높이를 유지해 스크롤 위치를 보존한다. */
+  visibility: hidden;
 }
 /* 검색창은 현재 원고 폭 안에 두고, 스크롤 중에도 편집 도구 위에 유지한다. */
 .editor-find {
@@ -3122,6 +3129,26 @@ textarea::-webkit-scrollbar-track {
   min-width: 0;
   min-height: 0;
 }
+.editor-workspace {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+.grid-sash {
+  z-index: 5;
+}
+.group-sash.horizontal {
+  cursor: row-resize;
+  padding: 1.5px 0;
+}
+.group-sash.horizontal:hover {
+  padding: 0;
+}
+body.sash-dragging-horizontal {
+  cursor: row-resize;
+  user-select: none;
+}
 .group-body {
   flex: 1;
   display: flex;
@@ -4394,22 +4421,27 @@ input.property-text {
   white-space: nowrap;
   text-overflow: ellipsis;
 }
-button.episode-tag[draggable] {
+.episode-tag[draggable="true"] {
   cursor: grab;
 }
-button.episode-tag[draggable]:active {
+.episode-tag[draggable="true"]:active {
   cursor: grabbing;
 }
-.episode-tag-edit {
-  min-width: 4ch;
-  max-width: 100%;
-  height: 22px;
-  padding: 1px 4px;
+.episode-tag-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 1px;
   border: 0;
   border-radius: 3px;
-  background: var(--soft);
-  font-size: 12px;
-  line-height: 18px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.episode-tag-remove:hover {
+  background: var(--surface);
+  color: var(--text);
 }
 .episode-tag-error {
   flex-basis: 100%;
@@ -4761,6 +4793,14 @@ button.episode-tag[draggable]:active {
   text-align: var(--editor-text-align, left);
 }
 
+/* 인용문의 시작·끝 여백이 세로선 높이에 포함되지 않도록 한다. */
+.editor-content .tiptap blockquote > :first-child {
+  margin-top: 0;
+}
+.editor-content .tiptap blockquote > :last-child {
+  margin-bottom: 0;
+}
+
 /* 일반 편집은 화면 밖 블록의 배치를 생략하고, 읽은 높이는 다시 사용한다. */
 .editor-content:not(.page-view) .tiptap > * {
   content-visibility: auto;
@@ -4784,18 +4824,18 @@ button.episode-tag[draggable]:active {
 .editor-content .tiptap hr {
   margin: var(--editor-divider-padding-y, 1.5em) auto;
   border: 0;
-  border-top: 1px solid var(--border);
+  border-top: var(--editor-divider-thickness, 2px) solid var(--border);
   width: 100%;
 }
 
 .editor-content[data-divider-style="short"] .tiptap hr {
   width: 28%;
   min-width: 72px;
-  border-top-width: 2px;
 }
 
 .editor-content[data-divider-style="ornament"] .tiptap hr,
-.editor-content[data-divider-style="stars"] .tiptap hr {
+.editor-content[data-divider-style="stars"] .tiptap hr,
+.editor-content[data-divider-style="custom"] .tiptap hr {
   border-top: 0;
   height: 1.6em;
   position: relative;
@@ -4823,6 +4863,18 @@ button.episode-tag[draggable]:active {
   color: var(--muted);
   font-size: 1.15em;
   letter-spacing: 0.2em;
+}
+
+.editor-content[data-divider-style="custom"] .tiptap hr::after {
+  content: var(--editor-divider-text, "***");
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  color: inherit;
+  text-indent: 0;
+  text-align: center;
+  white-space: pre;
 }
 
 .format-bar .format-divider {

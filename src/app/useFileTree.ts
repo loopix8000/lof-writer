@@ -72,7 +72,7 @@ export function useFileTree(options: Options) {
   const [treeDrop, setTreeDrop] = useState<string | null>(null);
   const [episodeDrop, setEpisodeDrop] = useState<{ id: string; after: boolean } | null>(null);
   const [treeSelection, setTreeSelection] = useState<string[]>([]);
-  const [memoEntries, setMemoEntries] = useState<{ path: string; name: string; type: string }[]>([]);
+  const [memoEntries, setMemoEntries] = useState<FolderEntry[]>([]);
   const [memoOpenFolders, setMemoOpenFolders] = useState<Set<string>>(new Set());
   const [folderRenaming, setFolderRenaming] = useState<{ path: string; value: string } | null>(null);
   const [treeTab, setTreeTab] = useState<"episode" | "memo">("episode");
@@ -393,7 +393,7 @@ export function useFileTree(options: Options) {
   async function loadMemoFolders() {
     const pid = latest.current.currentProjectId();
     if (!pid) return;
-    const r = await call<{ entries: { path: string; name: string; type: string }[] }>("memoTree", {
+    const r = await call<{ entries: FolderEntry[] }>("memoTree", {
       space: pid,
     });
     if (latest.current.currentProjectId() === pid) setMemoEntries(r.entries);
@@ -432,23 +432,46 @@ export function useFileTree(options: Options) {
     });
   }
 
+  async function archiveMemoFolder(path: string, archived: boolean) {
+    const pid = latest.current.currentProjectId();
+    await flush();
+    const inside = latest.current.getLibrary().documents.filter(
+      d => d.projectId === pid && d.relPath?.startsWith("doc/" + path + "/"),
+    );
+    await call("memoArchiveFolder", { space: pid, path, archived });
+    if (archived) {
+      for (const d of inside) {
+        await closeTab(d.id);
+        closeSideTab(d.id);
+      }
+    }
+    setTreeSelection([]);
+    await refresh();
+    await loadMemoFolders();
+    message(archived ? "폴더를 보관함으로 옮겼습니다." : "폴더를 보관함에서 꺼냈습니다.");
+  }
+
   async function removeMemoFolder(path: string) {
+    const pid = latest.current.currentProjectId();
     const prefix = "doc/" + path + "/",
       inside = latest.current.getLibrary().documents.filter(
-        (d) => d.projectId === latest.current.currentProjectId() && d.relPath?.startsWith(prefix),
+        (d) => d.projectId === pid && d.archived === archive && d.relPath?.startsWith(prefix),
       );
     const name = path.slice(path.lastIndexOf("/") + 1);
     const ok = await confirm({
       title: "폴더 삭제",
       message: `'${name}' 폴더${inside.length ? `와 안의 문서 ${inside.length}개` : ""}를 휴지통으로 옮길까요?`,
+      detail: archive
+        ? "보관하지 않은 문서는 폴더 구조와 함께 현재 문서에 유지됩니다."
+        : "이미 보관한 문서는 폴더 구조와 함께 보관함에 유지됩니다.",
       confirmLabel: "휴지통으로 옮기기",
       danger: true,
     });
-    if (!ok) return;
+    if (!ok || latest.current.currentProjectId() !== pid) return;
     await flush();
     for (const d of inside) await closeTab(d.id);
     for (const d of inside) closeSideTab(d.id);
-    await call("memoRemove", { space: latest.current.currentProjectId(), path });
+    await call("memoRemove", { space: pid, path, archived: archive });
     await refresh();
     await loadMemoFolders();
   }
@@ -481,8 +504,11 @@ export function useFileTree(options: Options) {
         (docScope === "all" || d.episodeId === treeEpisodeId) &&
         (!treeQuery.memo.trim() || treeMatch(d.title, treeQuery.memo)),
     );
-  const folderEntries = memoEntries.filter(entry => entry.type === "folder" &&
-    (!treeQuery.memo.trim() || treeDocs.some(doc => (doc.relPath || "").startsWith("doc/" + entry.path + "/"))));
+  const allFolders = memoEntries.filter(entry => entry.type === "folder");
+  const matchingFolders = treeQuery.memo.trim() ? [] : allFolders.filter(entry => !!entry.archived === archive);
+  const folderEntries = allFolders.filter(entry =>
+    matchingFolders.some(folder => folder.path === entry.path || folder.path.startsWith(entry.path + "/")) ||
+    treeDocs.some(doc => doc.relPath?.startsWith("doc/" + entry.path + "/")));
   const boundEpisode = docs.find(doc => doc.id === treeEpisodeId && doc.kind === "episode");
   const boundDocuments = boundEpisode ? docs.filter(doc => doc.kind !== "episode" && doc.episodeId === boundEpisode.id) : [];
 
@@ -514,7 +540,9 @@ export function useFileTree(options: Options) {
       ...memoMenuItems(folder.path), "separator",
       { label: "이름 바꾸기", shortcut: "F2", action: () => startFolderRename(folder.path, folder.name) },
       { label: "파일 탐색기에서 표시", action: attempt(() => revealFolder(folder.path)) }, "separator",
-      { label: "폴더 삭제", danger: true, action: attempt(() => removeMemoFolder(folder.path)) },
+      { label: archive ? "보관 해제" : "보관함으로 이동", shortcut: archive ? undefined : "Delete",
+        action: attempt(() => archiveMemoFolder(folder.path, !archive)) },
+      { label: "폴더 삭제", shortcut: "Shift+Delete", danger: true, action: attempt(() => removeMemoFolder(folder.path)) },
     ];
   }
   function folderDragProps(path: string) {
@@ -602,7 +630,7 @@ export function useFileTree(options: Options) {
     enterTab, enterEpisodeGroup, setEpisodeGroup, toggleDocGroup, toggleFolder,
     startRename, changeRename, cancelRename, commitRename,
     startFolderRename, cancelFolderRename, folderMenu, folderDragProps,
-    docCreateMenu, memoCreateMenu, plotItems, addDocFile, loadMemoFolders, addMemoFolder, renameMemoFolder, removeMemoFolder,
+    docCreateMenu, memoCreateMenu, plotItems, addDocFile, loadMemoFolders, addMemoFolder, renameMemoFolder, archiveMemoFolder, removeMemoFolder,
     rowProps, folderDropProps, draggedDocument, finishEditorDrop,
     openDoc, openMenu, attempt, archiveDoc,
   };
