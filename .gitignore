@@ -13,4 +13,4 @@ docs/
 .startup-diagnostic/
 src-tauri/tauri.updater.generated.json
 /AGENTS.md
-/.claude/launch.json
+/.claude/
