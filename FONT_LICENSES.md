@@ -1,17 +1,18 @@
 # 내장 글꼴 및 라이선스
 
-검토일: 2026-10-18
+검토일: 2026-10-19
 
 Lof Writer의 소스 코드에는 루트 `LICENSE`의 MIT 라이선스가 적용되지만,
 아래 글꼴 파일에는 각 저작권자의 **SIL Open Font License 1.1 (OFL-1.1)**이 별도로 적용됩니다.
-원본 글꼴의 형식·이름·내용을 변경하거나 서브셋을 만들지 않고 공식 배포 파일을 그대로 포함합니다.
+공식 배포 원본을 그대로 보관하며, 리디바탕과 본고딕은 로딩 용량을 줄인 WOFF2 압축본을 앱에서 사용합니다.
+글꼴 이름·글리프·레이아웃·메타데이터를 보존하고 서브셋은 만들지 않습니다.
 PC의 글꼴 설치 상태나 인터넷 연결에 의존하지 않도록 `src/fonts.css`에서 로컬 앱 리소스로 불러옵니다.
 
 | 글꼴 | 포함 파일 | 버전 | 저작권 및 원문 |
 | --- | --- | --- | --- |
-| 리디바탕 | `src/fonts/RIDIBatang.otf` | 1.0.1 (2019-10-01 빌드) | RIDI & Sandoll. Font designed by Sandoll Inc. [고지 및 OFL 전문](src/fonts/RIDIBatang-OFL.txt) |
+| 리디바탕 | `src/fonts/RIDIBatang.woff2` (원본: `RIDIBatang.otf`) | 1.0.1 (2019-10-01 빌드) | RIDI & Sandoll. Font designed by Sandoll Inc. [고지 및 OFL 전문](src/fonts/RIDIBatang-OFL.txt) |
 | Pretendard Variable | `src/fonts/PretendardVariable.woff2` | 1.3.9 | Copyright (c) 2021, Kil Hyung-jin. Reserved Font Name: Pretendard. [원본 라이선스](src/fonts/Pretendard-OFL.txt) |
-| Noto Sans KR | `src/fonts/NotoSansKR-Variable.ttf` | 2.004-H2 | Copyright 2014-2021 Adobe. Reserved Font Name: Source. [원본 라이선스](src/fonts/NotoSansKR-OFL.txt) |
+| Noto Sans KR | `src/fonts/NotoSansKR-Variable.woff2` (원본: `NotoSansKR-Variable.ttf`) | 2.004-H2 | Copyright 2014-2021 Adobe. Reserved Font Name: Source. [원본 라이선스](src/fonts/NotoSansKR-OFL.txt) |
 
 ## 검토 결과 및 준수 조건
 
@@ -25,6 +26,14 @@ PC의 글꼴 설치 상태나 인터넷 연결에 의존하지 않도록 `src/fo
 
 공식 근거: [OFL 1.1 원문](https://openfontlicense.org/open-font-license-official-text/),
 [앱에 포함할 때의 공식 안내](https://openfontlicense.org/how-to-use-ofl-fonts/).
+
+## WOFF2 압축
+
+- [OFL FAQ 2.2 및 2.2.1](https://openfontlicense.org/ofl-faq/)에 따라 원본 글꼴 데이터를 보존한 WOFF2 압축본을 사용합니다.
+- 생성 스크립트: `scripts/compress-fonts.py` (`fonttools[woff]` 4.67.0, Brotli 1.2.0).
+- 글리프 테이블 변환을 끄고 압축한 뒤, 원본과 압축본의 테이블 데이터를 비교합니다. 컨테이너에 따라 달라지는 `head`의 체크섬·무손실 압축 비트와 실제 서명이 없는 빈 `DSIG` 테이블만 제외합니다. 이름·저작권·라이선스를 포함한 나머지 테이블은 동일합니다.
+- 리디바탕: 1,453,448 → 457,732바이트. 본고딕: 10,414,588 → 4,306,608바이트.
+- 원본 파일과 원본 라이선스 전문은 삭제하거나 수정하지 않습니다.
 
 ## 공식 출처와 파일 무결성
 

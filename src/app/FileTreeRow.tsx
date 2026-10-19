@@ -1,4 +1,4 @@
-import { Archive, ArchiveRestore, Check, FileText, StickyNote } from "lucide-react";
+import { Archive, ArchiveRestore, FileText, StickyNote } from "lucide-react";
 import type { ReactNode } from "react";
 import { normalizeStatus } from "../../core/episode.mjs";
 import type { Doc } from "../types";
@@ -18,7 +18,8 @@ export default function FileTreeRow({ doc, marker, options = {}, tree }: {
     ? tree.episodeDrop.after ? "drop-after" : "drop-before"
     : doc.kind === "episode" && tree.treeDrop === doc.id ? "drop-target" : "";
   const selected = tree.treeSelection.length > 1 && tree.treeSelection.includes(doc.id);
-  const className = `tree-item ${doc.id === tree.currentId ? "current" : ""} ${selected ? "multi-selected" : ""} ${tree.menuTarget === doc.id ? "context-target" : ""} ${dropMark}`;
+  const completed = doc.kind === "episode" && normalizeStatus(doc.status) === "completed";
+  const className = `tree-item ${completed ? "is-completed" : ""} ${doc.id === tree.currentId ? "current" : ""} ${selected ? "multi-selected" : ""} ${tree.menuTarget === doc.id ? "context-target" : ""} ${dropMark}`;
   if (tree.renaming?.id === doc.id && !tree.renaming.widget) return (
     <div className={`${className} renaming`} style={style}>
       {marker}
@@ -35,10 +36,10 @@ export default function FileTreeRow({ doc, marker, options = {}, tree }: {
   );
   return (
     <button className={className} style={style} data-doc-id={doc.id} aria-selected={selected || undefined}
+      aria-label={completed ? `${tree.numberOf(doc)} ${doc.title} 집필 완료` : undefined}
       {...tree.rowProps(doc, options.dropFolder)}>
       {marker}
       <span>{doc.title}</span>
-      {doc.kind === "episode" && normalizeStatus(doc.status) === "completed" && <Check size={12} aria-label="집필 완료" />}
       {options.badge && <small className="tree-badge" title={`${options.badge}화에 연결됨`}>{options.badge}화</small>}
       <span className="tree-actions">
         <span className="tree-action" role="button" tabIndex={-1}

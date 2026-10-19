@@ -60,6 +60,28 @@ pub struct SpaceInfo {
 pub struct Memos;
 
 impl Memos {
+    fn archived_folders(project: &Value) -> Vec<String> {
+        project
+            .get("archivedDocFolders")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect()
+    }
+
+    fn set_archived_folders(project: &mut Value, folders: Vec<String>) {
+        if let Some(obj) = project.as_object_mut() {
+            if folders.is_empty() {
+                obj.remove("archivedDocFolders");
+            } else {
+                obj.insert("archivedDocFolders".to_string(), json!(folders));
+            }
+            obj.insert("updatedAt".to_string(), json!(now_iso()));
+        }
+    }
+
     pub fn spaces(store: &mut Store, common_root: &Path) -> Result<Value, LofError> {
         let cat = store.scan()?;
         let mut projs = cat.projects;
@@ -206,7 +228,15 @@ impl Memos {
         if let Some(ref pid) = space.project_id {
             let p = store.get_project(pid)?;
             let docs = store.doc_files(&p);
+            let archived_folders = Self::archived_folders(&p.project);
             for e in &mut entries {
+                if e.get("type").and_then(Value::as_str) == Some("folder") {
+                    let path = e.get("path").and_then(Value::as_str).unwrap_or("");
+                    let archived = archived_folders
+                        .iter()
+                        .any(|p| p.eq_ignore_ascii_case(path));
+                    e["archived"] = json!(archived);
+                }
                 if e.get("type").and_then(|v| v.as_str()) == Some("file") {
                     let epath = e.get("path").and_then(|v| v.as_str()).unwrap_or("");
                     let doc_rel = format!("doc/{}", epath);
@@ -442,6 +472,62 @@ impl Memos {
         Ok(json!({ "path": rel }))
     }
 
+    pub fn archive_folder(
+        store: &mut Store,
+        common_root: &Path,
+        input: &Value,
+    ) -> Result<bool, LofError> {
+        let space_id = input.get("space").and_then(Value::as_str).unwrap_or("");
+        let path = input.get("path").and_then(Value::as_str).unwrap_or("");
+        let archived = input
+            .get("archived")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| fail_invalid("잘못된 보관 상태"))?;
+        let space = Self::resolve_space(store, common_root, space_id)?;
+        if !fs::metadata(Self::space_abs(&space, path)?)?.is_dir() {
+            return Err(fail_invalid("폴더만 보관할 수 있습니다."));
+        }
+        let pid = space
+            .project_id
+            .as_deref()
+            .ok_or_else(|| fail_invalid("작품의 문서 폴더만 보관할 수 있습니다."))?;
+        let p = store.get_project(pid)?;
+        let prefix = format!("doc/{}/", path);
+        for doc in store.doc_files(&p) {
+            if !doc
+                .get("path")
+                .and_then(Value::as_str)
+                .is_some_and(|p| p.starts_with(&prefix))
+                || doc
+                    .get("archived")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                    == archived
+            {
+                continue;
+            }
+            let id = doc.get("id").and_then(Value::as_str).unwrap_or("");
+            let current = store.read(id)?;
+            store.save(&json!({ "id": id, "expectedRevision": current.get("revision"), "archived": archived }))?;
+        }
+        let mut p = store.get_project(pid)?;
+        let prefix = format!("{}/", path);
+        let mut folders = Self::archived_folders(&p.project);
+        folders.retain(|p| p != path && !p.starts_with(&prefix));
+        if archived {
+            folders.push(path.to_string());
+            folders.extend(
+                Self::walk_space(&space, path)
+                    .into_iter()
+                    .filter(|e| e.get("type").and_then(Value::as_str) == Some("folder"))
+                    .filter_map(|e| e.get("path").and_then(Value::as_str).map(str::to_string)),
+            );
+        }
+        Self::set_archived_folders(&mut p.project, folders);
+        store.write_project(&p)?;
+        Ok(true)
+    }
+
     pub fn rename(
         store: &mut Store,
         common_root: &Path,
@@ -550,7 +636,22 @@ impl Memos {
 
         if let Some(ref pid) = space.project_id {
             let mut p = store.get_project(pid)?;
-            if Store::move_doc_meta(&mut p, &format!("doc/{}", from), &format!("doc/{}", to)) {
+            let mut changed =
+                Store::move_doc_meta(&mut p, &format!("doc/{}", from), &format!("doc/{}", to));
+            let prefix = format!("{}/", from);
+            let folders = Self::archived_folders(&p.project)
+                .into_iter()
+                .map(|path| {
+                    if path == from || path.starts_with(&prefix) {
+                        changed = true;
+                        format!("{}{}", to, &path[from.len()..])
+                    } else {
+                        path
+                    }
+                })
+                .collect();
+            Self::set_archived_folders(&mut p.project, folders);
+            if changed {
                 store.write_project(&p)?;
             }
             if is_md(from)
@@ -592,24 +693,58 @@ impl Memos {
             Vec::new()
         };
         let mut ids: HashMap<String, String> = HashMap::new();
+        let mut protected = HashSet::new();
+        let is_folder = fs::metadata(&file)?.is_dir();
+        let archived = input
+            .get("archived")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         if let Some(ref pid) = space.project_id {
+            let p = store.get_project(pid)?;
+            let docs = store.doc_files(&p);
+            // 폴더를 지워도 다른 보기의 문서는 원래 경로와 속성을 유지한다.
+            if is_folder {
+                let archived_folders = Self::archived_folders(&p.project);
+                for entry in Self::walk_space(&space, path) {
+                    let rel = entry.get("path").and_then(Value::as_str).unwrap_or("");
+                    if entry.get("type").and_then(Value::as_str) == Some("folder")
+                        && archived_folders.iter().any(|p| p.eq_ignore_ascii_case(rel)) != archived
+                    {
+                        protected.insert(rel.to_string());
+                    }
+                }
+            }
             for rel in &files {
-                let raw = fs::read_to_string(abs(&space.root, rel)).unwrap_or_default();
-                let id = read_markdown(&raw)
-                    .ok()
-                    .and_then(|m| {
-                        m.properties
-                            .get("id")
-                            .and_then(|v| v.as_str())
-                            .filter(|s| !s.is_empty())
-                            .map(|s| s.to_string())
-                    })
+                let raw = fs::read_to_string(abs(&space.root, rel))?;
+                let parsed = read_markdown(&raw)?;
+                let doc_rel = format!("doc/{}", rel);
+                let entry = docs
+                    .iter()
+                    .find(|d| d.get("path").and_then(Value::as_str) == Some(&doc_rel));
+                let is_archived = parsed
+                    .properties
+                    .get("archived")
+                    .or_else(|| entry.and_then(|d| d.get("archived")))
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                if is_folder && is_archived != archived {
+                    protected.insert(rel.clone());
+                    continue;
+                }
+                let id = parsed
+                    .properties
+                    .get("id")
+                    .or_else(|| entry.and_then(|d| d.get("id")))
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
                     .unwrap_or_else(|| memo_id(pid, &format!("doc/{}", rel)));
                 ids.insert(rel.clone(), id);
             }
         }
 
-        store.trash_path(&file)?;
+        let mut retained_folders = Vec::new();
+        Self::trash_except(store, &space, path, &protected, &mut retained_folders)?;
         if let Some(ref pid) = space.project_id {
             if let Some(proj_folder) = space
                 .root
@@ -620,9 +755,21 @@ impl Memos {
                 store.invalidate_path(&format!("{}/doc/{}", proj_folder, path));
             }
             let mut p = store.get_project(pid)?;
-            if Store::drop_doc_meta(&mut p, &format!("doc/{}", path)) {
-                store.write_project(&p)?;
+            if protected.is_empty() {
+                Store::drop_doc_meta(&mut p, &format!("doc/{}", path));
+            } else {
+                for rel in ids.keys() {
+                    Store::drop_doc_meta(&mut p, &format!("doc/{}", rel));
+                }
             }
+            let prefix = format!("{}/", path);
+            let mut folders = Self::archived_folders(&p.project);
+            folders.retain(|p| p != path && !p.starts_with(&prefix));
+            if !archived {
+                folders.extend(retained_folders);
+            }
+            Self::set_archived_folders(&mut p.project, folders);
+            store.write_project(&p)?;
             for rel in &files {
                 if let Some(id) = ids.get(rel) {
                     let _ = store.clear_draft(id);
@@ -631,6 +778,32 @@ impl Memos {
             }
         }
         Ok(true)
+    }
+
+    fn trash_except(
+        store: &Store,
+        space: &SpaceInfo,
+        path: &str,
+        protected: &HashSet<String>,
+        retained_folders: &mut Vec<String>,
+    ) -> Result<(), LofError> {
+        let file = Self::space_abs(space, path)?;
+        let prefix = format!("{}/", path);
+        let keep = protected.contains(path) || protected.iter().any(|p| p.starts_with(&prefix));
+        if !keep {
+            return store.trash_path(&file);
+        }
+        if !fs::symlink_metadata(&file)?.is_dir() {
+            return Ok(());
+        }
+        // 목록을 먼저 읽어 삭제 범위를 확정한 뒤 보존 대상이 없는 항목만 휴지통으로 옮긴다.
+        let entries = fs::read_dir(&file)?.collect::<Result<Vec<_>, _>>()?;
+        for entry in entries {
+            let rel = join_rel(path, &entry.file_name().to_string_lossy());
+            Self::trash_except(store, space, &rel, protected, retained_folders)?;
+        }
+        retained_folders.push(path.to_string());
+        Ok(())
     }
 
     pub fn search_text(

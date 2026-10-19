@@ -708,6 +708,8 @@ export default function Writer({
     ["--editor-indent" as any]: `${style.indent}em`,
     ["--editor-text-align" as any]: style.textAlign,
     ["--editor-divider-padding-y" as any]: `${style.dividerPaddingY}em`,
+    ["--editor-divider-thickness" as any]: `${style.dividerThickness}px`,
+    ["--editor-divider-text" as any]: JSON.stringify(style.dividerText),
   };
 
   // 집필 화면의 우클릭 메뉴. 기본 메뉴 대신 잘라내기·복사·붙여넣기·메모 추가·이미지 삽입·전체 선택을 띄운다.
@@ -897,8 +899,8 @@ export default function Writer({
   return (
     <>
       <EditorFind editor={editor} enabled={visible && !inactive} />
-      {/* 다른 그룹의 원고는 도구를 흐리게만 하고 클릭은 막대로 넘긴다. 막대를 누르면 그 그룹으로 옮겨 간다. */}
-      <div className={`format-bar${inactive ? " inactive" : ""}`} aria-disabled={inactive || undefined}>
+      {/* 포커스가 없는 그룹의 막대는 높이만 유지하고 표시와 키보드 접근을 숨긴다. */}
+      <div className={`format-bar${inactive ? " inactive" : ""}`} aria-hidden={inactive || undefined} inert={inactive}>
         {tools.map((t) => (
           <button
             key={t.label}

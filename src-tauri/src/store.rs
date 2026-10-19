@@ -527,6 +527,7 @@ const PROJECT_FIELDS: &[&str] = &[
     "tags",
     "writing",
     "manualLineBreak",
+    "archivedDocFolders",
     "cover",
     "createdAt",
     "updatedAt",
@@ -543,6 +544,7 @@ pub fn project_fields(p: &Value) -> Value {
             }
         }
     }
+    out.entry("archivedDocFolders").or_insert_with(|| json!([]));
     Value::Object(out)
 }
 
@@ -620,6 +622,12 @@ pub(crate) fn parse_project(raw: &str) -> Result<Value, LofError> {
         };
         if dm_obj.iter().any(|(k, v)| !valid_rel(k) || !v.is_object()) {
             return Err(fail("작품 정보의 문서 속성이 올바르지 않습니다.", "FORMAT"));
+        }
+    }
+
+    if let Some(folders) = obj.get("archivedDocFolders") {
+        if !folders.as_array().is_some_and(|a| a.iter().all(|v| v.as_str().is_some_and(valid_rel))) {
+            return Err(fail("작품 정보의 보관한 폴더 목록이 올바르지 않습니다.", "FORMAT"));
         }
     }
 
@@ -3309,6 +3317,12 @@ impl Store {
         proj.insert("documents".to_string(), json!([]));
         proj.insert("propertyStorage".to_string(), json!("markdown"));
         proj.insert("fileCentric".to_string(), json!(true));
+        if let Some(folders) = input.get("archivedDocFolders") {
+            if !folders.as_array().is_some_and(|a| a.iter().all(|v| v.as_str().is_some_and(valid_rel))) {
+                return Err(fail_invalid("잘못된 폴더 보관 목록"));
+            }
+            proj.insert("archivedDocFolders".to_string(), folders.clone());
+        }
 
         let p = CatalogProject {
             dir: self.root.join(folder),
@@ -3367,6 +3381,12 @@ impl Store {
         let mut next = old.clone();
         next.insert("title".to_string(), json!(title));
         next.insert("description".to_string(), json!(description));
+        if let Some(folders) = input.get("archivedDocFolders") {
+            if !folders.as_array().is_some_and(|a| a.iter().all(|v| v.as_str().is_some_and(valid_rel))) {
+                return Err(fail_invalid("잘못된 폴더 보관 목록"));
+            }
+            next.insert("archivedDocFolders".to_string(), folders.clone());
+        }
 
         if let Some(tags_in) = input.get("tags") {
             next.insert("tags".to_string(), json!(normalize_tags(Some(tags_in))?));

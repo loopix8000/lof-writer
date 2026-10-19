@@ -263,11 +263,12 @@ export function useDocumentSession(options: Options) {
       sessionStarts.current.set(newId, sessionStart);
       sessionStarts.current.delete(oldId);
     }
-    const scrollPosition = scrollPositions.current.get(oldId);
-    if (oldId !== newId && scrollPosition) {
-      scrollPositions.current.set(newId, scrollPosition);
-      scrollPositions.current.delete(oldId);
-    }
+    if (oldId !== newId)
+      for (const [key, position] of [...scrollPositions.current])
+        if (key === oldId || key.endsWith(`\n${oldId}`)) {
+          scrollPositions.current.set(key.slice(0, -oldId.length) + newId, position);
+          scrollPositions.current.delete(key);
+        }
     if (activeId.current === oldId) activeId.current = newId;
     latest.current.onDocumentIdChanged(oldId, newId, location);
   }

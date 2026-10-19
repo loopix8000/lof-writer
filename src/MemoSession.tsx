@@ -16,7 +16,8 @@ import {
 import Writer from "./Writer";
 import EditorScroll, { type EditorScrollPositions } from "./EditorScroll";
 import RetainedTab from "./RetainedTab";
-import { editorDropZone, type EditorDropZone } from "./editor-groups";
+import { editorDropZone, editorGridStyle, editorGroupStyle, editorSides, editorSashStyle, hasEditorRows, isEditorSide, oppositeSide, verticalSide, type EditorDropZone, type EditorSide } from "./editor-groups";
+import { readWorkspaceState, saveWorkspaceState, workspaceKey } from "./workspace-state";
 import ContextMenu, { type MenuItem } from "./ContextMenu";
 import { useConfirm } from "./ConfirmDialog";
 import { readFileForClose, useSyncFileUpdates } from "./useSyncFileUpdates";
@@ -69,7 +70,8 @@ function placeMemoTab(list: MemoTab[], tab: MemoTab, pinned: boolean, after: Mem
 }
 // 분할 보기에서 포커스되지 않은 그룹. 포커스된 그룹은 tabs와 memo가 맡는다(집필 창과 같은 방식).
 type MemoGroup = { tabs: MemoTab[]; current: MemoTab | null };
-type Side = "left" | "right";
+type Side = EditorSide;
+type MemoGroups = Partial<Record<Side, MemoGroup>>;
 function withoutMemoTab(group: MemoGroup | null, t: MemoTab): MemoGroup | null {
   if (!group) return group;
   const index = group.tabs.findIndex((x) => sameTab(x, t));
@@ -118,6 +120,7 @@ const ancestors = (p: string) => {
 // 왼쪽은 폴더 트리(만들기·이름 바꾸기·끌어서 옮기기·삭제), 오른쪽은 메모 편집기다.
 export default function MemoSession({
   active,
+  workspaceRoot,
   syncStatus,
   syncChecking,
   syncAvailable,
@@ -139,6 +142,7 @@ export default function MemoSession({
   apiRef?: React.MutableRefObject<{ open: (space: string, path: string, pinned?: boolean) => Promise<void> } | null>;
   // 메모 화면이 보이는지. 숨겨져 있어도 탭과 편집 상태는 그대로 둔다.
   active: boolean;
+  workspaceRoot: string;
   syncStatus: AutoSyncStatus;
   syncChecking: boolean;
   syncAvailable: boolean;
@@ -174,25 +178,27 @@ export default function MemoSession({
     [filter, setFilter] = useState<Set<Filter>>(new Set<Filter>(["memo"])),
     // 플롯·에피소드 트리에서 접어 둔 폴더('plot:003 회차명' 꼴).
     [docCollapsed, setDocCollapsed] = useState<Set<string>>(new Set()),
-    [split, setSplitState] = useState<MemoGroup | null>(null),
+    [groups, setGroupsState] = useState<MemoGroups>({}),
     [focusedSide, setFocusedSideState] = useState<Side>("left"),
     [splitRatio, setSplitRatio] = useState(0.5),
-    [sideMemo, setSideMemoState] = useState<Memo | null>(null),
+    [rowRatio, setRowRatio] = useState(0.5),
+    [, renderMemos] = useState(0),
     [sideRev, setSideRev] = useState(0),
     [dropZone, setDropZone] = useState<EditorDropZone | null>(null);
   const scrollPositions = useRef<EditorScrollPositions>(new Map());
+  const dragSide = useRef<Side>("left");
   const titleRef = useRef(title); titleRef.current = title;
   const checkMemoRef = useRef<(() => Promise<void>) | null>(null);
   const retainedMemos = useRef(new Map<string, Memo>());
   const setSideMemo = useCallback((m: Memo | null) => {
     if (m) retainedMemos.current.set(`${m.space}\n${m.path}`, m);
-    setSideMemoState(m);
+    renderMemos(value => value + 1);
   }, []);
   useEffect(() => {
-    const open = new Set([...tabs, ...(split?.tabs ?? [])].map((tab) => `${tab.space}\n${tab.path}`));
+    const open = new Set([...tabs, ...Object.values(groups).flatMap(group => group?.tabs ?? [])].map((tab) => `${tab.space}\n${tab.path}`));
     for (const key of retainedMemos.current.keys())
       if (!open.has(key)) retainedMemos.current.delete(key);
-  }, [tabs, split]);
+  }, [tabs, groups]);
   const memoRef = useRef<Memo | null>(null),
     spaceRef = useRef(space),
     dirty = useRef({ seq: 0, saved: 0 }),
@@ -207,7 +213,7 @@ export default function MemoSession({
     pickAnchor = useRef(""),
     dragTreeMemo = useRef<MemoTab | null>(null),
     tabsRef = useRef<MemoTab[]>([]),
-    splitRef = useRef<MemoGroup | null>(null),
+    otherGroupsRef = useRef<MemoGroups>({}),
     focusedSideRef = useRef<Side>("left"),
     groupsRef = useRef<HTMLDivElement>(null);
   spaceRef.current = space;
@@ -222,9 +228,9 @@ export default function MemoSession({
     tabsRef.current = fn(tabsRef.current);
     setTabsState(tabsRef.current);
   };
-  const setSplit = (fn: (group: MemoGroup | null) => MemoGroup | null) => {
-    splitRef.current = fn(splitRef.current);
-    setSplitState(splitRef.current);
+  const setGroups = (fn: (groups: MemoGroups) => MemoGroups) => {
+    otherGroupsRef.current = fn(otherGroupsRef.current);
+    setGroupsState(otherGroupsRef.current);
   };
   const setFocusedSide = (side: Side) => {
     focusedSideRef.current = side;
@@ -233,13 +239,12 @@ export default function MemoSession({
   // 두 그룹의 탭을 함께 고친다. fn이 null을 돌려주면 그 탭을 닫는다.
   function mapGroups(fn: (t: MemoTab) => MemoTab | null) {
     setTabs((list) => list.map(fn).filter((t): t is MemoTab => !!t));
-    setSplit((g) => {
-      if (!g) return g;
+    setGroups(groups => Object.fromEntries(Object.entries(groups).flatMap(([side, g]) => {
       const tabs = g.tabs.map(fn).filter((t): t is MemoTab => !!t);
-      if (!tabs.length) return null;
+      if (!tabs.length) return [];
       const cur = g.current && fn(g.current);
-      return { tabs, current: (cur && tabs.find((t) => sameTab(t, cur))) || tabs[0] };
-    });
+      return [[side, { tabs, current: (cur && tabs.find((t) => sameTab(t, cur))) || tabs[0] }]];
+    })));
   }
   const currentTab = () => tabsRef.current.find((t) => sameTab(t, memoRef.current)) ?? null;
   function keepTab(t: MemoTab) {
@@ -369,7 +374,7 @@ export default function MemoSession({
     setSpaces(list);
     if (!list.some((s) => s.id === spaceRef.current)) setSpace(COMMON);
     const alive = (t: { space: string }) => list.some((s) => s.id === t.space);
-    if ([...tabsRef.current, ...(splitRef.current?.tabs ?? [])].some((t) => !alive(t)))
+    if ([...tabsRef.current, ...Object.values(otherGroupsRef.current).flatMap(group => group?.tabs ?? [])].some((t) => !alive(t)))
       mapGroups((t) => (alive(t) ? t : null));
     if (memoRef.current && !alive(memoRef.current)) setCurrent(null);
   }, []);
@@ -496,32 +501,34 @@ export default function MemoSession({
     else {
       closeCurrent();
       // 분할된 상태에서 그룹의 마지막 탭을 닫으면 그 그룹을 닫는다.
-      if (splitRef.current) {
-        await focusOther();
-        setSplit(() => null);
-      }
+      if (otherSide()) await closeGroup();
     }
   }
   // ---- 분할 보기 (집필 창과 같은 방식) ----
   // 다른 그룹으로 포커스를 옮긴다. open을 주면 그 그룹에서 그 메모를 연다.
-  async function focusOther(open?: MemoTab, pinned = false) {
-    const other = splitRef.current;
-    if (!other) return;
+  const otherSide = () => {
+    const opposite = oppositeSide(focusedSideRef.current);
+    return otherGroupsRef.current[opposite] ? opposite : editorSides.find(side => otherGroupsRef.current[side]);
+  };
+  async function focusOther(open?: MemoTab, pinned = false, targetSide = otherSide()) {
+    if (!targetSide || targetSide === focusedSideRef.current) return;
+    const other = otherGroupsRef.current[targetSide];
+    if (!other && !open) return;
     await flush();
-    const seq = ++openSeq.current;
-    const target = open ?? other.current;
-    // 읽기를 마친 뒤 두 그룹을 함께 바꿔 빈 화면이 끼어들지 않게 한다.
+    const seq = ++openSeq.current, target = open ?? other?.current;
     const opening = target ? await readForOpening(target.space, target.path) : null;
-    const next = opening?.doc ?? null;
-    if (seq !== openSeq.current || splitRef.current !== other) return;
-    const mine: MemoGroup = { tabs: tabsRef.current, current: currentTab() };
+    if (seq !== openSeq.current || otherGroupsRef.current[targetSide] !== other) return;
+    const mine: MemoGroup = { tabs: tabsRef.current, current: currentTab() }, oldSide = focusedSideRef.current;
     setSideMemo(memoRef.current);
-    setTabs(() => target ? placeMemoTab(other.tabs, target, pinned, null) : other.tabs);
-    setSplit(() => (mine.tabs.length ? mine : null));
-    setFocusedSide(focusedSideRef.current === "left" ? "right" : "left");
-    selectGroupMemo(next, opening?.stale);
+    setTabs(() => target ? placeMemoTab(other?.tabs ?? [], target, pinned, null) : other?.tabs ?? []);
+    setGroups(groups => {
+      const next = { ...groups }; delete next[targetSide];
+      if (mine.tabs.length) next[oldSide] = mine;
+      return next;
+    });
+    setFocusedSide(targetSide);
+    selectGroupMemo(opening?.doc ?? null, opening?.stale);
   }
-  // 그룹 전환에서는 편집기를 비우지 않고 새 메모와 트리 상태를 한 번에 반영한다.
   function selectGroupMemo(next: Memo | null, stale = false) {
     dirty.current = { seq: stale ? 1 : 0, saved: 0 };
     conflictRef.current = stale;
@@ -532,96 +539,85 @@ export default function MemoSession({
     if (!next) return;
     if (next.space !== spaceRef.current) {
       spaceRef.current = next.space;
-      setEntries([]);
-      setSpace(next.space);
-      setExpanded(new Set(ancestors(next.path)));
-    } else {
-      setExpanded((old) => new Set([...old, ...ancestors(next.path)]));
-    }
+      setEntries([]); setSpace(next.space); setExpanded(new Set(ancestors(next.path)));
+    } else setExpanded(old => new Set([...old, ...ancestors(next.path)]));
     setSelected(next.path);
   }
-
-  async function focusSide(side: Side) {
-    if (splitRef.current && side !== focusedSideRef.current) await focusOther();
-  }
-  // 트리에서 열 때는 원래 탭을 유지하고, 탭을 끌어 놓을 때만 그룹 사이에서 옮긴다.
-  async function openInGroup(t: MemoTab, side: Side, moveTab = false) {
-    if (splitRef.current) {
-      if (side === focusedSideRef.current) {
-        await activateTab(t, true);
-      } else {
-        await focusOther(t, true);
-        if (moveTab) setSplit((g) => withoutMemoTab(g, t));
+  async function focusSide(side: Side) { if (otherGroupsRef.current[side]) await focusOther(undefined, false, side); }
+  async function openInGroup(t: MemoTab, side: Side, moveTab = false, source = focusedSideRef.current) {
+    const splitting = source === focusedSideRef.current && !otherGroupsRef.current[side] && side !== focusedSideRef.current;
+    if (!memoRef.current || side === focusedSideRef.current) await activateTab(t, true);
+    else await focusOther(t, true, side);
+    if (moveTab && source !== side && focusedSideRef.current === side) setGroups(groups => {
+      const next = { ...groups }, mine = groups[source];
+      if (mine && (!splitting || mine.tabs.length > 1)) {
+        const remaining = withoutMemoTab(mine, t);
+        if (remaining) next[source] = remaining; else delete next[source];
       }
-      return;
-    }
-    if (!memoRef.current) {
-      await activateTab(t, true);
-      return;
-    }
-    await flush();
-    const seq = ++openSeq.current;
-    const opening = await readForOpening(t.space, t.path), next = opening.doc;
-    if (seq !== openSeq.current) return;
-    const mine: MemoGroup = { tabs: tabsRef.current, current: currentTab() };
-    setSideMemo(memoRef.current);
-    setTabs(() => placeMemoTab([], t, true, null));
-    setSplit(() => (moveTab && mine.tabs.length > 1 ? withoutMemoTab(mine, t) : mine));
-    setFocusedSide(side);
-    selectGroupMemo(next, opening.stale);
+      return next;
+    });
   }
-  // 오른쪽 그룹이 이미 있으면 그 자리에 열고, 없으면 새로 나눈다.
-  async function splitTo(t: MemoTab | null = currentTab()) {
-    if (t) await openInGroup(t, "right", true);
+  async function splitTo(t: MemoTab | null = currentTab(), direction: "right" | "down" = "right", fromSide?: Side) {
+    if (fromSide && t && fromSide !== focusedSideRef.current) await focusOther(t, false, fromSide);
+    if (fromSide && fromSide !== focusedSideRef.current) return;
+    if (t) await openInGroup(t, direction === "down" ? verticalSide(focusedSideRef.current) : oppositeSide(focusedSideRef.current), true);
   }
-
+  function closeOtherGroup(side: Side) {
+    setGroups(groups => { const next = { ...groups }; delete next[side]; return next; });
+  }
   async function closeGroup() {
-    if (!splitRef.current) return;
-    await flush({ closing: true });
-    await focusOther();
-    setSplit(() => null);
+    const side = focusedSideRef.current;
+    if (!otherSide()) return;
+    await flush({ closing: true }); await focusOther();
+    if (focusedSideRef.current !== side) closeOtherGroup(side);
   }
   async function moveToOther(t: MemoTab) {
+    const source = focusedSideRef.current;
     await focusOther(t, true);
-    setSplit((g) => withoutMemoTab(g, t));
+    if (focusedSideRef.current !== source) closeSideTab(t, source);
   }
-  const closeSideTab = (t: MemoTab) => {
-    setSplit((g) => withoutMemoTab(g, t));
-    if (sameTab(t, sideMemo)) setSideMemo(null);
-  };
-  // 다른 그룹의 읽기 전용 메모도 새 본문을 반영하기 전에 확인한다.
-  const sideKey = split?.current ? `${split.current.space}\n${split.current.path}` : "";
-  const [sideSyncKey, setSideSyncKey] = useState("");
-  const checkSideMemo = useSyncFileUpdates({
-    fileKey: sideKey,
-    enabled: !!sideMemo && !!split?.current && sameTab(split.current, sideMemo) && !sameTab(sideMemo, memo),
-    canCheck: () => active,
-    current: () => sideMemo ? { doc: sideMemo, version: sideMemo.revision } : null,
-    read: (m: Memo) => readItem(m.space, m.path),
-    pending: () => setSideSyncKey(`${sideKey}\n${sideMemo?.revision}`),
-    apply: (fresh) => { setSideMemo(fresh); setSideSyncKey(""); },
-    report,
-  });
-  useEffect(() => {
-    const t = splitRef.current?.current;
-    if (!t) return setSideMemo(null);
-    if (sideMemo && sameTab(t, sideMemo)) { void checkSideMemo().catch(report); return; }
-    const retained = retainedMemos.current.get(sideKey);
-    if (retained) { setSideMemo(retained); return; }
-    let canceled = false;
-    readItem(t.space, t.path)
-      .then((m) => !canceled && setSideMemo(m))
-      .catch(() => !canceled && setSideMemo(null));
-    return () => {
-      canceled = true;
-    };
-  }, [sideKey, sideRev, sideMemo?.path, sideMemo?.space, checkSideMemo]);
+  function closeSideTab(t: MemoTab, side?: Side) {
+    setGroups(groups => Object.fromEntries(Object.entries(groups).flatMap(([key, group]) => {
+      const next = !side || side === key ? withoutMemoTab(group, t) : group;
+      return next ? [[key, next]] : [];
+    })));
+  }
+  const [sideSyncKeys, setSideSyncKeys] = useState<Partial<Record<Side, string>>>({});
+  function useSideMemo(side: Side) {
+    const tab = groups[side]?.current, key = tab ? `${tab.space}\n${tab.path}` : "";
+    const shown = retainedMemos.current.get(key);
+    const check = useSyncFileUpdates({
+      fileKey: key, enabled: !!shown && !sameTab(shown, memo),
+      canCheck: () => active,
+      current: () => { const doc = retainedMemos.current.get(key); return doc ? { doc, version: doc.revision } : null; },
+      read: (m: Memo) => readItem(m.space, m.path),
+      pending: () => setSideSyncKeys(keys => ({ ...keys, [side]: `${key}\n${shown?.revision}` })),
+      apply: fresh => { setSideMemo(fresh); setSideSyncKeys(keys => ({ ...keys, [side]: undefined })); },
+      report,
+    });
+    useEffect(() => {
+      if (!tab) return;
+      if (retainedMemos.current.has(key)) { void check().catch(report); return; }
+      let canceled = false;
+      readItem(tab.space, tab.path).then(m => { if (!canceled) setSideMemo(m); }).catch(report);
+      return () => { canceled = true; };
+    }, [key, sideRev, !!shown, check]);
+    return check;
+  }
+  const leftCheck = useSideMemo("left"), rightCheck = useSideMemo("right");
+  const bottomLeftCheck = useSideMemo("bottom-left"), bottomRightCheck = useSideMemo("bottom-right");
+  const sideChecks = { left: leftCheck, right: rightCheck, "bottom-left": bottomLeftCheck, "bottom-right": bottomRightCheck };
+  const sides = editorSides.filter(side => side === focusedSide || groups[side]);
+  const split = sides.length > 1;
   // 앱을 다시 열면 지난번 스페이스·탭·보던 메모·분할을 되살린다. 없어진 메모의 탭은 뺀다.
-  const restored = useRef(false);
+  const restoreStarted = useRef(false);
+  const [restored, setRestored] = useState(false);
   useEffect(() => {
-    if (saved === undefined || restored.current) return;
+    if (saved === undefined || restoreStarted.current) return;
+    restoreStarted.current = true;
     (async () => {
-      if (!saved) return;
+      const session = readWorkspaceState(workspaceKey(workspaceRoot, "memo-layout")).layout as any ?? saved;
+      if (!session) return;
       const isTab = (t: any): t is MemoTab =>
         t && typeof t.space === "string" && typeof t.path === "string";
       const live = async (list: unknown) => {
@@ -631,60 +627,70 @@ export default function MemoSession({
             out.push({ space: t.space, path: t.path, pinned: t.pinned !== false });
         return out;
       };
-      const mine = await live(saved.tabs),
-        other = await live(saved.split?.tabs);
+      const mine = await live(session.tabs);
       const pick = (list: MemoTab[], t: any) => list.find((x) => sameTab(x, t)) ?? list[0] ?? null;
-      if (typeof saved.space === "string") {
-        spaceRef.current = saved.space;
-        setSpace(saved.space);
+      if (typeof session.space === "string") {
+        spaceRef.current = session.space;
+        setSpace(session.space);
       }
-      if (Array.isArray(saved.filter)) {
-        const f = saved.filter.filter((x: any) => FILTERS.some(([k]) => k === x));
+      if (Array.isArray(session.filter)) {
+        const f = session.filter.filter((x: any) => FILTERS.some(([k]) => k === x));
         if (f.length) setFilter(new Set(f));
       }
       setTabs(() => mine);
-      if (other.length) {
-        setSplit(() => ({ tabs: other, current: pick(other, saved.split?.current) }));
-        setFocusedSide(saved.focusedSide === "right" ? "right" : "left");
-        setSplitRatio(Math.min(0.8, Math.max(0.2, Number(saved.splitRatio) || 0.5)));
+      const side = isEditorSide(session.focusedSide) ? session.focusedSide : "left";
+      const restoredGroups: MemoGroups = {};
+      const previousGroups = session.groups ?? (session.split ? { [oppositeSide(side)]: session.split } : {});
+      for (const position of editorSides) {
+        if (position === side) continue;
+        const group = previousGroups[position], tabs = await live(group?.tabs);
+        if (tabs.length) restoredGroups[position] = { tabs, current: pick(tabs, group?.current) };
       }
-      const current = pick(mine, saved.current);
+      setGroups(() => restoredGroups);
+      setFocusedSide(side);
+      setSplitRatio(Math.min(0.8, Math.max(0.2, Number(session.splitRatio) || 0.5)));
+      setRowRatio(Math.min(0.8, Math.max(0.2, Number(session.rowRatio) || 0.5)));
+      const current = pick(mine, session.current);
       if (current) await activateTab(current);
     })()
       .catch(report)
       .finally(() => {
-        restored.current = true;
+        setRestored(true);
       });
   }, [saved]);
   useEffect(() => {
-    if (!restored.current) return;
-    const t = setTimeout(() => {
-      call("setPreferences", {
-        memoSession: {
+    if (!restored) return;
+    saveWorkspaceState(workspaceKey(workspaceRoot, "memo-layout"), {
+        layout: {
           space,
           tabs,
           current: memo ? { space: memo.space, path: memo.path } : null,
-          split,
+          groups,
           focusedSide,
           splitRatio,
+          rowRatio,
           filter: [...filter],
         },
-      }).catch(() => {});
-    }, 500);
-    return () => clearTimeout(t);
-  }, [space, tabs, memo?.space, memo?.path, split, focusedSide, splitRatio, filter]);
-  function startSash(e: React.PointerEvent) {
+      });
+  }, [restored, workspaceRoot, space, tabs, memo?.space, memo?.path, groups, focusedSide, splitRatio, rowRatio, filter]);
+  const stopSash = useRef<(() => void) | null>(null);
+  useEffect(() => () => stopSash.current?.(), []);
+  function startSash(e: React.PointerEvent, axis: "x" | "y") {
     e.preventDefault();
     const box = groupsRef.current?.getBoundingClientRect();
     if (!box) return;
+    stopSash.current?.();
     const move = (ev: PointerEvent) =>
-      setSplitRatio(Math.min(0.8, Math.max(0.2, (ev.clientX - box.left) / box.width)));
+      (axis === "x" ? setSplitRatio : setRowRatio)(Math.min(0.8, Math.max(0.2,
+        axis === "x" ? (ev.clientX - box.left) / box.width : (ev.clientY - box.top) / box.height)));
     const up = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
-      document.body.classList.remove("sash-dragging");
+      document.body.classList.remove("sash-dragging", "sash-dragging-horizontal");
+      stopSash.current = null;
     };
-    document.body.classList.add("sash-dragging");
+    stopSash.current = up;
+    document.body.classList.add(axis === "x" ? "sash-dragging" : "sash-dragging-horizontal");
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
   }
@@ -692,7 +698,7 @@ export default function MemoSession({
   function dragOverGroups(e: React.DragEvent) {
     const fromTree = !!dragTreeMemo.current;
     const zone = dragTab || fromTree
-      ? editorDropZone(e.target, e.clientX, groupsRef.current, !!splitRef.current, fromTree)
+      ? editorDropZone(e.target, e.clientX, groupsRef.current, split, fromTree, e.clientY, sides, dragSide.current)
       : null;
     if (zone) {
       e.preventDefault();
@@ -709,7 +715,7 @@ export default function MemoSession({
   function dropOnGroups(e: React.DragEvent) {
     const fromTree = !!dragTreeMemo.current;
     const t = dragTreeMemo.current || dragTab;
-    const zone = t ? editorDropZone(e.target, e.clientX, groupsRef.current, !!splitRef.current, fromTree) : null;
+    const zone = t ? editorDropZone(e.target, e.clientX, groupsRef.current, split, fromTree, e.clientY, sides, dragSide.current) : null;
     if (!zone || !t) return;
     e.preventDefault();
     e.stopPropagation();
@@ -718,12 +724,7 @@ export default function MemoSession({
     setDropTarget(null);
     setDropZone(null);
     setDragTab(null);
-    attempt(() => (zone.tabs ? openInTabs(t, zone.side) : openInGroup(t, zone.side, !fromTree)))();
-  }
-  // 트리에서 끌어 그룹의 탭 막대에 놓으면 화면을 나누지 않고 그 그룹에 고정 탭으로 연다.
-  async function openInTabs(t: MemoTab, side: Side) {
-    if (splitRef.current) await openInGroup(t, side);
-    else await activateTab(t, true);
+    attempt(() => openInGroup(t, zone.side, !fromTree, fromTree ? undefined : dragSide.current))();
   }
   const closeTab = (t: MemoTab) => closeTabs((x) => !sameTab(x, t));
   async function cycleTab(direction: number) {
@@ -758,8 +759,8 @@ export default function MemoSession({
       else if (e.key === "PageDown" || (e.key === "Tab" && !e.shiftKey)) run = () => keys.current.cycleTab(1);
       else if (e.key === "PageUp" || (e.key === "Tab" && e.shiftKey)) run = () => keys.current.cycleTab(-1);
       else if (e.code === "Backslash" && !e.shiftKey) run = () => keys.current.splitTo();
-      else if ((e.code === "Digit1" || e.code === "Digit2") && !e.shiftKey)
-        run = () => keys.current.focusSide(e.code === "Digit1" ? "left" : "right");
+      else if (/^Digit[1-4]$/.test(e.code) && !e.shiftKey)
+        run = () => keys.current.focusSide(editorSides[Number(e.code.slice(-1)) - 1]);
       else return;
       e.preventDefault();
       e.stopPropagation();
@@ -1017,9 +1018,9 @@ export default function MemoSession({
       "separator",
       { label: "탭 고정", disabled: t.pinned !== false, action: () => keepTab(t) },
       "separator",
-      split
-        ? { label: "다른 그룹으로 이동", action: attempt(() => moveToOther(t)) }
-        : { label: "오른쪽으로 분할", shortcut: "Ctrl+\\", action: attempt(() => splitTo(t)) },
+      { label: focusedSide.endsWith("right") ? "왼쪽으로 분할" : "오른쪽으로 분할", shortcut: "Ctrl+\\", action: attempt(() => splitTo(t)) },
+      { label: focusedSide.startsWith("bottom") ? "위로 분할" : "아래로 분할", action: attempt(() => splitTo(t, "down")) },
+      ...(split ? [{ label: "다른 그룹으로 이동", action: attempt(() => moveToOther(t)) }] : []),
       { label: "그룹 닫기", disabled: !split, action: attempt(closeGroup) },
       "separator",
       {
@@ -1049,18 +1050,20 @@ export default function MemoSession({
         : []),
     ];
   }
-  function sideTabMenu(t: MemoTab): MenuItem[] {
+  function sideTabMenu(t: MemoTab, side: Side): MenuItem[] {
     return [
-      { label: "열기", action: attempt(() => focusOther(t)) },
-      { label: "닫기", action: () => closeSideTab(t) },
+      { label: "열기", action: attempt(() => focusOther(t, false, side)) },
+      { label: "닫기", action: () => closeSideTab(t, side) },
+      { label: side.endsWith("right") ? "왼쪽으로 분할" : "오른쪽으로 분할", action: attempt(() => splitTo(t, "right", side)) },
+      { label: side.startsWith("bottom") ? "위로 분할" : "아래로 분할", action: attempt(() => splitTo(t, "down", side)) },
       {
         label: "다른 그룹으로 이동",
         action: attempt(async () => {
           await activateTab(t, true);
-          closeSideTab(t);
+          closeSideTab(t, side);
         }),
       },
-      { label: "그룹 닫기", action: () => setSplit(() => null) },
+      { label: "그룹 닫기", action: () => closeOtherGroup(side) },
       "separator",
       {
         label: "파일 탐색기에서 표시",
@@ -1072,12 +1075,7 @@ export default function MemoSession({
       },
     ];
   }
-  const groupStyle = (side: Side) =>
-    split
-      ? side === "left"
-        ? { flex: `0 0 calc(${splitRatio * 100}% - 2px)` }
-        : { flex: "1 1 0" }
-      : undefined;
+  const groupStyle = (side: Side) => editorGroupStyle(side, sides);
   const nameOf = (t: { path: string }) =>
     isDocPath(t.path)
       ? documents.find((d) => d.id === t.path.slice(DOC.length))?.title || "제목 없음"
@@ -1123,19 +1121,20 @@ export default function MemoSession({
       ...(d ? parentOf(d.relPath || "") : parentOf(m.path)).split("/").filter(Boolean),
     ].join(" / ");
   };
-  const sash = (
+  const sash = (axis: "x" | "y") => (
     <div
-      key="sash"
-      className="group-sash"
+      key={`sash-${axis}`}
+      className={`group-sash grid-sash ${axis === "y" ? "horizontal" : ""}`}
+      style={editorSashStyle(axis, sides)}
       role="separator"
-      aria-orientation="vertical"
+      aria-orientation={axis === "x" ? "vertical" : "horizontal"}
       aria-label="편집기 그룹 크기 조절"
-      onPointerDown={startSash}
-      onDoubleClick={() => setSplitRatio(0.5)}
+      onPointerDown={(event) => startSash(event, axis)}
+      onDoubleClick={() => (axis === "x" ? setSplitRatio : setRowRatio)(0.5)}
     />
   );
   // 두 그룹은 같은 요소를 사용해 포커스만 바뀔 때 본문을 다시 만들지 않는다.
-  function memoBody(memo: Memo, focused: boolean, visible = true) {
+  function memoBody(memo: Memo, focused: boolean, visible = true, side: Side = focusedSide) {
     const groupStatus = focused ? status : "저장됨";
     return (
       <div
@@ -1143,7 +1142,7 @@ export default function MemoSession({
         onMouseDownCapture={(e) => {
           if (!focused && e.button === 0 && !(e.target as Element).closest("[data-sync-actions]")) {
             e.stopPropagation();
-            attempt(() => focusOther())();
+            attempt(() => focusSide(side))();
           }
         }}
         onClickCapture={(e) => {
@@ -1156,14 +1155,14 @@ export default function MemoSession({
           if (!focused) {
             e.preventDefault();
             e.stopPropagation();
-            attempt(() => focusOther())();
+            attempt(() => focusSide(side))();
           }
         }}
         onKeyDownCapture={(e) => {
           if (!focused && e.key !== "Tab" && !(e.target as Element).closest("[data-sync-actions]")) {
             e.preventDefault();
             e.stopPropagation();
-            attempt(() => focusOther())();
+            attempt(() => focusSide(side))();
           }
         }}
       >
@@ -1185,15 +1184,15 @@ export default function MemoSession({
             </div>
           </div>
         )}
-        {!focused && sideSyncKey === `${memo.space}\n${memo.path}\n${memo.revision}` && (
+        {!focused && sideSyncKeys[side] === `${memo.space}\n${memo.path}\n${memo.revision}` && (
           <div className="memo-conflict" data-sync-actions>
             <span>다른 곳에서 이 메모가 바뀌었습니다. 현재 내용은 유지됩니다.</span>
             <div className="conflict-actions">
-              <button onClick={attempt(() => checkSideMemo(true))}>바뀐 내용 불러오기</button>
+              <button onClick={attempt(() => sideChecks[side](true))}>바뀐 내용 불러오기</button>
             </div>
           </div>
         )}
-        <EditorScroll key={`${memo.space}\n${memo.path}`} documentId={`${memo.space}\n${memo.path}`} positions={scrollPositions.current} visible={visible}>
+        <EditorScroll key={`${memo.space}\n${memo.path}`} documentId={`${side}\n${memo.path}`} scope={workspaceKey(workspaceRoot, `memo:${memo.space}`)} positions={scrollPositions.current} visible={visible}>
           {(() => {
             const mainBox = manuscriptBoxOf(kindOf(memo));
             return (
@@ -1272,31 +1271,32 @@ export default function MemoSession({
     );
   }
   // 한 번 연 메모는 탭별로 유지하며, 실제 선택된 탭만 표시하고 편집한다.
-  function memoTabs(list: MemoTab[], current: MemoTab | Memo | null, groupFocused: boolean) {
+  function memoTabs(list: MemoTab[], current: MemoTab | Memo | null, groupFocused: boolean, side: Side = focusedSide) {
     return list.map((tab) => {
       const key = `${tab.space}\n${tab.path}`;
       const shown = sameTab(tab, memo) ? memo
-        : sameTab(tab, sideMemo) ? sideMemo : retainedMemos.current.get(key);
+        : retainedMemos.current.get(key);
       if (!shown) return null;
       const visible = active && sameTab(tab, current);
       return <RetainedTab key={key} visible={visible}>
-        {memoBody(shown, visible && groupFocused, visible)}
+        {memoBody(shown, visible && groupFocused, visible, side)}
       </RetainedTab>;
     });
   }
   // 포커스되지 않은 그룹: 읽기 전용으로 보여 주고, 클릭하면 그 그룹으로 포커스를 옮긴다.
-  function sideGroup() {
-    if (!split) return null;
-    const cur = split.current;
+  function sideGroup(side: Side) {
+    const group = groups[side];
+    if (!group) return null;
+    const cur = group.current;
     return (
       <section
-        key={focusedSide === "left" ? "right" : "left"}
-        data-side={focusedSide === "left" ? "right" : "left"}
+        key={side}
+        data-side={side}
         className="editor-group inactive"
-        style={groupStyle(focusedSide === "left" ? "right" : "left")}
+        style={groupStyle(side)}
       >
         <div className="editor-tabs" role="tablist" aria-label="다른 그룹의 열린 메모">
-          {split.tabs.map((t) => {
+          {group.tabs.map((t) => {
             const current = !!cur && sameTab(t, cur),
               name = nameOf(t),
               key = `${t.space}\n${t.path}`;
@@ -1310,15 +1310,18 @@ export default function MemoSession({
                 className={`editor-tab ${current ? "current" : ""} ${t.pinned === false ? "preview" : ""} ${
                   menu?.target === "side:" + key ? "context-target" : ""
                 }`}
-                onClick={attempt(() => focusOther(t))}
-                onDoubleClick={attempt(() => focusOther(t, true))}
+                onClick={attempt(() => focusOther(t, false, side))}
+                onDoubleClick={attempt(() => focusOther(t, true, side))}
+                draggable
+                onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; dragSide.current = side; setDragTab(t); }}
+                onDragEnd={() => { setDragTab(null); setDropZone(null); }}
                 onMouseDown={(e) => {
                   if (e.button === 1) e.preventDefault();
                 }}
                 onAuxClick={(e) => {
-                  if (e.button === 1) closeSideTab(t);
+                  if (e.button === 1) closeSideTab(t, side);
                 }}
-                onContextMenu={(e) => openMenu(e, sideTabMenu(t), "side:" + key)}
+                onContextMenu={(e) => openMenu(e, sideTabMenu(t, side), "side:" + key)}
               >
                 <FileText size={14} />
                 <span>{name}</span>
@@ -1328,7 +1331,7 @@ export default function MemoSession({
                   title="닫기"
                   onClick={(e) => {
                     e.stopPropagation();
-                    closeSideTab(t);
+                    closeSideTab(t, side);
                   }}
                 >
                   <X size={14} />
@@ -1337,7 +1340,7 @@ export default function MemoSession({
             );
           })}
         </div>
-        {memoTabs(split.tabs, cur, false)}
+        {memoTabs(group.tabs, cur, false, side)}
       </section>
     );
   }
@@ -1664,13 +1667,13 @@ export default function MemoSession({
       <main className="workspace memo-main">
         <div
           className={`editor-groups ${split ? "split" : ""}`}
-          ref={groupsRef}
           onDragOverCapture={dragOverGroups}
           onDragLeave={(e) => {
             if (!e.currentTarget.contains(e.relatedTarget as Node)) setDropZone(null);
           }}
           onDropCapture={dropOnGroups}
         >
+        <div className="editor-workspace" ref={groupsRef} style={editorGridStyle(sides, splitRatio, rowRatio)}>
         {dropZone && (
           <div
             className="group-drop-zone"
@@ -1682,8 +1685,7 @@ export default function MemoSession({
             }}
           />
         )}
-        {split && focusedSide === "right" && sideGroup()}
-        {split && focusedSide === "right" && sash}
+        {sides.map(side => side !== focusedSide ? sideGroup(side) : (
         <section
           key={focusedSide}
           data-side={focusedSide}
@@ -1710,6 +1712,7 @@ export default function MemoSession({
                   draggable
                   onDragStart={(e) => {
                     e.dataTransfer.effectAllowed = "move";
+                    dragSide.current = focusedSide;
                     setDragTab(t);
                   }}
                   onDragEnd={() => {
@@ -1767,8 +1770,10 @@ export default function MemoSession({
           </div>
         )}
         </section>
-        {split && focusedSide === "left" && sash}
-        {split && focusedSide === "left" && sideGroup()}
+        ))}
+        {sides.some(side => side.endsWith("left")) && sides.some(side => side.endsWith("right")) && sash("x")}
+        {hasEditorRows(sides) && sash("y")}
+        </div>
         </div>
       </main>
       {menu && (

@@ -15,7 +15,7 @@ declare module "*/LICENSE?raw" {
 
 declare module "*.mjs" {
   export function tableStart(source: string): number;
-  export function plainText(text: string, options?: { preserveParagraphBreaks?: boolean }): string;
+  export function plainText(text: string, options?: { preserveParagraphBreaks?: boolean; dividerText?: string }): string;
   export function splitSoftBreaks(markdown: string, hardBreaks: boolean): string;
   export function characterCount(text: string, spaces?: boolean): number;
   export function requiresSource(text: string, options?: { tables?: boolean; links?: boolean; images?: boolean }): boolean;
@@ -122,7 +122,9 @@ declare module "*.mjs" {
     textareaBgColor: string;
     editorTextColor: string;
     serifSymbols: boolean;
-    dividerStyle: "solid" | "short" | "ornament" | "stars";
+    dividerStyle: "solid" | "short" | "ornament" | "stars" | "custom";
+    dividerThickness: number;
+    dividerText: string;
     dividerPaddingY: number;
     pageViewEnabled: boolean;
     pageViewFlow: "vertical" | "responsive";

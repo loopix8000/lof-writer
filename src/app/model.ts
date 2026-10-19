@@ -76,7 +76,7 @@ export type Navigation = { entries: Destination[]; index: number };
 // 편집기 탭. VS Code처럼 고정되지 않은 탭(미리보기)은 다음 문서를 열 때 재사용된다.
 export type EditorTab = { id: string; pinned: boolean };
 export type EditorGroup = { tabs: EditorTab[]; docId: string };
-export type Side = "left" | "right";
+export type Side = import("../editor-groups").EditorSide;
 export function withoutTab(group: EditorGroup | null, id: string): EditorGroup | null {
   if (!group) return group;
   const index = group.tabs.findIndex((t) => t.id === id);

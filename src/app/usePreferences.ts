@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { DEFAULT_EDITOR_STYLE } from "../../core/typesetting.mjs";
 import { call, type Kind } from "../types";
+import { prepareEditorFonts } from "../font-loader";
 
 export function usePreferences() {
   const [prefs, setPrefs] = useState<Record<string, any>>({
@@ -40,6 +41,7 @@ export function usePreferences() {
         },
       };
     }
+    prepareEditorFonts({ ...prefsRef.current, ...payload });
     setPrefs((old) => ({ ...old, ...payload }));
     await call("setPreferences", payload);
   }

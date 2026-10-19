@@ -1,11 +1,12 @@
 import {
+  Archive,
+  ArchiveRestore,
   ChevronDown,
   ChevronRight,
   FilePlus,
   Folder,
   FolderOpen,
   FolderPlus,
-  Trash2
 } from "lucide-react";
 import { Fragment } from "react";
 
@@ -18,7 +19,7 @@ import type { FileTreeController } from "./useFileTree";
 export default function MemoFolderTree({ tree, treeRow }: { tree: FileTreeController; treeRow: RenderTreeRow }) {
   const {
     memoOpenFolders, folderRenaming, attempt, renameMemoFolder, treeDrop,
-    openMenu, docCreateMenu, addMemoFolder, removeMemoFolder,
+    openMenu, docCreateMenu, addMemoFolder, archiveMemoFolder, removeMemoFolder,
   } = tree;
   const query = tree.treeQuery.memo;
 
@@ -71,6 +72,10 @@ export default function MemoFolderTree({ tree, treeRow }: { tree: FileTreeContro
                   if (e.key === "F2") {
                     e.preventDefault();
                     tree.startFolderRename(f.path, f.name);
+                  } else if (e.key === "Delete") {
+                    e.preventDefault();
+                    if (e.shiftKey) attempt(() => removeMemoFolder(f.path))();
+                    else if (!tree.archive) attempt(() => archiveMemoFolder(f.path, true))();
                   }
                 }}
                 onContextMenu={(e) => openMenu(e, tree.folderMenu(f), "folder-" + f.path)}
@@ -79,6 +84,7 @@ export default function MemoFolderTree({ tree, treeRow }: { tree: FileTreeContro
                 {open ? <FolderOpen size={15} /> : <Folder size={15} />}
                 <span>{f.name}</span>
                 <span className="tree-actions">
+                  {!tree.archive && <>
                   <span
                     className="tree-action"
                     role="button"
@@ -105,18 +111,19 @@ export default function MemoFolderTree({ tree, treeRow }: { tree: FileTreeContro
                   >
                     <FolderPlus size={14} />
                   </span>
+                  </>}
                   <span
                     className="tree-action"
                     role="button"
                     tabIndex={-1}
-                    title="폴더 삭제"
-                    aria-label={`${f.name} 폴더 삭제`}
+                    title={tree.archive ? "보관 해제" : "보관함으로 이동"}
+                    aria-label={`${f.name} 폴더 ${tree.archive ? "보관 해제" : "보관함으로 이동"}`}
                     onClick={(e) => {
                       e.stopPropagation();
-                      attempt(() => removeMemoFolder(f.path))();
+                      attempt(() => archiveMemoFolder(f.path, !tree.archive))();
                     }}
                   >
-                    <Trash2 size={14} />
+                    {tree.archive ? <ArchiveRestore size={14} /> : <Archive size={14} />}
                   </span>
                 </span>
               </button>
