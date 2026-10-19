@@ -9,6 +9,7 @@ test-results/
 playwright-report/
 *.log
 docs/
+temp/
 .private/
 .startup-diagnostic/
 src-tauri/tauri.updater.generated.json
