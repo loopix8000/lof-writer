@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createHash, createPublicKey, verify } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
@@ -42,6 +43,34 @@ try {
   gh("release", "download", tag, "--pattern", `${installer}.sig`, "--dir", temporary);
   if (fs.readFileSync(path.join(temporary, `${installer}.sig`), "utf8").trim() !== platform.signature.trim()) {
     throw new Error("Updater signature does not match the MSI signature asset.");
+  }
+  // 잘못 등록한 비밀키로 서명한 설치 파일이 기존 앱에 배포되지 않도록 확인한다.
+  const publicKey = process.env.TAURI_UPDATER_PUBLIC_KEY?.trim();
+  if (!publicKey) throw new Error("서명을 확인할 TAURI_UPDATER_PUBLIC_KEY가 필요합니다.");
+  const decode = value => Buffer.from(value, "base64").toString("utf8").trim().split(/\r?\n/);
+  const publicPacket = Buffer.from(decode(publicKey)[1] ?? "", "base64");
+  const signatureLines = decode(platform.signature.trim());
+  const signaturePacket = Buffer.from(signatureLines[1] ?? "", "base64");
+  if (publicPacket.length !== 42 || signaturePacket.length !== 74 ||
+      signaturePacket.subarray(0, 2).toString() !== "ED" ||
+      !signatureLines[2]?.startsWith("trusted comment: ")) {
+    throw new Error("업데이트 공개키 또는 서명 형식이 올바르지 않습니다.");
+  }
+  if (!publicPacket.subarray(2, 10).equals(signaturePacket.subarray(2, 10))) {
+    throw new Error("비밀키와 앱 공개키가 다릅니다. 기존 Writer 비밀키를 복구해 주세요.");
+  }
+  const key = createPublicKey({
+    key: Buffer.concat([Buffer.from("302a300506032b6570032100", "hex"), publicPacket.subarray(10)]),
+    format: "der", type: "spki",
+  });
+  gh("release", "download", tag, "--pattern", installer, "--dir", temporary);
+  const payload = fs.readFileSync(path.join(temporary, installer));
+  const digest = createHash("blake2b512").update(payload).digest();
+  const signature = signaturePacket.subarray(10);
+  const trusted = Buffer.concat([signature, Buffer.from(signatureLines[2].slice(17))]);
+  if (!verify(null, digest, key, signature) ||
+      !verify(null, trusted, key, Buffer.from(signatureLines[3] ?? "", "base64"))) {
+    throw new Error("설치 파일의 업데이트 서명 검증에 실패했습니다.");
   }
   const publicDownload = `https://github.com${prefix}${encodeURIComponent(installer)}`;
   const originalDownload = platform.url;

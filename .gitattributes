@@ -1,0 +1,2 @@
+# 외부 글꼴 라이선스 원문의 줄바꿈과 공백을 그대로 보존한다.
+src/fonts/*-OFL.txt -text -whitespace

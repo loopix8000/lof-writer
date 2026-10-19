@@ -62,4 +62,5 @@ jobs:
         if: inputs.publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_UPDATER_PUBLIC_KEY: ${{ vars.TAURI_UPDATER_PUBLIC_KEY }}
         run: node scripts/publish-release.mjs

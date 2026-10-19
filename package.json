@@ -1,7 +1,7 @@
 {
   "name": "lof-writer",
   "productName": "Lof Writer",
-  "version": "1.0.3-beta.9",
+  "version": "1.0.4-beta.6",
   "private": true,
   "description": "Local First Writing Tool",
   "author": "Lof Writer",
@@ -21,6 +21,7 @@
     "mcp": "node scripts/mcp.mjs",
     "snapshot": "node scripts/snapshot.mjs",
     "package:dir": "node scripts/package-tauri.mjs dir",
+    "licenses": "node scripts/generate-licenses.mjs",
     "package:msi": "node scripts/package-tauri.mjs msi",
     "updater:prepare": "node scripts/prepare-updater.mjs",
     "updater:keygen": "node scripts/generate-updater-key.mjs",

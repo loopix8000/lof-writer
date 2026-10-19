@@ -1,0 +1,47 @@
+import { useState, type Dispatch, type SetStateAction } from "react";
+import { Link, RefreshCw, X } from "lucide-react";
+import { call, type AutoSyncStatus, type SyncConnection } from "./types";
+const labels = { idle: "동기화 완료", pending: "동기화 대기", syncing: "동기화 중", error: "동기화 재시도 대기" };
+export default function SyncConnections({ connections, setConnections, autoSync, intervalSeconds, onIntervalChange, busy, setBusy, onSync, message, report }: {
+  connections: SyncConnection[]; setConnections: Dispatch<SetStateAction<SyncConnection[]>>; autoSync: AutoSyncStatus;
+  intervalSeconds: number; onIntervalChange: (seconds: number) => Promise<unknown>; busy: boolean; setBusy: (busy: boolean) => void;
+  onSync: (id: string) => Promise<void>; message: (message: string) => void; report: (error: any) => void;
+}) {
+  const [connectionType, setConnectionType] = useState("folder");
+  const status = autoSync.channels?.files ?? { phase: "idle", message: "" };
+  const attempt = (action: () => Promise<unknown>) => () => { void action().catch(report); };
+  const reload = async () => { setConnections((await call("settings")).connections); };
+  return <fieldset className="sync-connections" disabled={busy}>
+    <p className="settings-description">로컬 폴더·WebDAV·FTP 저장소와 서재의 Markdown 원본, 작품 정보, 이미지·첨부 파일을 폴더 구조 그대로 동기화합니다. 앱 실행 시와 트레이에서 열 때, 설정한 주기마다 변경을 확인합니다.</p>
+    <label className="connection-conflict-policy">자동 동기화 주기<select aria-label="파일 자동 동기화 주기" value={intervalSeconds} onChange={event => onIntervalChange(Number(event.target.value)).catch(report)}>
+      <option value={60}>1분</option><option value={300}>5분 (기본)</option><option value={600}>10분</option><option value={900}>15분</option><option value={1800}>30분</option><option value={3600}>1시간</option>
+    </select></label>
+    <p className="settings-note">파일 저장소에만 적용됩니다. 원고를 수동 저장하거나 ‘동기화’를 누르면 바로 실행합니다.</p>
+    <aside className="sync-notice"><strong>동기화는 아직 불안정할 수 있으니 중요한 원고는 따로 백업해 주세요.</strong><p>모든 기기를 최신 버전으로 업데이트해야 하며, 수정 이력은 기기마다 따로 보관합니다. 파일 충돌 사본은 서재의 .lof/file-conflicts 폴더에 보관합니다.</p></aside>
+    {connections.length > 0 && <p role="status" aria-live="off" className={status.phase === "error" ? "pin-error" : "muted"}>{labels[status.phase]}{status.message && ` · ${status.message}`}</p>}
+    {connections.length === 0 && <p className="sync-empty">연결된 파일 저장소가 없습니다.</p>}
+    {connections.map(connection => <div className="connection" key={connection.id}>
+      <div><b>{connection.name}</b><small>{connection.type === "folder" ? connection.folder : connection.url || connection.host}</small>
+        <label className="connection-conflict-policy">충돌 사본 처리<select aria-label={`${connection.name} 충돌 사본 처리`} value={connection.conflictPolicy ?? "keepBoth"} disabled={busy || autoSync.phase === "syncing"} onChange={event => {
+          const conflictPolicy = event.target.value;
+          attempt(async () => { setBusy(true); try { const updated = await call("setSyncConflictPolicy", { id: connection.id, conflictPolicy }); setConnections(current => current.map(item => item.id === connection.id ? updated : item)); } finally { setBusy(false); } })();
+        }}><option value="latest">최신본으로 덮어쓰기</option><option value="keepBoth">파일명을 바꿔 둘 다 보존</option></select></label>
+      </div>
+      <button disabled={busy || autoSync.phase === "syncing"} onClick={() => onSync(connection.id)}><RefreshCw size={15} />{busy ? "진행 중" : "동기화"}</button>
+      <button disabled={busy} title="연결 제거 (원격 파일 보존)" aria-label={`${connection.name} 연결 제거`} onClick={attempt(async () => { await call("removeConnection", { id: connection.id }); await reload(); })}><X size={15} /></button>
+    </div>)}
+    <form className="connection-form" onSubmit={event => {
+      event.preventDefault(); const data = Object.fromEntries(new FormData(event.currentTarget));
+      void (async () => { setBusy(true); try { await call("saveConnection", { ...data, type: connectionType, secure: data.secure === "on" }); await reload(); message("연결을 추가했습니다. 자동 동기화를 시작합니다."); } finally { setBusy(false); } })().catch(report);
+    }}>
+      <div className="row gap"><select aria-label="파일 저장소 연결 방식" disabled={busy} value={connectionType} onChange={event => setConnectionType(event.target.value)}><option value="folder">로컬 폴더</option><option value="webdav">WebDAV</option><option value="ftp">FTP / FTPS</option></select><input name="name" aria-label="연결 이름" placeholder="연결 이름" disabled={busy} /></div>
+      {(connectionType === "webdav" || connectionType === "ftp") && <>
+        <input name={connectionType === "webdav" ? "url" : "host"} aria-label="서버 주소" required placeholder={connectionType === "webdav" ? "https://nas.example.com/dav" : "FTP 호스트"} />
+        <div className="row gap"><input name="username" aria-label="사용자 이름" placeholder="사용자 이름" autoComplete="off" /><input name="password" aria-label="비밀번호" type="password" placeholder="비밀번호" autoComplete="off" /></div>
+        <input name="remotePath" aria-label="원격 폴더" placeholder="원격 폴더 (예: /writing)" />
+        {connectionType === "ftp" && <div className="row gap"><input name="port" aria-label="FTP 포트" type="number" placeholder="포트 (기본 21)" /><label className="checkbox"><input type="checkbox" name="secure" defaultChecked />FTPS</label></div>}
+      </>}
+      <button disabled={busy} type="submit"><Link size={15} />{connectionType === "folder" ? "동기화 폴더 선택" : "연결 추가"}</button>
+    </form>
+  </fieldset>;
+}

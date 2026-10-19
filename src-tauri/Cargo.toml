@@ -1,6 +1,6 @@
 [package]
 name = "lof-writer"
-version = "1.0.3-beta.9"
+version = "1.0.4-beta.6"
 description = "Local First Writing Tool"
 authors = ["Lof Writer"]
 license = "MIT"
@@ -27,7 +27,6 @@ hex = "0.4"
 base64 = "0.22"
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
-notify = "6"
 trash = "5"
 rfd = "0.15"
 arboard = "3"
@@ -41,6 +40,15 @@ rusqlite = { version = "0.40", features = ["bundled", "backup"] }
 flate2 = "1"
 fs2 = "0.4"
 zip = { version = "9", default-features = false }
+notify = "8.2"
+quick-xml = { version = "0.42", features = ["serialize"] }
+percent-encoding = "2"
+rustls-native-certs = "0.8"
+lof-realtime = { path = "../crates/lof-realtime" }
+iroh = { version = "=1.3.0", default-features = false, features = ["tls-ring", "portmapper"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+git2 = { version = "0.21", default-features = false, features = ["vendored-libgit2"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [

@@ -1,6 +1,8 @@
 import { Fragment, useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useManuscriptCounts } from "./useManuscriptCounts";
 import { useProjectReorder } from "./useProjectReorder";
+import { useGitActivity } from "./useGitActivity";
+import HistoryDialog from "./HistoryDialog";
 import CoverImage, { ImageViewer } from "./CoverImage";
 import { editorDropZone, type EditorDropZone } from "./editor-groups";
 import {
@@ -24,6 +26,7 @@ import {
   Upload,
   Check,
   Cloud,
+  FolderSync,
   HardDrive,
   RefreshCw,
   Code2,
@@ -39,7 +42,6 @@ import {
   Moon,
   X,
   Feather,
-  Link,
   Copy,
   Pilcrow,
   Sparkles,
@@ -59,6 +61,7 @@ import {
   type Project,
   type WritingRules,
   type AutoSyncStatus,
+  type SyncConnection,
 } from "./types";
 import {
   countForRule,
@@ -88,10 +91,13 @@ import PlatformPicker from "./PlatformPicker";
 import TagInput from "./TagInput";
 import PropertyPresetSettings from "./PropertyPresetSettings";
 import PinSettings from "./PinSettings";
+import OpenSourceLicenses from "./OpenSourceLicenses";
 import ContextMenu, { type MenuItem } from "./ContextMenu";
 import { useConfirm } from "./ConfirmDialog";
 import { readFileForClose, useProjectSyncUpdates, useSyncFileUpdates } from "./useSyncFileUpdates";
 import SyncStatus from "./SyncStatus";
+import SyncConnections from "./SyncConnections";
+import RealtimeSync from "./RealtimeSync";
 import EpisodeProperties, { statusItems } from "./EpisodeProperties";
 import EpisodeBindingPicker from "./EpisodeBindingPicker";
 import {
@@ -113,7 +119,6 @@ import {
   type SearchResult,
 } from "./SearchViews";
 const composingError = "한글 입력 조합이 끝난 뒤 다시 저장해 주세요.";
-const autoSyncLabels = { idle: "동기화 완료", pending: "동기화 대기", syncing: "동기화 중", error: "동기화 재시도 대기" };
 const labels = { episode: "에피소드", plot: "플롯", memo: "메모" };
 const icons = { episode: BookOpen, plot: FileText, memo: StickyNote };
 // 파일 트리에서 회차가 이보다 많으면 이 단위로 묶어 접는다.
@@ -204,7 +209,7 @@ const settingPages = [
   { id: "autocomplete", label: "자동 완성", icon: Sparkles },
   { id: "defaults", label: "작품 기본값", icon: BookOpen },
   { id: "storage", label: "보관 및 이력", icon: HardDrive },
-  { id: "connections", label: "외부 저장소", icon: Cloud },
+  { id: "connections", label: "파일 동기화", icon: FolderSync },
   { id: "api", label: "MCP / API", icon: Code2 },
   { id: "security", label: "앱 잠금", icon: LockKeyhole },
   { id: "updates", label: "앱 업데이트", icon: Download },
@@ -277,14 +282,13 @@ export default function App() {
       seq: number;
     } | null>(null),
     [archive, setArchive] = useState(false),
-    [history, setHistory] = useState<{ name: string }[]>([]),
-    [preview, setPreview] = useState<any>(null),
     [prefs, setPrefs] = useState<Record<string, any>>({
       ...DEFAULT_EDITOR_STYLE,
       goal: 3000,
       theme: "light",
       colorTheme: "modern",
       copyWithBlankLines: false,
+      hideCovers: false,
       autoCloseQuotes: true,
       autoCloseBrackets: true,
       smartBrackets: true,
@@ -292,13 +296,10 @@ export default function App() {
       autoDividerReplacement: true,
       quoteStyle: "straight",
     }),
-    [connections, setConnections] = useState<any[]>([]),
+    [connections, setConnections] = useState<SyncConnection[]>([]),
     [autoSync, setAutoSync] = useState<AutoSyncStatus>({ phase: "idle", message: "" }),
     [syncChecking, setSyncChecking] = useState(false),
     [syncAvailable, setSyncAvailable] = useState(false),
-    [connectionType, setConnectionType] = useState("folder"),
-    [googleDriveEnabled, setGoogleDriveEnabled] = useState(false),
-    [googleConnecting, setGoogleConnecting] = useState(false),
     [skillDownloading, setSkillDownloading] = useState(false),
     [busy, setBusy] = useState(false),
     // 메모 세션(레일의 메모 버튼). 열려 있는 동안 집필 화면은 그대로 두고 가린다.
@@ -344,6 +345,7 @@ export default function App() {
   const editorTabsRef = useRef<EditorTab[]>([]),
     renamingRef = useRef<{ id: string; value: string; widget?: boolean } | null>(null);
   const memoFlush = useRef<((options?: { closing?: boolean }) => Promise<void>) | null>(null);
+  const memoManualSave = useRef<(() => Promise<void>) | null>(null);
   // 원고 이미지 경로별로 읽은 data URL(작품·원고 경로·이미지 경로가 키).
   const imageCache = useRef(new Map<string, Promise<string | null>>());
   // 메모 화면에서 메모를 여는 함수(빠른 열기에서 공용 메모를 고를 때).
@@ -423,7 +425,6 @@ export default function App() {
     initialized = useRef(false),
     navigationSeq = useRef(0),
     toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const checkpointDue = useRef(new Set<string>());
   // 앱에서 문서를 처음 열었을 때의 글자 수를 문서별로 유지한다.
   const sessionStarts = useRef(new Map<string, number>());
   const scrollPositions = useRef<EditorScrollPositions>(new Map());
@@ -523,7 +524,6 @@ export default function App() {
           throw Error("닫는 동안 원고가 변경되었습니다. 다시 닫아 주세요.");
         d.doc = fresh;
         d.saved = seq;
-        checkpointDue.current.delete(fresh.id);
         conflictRef.current = false;
         setConflict(false);
         setActive(fresh);
@@ -582,6 +582,11 @@ export default function App() {
     saveChain.current = task.catch(() => {});
     return task;
   }, []);
+  const gitActivity = useGitActivity(async () => {
+    await flush();
+    const pending = draft.current;
+    return !composing.current && !conflictRef.current && (!pending || pending.seq === pending.saved);
+  }, report);
   const updater = useAppUpdater({
     loaded,
     autoCheck: prefs.checkUpdatesOnStartup !== false,
@@ -597,6 +602,24 @@ export default function App() {
   // 변경 이력: 자동 저장은 이력을 남기지 않는다. 본문을 고친 문서를 기억해 두었다가 작업의 끝(입력이 멈춤,
   // 다른 문서로 옮김, Ctrl+S, 앱 종료)에 저장소가 지금 원고를 이력으로 남기게 한다. 남길지는 설정의 규칙으로 저장소가 정한다.
   const [confirm, confirmDialog] = useConfirm();
+  // 실시간 동기화가 그룹 방식으로 바뀌며 이전 장치 연결을 초기화했다면 서재를 연 뒤 한 번 안내한다.
+  const resetNoticeShown = useRef(false);
+  useEffect(() => {
+    if (!loaded || resetNoticeShown.current) return;
+    resetNoticeShown.current = true;
+    void call<boolean>("realtimeResetNotice").then(async notice => {
+      if (!notice) return;
+      const reconnect = await confirm({
+        title: "장치 연결이 초기화되었습니다",
+        message: "실시간 동기화가 동기화 그룹 방식으로 바뀌어 이전 장치 연결을 한 번 초기화했습니다. 서재와 원고는 그대로 있습니다.",
+        detail: "모든 장치의 Lof Writer와 Lof Library를 최신 버전으로 업데이트한 뒤, 한 장치에서 초대 코드를 만들어 나머지 장치를 같은 그룹에 다시 가입시켜 주세요. 이후 새 장치는 페어링 코드 한 번으로 그룹의 모든 장치와 연결됩니다.",
+        confirmLabel: "동기화 그룹 열기",
+        cancelLabel: "나중에",
+      });
+      await call("realtimeDismissReset");
+      if (reconnect) await openSettings("serverSync");
+    }).catch(report);
+  }, [loaded]);
   const checkOpenDocument = useSyncFileUpdates({
     fileKey: active?.id ?? "",
     enabled: loaded && !!active,
@@ -634,38 +657,17 @@ export default function App() {
     report,
   });
   checkOpenDocRef.current = checkOpenDocument;
-  const checkpointTimer = useRef<number | undefined>(undefined);
-  const checkpoint = useCallback(
-    async (ids?: string[]) => {
-      const list = (ids ?? [...checkpointDue.current]).filter((id) => checkpointDue.current.has(id));
-      if (!list.length) return;
-      await flush({ auto: true });
-      for (const id of list) {
-        checkpointDue.current.delete(id);
-        // 그사이 지워졌거나 이름이 바뀌어 ID가 달라진 문서는 건너뛴다.
-        await call("checkpointDocument", { id }).catch(() => {});
-      }
-    },
-    [flush],
-  );
-  // 직접 저장(Ctrl+S, 저장 단추). 설정에서 켜 두면(기본) 최소 변경 글자 수와 상관없이 지금 원고를 이력으로 남기고,
-  // 끄면 다른 작업의 끝처럼 규칙에 맞을 때만 남긴다.
+  // 직접 저장은 현재 문서의 Git 기록에 수동 저장 표시를 남긴다.
   const manualSave = useCallback(async () => {
     await flush();
-    const id = draft.current?.doc.id;
-    if (id && prefsRef.current.historyOnManualSave !== false) {
-      checkpointDue.current.delete(id);
-      await call("checkpointDocument", { id, force: true });
+    if (memoOpen) {
+      await memoManualSave.current?.();
+    } else {
+      const id = draft.current?.doc.id;
+      if (id) await call("checkpointDocument", { id, force: true });
     }
-    await checkpoint();
-  }, [flush, checkpoint]);
-  // 다른 문서로 옮기거나(분할 편집의 다른 그룹 포함) 문서를 닫으면 떠난 문서의 이력을 남긴다.
-  const leftDocId = useRef("");
-  useEffect(() => {
-    const prev = leftDocId.current;
-    leftDocId.current = active?.id ?? "";
-    if (prev && prev !== leftDocId.current) checkpoint([prev]).catch(report);
-  }, [active?.id, checkpoint, report]);
+    await call("requestSyncNow");
+  }, [flush, memoOpen]);
   useEffect(() => {
     refresh().catch(report);
     const off = window.lof.onChange(() => {
@@ -674,7 +676,6 @@ export default function App() {
     });
     const offFlush = window.lof.onFlush(async () => {
       await flush({ closing: true });
-      await checkpoint();
       // 트레이에서 돌아오거나 다른 탭을 다시 열 때도 예전 본문을 되살리지 않는다.
       retainedDocuments.current.clear();
       if (draft.current) setActive(draft.current.doc);
@@ -682,7 +683,8 @@ export default function App() {
     });
     const updateAutoSync = (status: AutoSyncStatus) => {
       setAutoSync(previous => previous.phase === status.phase && previous.message === status.message &&
-        previous.hasConnections === status.hasConnections ? previous : status);
+        previous.hasConnections === status.hasConnections &&
+        JSON.stringify(previous.channels) === JSON.stringify(status.channels) ? previous : status);
       if (status.hasConnections !== undefined) setSyncAvailable(status.hasConnections);
     };
     const offAutoSync = window.lof.onAutoSync?.(updateAutoSync);
@@ -692,25 +694,16 @@ export default function App() {
       offFlush();
       offAutoSync?.();
     };
-  }, [refresh, flush, checkpoint, report]);
+  }, [refresh, flush, report]);
   function edit(patch: Partial<Doc>, markdownCopy?: boolean) {
     const d = draft.current;
     if (!d) return;
+    gitActivity();
     const previousPolicy = documentSourceCache.get(d.doc);
     d.doc = cloneDocument(d.doc, patch);
     const required = markdownCopy ?? (patch.body === undefined ? previousPolicy?.required : undefined);
     if (required !== undefined) documentSourceCache.set(d.doc, { body: d.doc.body, required });
     d.seq++;
-    // 본문을 고치면 이력 대상으로 기억하고, 입력이 멈춘 채 설정한 시간이 지나면 이력을 남긴다.
-    if (patch.body !== undefined) {
-      const id = d.doc.id;
-      checkpointDue.current.add(id);
-      clearTimeout(checkpointTimer.current);
-      checkpointTimer.current = window.setTimeout(
-        () => checkpoint([id]).catch(report),
-        Math.max(1, Number(prefsRef.current.historyIdleMinutes) || 5) * 60_000,
-      );
-    }
     // VS Code처럼 미리보기 탭을 편집하면 고정 탭이 된다.
     updateTabs((tabs) =>
       tabs.some((t) => t.id === d.doc.id && !t.pinned)
@@ -726,6 +719,7 @@ export default function App() {
       timer.current = setTimeout(() => flush({ auto: true }).catch(report), 650);
   }
   function composition(value: boolean) {
+    gitActivity();
     composing.current = value;
     if (timer.current) clearTimeout(timer.current);
     if (!value)
@@ -809,9 +803,21 @@ export default function App() {
         next = rest[index] || rest[index - 1];
       if (next) await openDoc(next.id, false);
       else if (splitRef.current) return closeGroup();
-      else await goView("project");
+      else return closeLastTab();
     }
     updateTabs((current) => current.filter((t) => t.id !== id));
+  }
+  // 마지막 탭을 닫아도 작품 화면으로 넘어가지 않고 파일 트리가 있는 집필 화면을 유지한다.
+  async function closeLastTab() {
+    const seq = ++navigationSeq.current;
+    await flush();
+    if (seq !== navigationSeq.current) return;
+    draft.current = null;
+    activeId.current = "";
+    conflictRef.current = false;
+    setConflict(false);
+    setActive(null);
+    updateTabs(() => []);
   }
   // 포커스를 다른 그룹으로 옮긴다. openId가 있으면 그 문서를 그 그룹에서 연다.
   // 두 그룹을 맞바꾸는 일은 열 문서를 읽은 뒤 한 번에 한다. 먼저 바꾸면 옛 문서가 반대편 그룹에
@@ -889,7 +895,8 @@ export default function App() {
       await flush({ closing: true, skipMemo: true });
       if (focusId && kept.some((t) => t.id === focusId)) await openDoc(focusId, false);
       else if (splitRef.current) return closeGroup();
-      else await goView("project");
+      else if (!kept.length) return closeLastTab();
+      else await openDoc(kept[0].id, false);
     }
     updateTabs((current) => current.filter((t) => kept.some((k) => k.id === t.id)));
   }
@@ -1161,6 +1168,7 @@ export default function App() {
   }
   // 순서는 파일 트리에서 끌어서 바꾼다(treeRow).
   function docMenu(d: Doc): MenuItem[] {
+    const rawCopy = active?.id === d.id && (source || requiresDocumentSource(active));
     return [
       { label: "열기", action: attempt(() => openDoc(d.id, false)) },
       // 미리보기 탭을 바꾸지 않고 고정 탭으로 연다(더블클릭과 같다).
@@ -1198,11 +1206,8 @@ export default function App() {
       { label: "파일 탐색기에서 표시", shortcut: "Shift+Alt+R", action: attempt(() => call("reveal", { id: d.id })) },
       { label: "경로 복사", shortcut: "Shift+Alt+C", action: attempt(() => copyPath(d)) },
       {
-        label:
-          active?.id === d.id && (source || requiresDocumentSource(active))
-            ? "Markdown 원문 복사"
-            : "본문 복사",
-        action: attempt(() => copyDocManuscript(d)),
+        label: rawCopy ? "Markdown 원문 복사" : "본문 복사",
+        action: attempt(() => copyDocManuscript(d, rawCopy)),
       },
       {
         label: "Markdown 내보내기",
@@ -1560,51 +1565,6 @@ export default function App() {
   useEffect(() => {
     if (view === "workspace" && projectId) loadMemoFolders().catch(() => {});
   }, [view, projectId, lib]);
-  // 설정의 변경 이력 숫자 칸. 입력하는 중간값(예: 50을 치는 중의 5)으로 저장되지 않게 칸을 벗어날 때(Enter 포함)
-  // 저장한다. 보관 규칙(개수·기간)을 줄이면 오래된 이력이 바로 지워지므로 먼저 묻는다.
-  function historyField(label: string, key: string, fallback: number, min: number, max: number, step = 1) {
-    const value = Number(prefs[key] ?? fallback);
-    const commit = async (input: HTMLInputElement) => {
-      const next = Math.min(max, Math.max(min, Math.floor(Number(input.value) || min)));
-      input.value = String(next);
-      if (next === value) return;
-      const retention = key === "historyKeepCount" || key === "historyKeepDays";
-      if (
-        retention &&
-        next < value &&
-        !(await confirm({
-          title: "보관 범위 줄이기",
-          message: `${label}: ${value} → ${next}`,
-          detail: "규칙을 넘는 오래된 이력이 바로 지워지며, 되돌릴 수 없습니다.",
-          confirmLabel: "줄이기",
-          danger: true,
-        }))
-      ) {
-        input.value = String(value);
-        return;
-      }
-      await savePrefs({ [key]: next });
-    };
-    return (
-      <label>
-        {label}
-        <input
-          key={value}
-          type="number"
-          min={min}
-          max={max}
-          step={step}
-          aria-label={`변경 이력 ${label}`}
-          defaultValue={value}
-          onBlur={(e) => commit(e.currentTarget).catch(report)}
-          // Enter는 칸을 벗어나게 해서 한 번만 저장한다.
-          onKeyDown={(e) => {
-            if (e.key === "Enter") e.currentTarget.blur();
-          }}
-        />
-      </label>
-    );
-  }
   async function savePrefs(p: Record<string, any>) {
     let payload = p;
     if (
@@ -1660,16 +1620,20 @@ export default function App() {
         : { typesettingByKind: nextByKind };
     await savePrefs(fullPatch);
   }
-  async function openSettings() {
+  async function openSettings(type: "settings" | "serverSync" = "settings") {
     await flush();
     const s = await call("settings");
     setConnections(s.connections);
-    setGoogleDriveEnabled(s.googleDriveEnabled === true);
-    if (!s.googleDriveEnabled && connectionType === "google-drive") setConnectionType("folder");
     if (s.autoSync) setAutoSync(s.autoSync);
     setCommonMemoPath(s.commonMemoPath || "");
     if (active?.kind) setTypesettingKind(active.kind === "episode" ? "episode" : "document");
-    setDialog({ type: "settings" });
+    setDialog({ type });
+  }
+  function renderSyncConnections() {
+    return <SyncConnections connections={connections} setConnections={setConnections}
+      autoSync={autoSync} intervalSeconds={prefs.syncIntervalSeconds ?? 300}
+      onIntervalChange={(seconds) => savePrefs({ syncIntervalSeconds: seconds })}
+      busy={busy} setBusy={setBusy} onSync={doSync} message={message} report={report} />;
   }
   async function chooseVault() {
     setBusy(true);
@@ -1694,23 +1658,6 @@ export default function App() {
       setBusy(false);
     }
   }
-  async function connectGoogleDrive(args: { id?: string; name?: string }) {
-    if (!googleDriveEnabled) return;
-    setBusy(true);
-    try {
-      await flush();
-      setGoogleConnecting(true);
-      await call("connectGoogleDrive", args);
-      setConnections((await call("settings")).connections);
-      message("Google 계정을 연결했습니다. 자동 동기화를 시작합니다.");
-    } catch (e: any) {
-      if (e.code === "CANCELLED") message("Google Drive 연결을 취소했습니다.");
-      else report(e);
-    } finally {
-      setGoogleConnecting(false);
-      setBusy(false);
-    }
-  }
   async function doSync(id: string) {
     setBusy(true);
     try {
@@ -1718,7 +1665,7 @@ export default function App() {
       const result = await call("sync", { id });
       await refresh();
       message(
-        `동기화 완료 · 받음 ${result.downloaded} · 보냄 ${result.uploaded} · 충돌 사본 ${result.conflicts}${result.removed ? " · 다른 장치에서 삭제 " + result.removed : ""}${result.projectConflicts ? " · 작품 정보 충돌 " + result.projectConflicts + "개 (.lof/project-conflicts에 보관)" : ""}`,
+        `동기화 완료 · 받음 ${result.downloaded} · 보냄 ${result.uploaded} · 충돌 사본 ${result.conflicts}${result.fileConflicts ? " (.lof/file-conflicts에 보관)" : ""}${result.removed ? " · 다른 장치에서 삭제 " + result.removed : ""}${result.projectConflicts ? " · 작품 정보 충돌 " + result.projectConflicts + "개 (.lof/project-conflicts에 보관)" : ""}`,
       );
     } catch (e) {
       report(e);
@@ -1729,28 +1676,7 @@ export default function App() {
   async function showHistory() {
     await flush();
     if (!active) return;
-    setHistory(await call("history", { id: active.id }));
-    setPreview(null);
     setDialog({ type: "history" });
-  }
-  // 이력 창에서 이력 하나(name)나 이 문서의 이력 전부(name 없음)를 지운다. 되돌릴 수 없으므로 먼저 묻는다.
-  async function deleteHistory(name?: string) {
-    if (!active) return;
-    const ok = await confirm({
-      title: "이력 삭제",
-      message: name
-        ? `${new Date(Number(name.split("-")[0])).toLocaleString("ko-KR")} 이력을 삭제할까요?`
-        : `이 문서의 이력 ${history.length}개를 모두 삭제할까요?`,
-      detail: "삭제한 이력은 되돌릴 수 없습니다.",
-      confirmLabel: "삭제",
-      danger: true,
-      icon: <Trash2 size={15} />,
-    });
-    if (!ok) return;
-    const removed = await call<number>("deleteHistory", { id: active.id, name });
-    setHistory(await call("history", { id: active.id }));
-    if (!name || preview?.name === name) setPreview(null);
-    message(name ? "이력을 삭제했습니다." : `이력 ${removed}개를 삭제했습니다.`);
   }
   async function resolveConflict() {
     const d = draft.current;
@@ -2033,6 +1959,8 @@ export default function App() {
   const charsWithSpaces = stats ? countForRule(stats, "spaces", countUnit) : 0;
   const goal = Number(writingRules.goal) || 0;
   const isWorkspace = view === "workspace" && !!active && !memoOpen;
+  // 모든 탭을 닫은 집필 화면. 파일 트리는 그대로 두고 편집 영역만 비운다.
+  const emptyWorkspace = view === "workspace" && !active && !memoOpen;
   // 문서를 연 집중 모드에서만 창을 작게 줄일 수 있다. 끄면 원래 최소 크기로 돌아간다.
   const compactWindow = focus && isWorkspace;
   useEffect(() => {
@@ -2256,7 +2184,8 @@ export default function App() {
                   ? "Markdown 원문 복사"
                   : "본문 복사"
               }
-              onClick={attempt(() => copyDocManuscript(active))}
+              // 분할 화면에서는 이 칸의 문서가 전체 활성 문서와 다를 수 있으므로 표시한 방식 그대로 복사한다.
+              onClick={attempt(() => copyDocManuscript(active, source || requiresDocumentSource(active)))}
             >
               <Copy size={18} />
             </button>
@@ -3950,9 +3879,19 @@ export default function App() {
               {prefs.theme === "dark" ? <Sun size={20} /> : <Moon size={20} />}
             </button>
             <button
-              title="설정 및 외부 연결"
+              title="실시간 동기화"
+              aria-label="실시간 동기화"
+              aria-haspopup="dialog"
+              aria-expanded={dialog?.type === "serverSync"}
+              className={dialog?.type === "serverSync" ? "selected" : ""}
+              onClick={attempt(() => openSettings("serverSync"))}
+            >
+              <Cloud size={20} />
+            </button>
+            <button
+              title="설정"
               aria-label="설정"
-              onClick={attempt(openSettings)}
+              onClick={attempt(() => openSettings())}
             >
               <Settings size={20} />
             </button>
@@ -3960,7 +3899,7 @@ export default function App() {
         </nav>
         <div className="content-frame">
           {/* 문서 편집 화면에서는 탭이 제목 역할을 하므로 헤더를 숨긴다. */}
-          {!isWorkspace && !memoOpen && (
+          {!isWorkspace && !emptyWorkspace && !memoOpen && (
             <header className="workspace-header">
               <strong>Lof Writer</strong>
               <span className="titlebar-path">
@@ -3989,6 +3928,7 @@ export default function App() {
             prefs={prefs}
             onSidebarResize={(width) => savePrefs({ leftSidebarWidth: width }).catch(report)}
             flushRef={memoFlush}
+            manualSaveRef={memoManualSave}
             report={report}
             onOpenLink={(href, quote) =>
               attempt(async () => {
@@ -4043,7 +3983,7 @@ export default function App() {
             />
           </ResizableSidebar>
         )}
-        {isWorkspace && treeOpen && !searchOpen && (
+        {(isWorkspace || emptyWorkspace) && treeOpen && !searchOpen && (
           <ResizableSidebar label="파일 트리" className="file-tree" width={prefs.leftSidebarWidth}
             onResize={(width) => savePrefs({ leftSidebarWidth: width }).catch(report)}>
             <div className="panel-caption">
@@ -4076,7 +4016,7 @@ export default function App() {
               }}
             >
               <div className="mini-cover">
-                {project?.coverData ? (
+                {project?.coverData && !prefs.hideCovers ? (
                   <CoverImage src={project.coverData} alt="작품 표지" />
                 ) : (
                   <Feather size={23} />
@@ -4279,7 +4219,16 @@ export default function App() {
             </div>
           </ResizableSidebar>
         )}
-        <main className={isWorkspace ? "workspace" : "main-page"}>
+        <main className={isWorkspace || emptyWorkspace ? "workspace" : "main-page"}>
+          {emptyWorkspace && (
+            <div className="workspace-empty">
+              <div className="empty-state">
+                <FileText size={32} />
+                <h3>열린 문서가 없습니다</h3>
+                <p>파일 트리에서 문서를 선택하세요.</p>
+              </div>
+            </div>
+          )}
           {view === "bookmarks" && bookmarksPage()}
           {view === "library" && (
             <>
@@ -4296,7 +4245,7 @@ export default function App() {
                   {lib.projects
                     .map((p, i) => (
                       <button
-                        className={`project-card ${menu?.target === "project:" + p.id ? "context-target" : ""} ${projectReorder.cardClass(p.id)}`}
+                        className={`project-card ${prefs.hideCovers ? "no-cover" : ""} ${menu?.target === "project:" + p.id ? "context-target" : ""} ${projectReorder.cardClass(p.id)}`}
                         key={p.id}
                         {...projectReorder.cardProps(p.id)}
                         onClick={attempt(() => goView("project", p.id))}
@@ -4316,18 +4265,20 @@ export default function App() {
                           )
                         }
                       >
-                        <div className={`book-cover cover-${i % 4}`}>
-                          {p.coverData ? (
-                            <CoverImage src={p.coverData} alt={`${p.title} 표지`} />
-                          ) : (
-                            <>
-                              <Feather size={40} />
-                              <span>
-                                LOF / {String(i + 1).padStart(2, "0")}
-                              </span>
-                            </>
-                          )}
-                        </div>
+                        {!prefs.hideCovers && (
+                          <div className={`book-cover cover-${i % 4}`}>
+                            {p.coverData ? (
+                              <CoverImage src={p.coverData} alt={`${p.title} 표지`} />
+                            ) : (
+                              <>
+                                <Feather size={40} />
+                                <span>
+                                  LOF / {String(i + 1).padStart(2, "0")}
+                                </span>
+                              </>
+                            )}
+                          </div>
+                        )}
                         <div className="project-info">
                           <h3>{p.title}</h3>
                           <small>
@@ -4353,12 +4304,12 @@ export default function App() {
                   {/* 목록 맨 끝의 새 이야기 카드. 작품이 없으면 가운데의 '첫 이야기 만들기'만 보인다. */}
                   {lib.projects.length > 0 && (
                     <button
-                      className={`project-card new-project-card ${projectReorder.cardClass(null)}`}
+                      className={`project-card new-project-card ${prefs.hideCovers ? "no-cover" : ""} ${projectReorder.cardClass(null)}`}
                       {...projectReorder.cardProps(null)}
                       onClick={() => setDialog({ type: "newProject", value: "" })}
                     >
                       <div className="book-cover new-cover">
-                        <Plus size={30} />
+                        <Plus size={prefs.hideCovers ? 18 : 30} />
                       </div>
                       <div className="project-info">
                         <h3>새 이야기</h3>
@@ -4479,7 +4430,7 @@ export default function App() {
                     </button>
                   </div>
                 </div>
-                <div className="hero-cover">
+                {!prefs.hideCovers && <div className="hero-cover">
                   {project.coverData ? (
                     <button
                       className="cover-zoom"
@@ -4499,7 +4450,7 @@ export default function App() {
                       <span>YOUR STORY</span>
                     </>
                   )}
-                </div>
+                </div>}
               </div>
               <div className="project-tabs">
                 <div className="row gap">
@@ -4817,6 +4768,9 @@ export default function App() {
           읽지 못한 파일 {lib.warnings.length}개 · {lib.warnings[0]}
         </div>
       )}
+      {lib.localGit?.message && (
+        <div className="warning-strip" role="status">로컬 원고 기록 대기 · {lib.localGit.message}</div>
+      )}
       {recoverable > 0 && (
         <div className="recovery-toast" role="status">
           <span>복구 가능한 임시 원고 {recoverable}개</span>
@@ -4880,7 +4834,7 @@ export default function App() {
           }}
         >
           <div
-            className={`modal ${["settings", "history"].includes(dialog.type) ? "wide" : ""}${dialog.type === "settings" ? " settings-modal" : ""}`}
+            className={`modal ${["settings", "history"].includes(dialog.type) ? "wide" : ""}${dialog.type === "settings" ? " settings-modal" : ""}${dialog.type === "serverSync" ? " server-sync-modal" : ""}`}
             role="dialog"
             aria-modal="true"
           >
@@ -4890,7 +4844,8 @@ export default function App() {
                   {
                     newProject: "새 이야기",
                     editProject: "소설 관리",
-                    settings: "설정 및 연결",
+                    settings: "설정",
+                    serverSync: "실시간 동기화",
                     history: "변경 이력",
                     document: "문서 관리",
                     deleteDoc: "영구 삭제",
@@ -5115,81 +5070,21 @@ export default function App() {
                 </div>
               </form>
             )}
-            {dialog.type === "history" && (
-              <div className="history-layout">
-                <div className="history-list">
-                  {history.map((h) => (
-                    <button
-                      className={preview?.name === h.name ? "selected" : ""}
-                      key={h.name}
-                      onClick={attempt(async () =>
-                        setPreview({
-                          ...(await call("historyRead", {
-                            id: active!.id,
-                            name: h.name,
-                          })),
-                          name: h.name,
-                        }),
-                      )}
-                      onContextMenu={(e) =>
-                        openMenu(e, [
-                          { label: "이력 삭제", danger: true, action: attempt(() => deleteHistory(h.name)) },
-                        ])
-                      }
-                    >
-                      {new Date(Number(h.name.split("-")[0])).toLocaleString(
-                        "ko-KR",
-                      )}
-                    </button>
-                  ))}
-                  {!history.length && <p>아직 저장 이력이 없습니다.</p>}
-                  {history.length > 0 && (
-                    <button className="danger-outline history-clear" onClick={attempt(() => deleteHistory())}>
-                      <Trash2 size={14} />
-                      모든 이력 삭제
-                    </button>
-                  )}
-                </div>
-                <div className="history-preview">
-                  {preview ? (
-                    <>
-                      <b>{preview.title}</b>
-                      <pre>{preview.body}</pre>
-                      <div className="history-actions">
-                      <button
-                        className="primary"
-                        onClick={attempt(async () => {
-                          await flush();
-                          const restored = await call<Doc>("restore", {
-                            id: active!.id,
-                            name: preview.name,
-                            expectedRevision: draft.current!.doc.revision,
-                          });
-                          draft.current = { doc: restored, seq: 0, saved: 0 };
-                          setActive(restored);
-                          setDialog(null);
-                          await refresh();
-                          message(
-                            "이전 원고를 복원했습니다. 복원 전 내용도 이력에 남습니다.",
-                          );
-                        })}
-                      >
-                        이 버전으로 복원
-                      </button>
-                      <button
-                        className="danger-outline"
-                        onClick={attempt(() => deleteHistory(preview.name))}
-                      >
-                        <Trash2 size={14} />
-                        이 이력 삭제
-                      </button>
-                      </div>
-                    </>
-                  ) : (
-                    <p>왼쪽에서 저장 이력을 선택하세요.</p>
-                  )}
-                </div>
-              </div>
+            {dialog.type === "history" && active && (
+              <HistoryDialog documentId={active.id} report={report} onRestore={async (id, name) => {
+                await flush();
+                const current = draft.current;
+                if (!current || current.doc.id !== id) throw Error("열린 문서가 바뀌었습니다. 이력을 다시 열어 주세요.");
+                const restored = await call<Doc & { historyWarning?: string }>("restore", {
+                  id, name, expectedRevision: current.doc.revision,
+                });
+                if (restored.id !== id) replaceDocId(id, restored.id);
+                draft.current = { doc: restored, seq: 0, saved: 0 };
+                setActive(restored);
+                setDialog(null);
+                await refresh();
+                message(restored.historyWarning ?? "이전 원고를 복원했습니다. 복원 전 원고와 복원 결과를 모두 이력에 남겼습니다.");
+              }} />
             )}
             {dialog.type === "document" && active && (
               <>
@@ -5348,6 +5243,11 @@ export default function App() {
                 ))}
               </div>
             )}
+            {dialog.type === "serverSync" && (
+              <div className="server-sync-content">
+                <RealtimeSync onClose={() => setDialog(null)} />
+              </div>
+            )}
             {dialog.type === "settings" && (
               <>
                 <div className="settings-layout">
@@ -5365,6 +5265,7 @@ export default function App() {
                   <UpdateSettings updater={updater} version={lib.version}
                     autoCheck={prefs.checkUpdatesOnStartup !== false}
                     onAutoCheck={(checked) => savePrefs({ checkUpdatesOnStartup: checked }).catch(report)} />
+                  <OpenSourceLicenses />
                 </section>
                 <section id="settings-security" className="settings-section" hidden={settingsPage !== "security"}>
                   {settingsPage === "security" && <PinSettings />}
@@ -5430,6 +5331,14 @@ export default function App() {
                         <option value="dark">어둡게</option>
                       </select>
                     </label>
+                  </div>
+                  <div className="settings-toggles" style={{ marginTop: 14 }}>
+                    <SettingsToggle
+                      label="표지 숨기기"
+                      description="내 서재와 작품 화면에서 작품 표지를 표시하지 않습니다. 등록한 표지는 지우지 않습니다."
+                      checked={prefs.hideCovers === true}
+                      onChange={(checked) => savePrefs({ hideCovers: checked }).catch(report)}
+                    />
                   </div>
                   <PropertyPresetSettings presets={prefs.propertyPresets} tags={prefs.favoriteTags} onChange={savePrefs} />
                 </section>
@@ -5723,64 +5632,26 @@ export default function App() {
                 <section className="settings-section" hidden={settingsPage !== "storage"}>
                   <h3>
                     <History size={17} />
-                    변경 이력
+                    로컬 Git 기록
                   </h3>
-                  {/* 이력을 남기는 때: 자동 저장과 따로, 작업의 끝에만 남긴다(저장소 HistoryPolicy·checkpoint). */}
-                  <div className="settings-grid">
-                    {historyField("입력이 멈춘 뒤(분)", "historyIdleMinutes", 5, 1, 120)}
-                    {historyField("계속 쓸 때 최대 간격(분)", "historyMaxMinutes", 30, 5, 1440)}
-                    {historyField("최소 변경 글자 수", "historyMinChars", 200, 0, 100000, 50)}
-                  </div>
-                  <p className="muted">
-                    쓰다가 멈추거나 다른 문서로 옮길 때 이력을 남깁니다. 계속 쓰는 중에는 최대 간격마다 남깁니다.
+                  <p role="status" className={lib.localGit?.message ? "pin-error" : "muted"}>
+                    {lib.localGit?.message ? `로컬 Git 기록 대기 · ${lib.localGit.message}`
+                      : lib.localGit?.ready ? "로컬 Git 기록 사용 중"
+                      : `기존 이력을 로컬 Git으로 옮기는 중 · ${lib.localGit?.importedHistory ?? 0}개 완료`}
                   </p>
-                  <SettingsToggle
-                    label="직접 저장하면 항상 이력 남기기"
-                    description="Ctrl+S나 저장 단추로 저장하면 최소 변경 글자 수와 상관없이 이력을 남깁니다."
-                    checked={prefs.historyOnManualSave !== false}
-                    onChange={(checked) => savePrefs({ historyOnManualSave: checked }).catch(report)}
-                  />
-                  {/* 보관 규칙: 저장소가 하루 한 번(바꾸면 바로) 정리한다. 최근 10개는 늘 남는다(HISTORY_MINIMUM). */}
-                  <div className="settings-grid">
-                    {historyField("문서당 최대 개수", "historyKeepCount", 100, 10, 1000, 10)}
-                    {historyField("보관 기간(일)", "historyKeepDays", 30, 1, 3650)}
-                  </div>
-                  <p className="muted">
-                    개수나 기간을 넘은 이력은 지우고, 최근 10개는 항상 남깁니다. 이력은 이 PC에만 보관합니다.
-                  </p>
+                  <p className="settings-description">입력이 10초간 멈추고 원고 저장이 완료되면 로컬 Git에 기록합니다. 인터넷 연결이나 별도 Git 설치 없이 작동하며, 기존 원고와 변경 이력은 보존합니다.</p>
+                  <p className="settings-description">수동 저장 기록은 별도로 표시합니다. 모든 기록은 기간과 개수에 관계없이 그대로 보관하며, 자동으로 합치거나 삭제하지 않습니다. 이전 원고를 복원하면 현재 원고를 먼저 보존한 뒤 복원 결과를 새 기록으로 남깁니다.</p>
                   <div className="history-actions">
-                  <button disabled={busy} onClick={attempt(async () => {
-                    setBusy(true);
-                    try {
-                      await flush();
-                      const result = await call<{ path: string }>("backupStorage");
-                      message("로컬 이력 백업을 저장했습니다: " + result.path);
-                    } finally {
-                      setBusy(false);
-                    }
-                  })}>
-                    <HardDrive size={16} /> 로컬 이력 백업
-                  </button>
-                  {/* 모든 문서의 이력을 지운다. 되돌릴 수 없으므로 먼저 묻는다. */}
-                  <button
-                    className="danger-outline"
-                    disabled={busy}
-                    onClick={attempt(async () => {
-                      const ok = await confirm({
-                        title: "모든 이력 초기화",
-                        message: "모든 문서의 변경 이력을 삭제할까요?",
-                        detail: "삭제한 이력은 되돌릴 수 없습니다. 필요하면 먼저 로컬 이력 백업을 해 두세요.",
-                        confirmLabel: "초기화",
-                        danger: true,
-                        icon: <Trash2 size={15} />,
-                      });
-                      if (!ok) return;
-                      const removed = await call<number>("deleteHistory", {});
-                      message(`이력 ${removed}개를 삭제했습니다.`);
-                    })}
-                  >
-                    <Trash2 size={16} /> 모든 이력 초기화
-                  </button>
+                    <button disabled={busy || !lib.localGit?.ready} onClick={attempt(async () => {
+                      setBusy(true);
+                      try {
+                        await flush();
+                        const result = await call<{ path: string }>("backupGitHistory");
+                        message("Git 이력 백업을 저장했습니다: " + result.path);
+                      } finally { setBusy(false); }
+                    })}>
+                      <HardDrive size={16} /> Git 이력 백업
+                    </button>
                   </div>
                 </section>
                 <section id="settings-defaults" className="settings-section" hidden={settingsPage !== "defaults"}>
@@ -5836,181 +5707,8 @@ export default function App() {
                   </fieldset>
                 </section>
                 <section id="settings-connections" className="settings-section" hidden={settingsPage !== "connections"}>
-                  <h3>
-                    <Cloud size={18} />
-                    외부 저장소
-                  </h3>
-                  <p className="settings-description">작품·작문 페이지에 들어가면 즉시 동기화하고, 해당 화면에서는 3초마다 확인합니다. 다른 페이지나 트레이 상태에서도 1분마다 동기화합니다. 서재 파일의 변경이 감지되면 즉시 전송하며, 열린 본문은 확인 후 바꿉니다.</p>
-                  <aside className="sync-notice" aria-label="동기화 이용 안내">
-                    <strong>동기화는 아직 불안정할 수 있습니다.</strong>
-                    <p>중요한 원고는 별도로 백업해 주세요.</p>
-                    <p>동기화하려면 사용하는 모든 기기의 Lof Writer를 최신 버전으로 업데이트해야 합니다. 구버전 앱은 새 동기화 데이터를 받을 수 없습니다.</p>
-                    <p>최신 문서만 동기화하며, 수정 이력은 각 기기에 별도로 보관합니다.</p>
-                  </aside>
-                  {connections.length > 0 && <p role="status" aria-live="off" className={autoSync.phase === "error" ? "pin-error" : "muted"}>
-                    {autoSyncLabels[autoSync.phase]}{autoSync.message && ` · ${autoSync.message}`}
-                  </p>}
-                  {googleDriveEnabled && googleConnecting && <div className="connection" role="status">
-                    <div><b>Google 계정 연결 중</b><small>브라우저에서 로그인하고 접근을 허용해 주세요.</small></div>
-                    <button type="button" onClick={attempt(async () => { await call("cancelGoogleDrive"); })}>취소</button>
-                  </div>}
-                  {connections.map((c) => (
-                    <div className="connection" key={c.id}>
-                      <div>
-                        <b>{c.name}</b>
-                        <small>
-                          {c.type === "google-drive" ? `${c.email} · Google Drive / Lof Writer`
-                            : c.type === "folder" ? c.folder : c.url || c.host}
-                        </small>
-                        <label className="connection-conflict-policy">
-                          충돌 사본 처리
-                          <select aria-label={`${c.name} 충돌 사본 처리`} value={c.conflictPolicy ?? "keepBoth"}
-                            disabled={busy || autoSync.phase === "syncing"}
-                            onChange={(event) => {
-                              const conflictPolicy = event.target.value;
-                              attempt(async () => {
-                                setBusy(true);
-                                try {
-                                  const updated = await call("setSyncConflictPolicy", { id: c.id, conflictPolicy });
-                                  setConnections((current) => current.map((connection) => connection.id === c.id ? updated : connection));
-                                } finally { setBusy(false); }
-                              })();
-                            }}>
-                            <option value="latest">최신본으로 덮어쓰기</option>
-                            <option value="keepBoth">파일명을 바꿔 둘 다 보존</option>
-                          </select>
-                        </label>
-                      </div>
-                      <button disabled={busy || autoSync.phase === "syncing"} onClick={() => doSync(c.id)}>
-                        <RefreshCw size={15} />
-                        {busy ? "진행 중" : "동기화"}
-                      </button>
-                      {googleDriveEnabled && c.type === "google-drive" && <button disabled={busy}
-                        onClick={() => void connectGoogleDrive({ id: c.id })}>계정 다시 연결</button>}
-                      <button
-                        disabled={busy}
-                        title="연결 제거 (원격 파일 보존)"
-                        aria-label={`${c.name} 연결 제거`}
-                        onClick={attempt(async () => {
-                          await call("removeConnection", { id: c.id });
-                          setConnections((await call("settings")).connections);
-                        })}
-                      >
-                        <X size={15} />
-                      </button>
-                    </div>
-                  ))}
-                  <form
-                    className="connection-form"
-                    onSubmit={(e) => {
-                      e.preventDefault();
-                      const data = Object.fromEntries(
-                        new FormData(e.currentTarget),
-                      );
-                      if (connectionType === "google-drive") {
-                        void connectGoogleDrive({ name: String(data.name || "") });
-                        return;
-                      }
-                      (async () => {
-                        setBusy(true);
-                        try {
-                          await call("saveConnection", {
-                            ...data,
-                            type: connectionType,
-                            secure: data.secure === "on",
-                          });
-                          setConnections((await call("settings")).connections);
-                          message(
-                            "연결을 추가했습니다. 자동 동기화를 시작합니다.",
-                          );
-                        } finally {
-                          setBusy(false);
-                        }
-                      })().catch(report);
-                    }}
-                  >
-                    <div className="row gap">
-                      <select
-                        aria-label="연결 방식"
-                        disabled={busy}
-                        value={connectionType}
-                        onChange={(e) => setConnectionType(e.target.value)}
-                      >
-                        <option value="folder">로컬 폴더</option>
-                        {googleDriveEnabled && <option value="google-drive">Google Drive</option>}
-                        <option value="webdav">WebDAV</option>
-                        <option value="ftp">FTP / FTPS</option>
-                      </select>
-                      <input
-                        name="name"
-                        aria-label="연결 이름"
-                        placeholder="연결 이름"
-                        disabled={busy}
-                      />
-                    </div>
-                    {googleDriveEnabled && connectionType === "google-drive" && <p className="muted">
-                      내 Google 계정으로 로그인해 Drive의 Lof Writer 폴더에 동기화합니다.
-                      다른 PC에서도 같은 계정을 연결하세요.
-                    </p>}
-                    {(connectionType === "webdav" || connectionType === "ftp") && (
-                      <>
-                        <input
-                          name={connectionType === "webdav" ? "url" : "host"}
-                          aria-label="서버 주소"
-                          required
-                          placeholder={
-                            connectionType === "webdav"
-                              ? "https://nas.example.com/dav"
-                              : "FTP 호스트"
-                          }
-                        />
-                        <div className="row gap">
-                          <input
-                            name="username"
-                            aria-label="사용자 이름"
-                            placeholder="사용자 이름"
-                            autoComplete="off"
-                          />
-                          <input
-                            name="password"
-                            aria-label="비밀번호"
-                            type="password"
-                            placeholder="비밀번호"
-                            autoComplete="off"
-                          />
-                        </div>
-                        <input
-                          name="remotePath"
-                          aria-label="원격 폴더"
-                          placeholder="원격 폴더 (예: /writing)"
-                        />
-                        {connectionType === "ftp" && (
-                          <div className="row gap">
-                            <input
-                              name="port"
-                              aria-label="FTP 포트"
-                              type="number"
-                              placeholder="포트 (기본 21)"
-                            />
-                            <label className="checkbox">
-                              <input
-                                type="checkbox"
-                                name="secure"
-                                defaultChecked
-                              />
-                              FTPS
-                            </label>
-                          </div>
-                        )}
-                      </>
-                    )}
-                    <button disabled={busy} type="submit">
-                      <Link size={15} />
-                      {connectionType === "folder"
-                        ? "동기화 폴더 선택"
-                        : connectionType === "google-drive" ? "Google 계정 연결" : "연결 추가"}
-                    </button>
-                  </form>
+                  <h3><FolderSync size={18} />파일 동기화</h3>
+                  {settingsPage === "connections" && renderSyncConnections()}
                 </section>
                 <section id="settings-api" className="settings-section" hidden={settingsPage !== "api"}>
                   <h3>

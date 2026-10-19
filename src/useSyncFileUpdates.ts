@@ -1,8 +1,5 @@
 import { useCallback, useEffect, useRef } from "react";
-import { call } from "./types";
-
-type SyncCheck = { changed: boolean; busy: boolean; hasConnections: boolean };
-let remoteCheck: Promise<SyncCheck> | null = null;
+import { call, type AutoSyncStatus } from "./types";
 
 // 닫기 직전에 외부 저장이 진행 중이면 완료된 파일을 짧게 재확인한다.
 export async function readFileForClose<T>(read: () => Promise<T>): Promise<T> {
@@ -15,35 +12,22 @@ export async function readFileForClose<T>(read: () => Promise<T>): Promise<T> {
   }
 }
 
-// 작품을 전환하는 동안에도 진행 중인 네트워크 동기화는 중복 실행하지 않는다.
-function checkForSyncUpdates(): Promise<SyncCheck> {
-  if (remoteCheck) return remoteCheck;
-  remoteCheck = call<SyncCheck>("checkSyncUpdates").finally(() => { remoteCheck = null; });
-  return remoteCheck;
-}
-
 export function useProjectSyncUpdates(projectKey: string, report: (error: any) => void,
   onState: (checking: boolean, available?: boolean) => void) {
   const reportRef = useRef(report); reportRef.current = report;
   const stateRef = useRef(onState); stateRef.current = onState;
   useEffect(() => {
     if (!projectKey) return;
-    let canceled = false, checking = false;
-    const tick = async () => {
-      if (checking || canceled || document.documentElement.dataset.pinLocked === "true") return;
-      checking = true;
-      stateRef.current(true);
-      try {
-        const result = await checkForSyncUpdates();
-        if (!canceled) stateRef.current(false, result.hasConnections);
-      }
-      catch (error) { if (!canceled) reportRef.current(error); }
-      finally { checking = false; if (!canceled) stateRef.current(false); }
+    let canceled = false, receivedStatus = false;
+    const update = (status: AutoSyncStatus) => {
+      if (!canceled) stateRef.current(status.phase === "syncing", status.hasConnections);
     };
-    // 작품 페이지 진입 즉시 확인하며, 원고를 열지 않아도 같은 주기로 확인한다.
-    void tick();
-    const interval = window.setInterval(() => { void tick(); }, 3000);
-    return () => { canceled = true; clearInterval(interval); stateRef.current(false); };
+    // 화면은 공통 스케줄러의 상태만 구독하며 별도 네트워크 동기화를 실행하지 않는다.
+    const off = window.lof.onAutoSync?.((status) => { receivedStatus = true; update(status); });
+    call<AutoSyncStatus>("autoSyncStatus").then((status) => {
+      if (!receivedStatus) update(status);
+    }).catch((error) => { if (!canceled) reportRef.current(error); });
+    return () => { canceled = true; off?.(); stateRef.current(false); };
   }, [projectKey]);
 }
 
@@ -106,11 +90,10 @@ export function useSyncFileUpdates<T extends SyncedFile>(options: Options<T>) {
       if (!canceled && !["ENOENT", "NOT_FOUND", "VAULT_CHANGED", "SYNC_BUSY", "FILE_BUSY"].includes(error.code)) latest.current.report(error);
     };
     const tick = () => { if (!canceled) void checkLocal().catch(report); };
-    // 네트워크 확인은 작품 페이지가 맡고, 여기서는 열린 편집기의 내용만 비교한다.
+    // 네트워크 동기화는 공통 스케줄러가 맡고, 여기서는 열린 편집기의 내용만 비교한다.
     tick();
-    const interval = window.setInterval(() => { void tick(); }, 3000);
     const off = window.lof.onChange(() => { if (!canceled) void checkLocal().catch(report); });
-    return () => { canceled = true; clearInterval(interval); off(); };
+    return () => { canceled = true; off(); };
   }, [options.enabled, options.fileKey, checkLocal]);
   return checkLocal;
 }

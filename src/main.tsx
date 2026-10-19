@@ -2,6 +2,7 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import { installTauriBridge } from "./tauri-bridge";
 import PinGate from "./PinGate";
+import "./fonts.css";
 import "./style.css";
 
 installTauriBridge();

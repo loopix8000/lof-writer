@@ -160,6 +160,7 @@ impl LibraryDb {
             CREATE TABLE IF NOT EXISTS observations (doc_id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, doc BLOB NOT NULL);
             CREATE TABLE IF NOT EXISTS history (doc_id TEXT NOT NULL, name TEXT NOT NULL, data BLOB NOT NULL, saved_at TEXT NOT NULL, pinned INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(doc_id,name));
             CREATE INDEX IF NOT EXISTS history_time ON history(doc_id,saved_at DESC,name DESC);
+            CREATE INDEX IF NOT EXISTS history_git_migration_time ON history(saved_at,doc_id,name);
             CREATE TABLE IF NOT EXISTS pending_writes (doc_id TEXT PRIMARY KEY, previous BLOB NOT NULL, started_at TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS legacy_sources (path TEXT PRIMARY KEY, hash TEXT NOT NULL);
             PRAGMA user_version=1;")?;
@@ -199,6 +200,7 @@ impl LibraryDb {
         db.connection.pragma_update(None, "journal_mode", "WAL")?;
         db.connection
             .pragma_update(None, "wal_autocheckpoint", 500)?;
+        crate::library_sync_reset::migrate_database(&db.connection)?;
         db.recover_pending()?;
         Ok(db)
     }
@@ -530,6 +532,25 @@ impl LibraryDb {
             .collect::<Vec<_>>()))
     }
 
+    // 고정된 백업에서 조금씩 읽으므로 이관 중의 새 저장이나 이력 정리에 영향을 받지 않는다.
+    pub fn visit_history_backup(path: &Path, offset: usize, limit: usize,
+        mut visit: impl FnMut(&str, &str, Value) -> Result<(), LofError>) -> Result<usize, LofError> {
+        let connection = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        let mut query = connection.prepare(
+            "SELECT doc_id,name,data FROM history ORDER BY saved_at,doc_id,name LIMIT ?1 OFFSET ?2",
+        )?;
+        let mut rows = query.query(params![limit as i64, offset as i64])?;
+        let mut count = 0;
+        while let Some(row) = rows.next()? {
+            let id: String = row.get(0)?;
+            let name: String = row.get(1)?;
+            let data: Vec<u8> = row.get(2)?;
+            visit(&id, &name, decode(&data)?)?;
+            count += 1;
+        }
+        Ok(count)
+    }
+
     pub fn history_read(&self, id: &str, name: &str) -> Result<Option<Value>, LofError> {
         let bytes: Option<Vec<u8>> = self
             .connection
@@ -540,6 +561,39 @@ impl LibraryDb {
             )
             .optional()?;
         bytes.map(|data| decode(&data)).transpose()
+    }
+
+    pub fn visit_unimported_history(&self, imported: &std::collections::HashSet<String>, limit: usize,
+        mut visit: impl FnMut(&str, &str, Value) -> Result<(), LofError>) -> Result<usize, LofError> {
+        let mut query = self.connection.prepare("SELECT doc_id,name,data FROM history ORDER BY saved_at,doc_id,name")?;
+        let mut rows = query.query([])?;
+        let mut count = 0;
+        while let Some(row) = rows.next()? {
+            let id: String = row.get(0)?;
+            let name: String = row.get(1)?;
+            if imported.contains(&format!("{id}/{name}")) { continue; }
+            let bytes: Vec<u8> = row.get(2)?;
+            visit(&id, &name, decode(&bytes)?)?;
+            count += 1;
+            if count >= limit { break; }
+        }
+        Ok(count)
+    }
+
+    pub fn legacy_history_page(&self, id: &str, offset: usize, limit: usize) -> Result<Value, LofError> {
+        let mut query = self.connection.prepare("SELECT name,data,saved_at FROM history WHERE doc_id=?1 ORDER BY saved_at DESC,name DESC LIMIT ?2 OFFSET ?3")?;
+        let mut rows = query.query(params![id, (limit + 1) as i64, offset as i64])?;
+        let mut entries = Vec::new();
+        while let Some(row) = rows.next()? {
+            let name: String = row.get(0)?;
+            let bytes: Vec<u8> = row.get(1)?;
+            let doc = decode(&bytes)?;
+            entries.push(json!({"name":name,"savedAt":row.get::<_,String>(2)?,"title":doc["title"],
+                "kind":if doc["manual"].as_bool()==Some(true){"manual"}else{"legacy"}}));
+        }
+        let more = entries.len() > limit;
+        entries.truncate(limit);
+        Ok(json!({"entries":entries,"nextOffset":if more{Some(offset+limit)}else{None},"anchor":Value::Null,"migrating":true}))
     }
 
     // 이력을 지운다. id가 있으면 그 문서의 이력만(name이 있으면 그 하나만), 없으면 모든 이력을 지운다. 지운 개수를 돌려준다.

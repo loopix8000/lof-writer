@@ -185,6 +185,16 @@ pub fn tool_definitions() -> Value {
             }
         },
         {
+            "name": "history_page",
+            "description": "Git 문서 이력의 다음 페이지 조회. 첫 응답의 anchor를 다음 조회에도 전달하면 조회 중 새 기록이 생겨도 순서가 유지됩니다.",
+            "inputSchema": {
+                "type":"object",
+                "properties":{"id":{"type":"string"},"offset":{"type":"integer","minimum":0},
+                    "limit":{"type":"integer","minimum":1,"maximum":100},"anchor":{"type":"string"}},
+                "required":["id"],"additionalProperties":false
+            }
+        },
+        {
             "name": "history_restore",
             "description": "현재 revision 확인 후 이력 복원",
             "inputSchema": {
@@ -207,7 +217,7 @@ pub fn dispatch(
     args: &Value,
     on_mutate: &dyn Fn(),
 ) -> Result<Value, LofError> {
-    if !matches!(name,"library_list"|"document_read"|"document_search"|"history_list"|"history_read"){
+    if !matches!(name,"library_list"|"document_read"|"document_search"|"history_list"|"history_read"|"history_page"){
         store.require_database()?;
     }
     match name {
@@ -342,6 +352,12 @@ pub fn dispatch(
         "history_list" => {
             let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
             store.history(id)
+        }
+        "history_page" => {
+            let id = args["id"].as_str().unwrap_or("");
+            let offset = args["offset"].as_u64().unwrap_or(0).min(1_000_000) as usize;
+            let limit = args["limit"].as_u64().unwrap_or(100).clamp(1,100) as usize;
+            store.history_page(id, offset, limit, args["anchor"].as_str())
         }
         "history_read" => {
             let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
