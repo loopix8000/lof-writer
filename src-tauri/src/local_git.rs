@@ -54,6 +54,13 @@ impl LocalHistory {
     }
 
     pub(crate) fn repository(&self) -> Result<Repository, LofError> {
+        // NAS 등 네트워크 공유 폴더는 파일 소유자가 현재 Windows 사용자와 달라
+        // 소유자 검사에 걸린다. 앱 전용 저장소는 lof-owner.json으로 서재를 확인하므로 끈다.
+        static OWNER_VALIDATION: std::sync::Once = std::sync::Once::new();
+        OWNER_VALIDATION.call_once(|| {
+            // SAFETY: 다른 스레드가 저장소를 열기 전에 한 번만 호출되는 전역 설정이다.
+            let _ = unsafe { git2::opts::set_verify_owner_validation(false) };
+        });
         // 부모 저장소를 검색하지 않으며, 기존의 알 수 없는 디렉터리를 덮어쓰지 않는다.
         let repo = if self.path.try_exists()? {
             Repository::open_bare(&self.path)?

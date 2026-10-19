@@ -5534,7 +5534,11 @@ impl Store {
 
 pub fn strip_verbatim_prefix(p: &Path) -> PathBuf {
     let s = p.to_string_lossy();
-    if let Some(stripped) = s.strip_prefix(r"\\?\") {
+    // `\\?\UNC\server\share` is a network path; it must become `\\server\share`,
+    // otherwise stripping only `\\?\` leaves a relative `UNC\...` path.
+    if let Some(stripped) = s.strip_prefix(r"\\?\UNC\") {
+        PathBuf::from(format!(r"\\{stripped}"))
+    } else if let Some(stripped) = s.strip_prefix(r"\\?\") {
         PathBuf::from(stripped)
     } else {
         p.to_path_buf()
