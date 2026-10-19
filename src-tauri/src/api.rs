@@ -1,4 +1,4 @@
-use crate::error::{fail_invalid, slice_utf16_range, utf16_len, LofError};
+use crate::error::{fail, fail_invalid, slice_utf16_range, utf16_len, LofError};
 use crate::store::Store;
 use rand::RngCore;
 use serde_json::{json, Value};
@@ -12,9 +12,10 @@ use std::time::Duration;
 const MCP_INSTRUCTIONS: &str = r#"Lof Writer의 작품, 회차, 플롯, 메모를 조회하고 편집하는 서버입니다. Lof Writer 앱이 실행 중이어야 합니다.
 
 - library_list로 작품과 문서를 확인하고, 조회 결과의 작품 id를 projectId로, 문서 id를 id로 사용하세요. ID를 추측하지 마세요.
-- 문서를 수정하거나 이력을 복원하기 전에 document_read로 현재 내용과 revision을 조회하세요. document_update, document_patch, history_restore의 expectedRevision에는 조회한 revision을 그대로 전달하세요. 저장 후에는 새로 반환된 revision을 사용하세요.
+- 문서를 수정하거나 이력을 복원하기 전에 document_read로 현재 내용과 revision을 조회하세요. document_update, document_patch, document_apply_patch, history_restore의 expectedRevision에는 조회한 revision을 그대로 전달하세요. 저장 후에는 새로 반환된 revision을 사용하세요.
 - CONFLICT 오류가 나면 최신 문서를 다시 읽고 변경 내용을 비교한 뒤 사용자가 요청한 수정만 다시 적용하세요. revision만 최신 값으로 바꿔 이전 본문을 덮어쓰지 마세요.
 - 일부 문장을 수정할 때는 document_patch를 사용하세요. find는 현재 본문에서 정확히 한 번 일치해야 하므로 필요한 앞뒤 문맥을 포함하세요. 전체 본문 교체는 document_update의 body를 사용하세요.
+- 여러 구간을 줄 단위로 수정할 때는 document_apply_patch를 사용하세요. patch는 @@로 구간을 시작하고 공백 접두사의 문맥 줄, - 삭제 줄, + 추가 줄로 작성하세요. 각 구간은 원본 본문에서 유일하게 일치해야 하며 겹치는 구간은 합치세요. 파일 경로·파일 작업·메타데이터 변경은 지원하지 않고, 구간 하나라도 실패하면 저장하지 않습니다. 마지막 구간 끝의 *** End of File로 본문 끝에 일치하도록 제한할 수 있습니다.
 - document_read의 truncated가 true이면 본문이 일부만 반환된 것입니다. 전체 본문을 교체하기 전에 offset과 limit으로 나머지를 읽으세요. offset, limit, totalLength는 UTF-16 코드 단위입니다. 여러 번 읽는 동안 revision이 바뀌면 처음부터 다시 조회하세요.
 - 문서 생성 시 kind를 episode(회차), plot(플롯), memo(메모) 중에서 지정하세요. 플롯과 메모의 folder는 doc/ 아래의 상대 경로이므로 doc/ 접두사 없이 전달하세요. 회차에 연결할 때는 해당 작품에 존재하는 회차의 id를 episodeId로 전달하세요.
 - 사용자가 요청한 본문과 메타데이터만 변경하고, 나머지 문장, Markdown 서식, 태그, 속성, 줄바꿈 설정은 보존하세요. 순서 변경과 이력 복원은 사용자의 요청 범위에 포함된 경우에 수행하세요.
@@ -143,6 +144,20 @@ pub fn tool_definitions() -> Value {
                     "replace": { "type": "string" }
                 },
                 "required": ["id", "expectedRevision", "find", "replace"],
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": "document_apply_patch",
+            "description": "본문에 문맥 기반 줄 패치를 한 번에 적용. @@ 구간, 공백 문맥 줄, - 삭제 줄, + 추가 줄을 사용한다. 여러 구간은 원본에서 각각 유일하게 일치하고 범위가 겹치지 않아야 한다. 빈 줄에도 접두사가 필요하다. 마지막 *** End of File은 본문 끝을 지정한다. 문맥 없는 추가는 빈 본문에만 허용한다. 파일 작업·줄 번호·메타데이터 변경은 지원하지 않는다. 실패 시 전체 미저장. 성공 시 문서와 새 revision, appliedHunks를 반환한다.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "minLength": 1 },
+                    "expectedRevision": { "type": "string", "minLength": 1 },
+                    "patch": { "type": "string", "minLength": 1, "description": "예: @@\n 앞 문맥\n-이전 문장\n+새 문장\n 뒤 문맥. 기존 문맥과 삭제 줄은 공백까지 정확히 일치해야 한다. 추가 줄은 주변 CRLF/LF를 따르고 수정 범위 밖의 본문은 그대로 유지한다." }
+                },
+                "required": ["id", "expectedRevision", "patch"],
                 "additionalProperties": false
             }
         },
@@ -280,6 +295,49 @@ pub fn dispatch(
             }))?;
             on_mutate();
             Ok(r)
+        }
+        "document_apply_patch" => {
+            let Some(input) = args.as_object() else {
+                return Err(fail_invalid("id, expectedRevision, patch가 필요합니다."));
+            };
+            if input
+                .keys()
+                .any(|key| !matches!(key.as_str(), "id" | "expectedRevision" | "patch"))
+            {
+                return Err(fail_invalid(
+                    "document_apply_patch는 id, expectedRevision, patch만 받습니다.",
+                ));
+            }
+            let required = |key: &str| {
+                args.get(key)
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| {
+                        fail_invalid(format!("{key}는 비어 있지 않은 문자열이어야 합니다."))
+                    })
+            };
+            let id = required("id")?;
+            let expected = required("expectedRevision")?;
+            let patch = required("patch")?;
+            let current = store.read(id)?;
+            if current.get("revision").and_then(Value::as_str) != Some(expected) {
+                return Err(fail(
+                    "다른 곳에서 수정된 문서입니다. 현재 내용을 다시 확인해 주세요.",
+                    "CONFLICT",
+                ));
+            }
+            let applied = crate::document_patch::apply(
+                current.get("body").and_then(Value::as_str).unwrap_or(""),
+                patch,
+            )?;
+            let mut saved = store.save(&json!({
+                "id": id,
+                "expectedRevision": expected,
+                "body": applied.body,
+            }))?;
+            saved["appliedHunks"] = json!(applied.hunks);
+            on_mutate();
+            Ok(saved)
         }
         "history_list" => {
             let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");

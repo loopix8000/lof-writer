@@ -4,6 +4,17 @@ import { call } from "./types";
 type SyncCheck = { changed: boolean; busy: boolean; hasConnections: boolean };
 let remoteCheck: Promise<SyncCheck> | null = null;
 
+// 닫기 직전에 외부 저장이 진행 중이면 완료된 파일을 짧게 재확인한다.
+export async function readFileForClose<T>(read: () => Promise<T>): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try { return await read(); }
+    catch (error: any) {
+      if (error.code !== "FILE_BUSY" || attempt >= 2) throw error;
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 1000));
+    }
+  }
+}
+
 // 작품을 전환하는 동안에도 진행 중인 네트워크 동기화는 중복 실행하지 않는다.
 function checkForSyncUpdates(): Promise<SyncCheck> {
   if (remoteCheck) return remoteCheck;
@@ -92,7 +103,7 @@ export function useSyncFileUpdates<T extends SyncedFile>(options: Options<T>) {
     if (!options.enabled || !options.fileKey) return;
     let canceled = false;
     const report = (error: any) => {
-      if (!canceled && !["ENOENT", "NOT_FOUND", "VAULT_CHANGED", "SYNC_BUSY"].includes(error.code)) latest.current.report(error);
+      if (!canceled && !["ENOENT", "NOT_FOUND", "VAULT_CHANGED", "SYNC_BUSY", "FILE_BUSY"].includes(error.code)) latest.current.report(error);
     };
     const tick = () => { if (!canceled) void checkLocal().catch(report); };
     // 네트워크 확인은 작품 페이지가 맡고, 여기서는 열린 편집기의 내용만 비교한다.

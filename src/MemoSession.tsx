@@ -19,7 +19,7 @@ import RetainedTab from "./RetainedTab";
 import { editorDropZone, type EditorDropZone } from "./editor-groups";
 import ContextMenu, { type MenuItem } from "./ContextMenu";
 import { useConfirm } from "./ConfirmDialog";
-import { useSyncFileUpdates } from "./useSyncFileUpdates";
+import { readFileForClose, useSyncFileUpdates } from "./useSyncFileUpdates";
 import { call, type AutoSyncStatus, type Doc, type Kind } from "./types";
 import SyncStatus from "./SyncStatus";
 import { normalizeEditorStyle, resolveKindPrefs } from "../core/typesetting.mjs";
@@ -143,7 +143,7 @@ export default function MemoSession({
   saved: any;
   prefs: Record<string, any>;
   onSidebarResize: (width: number) => void;
-  flushRef: React.MutableRefObject<(() => Promise<void>) | null>;
+  flushRef: React.MutableRefObject<((options?: { closing?: boolean }) => Promise<void>) | null>;
   report: (e: any) => void;
   // 메모의 문서 링크(퀵 노트 출처)를 누르면 집필 창에서 그 문서를 열고 인용한 문장으로 간다.
   onOpenLink: (href: string, quote: string) => void;
@@ -250,10 +250,28 @@ export default function MemoSession({
     };
 
   // 저장은 하나씩 순서대로 한다. auto면 한글 조합 중에는 미뤘다가 조합이 끝나면 저장한다.
-  const save = useCallback((auto = false) => {
+  const save = useCallback((auto = false, closing = false) => {
     const run = async () => {
       const m = memoRef.current;
-      if (!m || dirty.current.seq === dirty.current.saved) return;
+      if (!m) return;
+      const loadExternalOnClose = async (onlyIfChanged = false) => {
+        if (composing.current) throw Error("입력 중인 글자를 확정한 뒤 다시 닫아 주세요.");
+        const seq = dirty.current.seq;
+        const fresh = await readFileForClose(() => readItem(m.space, m.path));
+        if (memoRef.current !== m || dirty.current.seq !== seq || composing.current)
+          throw Error("닫는 동안 메모가 변경되었습니다. 다시 닫아 주세요.");
+        if (onlyIfChanged && !conflictRef.current && fresh.revision === m.revision) return false;
+        dirty.current = { seq: 0, saved: 0 };
+        conflictRef.current = false;
+        setConflict(false);
+        setStatus("저장됨");
+        titleRef.current = fresh.title;
+        setTitle(fresh.title);
+        setCurrent(fresh);
+        return true;
+      };
+      if (closing && await loadExternalOnClose(true)) return;
+      if (dirty.current.seq === dirty.current.saved) return;
       if (auto && (composing.current || conflictRef.current)) return;
       const seq = dirty.current.seq;
       setStatus("저장 중");
@@ -276,7 +294,11 @@ export default function MemoSession({
           setCurrent({ ...now, revision: saved.revision, updatedAt: saved.updatedAt });
         setStatus(dirty.current.seq === dirty.current.saved ? "저장됨" : "저장 대기");
       } catch (e: any) {
-        if (e.code === "CONFLICT") setConflict(true);
+        if (closing && e.code === "CONFLICT") { await loadExternalOnClose(); return; }
+        if (e.code === "CONFLICT") {
+          conflictRef.current = true;
+          setConflict(true);
+        }
         setStatus("저장 안 됨");
         throw e;
       }
@@ -285,14 +307,21 @@ export default function MemoSession({
     chain.current = task.catch(() => {});
     return task;
   }, []);
-  const flush = useCallback(async () => {
+  const flush = useCallback(async ({ closing = false } = {}) => {
     clearTimeout(timer.current);
-    if (conflictRef.current && dirty.current.seq !== dirty.current.saved)
+    if (!closing && conflictRef.current && dirty.current.seq !== dirty.current.saved)
       throw Error("메모 변경 충돌을 해결해 주세요.");
-    await save();
+    await save(false, closing);
   }, [save]);
   useEffect(() => {
-    flushRef.current = flush;
+    flushRef.current = async (options) => {
+      await flush(options);
+      if (options?.closing) {
+        retainedMemos.current.clear();
+        if (memoRef.current) setCurrent(memoRef.current);
+        setSideMemo(null);
+      }
+    };
     return () => {
       flushRef.current = null;
     };
@@ -425,6 +454,7 @@ export default function MemoSession({
     ++openSeq.current;
     clearTimeout(timer.current);
     dirty.current = { seq: 0, saved: 0 };
+    conflictRef.current = false;
     setConflict(false);
     setStatus("저장됨");
     setCurrent(null);
@@ -436,7 +466,7 @@ export default function MemoSession({
       rest = list.filter(keep);
     if (rest.length === list.length) return;
     const closingCurrent = currentIndex >= 0 && !keep(list[currentIndex], currentIndex);
-    if (closingCurrent) await flush();
+    if (closingCurrent) await flush({ closing: true });
     setTabs(() => rest);
     if (!closingCurrent) return;
     const next =
@@ -527,6 +557,7 @@ export default function MemoSession({
 
   async function closeGroup() {
     if (!splitRef.current) return;
+    await flush({ closing: true });
     await focusOther();
     setSplit(() => null);
   }
@@ -534,7 +565,10 @@ export default function MemoSession({
     await focusOther(t, true);
     setSplit((g) => withoutMemoTab(g, t));
   }
-  const closeSideTab = (t: MemoTab) => setSplit((g) => withoutMemoTab(g, t));
+  const closeSideTab = (t: MemoTab) => {
+    setSplit((g) => withoutMemoTab(g, t));
+    if (sameTab(t, sideMemo)) setSideMemo(null);
+  };
   // 다른 그룹의 읽기 전용 메모도 새 본문을 반영하기 전에 확인한다.
   const sideKey = split?.current ? `${split.current.space}\n${split.current.path}` : "";
   const [sideSyncKey, setSideSyncKey] = useState("");
@@ -1124,7 +1158,7 @@ export default function MemoSession({
         </div>
         {focused && conflict && (
           <div className="memo-conflict" role="alert">
-            <span>다른 곳에서 이 메모가 바뀌었습니다.</span>
+            <span>다른 곳에서 이 메모가 바뀌었습니다. 선택하지 않고 닫으면 바뀐 내용을 사용합니다.</span>
             <div className="conflict-actions">
               <button onClick={attempt(reloadFromDisk)}>바뀐 내용 불러오기</button>
               <button onClick={attempt(keepMine)}>내 내용으로 덮어쓰기</button>

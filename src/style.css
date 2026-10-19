@@ -562,6 +562,7 @@ h1 small {
   align-content: start;
 }
 .project-card {
+  position: relative;
   border: 1px solid transparent;
   padding: 12px;
   text-align: left;
@@ -577,6 +578,35 @@ h1 small {
   border-color: var(--border);
   box-shadow: 0 6px 26px #00000008;
 }
+.project-card[draggable="true"] {
+  cursor: grab;
+  user-select: none;
+}
+.project-card.project-dragging {
+  opacity: 0.45;
+  cursor: grabbing;
+}
+.project-card.project-drop-before::after,
+.project-card.project-drop-after::after {
+  content: "";
+  position: absolute;
+  pointer-events: none;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+.project-card.project-drop-before::after { left: -14px; }
+.project-card.project-drop-after::after { right: -14px; }
+.project-card.project-drop-vertical::after {
+  left: 0;
+  right: 0;
+  width: auto;
+  height: 3px;
+}
+.project-card.project-drop-before.project-drop-vertical::after { top: -17px; bottom: auto; }
+.project-card.project-drop-after.project-drop-vertical::after { top: auto; bottom: -17px; }
 .book-cover {
   width: 93px;
   height: 143px;

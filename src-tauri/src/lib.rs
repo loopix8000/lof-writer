@@ -2,6 +2,7 @@ pub mod api;
 pub mod assets;
 mod auto_sync;
 pub mod database;
+mod document_patch;
 pub mod episode;
 pub mod error;
 pub mod file_index;
@@ -356,8 +357,10 @@ fn schedule_index_refresh(store: &Arc<Mutex<Option<Store>>>, seq: &Arc<AtomicU64
                 let after=(st.database()?.get("catalog")?,st.deleted()?);
                 Ok(before!=after)
             })();
-            if changed.unwrap_or(false) {
-                if let Some(state)=app.try_state::<AppState>(){schedule_notify(&app,&state.notify_seq);}
+            if let Ok(changed) = changed {
+                if changed {
+                    if let Some(state)=app.try_state::<AppState>(){schedule_notify(&app,&state.notify_seq);}
+                }
                 auto_sync::request_now(&app);
             }
         }
@@ -368,13 +371,11 @@ fn setup_vault_watcher(
     root: &Path,
     app: &AppHandle,
     store: &Arc<Mutex<Option<Store>>>,
-    notify_seq: &Arc<AtomicU64>,
     refresh_seq: &Arc<AtomicU64>,
 ) -> Option<RecommendedWatcher> {
     let root_buf = root.to_path_buf();
     let app_clone = app.clone();
     let store_clone = Arc::clone(store);
-    let n_seq = Arc::clone(notify_seq);
     let r_seq = Arc::clone(refresh_seq);
 
     let mut watcher = RecommendedWatcher::new(
@@ -406,8 +407,6 @@ fn setup_vault_watcher(
                 relevant = true;
             }
             if relevant {
-                auto_sync::request_now(&app_clone);
-                schedule_notify(&app_clone, &n_seq);
                 schedule_index_refresh(&store_clone, &r_seq, &app_clone);
             }
         },
@@ -494,7 +493,6 @@ fn bind_vault(state: &AppState, app: &AppHandle, root: &Path) -> Result<(), LofE
             &clean_root,
             app,
             &state.store,
-            &state.notify_seq,
             &state.refresh_seq,
         );
     }
@@ -601,7 +599,7 @@ fn handle_method(
 ) -> Result<Value, LofError> {
     if matches!(method,
         "createProject" | "updateProject" | "chooseCover" | "removeCover" | "createDocument" |
-        "saveDocument" | "reorderDocuments" | "deleteProject" | "repair" | "relinkDocument" |
+        "saveDocument" | "reorderDocuments" | "reorderProjects" | "deleteProject" | "repair" | "relinkDocument" |
         "adoptFile" | "forgetDocument" | "memoSave" | "memoCreate" | "memoCreateFolder" |
         "memoRename" | "memoMove" | "memoRemove" | "restore" | "deleteDocument" | "importFiles")
     {
@@ -880,6 +878,17 @@ fn dispatch_method(
             };
             schedule_notify(app, &state.notify_seq);
             Ok(res)
+        }
+        "reorderProjects" => {
+            let changed = {
+                let mut guard = state.store.lock().unwrap();
+                let store = guard.as_mut().ok_or_else(|| fail_invalid("Store not initialized"))?;
+                store.reorder_projects(&args)?
+            };
+            if changed {
+                schedule_notify(app, &state.notify_seq);
+            }
+            Ok(json!(changed))
         }
         "reorderDocuments" => {
             let res = {
@@ -2156,7 +2165,6 @@ pub fn run() {
                     &clean_vault_root,
                     &handle,
                     &st.store,
-                    &st.notify_seq,
                     &st.refresh_seq,
                 );
             }

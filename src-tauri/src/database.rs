@@ -369,6 +369,19 @@ impl LibraryDb {
     }
 
     pub fn observe(&self, doc: &Value) -> Result<(), LofError> {
+        self.observe_document(doc, None, true).map(|_| ())
+    }
+
+    pub fn observe_file(&self, doc: &Value, modified: &str, app_write: bool) -> Result<Value, LofError> {
+        self.observe_document(doc, Some(modified), app_write)
+    }
+
+    fn observe_document(
+        &self,
+        doc: &Value,
+        modified: Option<&str>,
+        app_write: bool,
+    ) -> Result<Value, LofError> {
         let id = doc["id"]
             .as_str()
             .filter(|id| valid_id(id))
@@ -384,20 +397,30 @@ impl LibraryDb {
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?;
-        if let Some((hash, bytes)) = &old {
-            if hash == fingerprint && decode(bytes)? == *doc {
-                return Ok(());
-            }
-        }
         let transaction = self.connection.unchecked_transaction()?;
         let pending: bool = self.connection.query_row(
             "SELECT EXISTS(SELECT 1 FROM pending_writes WHERE doc_id=?1)",
             [id],
             |row| row.get(0),
         )?;
+        let mut observed = doc.clone();
         if let Some((hash, bytes)) = &old {
+            let previous = decode(bytes)?;
+            if !pending && !app_write {
+                // 원고를 다시 쓰지 않고 실제 파일의 수정 시각을 관리 DB에 유지한다.
+                if hash != fingerprint {
+                    if let Some(modified) = modified {
+                        observed["updatedAt"] = json!(modified);
+                    }
+                } else if let Some(updated) = previous.get("updatedAt") {
+                    observed["updatedAt"] = updated.clone();
+                }
+            }
+            if hash == fingerprint && previous == observed {
+                transaction.commit()?;
+                return Ok(observed);
+            }
             if hash != fingerprint && !pending {
-                let previous = decode(bytes)?;
                 self.insert_history(
                     id,
                     &format!(
@@ -409,9 +432,9 @@ impl LibraryDb {
                 )?;
             }
         }
-        self.connection.execute("INSERT INTO observations VALUES(?1,?2,?3) ON CONFLICT(doc_id) DO UPDATE SET fingerprint=excluded.fingerprint,doc=excluded.doc",params![id,fingerprint,encode(doc)?])?;
+        self.connection.execute("INSERT INTO observations VALUES(?1,?2,?3) ON CONFLICT(doc_id) DO UPDATE SET fingerprint=excluded.fingerprint,doc=excluded.doc",params![id,fingerprint,encode(&observed)?])?;
         transaction.commit()?;
-        Ok(())
+        Ok(observed)
     }
 
     pub fn finish_write(&self, doc: &Value) -> Result<(), LofError> {

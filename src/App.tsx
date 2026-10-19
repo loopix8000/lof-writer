@@ -1,5 +1,6 @@
 import { Fragment, useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useManuscriptCounts } from "./useManuscriptCounts";
+import { useProjectReorder } from "./useProjectReorder";
 import CoverImage, { ImageViewer } from "./CoverImage";
 import { editorDropZone, type EditorDropZone } from "./editor-groups";
 import {
@@ -89,7 +90,7 @@ import PropertyPresetSettings from "./PropertyPresetSettings";
 import PinSettings from "./PinSettings";
 import ContextMenu, { type MenuItem } from "./ContextMenu";
 import { useConfirm } from "./ConfirmDialog";
-import { useProjectSyncUpdates, useSyncFileUpdates } from "./useSyncFileUpdates";
+import { readFileForClose, useProjectSyncUpdates, useSyncFileUpdates } from "./useSyncFileUpdates";
 import SyncStatus from "./SyncStatus";
 import EpisodeProperties, { statusItems } from "./EpisodeProperties";
 import EpisodeBindingPicker from "./EpisodeBindingPicker";
@@ -342,7 +343,7 @@ export default function App() {
     [dropZone, setDropZone] = useState<EditorDropZone | null>(null);
   const editorTabsRef = useRef<EditorTab[]>([]),
     renamingRef = useRef<{ id: string; value: string; widget?: boolean } | null>(null);
-  const memoFlush = useRef<(() => Promise<void>) | null>(null);
+  const memoFlush = useRef<((options?: { closing?: boolean }) => Promise<void>) | null>(null);
   // 원고 이미지 경로별로 읽은 data URL(작품·원고 경로·이미지 경로가 키).
   const imageCache = useRef(new Map<string, Promise<string | null>>());
   // 메모 화면에서 메모를 여는 함수(빠른 열기에서 공용 메모를 고를 때).
@@ -422,6 +423,7 @@ export default function App() {
     initialized = useRef(false),
     navigationSeq = useRef(0),
     toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const checkpointDue = useRef(new Set<string>());
   // 앱에서 문서를 처음 열었을 때의 글자 수를 문서별로 유지한다.
   const sessionStarts = useRef(new Map<string, number>());
   const scrollPositions = useRef<EditorScrollPositions>(new Map());
@@ -501,17 +503,41 @@ export default function App() {
     }
     return data;
   }, [updateTabs, updateSplit]);
-  const flush = useCallback(async ({ auto = false } = {}) => {
-    if (!auto) await memoFlush.current?.();
+  const projectReorder = useProjectReorder(libraryRef, lib.root, loaded && view === "library", busy, refresh, report);
+  const flush = useCallback(async ({ auto = false, closing = false, skipMemo = false } = {}) => {
+    if (!auto && !skipMemo) await memoFlush.current?.({ closing });
     await writingQueue.current;
     if (timer.current) clearTimeout(timer.current);
     const run = async () => {
       const d = draft.current;
-      if (!d || d.seq === d.saved) return;
+      if (!d) return;
+      const loadExternalOnClose = async (onlyIfChanged = false) => {
+        if (composing.current) throw Error(composingError);
+        const seq = d.seq;
+        const fresh = await readFileForClose(() => call<Doc>("readDocument", { id: d.doc.id }));
+        if (draft.current !== d || d.seq !== seq || composing.current)
+          throw Error("닫는 동안 원고가 변경되었습니다. 다시 닫아 주세요.");
+        if (onlyIfChanged && !conflictRef.current && fresh.revision === d.doc.revision) return false;
+        await call("clearDraft", { id: d.doc.id });
+        if (draft.current !== d || d.seq !== seq || composing.current)
+          throw Error("닫는 동안 원고가 변경되었습니다. 다시 닫아 주세요.");
+        d.doc = fresh;
+        d.saved = seq;
+        checkpointDue.current.delete(fresh.id);
+        conflictRef.current = false;
+        setConflict(false);
+        setActive(fresh);
+        setSaveStatus("저장됨");
+        return true;
+      };
+      // 닫기는 파일의 최신 내용을 채택하며, 일반 저장은 기존 충돌 처리를 유지한다.
+      if (closing && await loadExternalOnClose(true)) return;
+      if (d.seq === d.saved) return;
       const seq = d.seq,
         payload = { ...d.doc, expectedRevision: d.doc.revision };
       await call("saveDraft", payload);
       if (conflictRef.current) {
+        if (closing) { await loadExternalOnClose(); return; }
         if (auto) return;
         throw Error(
           "변경 충돌을 해결해 주세요. 입력한 원고는 임시 저장되어 있습니다.",
@@ -543,6 +569,7 @@ export default function App() {
           if (d.seq === seq) await call("clearDraft", { id: d.doc.id });
         }
       } catch (e: any) {
+        if (closing && e.code === "CONFLICT") { await loadExternalOnClose(); return; }
         setSaveStatus(e.code === "CONFLICT" ? "변경 충돌" : "저장 실패");
         if (e.code === "CONFLICT") {
           conflictRef.current = true;
@@ -607,7 +634,6 @@ export default function App() {
     report,
   });
   checkOpenDocRef.current = checkOpenDocument;
-  const checkpointDue = useRef(new Set<string>());
   const checkpointTimer = useRef<number | undefined>(undefined);
   const checkpoint = useCallback(
     async (ids?: string[]) => {
@@ -647,8 +673,12 @@ export default function App() {
         saveChain.current.then(() => refresh()).catch(report);
     });
     const offFlush = window.lof.onFlush(async () => {
-      await flush();
+      await flush({ closing: true });
       await checkpoint();
+      // 트레이에서 돌아오거나 다른 탭을 다시 열 때도 예전 본문을 되살리지 않는다.
+      retainedDocuments.current.clear();
+      if (draft.current) setActive(draft.current.doc);
+      setSideDoc(null);
     });
     const updateAutoSync = (status: AutoSyncStatus) => {
       setAutoSync(previous => previous.phase === status.phase && previous.message === status.message &&
@@ -774,6 +804,7 @@ export default function App() {
       index = tabs.findIndex((t) => t.id === id);
     if (index < 0) return;
     if (view === "workspace" && id === activeId.current) {
+      await flush({ closing: true, skipMemo: true });
       const rest = tabs.filter((t) => t.id !== id),
         next = rest[index] || rest[index - 1];
       if (next) await openDoc(next.id, false);
@@ -840,6 +871,7 @@ export default function App() {
   // 포커스된 그룹을 닫고 남은 그룹 하나로 돌아간다.
   async function closeGroup() {
     if (!splitRef.current) return;
+    await flush({ closing: true, skipMemo: true });
     await focusOther();
     updateSplit(() => null);
   }
@@ -849,10 +881,12 @@ export default function App() {
   }
   function closeSideTab(id: string) {
     updateSplit((group) => withoutTab(group, id));
+    if (sideDoc?.id === id) setSideDoc(null);
   }
   async function closeTabs(keep: (tab: EditorTab, index: number) => boolean, focusId?: string) {
     const kept = editorTabsRef.current.filter(keep);
     if (view === "workspace" && !kept.some((t) => t.id === activeId.current)) {
+      await flush({ closing: true, skipMemo: true });
       if (focusId && kept.some((t) => t.id === focusId)) await openDoc(focusId, false);
       else if (splitRef.current) return closeGroup();
       else await goView("project");
@@ -2262,8 +2296,7 @@ export default function App() {
         {focused && conflict && (
           <div className="conflict-banner">
             <span>
-              다른 편집 내용이 있습니다. 내 원고를 사본으로 보존한 뒤
-              계속할 수 있습니다.
+              다른 편집 내용이 있습니다. 선택하지 않고 닫으면 바뀐 내용을 사용합니다.
             </span>
             <div className="conflict-actions">
               <button onClick={attempt(resolveConflict)}>
@@ -4259,12 +4292,13 @@ export default function App() {
               {!loaded ? (
                 <div className="empty-state">내 서재를 여는 중...</div>
               ) : (
-                <div className="project-grid">
+                <div className="project-grid" aria-busy={projectReorder.saving || undefined}>
                   {lib.projects
                     .map((p, i) => (
                       <button
-                        className={`project-card ${menu?.target === "project:" + p.id ? "context-target" : ""}`}
+                        className={`project-card ${menu?.target === "project:" + p.id ? "context-target" : ""} ${projectReorder.cardClass(p.id)}`}
                         key={p.id}
+                        {...projectReorder.cardProps(p.id)}
                         onClick={attempt(() => goView("project", p.id))}
                         onContextMenu={(e) =>
                           openMenu(
@@ -4319,7 +4353,8 @@ export default function App() {
                   {/* 목록 맨 끝의 새 이야기 카드. 작품이 없으면 가운데의 '첫 이야기 만들기'만 보인다. */}
                   {lib.projects.length > 0 && (
                     <button
-                      className="project-card new-project-card"
+                      className={`project-card new-project-card ${projectReorder.cardClass(null)}`}
+                      {...projectReorder.cardProps(null)}
                       onClick={() => setDialog({ type: "newProject", value: "" })}
                     >
                       <div className="book-cover new-cover">

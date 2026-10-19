@@ -51,6 +51,7 @@ const methods = [
   "setTitleBarDimmed",
   "setCompactWindow",
   "reorderDocuments",
+  "reorderProjects",
   "deleteProject",
   "repair",
   "relinkDocument",

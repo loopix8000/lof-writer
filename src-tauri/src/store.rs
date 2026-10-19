@@ -5,7 +5,7 @@ use crate::episode::{
     DOCUMENT_META_FIELDS, LEGACY_STATUSES, META_FIELDS, STATUSES,
 };
 use crate::error::{
-    fail, fail_invalid, hash_str, now_iso, slice_utf16, sys_time_to_iso, utf16_len, valid_id,
+    fail, fail_invalid, hash_bytes, hash_str, now_iso, slice_utf16, sys_time_to_iso, utf16_len, valid_id,
     LofError,
 };
 use crate::file_index::{Catalog, CatalogProject, FileIndex, IndexedFileRecord};
@@ -48,6 +48,38 @@ fn sync_remote_is_newer(remote: &Value, local: &Value, remote_hash: &str, local_
 
 static CHANGE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static CHANGED_PATHS: OnceLock<Mutex<HashMap<PathBuf, u64>>> = OnceLock::new();
+static APP_WRITES: OnceLock<Mutex<HashMap<PathBuf, (String, SystemTime)>>> = OnceLock::new();
+const EXTERNAL_WRITE_DELAY: Duration = Duration::from_secs(1);
+
+fn app_writes() -> &'static Mutex<HashMap<PathBuf, (String, SystemTime)>> {
+    APP_WRITES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn is_app_write(file: &Path, raw: &str, stat: &fs::Metadata) -> bool {
+    app_writes().lock().unwrap().get(file).is_some_and(|(hash, modified)| {
+        stat.modified().ok() == Some(*modified) && *hash == hash_str(raw)
+    })
+}
+
+fn same_file_state(a: &fs::Metadata, b: &fs::Metadata) -> bool {
+    a.len() == b.len() && a.modified().ok() == b.modified().ok()
+        && a.created().ok() == b.created().ok()
+}
+
+// 외부 편집기의 연속 쓰기와 임시 파일 교체가 끝난 뒤에만 내용을 관찰한다.
+fn read_document_file(file: &Path) -> Result<(String, fs::Metadata), LofError> {
+    let before = fs::metadata(file)?;
+    let raw = fs::read_to_string(file)?;
+    let after = fs::metadata(file)?;
+    let modified = after.modified()?;
+    if !same_file_state(&before, &after) || after.len() != raw.len() as u64
+        || (!is_app_write(file, &raw, &after)
+            && modified.elapsed().is_ok_and(|age| age < EXTERNAL_WRITE_DELAY))
+    {
+        return Err(fail("외부 편집기가 파일을 저장 중입니다. 잠시 후 다시 확인합니다.", "FILE_BUSY"));
+    }
+    Ok((raw, after))
+}
 
 fn changed_paths_map() -> &'static Mutex<HashMap<PathBuf, u64>> {
     CHANGED_PATHS.get_or_init(|| Mutex::new(HashMap::new()))
@@ -91,6 +123,13 @@ pub fn atomic_write_bytes(file: &Path, data: &[u8]) -> Result<(), LofError> {
             handle.sync_all()?;
         }
         rename_with_retry(&temp, file)?;
+        if file.extension().and_then(|ext| ext.to_str()).is_some_and(|ext| {
+            ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("lofnew")
+        }) && !file.components().any(|part| part.as_os_str() == ".lof") {
+            if let Ok(modified) = fs::metadata(file).and_then(|stat| stat.modified()) {
+                app_writes().lock().unwrap().insert(file.to_path_buf(), (hash_bytes(data), modified));
+            }
+        }
         record_change(file);
         Ok(())
     })();
@@ -124,6 +163,13 @@ pub fn rename_with_retry(from: &Path, to: &Path) -> Result<(), LofError> {
     loop {
         match fs::rename(from, to) {
             Ok(()) => {
+                let mut writes = app_writes().lock().unwrap();
+                if let Some(written) = writes.remove(from) {
+                    writes.insert(to.to_path_buf(), written);
+                } else {
+                    writes.remove(to);
+                }
+                drop(writes);
                 record_change(from);
                 record_change(to);
                 return Ok(());
@@ -953,7 +999,11 @@ impl Store {
         let project_id = project.get("id").and_then(|v| v.as_str()).unwrap_or("");
         let entry_id = entry.get("id").and_then(|v| v.as_str()).unwrap_or("");
         let mut full_doc = doc_of(dir, project_id, entry, raw)?;
-        if let Some(db) = &self.index.database { db.observe(&full_doc)?; }
+        if let Some(db) = &self.index.database {
+            let file = PathBuf::from(full_doc["path"].as_str().unwrap_or(""));
+            full_doc = db.observe_file(&full_doc, &sys_time_to_iso(meta_stat.modified()?),
+                is_app_write(&file, raw, meta_stat))?;
+        }
         let body = full_doc
             .get("body")
             .and_then(|v| v.as_str())
@@ -971,6 +1021,9 @@ impl Store {
         let mut entry_with_hash = entry.clone();
         if let Some(eobj) = entry_with_hash.as_object_mut() {
             eobj.insert("hash".to_string(), json!(hash_str(&body)));
+            if let Some(updated) = full_doc.get("updatedAt") {
+                eobj.insert("updatedAt".to_string(), updated.clone());
+            }
         }
         let mtime = meta_stat
             .modified()
@@ -997,6 +1050,14 @@ impl Store {
             && !relative.split(['/', '\\']).any(|s| s == ".lof")
         {
             self.index.dirty.insert(relative.replace('\\', "/"));
+        }
+    }
+
+    fn retry_busy_file(&mut self, file: &Path, error: &LofError) {
+        if error.code == "FILE_BUSY" {
+            if let Ok(relative) = file.strip_prefix(&self.root) {
+                self.invalidate_path(&relative.to_string_lossy());
+            }
         }
     }
 
@@ -1028,8 +1089,7 @@ impl Store {
                     return Ok(());
                 }
             }
-            let raw = fs::read_to_string(&file)?;
-            let stat = fs::metadata(&file)?;
+            let (raw, stat) = read_document_file(&file)?;
             let proj_id = p
                 .project
                 .get("id")
@@ -1115,6 +1175,7 @@ impl Store {
         })();
 
         if let Err(e) = res {
+            self.retry_busy_file(&file, &e);
             if e.code == "ENOENT" {
                 p.files.remove(rel);
                 p.errors.remove(rel);
@@ -1145,7 +1206,7 @@ impl Store {
                 present.insert(rel.clone());
                 let stamp = self.stamp(&abs(&p.dir, &rel)).ok().flatten();
                 let current_stamp = p.files.get(&rel).map(|f| f.stamp.clone());
-                if !inventory || current_stamp != stamp {
+                if !inventory || current_stamp != stamp || p.errors.contains_key(&rel) {
                     self.refresh_indexed_file(p, &rel);
                 }
             }
@@ -1566,8 +1627,7 @@ impl Store {
                     }
                     let fpath = abs(&dir, &rel);
                     let ep_res: Result<(), LofError> = (|| {
-                        let raw = fs::read_to_string(&fpath)?;
-                        let stat = fs::metadata(&fpath)?;
+                        let (raw, stat) = read_document_file(&fpath)?;
                         let old = cached.iter().find(|d| {
                             d.get("path")
                                 .and_then(|v| v.as_str())
@@ -1621,6 +1681,7 @@ impl Store {
                         Ok(())
                     })();
                     if let Err(err) = ep_res {
+                        self.retry_busy_file(&fpath, &err);
                         if err.code != "ENOENT" {
                             errors.insert(
                                 rel.clone(),
@@ -1655,8 +1716,14 @@ impl Store {
                         .unwrap_or("")
                         .to_string();
                     let fpath = abs(&dir, &rel);
-                    let Ok(raw) = fs::read_to_string(&fpath) else { continue };
-                    let Ok(stat) = fs::metadata(&fpath) else { continue };
+                    let (raw, stat) = match read_document_file(&fpath) {
+                        Ok(value) => value,
+                        Err(error) => {
+                            self.retry_busy_file(&fpath, &error);
+                            errors.insert(rel.clone(), format!("{} · {}: {}", folder_name, rel, error.message));
+                            continue;
+                        }
+                    };
                     let eid = entry.get("id").and_then(|v| v.as_str()).unwrap_or("");
                     if files
                         .values()
@@ -1671,8 +1738,9 @@ impl Store {
                         );
                         continue;
                     }
-                    if let Ok(rec) = self.index_record(&dir, &proj, &entry, &raw, &stat) {
-                        files.insert(rel, rec);
+                    match self.index_record(&dir, &proj, &entry, &raw, &stat) {
+                        Ok(rec) => { files.insert(rel, rec); }
+                        Err(error) => { errors.insert(rel.clone(), format!("{} · {}: {}", folder_name, rel, error.message)); }
                     }
                 }
                 for w in doc_warnings {
@@ -1836,8 +1904,78 @@ impl Store {
         Ok(())
     }
 
+    fn ordered_projects(&self, projects: &[CatalogProject]) -> Result<Vec<Value>, LofError> {
+        let saved = match &self.index.database {
+            Some(db) => db.get("projectOrder")?,
+            None => None,
+        };
+        let positions: HashMap<&str, usize> = saved
+            .as_ref()
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .enumerate()
+            .filter_map(|(position, id)| id.as_str().map(|id| (id, position)))
+            .collect();
+        let mut ordered: Vec<Value> = projects.iter().map(public_project).collect();
+        // 새로 발견한 작품은 기존 폴더 순서를 유지하며 저장된 목록 뒤에 둔다.
+        ordered.sort_by_key(|project| {
+            positions
+                .get(project["id"].as_str().unwrap_or(""))
+                .copied()
+                .unwrap_or(usize::MAX)
+        });
+        Ok(ordered)
+    }
+
+    pub fn reorder_projects(&mut self, input: &Value) -> Result<bool, LofError> {
+        self.require_database()?;
+        if input.get("root").and_then(Value::as_str) != self.root.to_str() {
+            return Err(fail(
+                "서재가 변경되었습니다. 현재 서재에서 다시 순서를 바꿔 주세요.",
+                "VAULT_CHANGED",
+            ));
+        }
+        let ids = input
+            .get("ids")
+            .and_then(Value::as_array)
+            .ok_or_else(|| fail_invalid("작품 ID 목록이 필요합니다."))?;
+        let mut unique = HashSet::new();
+        for value in ids {
+            let id = value
+                .as_str()
+                .filter(|id| valid_id(id))
+                .ok_or_else(|| fail_invalid("올바른 작품 ID가 필요합니다."))?;
+            if !unique.insert(id) {
+                return Err(fail_invalid("작품 ID가 중복되었습니다."));
+            }
+        }
+        let catalog = self.scan()?;
+        if ids.len() != catalog.projects.len()
+            || catalog.projects.iter().any(|project| {
+                !unique.contains(project.project["id"].as_str().unwrap_or(""))
+            })
+        {
+            return Err(fail(
+                "작품 목록이 변경되었습니다. 목록을 다시 확인한 뒤 순서를 바꿔 주세요.",
+                "CONFLICT",
+            ));
+        }
+        let current: Vec<Value> = self
+            .ordered_projects(&catalog.projects)?
+            .iter()
+            .map(|project| project["id"].clone())
+            .collect();
+        if &current == ids {
+            return Ok(false);
+        }
+        self.database()?.set("projectOrder", &json!(ids))?;
+        Ok(true)
+    }
+
     pub fn list(&mut self) -> Result<Value, LofError> {
         let cat = self.scan()?;
+        let projects_out = self.ordered_projects(&cat.projects)?;
         let mut documents = Vec::new();
         let mut unlinked = Vec::new();
         let mut missing_files = Vec::new();
@@ -1879,7 +2017,6 @@ impl Store {
                         ia.cmp(ib)
                     })
             });
-            let projects_out: Vec<Value> = cat.projects.iter().map(public_project).collect();
             return Ok(json!({
                 "root": self.root.to_string_lossy().to_string(),
                 "vault": self.vault,
@@ -1993,7 +2130,6 @@ impl Store {
                 })
         });
 
-        let projects_out: Vec<Value> = cat.projects.iter().map(public_project).collect();
         Ok(json!({
             "root": self.root.to_string_lossy().to_string(),
             "vault": self.vault,
@@ -2011,10 +2147,12 @@ impl Store {
 
     pub fn read(&mut self, id: &str) -> Result<Value, LofError> {
         let (p, entry, file) = self.find_doc(id)?;
-        let raw = fs::read_to_string(&file)?;
+        let (raw, stat) = read_document_file(&file)?;
         let proj_id = p.project.get("id").and_then(|v| v.as_str()).unwrap_or("");
         let doc = doc_of(&p.dir, proj_id, &entry, &raw)?;
-        if let Some(db) = &self.index.database { db.observe(&doc)?; }
+        if let Some(db) = &self.index.database {
+            return db.observe_file(&doc, &sys_time_to_iso(stat.modified()?), is_app_write(&file, &raw, &stat));
+        }
         Ok(doc)
     }
 

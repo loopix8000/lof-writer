@@ -16,7 +16,8 @@ Lof Writer 앱을 실행한 상태에서 연결된 MCP 도구를 사용한다. M
 ## 원고 수정과 생성
 
 - 일부 문장만 바꿀 때는 `document_patch`를 쓴다. `find`에는 현재 본문에서 정확히 한 번 일치하는 글을 넣고, 중복된다면 앞뒤 문맥을 포함한다.
-- `document_update`, `document_patch`, `history_restore`에는 직전에 읽은 `revision`을 `expectedRevision`으로 전달한다. 저장 후 후속 수정에는 새로 반환된 `revision`을 쓴다.
+- 여러 구간을 줄 단위로 수정할 때는 `document_apply_patch`를 쓴다. `@@` 구간과 공백 문맥 줄, `-` 삭제 줄, `+` 추가 줄로 작성한다. 문맥은 원본 본문에서 유일하게 일치해야 하고 구간이 겹치면 하나로 합친다. 하나라도 실패하면 전체를 저장하지 않는다. 형식과 예시는 [문맥 패치](references/api.md#문맥-패치)를 참고한다.
+- `document_update`, `document_patch`, `document_apply_patch`, `history_restore`에는 직전에 읽은 `revision`을 `expectedRevision`으로 전달한다. 저장 후 후속 수정에는 새로 반환된 `revision`을 쓴다.
 - `CONFLICT`가 나면 최신 문서를 읽고 요청한 수정과 비교해 다시 적용한다. 이전 본문에 새 revision만 붙여 덮어쓰지 않는다.
 - 전체 본문 교체가 필요한 경우에만 `document_update`의 `body`를 쓴다. 요청하지 않은 문장, Markdown 서식, 태그, 속성, 줄바꿈 방식은 보존한다.
 - 새 문서는 `document_create`로 만든다. `kind`는 `episode`(회차), `plot`(플롯), `memo`(메모)를 명시한다. 플롯·메모의 `folder`는 `doc/` 아래 상대 경로이며 `doc/` 접두사는 제외한다. 회차에 연결할 때는 같은 작품의 실제 회차 ID를 `episodeId`로 전달한다.
