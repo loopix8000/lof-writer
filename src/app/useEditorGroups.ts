@@ -56,13 +56,30 @@ export function useEditorGroups(options: Options) {
   const setSideDoc = useCallback((doc: Doc) => {
     retainedDocuments.current.set(doc.id, doc); renderDocuments(value => value + 1);
   }, []);
-  function rememberLayout() {
-    if (!projectKey.current) return;
+  function currentLayout(): Layout {
     const all = { ...groupsState.current };
     if (tabsRef.current.length && latest.current.currentId())
       all[focusedSideRef.current] = { tabs: tabsRef.current, docId: latest.current.currentId() };
-    saveWorkspaceState(projectKey.current, { layout: { groups: all, focusedSide: focusedSideRef.current, ...ratiosRef.current } });
+    return { groups: all, focusedSide: focusedSideRef.current, ...ratiosRef.current };
   }
+  function rememberLayout() {
+    if (!projectKey.current) return;
+    saveWorkspaceState(projectKey.current, { layout: currentLayout() });
+  }
+  const getProjectDocument = useCallback((projectId: string): string | undefined => {
+    const key = workspaceKey(latest.current.root, projectId);
+    // 현재 작품은 최신 상태를 사용해 방금 닫은 탭을 저장 대기 중인 옛 배치에서 되살리지 않는다.
+    const layout = key === projectKey.current ? currentLayout() : readWorkspaceState(key).layout as Layout | undefined;
+    if (!layout) return;
+    const available = new Set(latest.current.documents.filter(doc => doc.projectId === projectId).map(doc => doc.id));
+    const focused = isEditorSide(layout.focusedSide) ? layout.focusedSide : "left";
+    for (const side of [focused, ...editorSides.filter(side => side !== focused)]) {
+      const group = layout.groups?.[side];
+      if (!group || !Array.isArray(group.tabs)) continue;
+      const tabs = group.tabs.filter(tab => tab && available.has(tab.id));
+      if (tabs.length) return tabs.some(tab => tab.id === group.docId) ? group.docId : tabs[0].id;
+    }
+  }, []);
   useEffect(rememberLayout, [tabs, groups, focusedSide, ratios, options.active?.id]);
   useEffect(() => {
     const open = new Set([...tabs, ...Object.values(groups).flatMap(group => group?.tabs ?? [])].map(tab => tab.id));
@@ -292,7 +309,7 @@ export function useEditorGroups(options: Options) {
   return {
     tabs, groups, sides, split: sides.length > 1, focusedSide, groupsRef, pending, checks,
     retainDocument, getRetainedDocument, clearRetainedDocuments, clearSideDocument,
-    pruneDocuments, resetGroups, commitOpenDocument, replaceDocumentId,
+    pruneDocuments, resetGroups, commitOpenDocument, replaceDocumentId, getProjectDocument,
     openDoc, openLinked, pinTab, closeTab, closeTabs, cycleTab, moveTab,
     focusOther, focusSide, openInGroup, splitTo, closeGroup, closeOtherGroup, moveToOther, closeSideTab,
     gridStyle: editorGridStyle(sides, ratios.x, ratios.y), groupStyle: (side: Side) => editorGroupStyle(side, sides),

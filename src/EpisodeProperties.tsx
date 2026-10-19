@@ -220,7 +220,7 @@ export default function EpisodeProperties({
         );
       case "tags":
         return <EpisodeTags key={doc.id} tags={doc.tags || []} editable={edit} favorites={favoriteTags}
-          onChange={(tags) => onEdit({ tags })} onMenu={onMenu} />;
+          onChange={(tags) => onEdit({ tags })} />;
       case "episode-binding":
         return (
           <div className="property-binding">

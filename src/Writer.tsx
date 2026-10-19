@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 import { useEditor, useEditorState, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
@@ -290,6 +290,41 @@ function loadBookmarks(editor: Editor, list: Bookmark[] = []) {
       .setMeta("addToHistory", false),
   );
 }
+function FormatBar({ inactive, visible, children }: { inactive: boolean; visible: boolean; children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [stuck, setStuck] = useState(false);
+  useLayoutEffect(() => {
+    const bar = ref.current, scroll = bar?.closest<HTMLElement>(".editor-scroll");
+    if (!bar || !scroll || !visible) return;
+    let frame: number | undefined;
+    const update = () => {
+      frame = undefined;
+      if (!scroll.clientHeight) return;
+      const top = Number.parseFloat(getComputedStyle(bar).top) || 0;
+      const edge = scroll.getBoundingClientRect().top + scroll.clientTop + top;
+      setStuck(scroll.scrollTop > 0 && bar.getBoundingClientRect().top <= edge + 0.5);
+    };
+    const schedule = () => { if (frame === undefined) frame = requestAnimationFrame(update); };
+    // 실제 고정 위치를 기준으로 판단하며 스크롤이나 막대 높이는 변경하지 않는다.
+    update();
+    scroll.addEventListener("scroll", schedule, { passive: true });
+    const resize = new ResizeObserver(schedule);
+    resize.observe(scroll);
+    resize.observe(bar);
+    if (bar.parentElement) resize.observe(bar.parentElement);
+    return () => {
+      scroll.removeEventListener("scroll", schedule);
+      resize.disconnect();
+      if (frame !== undefined) cancelAnimationFrame(frame);
+    };
+  }, [inactive, visible]);
+  const hidden = inactive && stuck;
+  return <div ref={ref} className={`format-bar${inactive ? " inactive" : ""}${stuck ? " is-stuck" : ""}`}
+    aria-hidden={hidden || undefined} aria-disabled={inactive || undefined} inert={inactive}>
+    {children}
+  </div>;
+}
+
 export default function Writer({
   id,
   body,
@@ -899,8 +934,8 @@ export default function Writer({
   return (
     <>
       <EditorFind editor={editor} enabled={visible && !inactive} />
-      {/* 포커스가 없는 그룹의 막대는 높이만 유지하고 표시와 키보드 접근을 숨긴다. */}
-      <div className={`format-bar${inactive ? " inactive" : ""}`} aria-hidden={inactive || undefined} inert={inactive}>
+      {/* 다른 그룹의 막대도 원래 위치에서는 표시하고 상단에 고정됐을 때만 숨긴다. */}
+      <FormatBar inactive={inactive} visible={visible}>
         {tools.map((t) => (
           <button
             key={t.label}
@@ -956,7 +991,7 @@ export default function Writer({
             />
           </>
         )}
-      </div>
+      </FormatBar>
       {tables && editable && visible && (
         <BubbleMenu
           editor={editor}

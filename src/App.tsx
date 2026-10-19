@@ -247,7 +247,7 @@ export default function App() {
   const {
     tabs: editorTabs, split, groups, sides, focusedSide, pending: sideSyncKeys, checks: sideChecks, groupsRef, gridStyle,
     retainDocument, getRetainedDocument, clearRetainedDocuments, clearSideDocument,
-    pruneDocuments, resetGroups, commitOpenDocument, replaceDocumentId: replaceGroupDocumentId,
+    pruneDocuments, resetGroups, commitOpenDocument, replaceDocumentId: replaceGroupDocumentId, getProjectDocument,
     openDoc, openLinked, pinTab, closeTab, closeTabs, cycleTab, moveTab,
     focusOther, focusSide, openInGroup, splitTo, closeGroup, closeOtherGroup, moveToOther, closeSideTab,
     groupStyle, getDropZone, startSash, resetSplitRatio,
@@ -739,6 +739,11 @@ export default function App() {
     const keep = next !== "project" && id === projectId;
     await navigate({ view: next, projectId: id,
       tab: keep ? tab : "episode", archive: keep ? archive : false });
+  }
+  async function openLibraryProject(id: string) {
+    const documentId = getProjectDocument(id);
+    if (documentId) await openDoc(documentId);
+    else await goView("project", id);
   }
   async function travel(direction: number) {
     const current = navigationRef.current;
@@ -1605,12 +1610,12 @@ export default function App() {
           </div>
         </nav>
         <div className="content-frame">
-          {/* 문서 편집 화면에서는 탭이 제목 역할을 하므로 헤더를 숨긴다. */}
-          {!isWorkspace && !emptyWorkspace && !memoOpen && (
+          {/* 집필 화면에서는 문서 탭이 제목 역할을 하고, 메모 화면에는 공통 헤더를 표시한다. */}
+          {!isWorkspace && !emptyWorkspace && (
             <header className="workspace-header">
               <strong>Lof Writer</strong>
               <span className="titlebar-path">
-                {project?.title && !globalView(view)
+                {memoOpen ? "메모" : project?.title && !globalView(view)
                   ? project.title
                   : "Local First Writing Tool"}
               </span>
@@ -1744,7 +1749,7 @@ export default function App() {
             prefs={prefs}
             menu={menu}
             attempt={attempt}
-            goView={goView}
+            openProject={openLibraryProject}
             openMenu={openMenu}
             askDeleteProject={askDeleteProject}
             setDialog={setDialog}

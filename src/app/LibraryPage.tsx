@@ -23,7 +23,7 @@ type Props = {
   prefs: Record<string, any>;
   menu: { x: number; y: number; items: MenuItem[]; target?: string; } | null;
   attempt: (fn: () => Promise<any>) => () => Promise<any>;
-  goView: (next: "library" | "project" | "bookmarks", id?: string) => Promise<void>;
+  openProject: (id: string) => Promise<void>;
   openMenu: (e: React.MouseEvent, items: MenuItem[], target?: string) => void;
   askDeleteProject: (id: string) => void;
   setDialog: React.Dispatch<React.SetStateAction<Dialog | null>>;
@@ -38,7 +38,7 @@ export default function LibraryPage({
   prefs,
   menu,
   attempt,
-  goView,
+  openProject,
   openMenu,
   askDeleteProject,
   setDialog,
@@ -64,12 +64,12 @@ export default function LibraryPage({
                 className={`project-card ${prefs.hideCovers ? "no-cover" : ""} ${menu?.target === "project:" + p.id ? "context-target" : ""} ${projectReorder.cardClass(p.id)}`}
                 key={p.id}
                 {...projectReorder.cardProps(p.id)}
-                onClick={attempt(() => goView("project", p.id))}
+                onClick={attempt(() => openProject(p.id))}
                 onContextMenu={(e) =>
                   openMenu(
                     e,
                     [
-                      { label: "열기", action: attempt(() => goView("project", p.id)) },
+                      { label: "열기", action: attempt(() => openProject(p.id)) },
                       "separator",
                       {
                         label: "작품 삭제",

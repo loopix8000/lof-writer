@@ -79,25 +79,12 @@ export function useProjectReorder(
   function cardProps(id: string | null): ButtonHTMLAttributes<HTMLButtonElement> {
     return {
       draggable: id !== null && enabled && !busy && !saving && library.current.projects.length > 1,
-      ...(id !== null ? {
-        title: "드래그하여 순서 변경 · Alt+방향키로 이동",
-        "aria-keyshortcuts": "Alt+ArrowLeft Alt+ArrowRight Alt+ArrowUp Alt+ArrowDown",
-      } : {}),
+      ...(id !== null ? { title: "드래그하여 순서 변경" } : {}),
       onClickCapture(event) {
         if (source.current || Date.now() < suppressClickUntil.current) {
           event.preventDefault();
           event.stopPropagation();
         }
-      },
-      onKeyDown(event) {
-        if (id === null || !enabled || busy || pending.current || !event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
-        const direction = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 }[event.key];
-        if (!direction) return;
-        event.preventDefault();
-        const current = library.current;
-        const index = current.projects.findIndex((project) => project.id === id);
-        const target = current.projects[index + direction];
-        if (index >= 0 && target) void move(id, target.id, direction > 0, current.root).catch(report);
       },
       onDragStart(event) {
         if (id === null || !enabled || busy || pending.current || library.current.projects.length < 2) {
