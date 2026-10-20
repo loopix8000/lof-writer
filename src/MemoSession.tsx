@@ -15,7 +15,6 @@ import {
   X,
 } from "lucide-react";
 import Writer from "./Writer";
-import { flushEditorDrafts, hasEditorDraft } from "./editor-drafts";
 import EditorScroll, { type EditorScrollPositions } from "./EditorScroll";
 import RetainedTab from "./RetainedTab";
 import { groupIds, groupShortcutIndex, isGroupId, legacyPairedGroup, type GroupId, type SplitDirection } from "./split/layout";
@@ -248,9 +247,6 @@ export default function MemoSession({
   // 저장은 하나씩 순서대로 한다. auto면 한글 조합 중에는 미뤘다가 조합이 끝나면 저장한다.
   const save = useCallback((auto = false, closing = false) => {
     const run = async () => {
-      if (auto && composing.current) return;
-      const pending = memoRef.current;
-      if (pending) flushEditorDrafts(`memo-${pending.space}\n${pending.path}`);
       const m = memoRef.current;
       if (!m) return;
       const loadExternalOnClose = async (onlyIfChanged = false) => {
@@ -371,8 +367,7 @@ export default function MemoSession({
   const checkOpenMemo = useSyncFileUpdates({
     fileKey: memo ? `${memo.space}\n${memo.path}` : "",
     enabled: !!memo,
-    canCheck: () => active && !composing.current && (!memoRef.current ||
-      !hasEditorDraft(`memo-${memoRef.current.space}\n${memoRef.current.path}`)),
+    canCheck: () => active && !composing.current,
     current: () => {
       const m = memoRef.current;
       return m ? { doc: m, version: `${dirty.current.seq}:${m.revision}:${titleRef.current}` } : null;
@@ -1136,17 +1131,7 @@ export default function MemoSession({
                   tables={kindOf(memo) !== "episode"}
                   manualLineBreak={!!memo.manualLineBreak}
                   copyWithBlankLines={prefs.copyWithBlankLines === true}
-                  onChange={(body) => {
-                    if (focused && memoRef.current?.space === memo.space && memoRef.current?.path === memo.path) edit(body);
-                  }}
-                  onPendingChange={() => {
-                    if (!focused || !memoRef.current) return;
-                    if (memoRef.current.space !== COMMON) gitActivity();
-                    keepTab(memoRef.current);
-                    dirty.current.seq++;
-                    setStatus("저장 대기");
-                    schedule();
-                  }}
+                  onChange={(body) => { if (focused) edit(body); }}
                   fontSize={mainBox.norm.fontSize}
                   lineHeight={mainBox.norm.lineHeight}
                   source={false}

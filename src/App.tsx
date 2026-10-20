@@ -51,8 +51,9 @@ import {
   lineBreakDefault,
   normalizeStatus
 } from "../core/episode.mjs";
-import { normalizeWriting } from "../core/platforms.mjs";
+import { normalizeWriting, writingName } from "../core/platforms.mjs";
 import {
+  countForRule,
   plainText,
   requiresSource,
   stripJsdocComments,
@@ -75,10 +76,9 @@ import EpisodeBindingPicker from "./EpisodeBindingPicker";
 import EpisodeProperties, { statusItems } from "./EpisodeProperties";
 import HistoryDialog from "./HistoryDialog";
 import MemoSession from "./MemoSession";
-import { ManuscriptCountSummary, ManuscriptPlatformCount, ManuscriptPreview, ManuscriptSessionCount } from "./ManuscriptViews";
-import { createValueStore } from "./value-store";
-import { flushEditorDrafts } from "./editor-drafts";
+import MobilePreview from "./MobilePreview";
 import { noteLinkTarget, type NoteMark } from "./note-links";
+import PlatformCount from "./PlatformCount";
 import PlatformPicker from "./PlatformPicker";
 import QuickNote, { quickNoteMarkdown, quickNoteTitle, type QuickNoteSource } from "./QuickNote";
 import RealtimeSync from "./RealtimeSync";
@@ -145,7 +145,7 @@ export default function App() {
     [error, setError] = useState(""),
     [source, setSource] = useState(false),
     // 편집 중인 원고에서 커서가 있는 줄 번호(상태줄에 보인다).
-    [cursorStore] = useState(() => createValueStore<number | null>(null)),
+    [cursorLine, setCursorLine] = useState<number | null>(null),
     [focus, setFocus] = useState(false),
     // 집중 모드의 파일 트리는 평소 상태와 따로 두고, 집중 모드에 들어갈 때마다 닫힌 채로 시작한다.
     [focusTree, setFocusTree] = useState(false),
@@ -584,25 +584,22 @@ export default function App() {
   }
   function replaceActiveSymbols() {
     if (!active || isProtected) return;
-    flushEditorDrafts(active.id);
-    const current = session.currentDocument();
-    if (!current || current.id !== active.id) return;
     const ellipsisRule = prefs.autoSymbolReplacement !== false
       ? normalizeTextReplacements(prefs.textReplacements).find(
           (rule) => rule.enabled && rule.from === "..." && rule.from !== rule.to,
         )
       : undefined;
-    const { body: nextBody, count } = replaceManuscriptSymbols(current.body, {
+    const { body: nextBody, count } = replaceManuscriptSymbols(active.body, {
       doubleQuotes: prefs.quoteStyle === "curly",
       singleQuotes: prefs.quoteStyle === "curly",
       ellipsis: !!ellipsisRule,
       ellipsisChar: ellipsisRule?.to,
     });
-    if (!count || nextBody === current.body) {
+    if (!count || nextBody === active.body) {
       message("교정할 직선 따옴표나 마침표 말줄임표가 없습니다.");
       return;
     }
-    const prevBody = current.body;
+    const prevBody = active.body;
     edit({ body: nextBody });
     message(`기호 일괄 교정 완료 (${count}건 변환)`, {
       label: "실행 취소",
@@ -1013,8 +1010,18 @@ export default function App() {
       if (libraryRef.current.root === scope) session.recordBaseline(id, count);
     },
   });
+  const stats = counter.stats;
+  const sessionCount = active && stats
+    ? session.sessionDelta(active.id, stats.utf16WithoutSpaces)
+    : 0;
   // 원고 보호: 집필 완료인 회차는 제목과 본문을 고칠 수 없다(상태는 바꿀 수 있다).
   const isProtected = active?.kind === "episode" && normalizeStatus(active.status) === "completed";
+  const platformChars = stats?.platformCharacters ?? 0;
+  const countUnit = active?.kind === "episode" ? writingRules.unit : "utf16";
+  const charsWithoutSpaces = stats ? countForRule(stats, "noSpace", countUnit) : 0;
+  // 상태줄의 두 번째 값: 공백 포함·줄바꿈 제외(위젯 보드의 같은 항목과 동일한 계산).
+  const charsWithSpaces = stats ? countForRule(stats, "spaces", countUnit) : 0;
+  const goal = Number(writingRules.goal) || 0;
   const isWorkspace = view === "workspace" && !!active && !memoOpen;
   // 모든 탭을 닫은 집필 화면. 파일 트리는 그대로 두고 편집 영역만 비운다.
   const emptyWorkspace = view === "workspace" && !active && !memoOpen;
@@ -1267,8 +1274,7 @@ export default function App() {
               tables={active.kind === "memo" || active.kind === "plot"}
               reveal={focused && reveal?.docId === active.id ? reveal : null}
               countingRules={writingRules}
-              onChange={(body, delta, markdownCopy) => { if (focused && session.currentId() === active.id) { counter.update(body, delta); edit({ body }, markdownCopy, true); } }}
-              onPendingChange={() => { if (focused) session.editorChanged(); }}
+              onChange={(body, delta, markdownCopy) => { if (focused) { counter.update(body, delta); edit({ body }, markdownCopy); } }}
               fontSize={activeBox.norm.fontSize}
               lineHeight={activeBox.norm.lineHeight}
               source={source}
@@ -1291,7 +1297,7 @@ export default function App() {
                 onChange: (manualLineBreak) => edit({ manualLineBreak }),
               }}
               bookmarks={active.bookmarks}
-              onBookmarksChange={(bookmarks) => { if (focused && session.currentId() === active.id) edit({ bookmarks }); }}
+              onBookmarksChange={(bookmarks) => { if (focused) edit({ bookmarks }); }}
               jumpToBookmark={focused && bookmarkJump?.docId === active.id ? bookmarkJump : null}
               onQuickNote={(text, at) =>
                 setQuickNote({
@@ -1312,7 +1318,7 @@ export default function App() {
               notes={noteMarks[active.id]}
               onOpenNotes={openNotes}
               contextMenu
-              onCursorLine={focused ? cursorStore.set : undefined}
+              onCursorLine={focused ? setCursorLine : undefined}
               images={docImages(active, !isProtected)}
             />
           </article>
@@ -1830,9 +1836,7 @@ export default function App() {
                 className={previewOpen ? "with-preview" : ""}
                 hidden={!isWorkspace}
                 after={previewOpen && (
-                  <ManuscriptPreview
-                    store={session.bodyStore}
-                    documentId={active.id}
+                  <MobilePreview
                     title={active.title}
                     label={`${labels[active.kind]} · ${numberOf(active)}`}
                     body={active.body}
@@ -1948,7 +1952,13 @@ export default function App() {
               ))}
               </SplitArea>
               <footer className="editor-footer" hidden={!isWorkspace}>
-                <ManuscriptCountSummary store={counter.statsStore} cursor={cursorStore} kind={active.kind} rules={writingRules} />
+                <span>
+                  {active.kind === "episode"
+                    ? <>{writingName(writingRules)} {stats ? platformChars.toLocaleString() : "…"}자</>
+                    : <>공백 제외 {stats ? charsWithoutSpaces.toLocaleString() : "…"}자</>}
+                  <i /> 공백 포함 {stats ? charsWithSpaces.toLocaleString() : "…"}자
+                  {cursorLine !== null && <><i /> {cursorLine.toLocaleString()}번째 줄</>}
+                </span>
                 {focus && (
                   <button className="footer-exit-focus" onClick={() => setFocus(false)}>
                     집중 모드 종료 · F11
@@ -2014,8 +2024,8 @@ export default function App() {
               </div>
             ) : rightView === "bookmarks" ? <BookmarkList active={active} setBookmarkJump={setBookmarkJump} edit={edit} /> : (
             <>
-            <ManuscriptPlatformCount
-              store={counter.statsStore}
+            <PlatformCount
+              stats={stats}
               rules={writingRules}
               documentOnly={active.kind !== "episode"}
               onChange={(rules) => {
@@ -2037,7 +2047,13 @@ export default function App() {
                 writingQueue.current.catch(() => {});
               }}
             />
-            <ManuscriptSessionCount store={counter.statsStore} id={active.id} kind={active.kind} sessionDelta={session.sessionDelta} />
+            <section className="widget session-widget">
+              <span>{active.kind === "episode" ? "이번 회차에서 새로 쓴 글" : "이번 문서에서 새로 쓴 글"}</span>
+              <strong>
+                +{sessionCount.toLocaleString()}
+                <small>자</small>
+              </strong>
+            </section>
             {<DocumentLinksWidget
               active={active}
               lib={lib}

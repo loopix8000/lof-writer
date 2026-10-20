@@ -4,8 +4,6 @@ import { call, type Doc } from "../types";
 import { useGitActivity } from "../useGitActivity";
 import { readFileForClose, useSyncFileUpdates } from "../useSyncFileUpdates";
 import { cloneDocument, editDocument, relocateDocument, sameDocumentContent, updateDocumentLocation } from "./model";
-import { flushEditorDrafts, hasComposingEditorDraft, hasEditorDraft } from "../editor-drafts";
-import { createValueStore } from "../value-store";
 
 export const composingError = "한글 입력 조합이 끝난 뒤 다시 저장해 주세요.";
 type FlushOptions = { auto?: boolean; closing?: boolean; skipMemo?: boolean; manual?: boolean };
@@ -86,10 +84,6 @@ export function useDocumentSession(options: Options) {
   const saveChain = useRef(Promise.resolve());
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const draftWindowStart = useRef(0);
-  const draftJob = useRef<Promise<void> | null>(null);
-  const rescheduleDraft = useRef<() => void>(() => {});
-  const editorBodyPending = useRef(false);
   const composing = useRef(false);
   const conflictRef = useRef(false);
   const activeId = useRef("");
@@ -99,20 +93,26 @@ export function useDocumentSession(options: Options) {
   const report = useCallback((error: any) => latest.current.report(error), []);
   const message = useCallback((text: string) => latest.current.message(text), []);
   const pinTab = (id: string) => latest.current.pinTab(id);
-  const [bodyStore] = useState(() => createValueStore<Doc | null>(null));
-  // 본문은 세션에 즉시 보관하고, 미리보기 등 구독한 부분에만 전달한다.
+  // 본문 입력은 앱 화면 갱신을 잠깐 모아서 한다(키를 누르고 있으면 초당 수십 번 들어온다).
+  // 그동안 다른 이유로 화면을 그려도 pendingActive로 최신 원고를 보여 준다.
   const pendingActive = useRef<Doc | null>(null);
+  const renderTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const setActive = useCallback((doc: Doc | null) => {
+    if (renderTimer.current) clearTimeout(renderTimer.current);
+    renderTimer.current = null;
     pendingActive.current = null;
     if (doc) latest.current.retainDocument(doc);
-    bodyStore.set(doc);
     setActiveState(doc);
-  }, [bodyStore]);
-  const updateBodySnapshot = useCallback((doc: Doc) => {
+  }, []);
+  const setActiveSoon = useCallback((doc: Doc) => {
     pendingActive.current = doc;
     latest.current.retainDocument(doc);
-    bodyStore.set(doc);
-  }, [bodyStore]);
+    renderTimer.current ??= setTimeout(() => {
+      renderTimer.current = null;
+      if (pendingActive.current) setActive(pendingActive.current);
+    }, 80);
+  }, [setActive]);
+  useEffect(() => () => { if (renderTimer.current) clearTimeout(renderTimer.current); }, []);
   const shownActive = pendingActive.current ?? active;
 
   const autoSaveCondition = useCallback((d: DraftState) => {
@@ -135,47 +135,26 @@ export function useDocumentSession(options: Options) {
       clearTimeout(draftTimer.current);
       draftTimer.current = null;
     }
-    if (!target || composing.current) return;
-    if (draftJob.current) return draftJob.current;
-    const run = async () => {
-      if (draft.current !== target || composing.current || hasComposingEditorDraft(target.doc.id)) return;
-      flushEditorDrafts(target.doc.id);
-      if (target.seq === target.saved || target.draftSaved === target.seq) { draftWindowStart.current = 0; return; }
-      const seq = target.seq;
-      draftWindowStart.current = 0;
-      await call("saveDraft", { ...target.doc, expectedRevision: target.doc.revision });
-      if (draft.current === target) target.draftSaved = seq;
-    };
-    // 임시 저장과 본 저장을 같은 순서로 처리해 오래된 임시본이 뒤늦게 쓰이지 않게 한다.
-    const task = saveChain.current.then(run);
-    saveChain.current = task.catch(report);
-    draftJob.current = task;
-    const finish = () => { if (draftJob.current === task) draftJob.current = null; };
-    void task.then(() => {
-      finish();
-      if (draft.current === target && target.seq !== target.saved && target.draftSaved !== target.seq && !composing.current)
-        rescheduleDraft.current();
-    }, finish);
-    return task;
+    if (!target || target.seq === target.saved || target.draftSaved === target.seq) return;
+    const seq = target.seq;
+    const payload = { ...target.doc, expectedRevision: target.doc.revision };
+    void call("saveDraft", payload)
+      .then(() => {
+        if (draft.current === target && target.seq === seq && target.seq !== target.saved && !conflictRef.current) {
+          target.draftSaved = seq;
+          setSaveStatus("편집 중");
+        }
+      })
+      .catch(report);
   }, [report]);
 
   const scheduleDraftSave = useCallback(() => {
     if (draftTimer.current) clearTimeout(draftTimer.current);
-    const now = Date.now();
-    draftWindowStart.current ||= now;
     draftTimer.current = setTimeout(() => {
       draftTimer.current = null;
-      void persistDraftNow();
-    }, Math.max(50, Math.min(800, draftWindowStart.current + 2_000 - now)));
+      persistDraftNow();
+    }, 150);
   }, [persistDraftNow]);
-  useEffect(() => {
-    rescheduleDraft.current = scheduleDraftSave;
-    return () => {
-      if (draftTimer.current) clearTimeout(draftTimer.current);
-      if (timer.current) clearTimeout(timer.current);
-      rescheduleDraft.current = () => {};
-    };
-  }, [scheduleDraftSave]);
 
   const flushRef = useRef<(options?: FlushOptions) => Promise<void>>(async () => {});
 
@@ -209,11 +188,6 @@ export function useDocumentSession(options: Options) {
     const run = async () => {
       const moving = latest.current.pendingDocumentMove();
       if (moving) await moving;
-      if (composing.current || (draft.current && hasComposingEditorDraft(draft.current.doc.id))) {
-        if (auto) return;
-        throw Error(composingError);
-      }
-      if (draft.current) flushEditorDrafts(draft.current.doc.id);
       const d = draft.current;
       if (!d) return;
       const loadExternalOnClose = async (onlyIfChanged = false) => {
@@ -263,7 +237,6 @@ export function useDocumentSession(options: Options) {
           ...(manual ? { manualHistory: true } : {}),
         };
       await call("saveDraft", { ...d.doc, expectedRevision: d.doc.revision });
-      draftWindowStart.current = 0;
       d.draftSaved = seq;
       if (conflictRef.current) {
         if (closing) { await loadExternalOnClose(); return; }
@@ -365,7 +338,7 @@ export function useDocumentSession(options: Options) {
   const checkOpenDocument = useSyncFileUpdates({
     fileKey: shownActive?.id ?? "",
     enabled: options.loaded && !!shownActive,
-    canCheck: () => latest.current.visible && !composing.current && !hasEditorDraft(activeId.current) && !latest.current.pendingDocumentMove(),
+    canCheck: () => latest.current.visible && !composing.current && !latest.current.pendingDocumentMove(),
     current: () => {
       const d = draft.current;
       return d ? { doc: d.doc, version: `${d.seq}:${d.doc.revision}` } : null;
@@ -396,7 +369,7 @@ export function useDocumentSession(options: Options) {
       const d = draft.current;
       if (d) {
         if (d.seq === d.saved) d.seq++;
-        void persistDraftNow(d);
+        void call("saveDraft", { ...d.doc, expectedRevision: d.doc.revision }).catch(report);
       }
       setSaveStatus("외부 변경 있음");
     },
@@ -427,37 +400,21 @@ export function useDocumentSession(options: Options) {
     }
     await call("requestSyncNow");
   }, [flush]);
-  function edit(patch: Partial<Doc>, markdownCopy?: boolean, fromEditor = false) {
-    if (!fromEditor && !composing.current)
-      flushEditorDrafts(activeId.current);
+  function edit(patch: Partial<Doc>, markdownCopy?: boolean) {
     const d = draft.current;
     if (!d) return;
-    const wasPending = fromEditor && editorBodyPending.current;
-    if (fromEditor) editorBodyPending.current = false;
     gitActivity();
     d.doc = editDocument(d.doc, patch, markdownCopy);
     d.seq++;
     d.edited = true;
     pinTab(d.doc.id);
-    // 제목·외부 수정은 바로 그리고, 편집기 입력은 구독한 부분에만 알린다.
+    // 제목 같은 입력란은 바로 그려야 커서가 튀지 않는다. 본문은 편집기가 직접 그리므로 앱 화면 갱신을 모은다.
     const bodyOnly = Object.keys(patch).every((key) => key === "body");
-    if (bodyOnly && fromEditor) updateBodySnapshot(cloneDocument(d.doc));
+    if (bodyOnly) setActiveSoon(cloneDocument(d.doc));
     else setActive(cloneDocument(d.doc));
     setSaveStatus("편집 중");
-    // 직렬화를 끝내 전달한 본문은 실제 마지막 입력에서 예약한 저장 시각을 늦추지 않는다.
-    if (!wasPending) scheduleDraftSave();
-    scheduleAutoSave();
-  }
-  function editorChanged() {
-    const d = draft.current;
-    if (!d) return;
-    editorBodyPending.current = true;
-    gitActivity();
-    d.seq++;
-    d.edited = true;
-    pinTab(d.doc.id);
-    setSaveStatus("편집 중");
     scheduleDraftSave();
+    scheduleAutoSave();
   }
   function composition(value: boolean) {
     gitActivity();
@@ -551,8 +508,6 @@ export function useDocumentSession(options: Options) {
   function commitDocument(doc: Doc, keepOlder: boolean) {
     if (timer.current) clearTimeout(timer.current);
     if (draftTimer.current) clearTimeout(draftTimer.current);
-    draftWindowStart.current = 0;
-    editorBodyPending.current = false;
     draft.current = {
       doc,
       base: doc,
@@ -562,7 +517,7 @@ export function useDocumentSession(options: Options) {
       lastSavedAt: Date.now(),
       edited: keepOlder,
     };
-    if (keepOlder) void persistDraftNow(draft.current);
+    if (keepOlder) void call("saveDraft", { ...doc, expectedRevision: doc.revision }).catch(report);
     activeId.current = doc.id;
     setActive(doc);
     setSaveStatus(keepOlder ? "외부 변경 있음" : "저장됨");
@@ -574,8 +529,6 @@ export function useDocumentSession(options: Options) {
     if (id !== undefined && draft.current?.doc.id !== id) return;
     if (timer.current) clearTimeout(timer.current);
     if (draftTimer.current) clearTimeout(draftTimer.current);
-    draftWindowStart.current = 0;
-    editorBodyPending.current = false;
     draft.current = null;
     conflictRef.current = false;
     setConflict(false);
@@ -596,8 +549,6 @@ export function useDocumentSession(options: Options) {
     scrollPositions.current.clear();
     if (timer.current) clearTimeout(timer.current);
     if (draftTimer.current) clearTimeout(draftTimer.current);
-    draftWindowStart.current = 0;
-    editorBodyPending.current = false;
     draft.current = null;
     activeId.current = "";
     setActive(null);
@@ -654,9 +605,9 @@ export function useDocumentSession(options: Options) {
   }
 
   return {
-    active: shownActive, saveStatus, conflict, bodyStore, scrollPositions: scrollPositions.current,
+    active: shownActive, saveStatus, conflict, scrollPositions: scrollPositions.current,
     currentId, currentDocument, waitForSave, flush, flushForClose, manualSave, prepareForInstall,
-    edit, editorChanged, composition, checkOpenDocument, reconcileDocuments, commitDocument,
+    edit, composition, checkOpenDocument, reconcileDocuments, commitDocument,
     discardDraft, detachDocument, closeDocument, resetVault, replaceDocId, writeMeta,
     remapDocuments, resolveConflict, restoreHistory, recordBaseline, sessionDelta,
   };
