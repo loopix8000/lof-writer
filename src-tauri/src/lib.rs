@@ -6,6 +6,8 @@ mod document_patch;
 pub mod episode;
 pub mod error;
 pub mod file_index;
+pub mod export;
+pub mod fonts;
 mod file_sync_reset;
 mod git_worker;
 mod git_history;
@@ -1450,6 +1452,53 @@ fn dispatch_method(
             Ok(json!(true))
         }
         "downloadSkill" => Ok(json!(skills::download(window)?)),
+        "installFontFiles" => {
+            let paths = args.get("paths").and_then(Value::as_array).map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(PathBuf::from))
+                    .collect()
+            });
+            fonts::install_font_files(&state.user_dir, &state.config_file, &state.settings, paths)
+        }
+        "systemFonts" => {
+            let refresh = args.get("refresh").and_then(Value::as_bool).unwrap_or(false);
+            Ok(Value::Array(fonts::list_system_fonts(refresh)))
+        }
+        "addSystemFont" => fonts::add_system_font(&state.config_file, &state.settings, &args),
+        "removeUserFont" => {
+            fonts::remove_user_font(&state.user_dir, &state.config_file, &state.settings, &args)
+        }
+        "readUserFont" => fonts::read_user_font(&state.user_dir, &args),
+        "exportLibrary" | "exportProject" => {
+            let (_, common_root) = get_store_and_common()?;
+            let default_preserve_breaks = {
+                let s_guard = state.settings.lock().unwrap();
+                s_guard
+                    .get("preferences")
+                    .and_then(|p| p.get("copyWithBlankLines"))
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+            };
+            export::export_library_or_project(
+                &state.store,
+                &common_root,
+                &args,
+                default_preserve_breaks,
+            )
+        }
+        "openExportFolder" => {
+            if let Some(p) = args
+                .get("path")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+            {
+                let target = Path::new(p);
+                if target.is_dir() {
+                    open_folder_path(target);
+                }
+            }
+            Ok(json!(true))
+        }
         _ => Err(fail_invalid(format!("알 수 없는 요청: {}", method))),
     }
 }
@@ -1463,7 +1512,7 @@ async fn lof_invoke(
     window: WebviewWindow,
 ) -> Result<Value, String> {
     let args_val = args.unwrap_or_else(|| json!({}));
-    let result = if method.starts_with("realtime") || matches!(method.as_str(), "sync" | "pinUnlock" | "pinSave" | "backupStorage" | "backupGitHistory" | "history" | "historyPage" | "historyRead" | "restore" | "checkpointDocument" | "countManuscript" | "downloadSkill" | "checkSyncUpdates") {
+    let result = if method.starts_with("realtime") || matches!(method.as_str(), "sync" | "pinUnlock" | "pinSave" | "backupStorage" | "backupGitHistory" | "history" | "historyPage" | "historyRead" | "restore" | "checkpointDocument" | "countManuscript" | "downloadSkill" | "checkSyncUpdates" | "systemFonts" | "readUserFont" | "exportLibrary" | "exportProject") {
         tauri::async_runtime::spawn_blocking(move || {
             let state = app.state::<AppState>();
             if method == "pinUnlock" || method == "pinSave" {

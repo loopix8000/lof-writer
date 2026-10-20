@@ -56,6 +56,7 @@ export type Dialog = {
   type: string;
   kind?: Kind;
   value?: string;
+  returnToSettings?: boolean;
   // 여러 문서를 한 번에 다루는 대화상자(파일 트리 다중 선택의 영구 삭제).
   ids?: string[];
   description?: string;

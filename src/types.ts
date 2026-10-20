@@ -73,6 +73,29 @@ export type Doc = {
   bookmarks?: Bookmark[];
 };
 export type Bookmark = { index: number; text: string };
+export type UserFontFile = {
+  file: string;
+  format: string;
+  weight?: number;
+  italic?: boolean;
+  variable?: boolean;
+  originalName?: string;
+};
+export type UserFont = {
+  id: string;
+  label: string;
+  family: string;
+  familyEn?: string | null;
+  value: string;
+  source: "file" | "system";
+  files?: UserFontFile[];
+};
+export type SystemFontOption = {
+  label: string;
+  family: string;
+  familyEn?: string | null;
+  value: string;
+};
 export type Library = {
   localGit?: { ready: boolean; message: string; head: string; importedHistory: number; path: string };
   root: string;

@@ -41,7 +41,9 @@ export function usePreferences() {
         },
       };
     }
-    prepareEditorFonts({ ...prefsRef.current, ...payload });
+    const next = { ...prefsRef.current, ...payload };
+    prefsRef.current = next;
+    prepareEditorFonts(next);
     setPrefs((old) => ({ ...old, ...payload }));
     await call("setPreferences", payload);
   }

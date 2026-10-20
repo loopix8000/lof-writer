@@ -1,8 +1,15 @@
 import {
   BookOpen,
-  FileText
+  Check,
+  FileText,
+  FolderPlus,
+  Monitor,
+  RefreshCw,
+  Search,
+  Trash2,
+  X,
 } from "lucide-react";
-import type * as React from "react";
+import { useMemo, useState, type Dispatch, type SetStateAction } from "react";
 import {
   DEFAULT_EDITOR_STYLE,
   DEFAULT_NOTE_EDITOR_STYLE,
@@ -11,33 +18,81 @@ import {
   PLATFORM_STYLE_PRESETS,
   TYPESETTING_KINDS,
   WIDTH_PRESETS,
-  normalizeEditorStyle
+  normalizeEditorStyle,
+  normalizeUserFonts,
 } from "../../core/typesetting.mjs";
+import { syncUserFonts } from "../font-loader";
 import {
-  type Kind
+  call,
+  type Kind,
+  type SystemFontOption,
+  type UserFont,
 } from "../types";
 
 import SettingsToggle from "./SettingsToggle";
 
 type Props = {
   prefs: Record<string, any>;
+  savePrefs?: (p: Record<string, any>) => Promise<void>;
   saveKindPrefs: (kind: Kind | "document", patch: Record<string, any>) => Promise<void>;
   report: (e: any) => void;
-  message: (text: string, action?: { label: string; run: () => void; }) => void;
-  setTypesettingKind: React.Dispatch<React.SetStateAction<"episode" | "document">>;
+  message: (text: string, action?: { label: string; run: () => void }) => void;
+  setTypesettingKind: Dispatch<SetStateAction<"episode" | "document">>;
   targetKind: "episode" | "document";
   inPanel: boolean;
 };
 
-export default function TypesettingSettings({ prefs, saveKindPrefs, report, message, setTypesettingKind, targetKind, inPanel }: Props) {
-
+export default function TypesettingSettings({
+  prefs,
+  savePrefs,
+  saveKindPrefs,
+  report,
+  message,
+  setTypesettingKind,
+  targetKind,
+  inPanel,
+}: Props) {
+  const [installingFont, setInstallingFont] = useState(false);
+  const [systemPickerOpen, setSystemPickerOpen] = useState(false);
+  const [systemFonts, setSystemFonts] = useState<SystemFontOption[] | null>(null);
+  const [loadingSystemFonts, setLoadingSystemFonts] = useState(false);
+  const [systemQuery, setSystemQuery] = useState("");
 
   const targetKindInfo =
     TYPESETTING_KINDS.find((k) => k.id === targetKind) || TYPESETTING_KINDS[0];
   const kindEditorStyle = normalizeEditorStyle(prefs, targetKind);
+  const userFonts = useMemo(
+    () => normalizeUserFonts(prefs.userFonts) as UserFont[],
+    [prefs.userFonts],
+  );
   const allWidthItems = WIDTH_PRESETS.flatMap((g) => g.items);
+
+  const knownFontValues = useMemo(() => {
+    const set = new Set<string>(FONT_FAMILY_PRESETS.map((f) => f.value));
+    for (const f of userFonts) set.add(f.value);
+    return set;
+  }, [userFonts]);
+
+  const userFontFamilySet = useMemo(
+    () => new Set(userFonts.map((f) => f.family.toLowerCase())),
+    [userFonts],
+  );
+
+  const filteredSystemFonts = useMemo(() => {
+    if (!systemFonts) return [];
+    const q = systemQuery.trim().toLowerCase();
+    if (!q) return systemFonts;
+    return systemFonts.filter(
+      (item) =>
+        item.label.toLowerCase().includes(q) ||
+        item.family.toLowerCase().includes(q) ||
+        (item.familyEn && item.familyEn.toLowerCase().includes(q)),
+    );
+  }, [systemFonts, systemQuery]);
+
   const updateTargetPrefs = (patch: Record<string, any>) =>
     saveKindPrefs(targetKind, patch).catch(report);
+
   const resetTargetPrefs = () => {
     const isNote = targetKind === "document";
     const defPatch = isNote
@@ -51,6 +106,103 @@ export default function TypesettingSettings({ prefs, saveKindPrefs, report, mess
       )
       .catch(report);
   };
+
+  async function loadSystemFonts(refresh = false) {
+    setLoadingSystemFonts(true);
+    try {
+      const list = await call<SystemFontOption[]>("systemFonts", { refresh });
+      setSystemFonts(Array.isArray(list) ? list : []);
+    } catch (e) {
+      report(e);
+    } finally {
+      setLoadingSystemFonts(false);
+    }
+  }
+
+  function toggleSystemPicker() {
+    const nextOpen = !systemPickerOpen;
+    setSystemPickerOpen(nextOpen);
+    if (nextOpen && systemFonts === null && !loadingSystemFonts) {
+      void loadSystemFonts(false);
+    }
+  }
+
+  async function handleInstallFontFiles() {
+    if (installingFont) return;
+    setInstallingFont(true);
+    try {
+      const res = await call<{
+        added: UserFont[];
+        userFonts: UserFont[];
+        preferences: Record<string, any>;
+      } | null>("installFontFiles");
+      if (!res) return;
+      await syncUserFonts(res.userFonts);
+      if (savePrefs) {
+        await savePrefs({ userFonts: res.userFonts });
+      }
+      const firstAdded = res.added?.[0];
+      if (firstAdded) {
+        await saveKindPrefs(targetKind, { fontFamily: firstAdded.value });
+        if (res.added.length > 1) {
+          message(
+            `'${firstAdded.label}' 외 ${res.added.length - 1}개 글꼴을 설치하고 '${targetKindInfo.label}'에 적용했습니다.`,
+          );
+        } else {
+          message(
+            `'${firstAdded.label}' 글꼴을 설치하고 '${targetKindInfo.label}'에 적용했습니다.`,
+          );
+        }
+      }
+    } catch (e) {
+      report(e);
+    } finally {
+      setInstallingFont(false);
+    }
+  }
+
+  async function handleSelectSystemFont(option: SystemFontOption) {
+    try {
+      const res = await call<{
+        added: UserFont;
+        userFonts: UserFont[];
+        preferences: Record<string, any>;
+      }>("addSystemFont", {
+        label: option.label,
+        family: option.family,
+        familyEn: option.familyEn,
+      });
+      await syncUserFonts(res.userFonts);
+      if (savePrefs) {
+        await savePrefs({ userFonts: res.userFonts });
+      }
+      await saveKindPrefs(targetKind, { fontFamily: res.added.value });
+      message(
+        `'${res.added.label}' 글꼴을 등록하고 '${targetKindInfo.label}'에 적용했습니다.`,
+      );
+    } catch (e) {
+      report(e);
+    }
+  }
+
+  async function handleRemoveUserFont(font: UserFont) {
+    try {
+      const res = await call<{
+        userFonts: UserFont[];
+        preferences: Record<string, any>;
+      }>("removeUserFont", { id: font.id });
+      await syncUserFonts(res.userFonts);
+      if (savePrefs && res.preferences) {
+        await savePrefs(res.preferences);
+      } else if (kindEditorStyle.fontFamily === font.value) {
+        await saveKindPrefs(targetKind, { fontFamily: "" });
+      }
+      message(`'${font.label}' 글꼴을 삭제했습니다.`);
+    } catch (e) {
+      report(e);
+    }
+  }
+
   return (
     <>
       <div className="typesetting-kind-bar">
@@ -134,6 +286,24 @@ export default function TypesettingSettings({ prefs, saveKindPrefs, report, mess
                   {f.label}
                 </option>
               ))}
+              {userFonts.length > 0 && (
+                <optgroup label="설치한 사용자 글꼴">
+                  {userFonts.map((f) => (
+                    <option key={f.id} value={f.value}>
+                      {f.label}
+                      {f.familyEn && f.familyEn.toLowerCase() !== f.label.toLowerCase()
+                        ? ` (${f.familyEn})`
+                        : ""}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+              {kindEditorStyle.fontFamily &&
+                !knownFontValues.has(kindEditorStyle.fontFamily) && (
+                  <option value={kindEditorStyle.fontFamily}>
+                    직접 지정 ({kindEditorStyle.fontFamily.split(",")[0].replace(/^["']|["']$/g, "")})
+                  </option>
+                )}
             </select>
           </label>
           <label>
@@ -310,6 +480,178 @@ export default function TypesettingSettings({ prefs, saveKindPrefs, report, mess
             />
           </label>
         </div>
+
+        <div className="user-fonts-panel" aria-label="사용자 글꼴 관리">
+          <div className="user-fonts-header">
+            <div className="user-fonts-title">
+              <strong>사용자 글꼴 설치</strong>
+              {!inPanel && (
+                <span>
+                  글꼴 파일(.ttf, .otf, .woff, .woff2)을 추가하거나 PC에 설치된 글꼴을 골라 모든 서재에서 사용합니다.
+                </span>
+              )}
+            </div>
+            <div className="user-fonts-actions">
+              <button
+                type="button"
+                disabled={installingFont}
+                onClick={() => void handleInstallFontFiles()}
+              >
+                <FolderPlus size={14} />
+                <span>{installingFont ? "추가 중…" : "글꼴 파일 추가"}</span>
+              </button>
+              <button
+                type="button"
+                className={systemPickerOpen ? "active" : ""}
+                aria-expanded={systemPickerOpen}
+                onClick={toggleSystemPicker}
+              >
+                <Monitor size={14} />
+                <span>PC 글꼴 선택</span>
+              </button>
+            </div>
+          </div>
+
+          {systemPickerOpen && (
+            <div className="system-font-picker" role="region" aria-label="PC 설치 글꼴 선택">
+              <div className="system-font-toolbar">
+                <div className="system-font-search">
+                  <Search size={14} />
+                  <input
+                    type="search"
+                    aria-label="PC 글꼴 검색"
+                    placeholder="PC 글꼴 이름 검색 (예: 나눔, 마루, 바탕, Gothic…)"
+                    value={systemQuery}
+                    onChange={(e) => setSystemQuery(e.target.value)}
+                  />
+                </div>
+                <button
+                  type="button"
+                  title="PC 글꼴 목록 새로고침"
+                  aria-label="PC 글꼴 목록 새로고침"
+                  disabled={loadingSystemFonts}
+                  onClick={() => void loadSystemFonts(true)}
+                >
+                  <RefreshCw size={13} className={loadingSystemFonts ? "spin" : ""} />
+                </button>
+                <button
+                  type="button"
+                  title="PC 글꼴 선택 닫기"
+                  aria-label="PC 글꼴 선택 닫기"
+                  onClick={() => setSystemPickerOpen(false)}
+                >
+                  <X size={14} />
+                </button>
+              </div>
+              <div className="system-font-list" role="listbox" aria-label="PC 글꼴 목록">
+                {loadingSystemFonts ? (
+                  <p className="system-font-empty">PC에 설치된 글꼴을 불러오고 있습니다…</p>
+                ) : filteredSystemFonts.length === 0 ? (
+                  <p className="system-font-empty">
+                    {systemQuery.trim()
+                      ? "검색어와 일치하는 PC 글꼴이 없습니다."
+                      : "불러올 수 있는 PC 글꼴이 없습니다."}
+                  </p>
+                ) : (
+                  filteredSystemFonts.map((item) => {
+                    const registered = userFontFamilySet.has(item.family.toLowerCase());
+                    const selected = kindEditorStyle.fontFamily === item.value;
+                    return (
+                      <button
+                        key={item.family}
+                        type="button"
+                        role="option"
+                        aria-selected={selected}
+                        className={`system-font-option${selected ? " selected" : ""}`}
+                        onClick={() => void handleSelectSystemFont(item)}
+                      >
+                        <div className="system-font-meta">
+                          <strong>{item.label}</strong>
+                          {item.familyEn &&
+                            item.familyEn.toLowerCase() !== item.label.toLowerCase() && (
+                              <small>{item.familyEn}</small>
+                            )}
+                          <span className={`user-font-badge${registered ? " registered" : ""}`}>
+                            {selected ? "사용 중" : registered ? "등록됨" : "추가"}
+                          </span>
+                        </div>
+                        <span
+                          className="system-font-preview"
+                          style={{ fontFamily: item.value }}
+                        >
+                          다람쥐 헌 쳇바퀴에 타고파 Aa 123
+                        </span>
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          )}
+
+          {userFonts.length > 0 && (
+            <div className="user-font-list" role="list" aria-label="설치한 사용자 글꼴">
+              {userFonts.map((f) => {
+                const selected = kindEditorStyle.fontFamily === f.value;
+                const fileCount = f.source === "file" ? f.files?.length || 1 : 0;
+                return (
+                  <div
+                    key={f.id}
+                    role="listitem"
+                    className={`user-font-item${selected ? " active" : ""}`}
+                  >
+                    <button
+                      type="button"
+                      className="user-font-select"
+                      onClick={() => {
+                        updateTargetPrefs({ fontFamily: f.value });
+                        message(
+                          `'${targetKindInfo.label}' 본문 글꼴을 '${f.label}'(으)로 변경했습니다.`,
+                        );
+                      }}
+                    >
+                      <div className="user-font-head">
+                        <strong>{f.label}</strong>
+                        {f.familyEn &&
+                          f.familyEn.toLowerCase() !== f.label.toLowerCase() && (
+                            <small>{f.familyEn}</small>
+                          )}
+                        <span className="user-font-badge">
+                          {f.source === "file"
+                            ? fileCount > 1
+                              ? `파일 ${fileCount}개`
+                              : "파일"
+                            : "PC 글꼴"}
+                        </span>
+                        {selected && (
+                          <span className="user-font-badge active">
+                            <Check size={11} /> 사용 중
+                          </span>
+                        )}
+                      </div>
+                      <span
+                        className="user-font-preview"
+                        style={{ fontFamily: f.value }}
+                      >
+                        그날 밤, 별빛이 원고지 위로 조용히 내려앉았다. Aa 123
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className="user-font-delete"
+                      aria-label={`${f.label} 글꼴 삭제`}
+                      title="글꼴 삭제"
+                      onClick={() => void handleRemoveUserFont(f)}
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
         <div className="settings-toggles" style={{ marginTop: 16 }}>
           <SettingsToggle
             label="강제 줄바꿈(Shift+Enter) 뒤 들여쓰기"
@@ -442,5 +784,4 @@ export default function TypesettingSettings({ prefs, saveKindPrefs, report, mess
       </div>
     </>
   );
-
 }

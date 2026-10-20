@@ -58,6 +58,51 @@ export const FONT_FAMILY_PRESETS = [
   },
 ];
 
+export function normalizeUserFonts(list) {
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  const seen = new Set();
+  for (const raw of list) {
+    if (!raw || typeof raw !== "object") continue;
+    const family = typeof raw.family === "string" ? raw.family.trim() : "";
+    const label = typeof raw.label === "string" && raw.label.trim() ? raw.label.trim() : family;
+    const value = typeof raw.value === "string" ? raw.value.trim() : "";
+    if (!family || !value) continue;
+    const source = raw.source === "file" ? "file" : "system";
+    const id = typeof raw.id === "string" && raw.id.trim()
+      ? raw.id.trim()
+      : `${source}:${family.toLowerCase()}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const familyEn = typeof raw.familyEn === "string" && raw.familyEn.trim()
+      ? raw.familyEn.trim()
+      : undefined;
+    const files = source === "file" && Array.isArray(raw.files)
+      ? raw.files
+          .filter((f) => f && typeof f === "object" && typeof f.file === "string" && f.file.trim())
+          .map((f) => ({
+            file: f.file.trim(),
+            format: typeof f.format === "string" && f.format.trim() ? f.format.trim() : "truetype",
+            weight: Number.isFinite(Number(f.weight)) ? Math.min(900, Math.max(100, Number(f.weight))) : 400,
+            italic: f.italic === true,
+            variable: f.variable === true,
+            originalName: typeof f.originalName === "string" ? f.originalName : undefined,
+          }))
+      : undefined;
+    if (source === "file" && (!files || !files.length)) continue;
+    out.push({
+      id,
+      label,
+      family,
+      ...(familyEn ? { familyEn } : {}),
+      value,
+      source,
+      ...(files ? { files } : {}),
+    });
+  }
+  return out;
+}
+
 export const WIDTH_PRESETS = [
   {
     group: "기본 및 용지",

@@ -107,6 +107,7 @@ declare module "*.mjs" {
     description: string;
   }[];
   export function resolveKindPrefs(prefs?: Record<string, any>, kind?: string): Record<string, any>;
+  export function normalizeUserFonts(list?: unknown): import("./types").UserFont[];
   export function normalizeEditorStyle(prefs?: Record<string, any>, kind?: string): {
     fontFamily: string;
     fontSize: number;

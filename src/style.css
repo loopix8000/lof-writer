@@ -5086,6 +5086,291 @@ input.property-text {
   font-size: 12px;
 }
 
+.user-fonts-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--sidebar);
+}
+
+.user-fonts-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+}
+
+.user-fonts-title {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.user-fonts-title strong {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.user-fonts-title span {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.user-fonts-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.user-fonts-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 11px;
+  font-size: 12px;
+  background: var(--surface);
+}
+
+.user-fonts-actions button.active {
+  border-color: var(--accent);
+  background: var(--selection-bg);
+  color: var(--accent);
+}
+
+.system-font-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.system-font-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.system-font-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+}
+
+.system-font-search > svg {
+  position: absolute;
+  left: 10px;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.system-font-search input {
+  width: 100%;
+  height: 32px;
+  padding: 0 10px 0 30px;
+  font-size: 12px;
+}
+
+.system-font-toolbar > button {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  flex-shrink: 0;
+  justify-content: center;
+  color: var(--muted);
+}
+
+.system-font-toolbar > button:hover {
+  color: var(--text);
+}
+
+.system-font-toolbar .spin {
+  animation: release-spin 0.9s linear infinite;
+}
+
+.system-font-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.system-font-empty {
+  margin: 14px 0;
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.system-font-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  text-align: left;
+}
+
+.system-font-option:hover {
+  border-color: var(--border);
+  background: var(--hover);
+}
+
+.system-font-option.selected {
+  border-color: var(--accent);
+  background: var(--selection-bg);
+}
+
+.system-font-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  width: 100%;
+}
+
+.system-font-meta strong {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.system-font-meta small {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.system-font-meta .user-font-badge {
+  margin-left: auto;
+}
+
+.system-font-preview,
+.user-font-preview {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-font-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.user-font-item {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  padding: 6px 8px 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.user-font-item.active {
+  border-color: var(--accent);
+  background: var(--selection-bg);
+}
+
+.user-font-select {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  padding: 2px 4px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+}
+
+.user-font-select:hover {
+  background: transparent;
+}
+
+.user-font-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  width: 100%;
+}
+
+.user-font-head strong {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.user-font-head small {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.user-font-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--sidebar);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.user-font-badge.active,
+.user-font-badge.registered {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--surface);
+}
+
+.user-font-delete {
+  align-self: center;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  justify-content: center;
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+}
+
+.user-font-delete:hover {
+  border-color: var(--danger);
+  background: var(--surface);
+  color: var(--danger);
+}
+
 .typesetting-scope-header {
   display: flex;
   align-items: center;
@@ -5558,6 +5843,25 @@ input.property-text {
 .typesetting-panel .settings-subsection {
   margin-top: 18px;
   padding-top: 16px;
+}
+.typesetting-panel .user-fonts-panel {
+  margin-top: 12px;
+  padding: 11px 12px;
+  background: var(--surface);
+}
+.typesetting-panel .user-fonts-header {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+.typesetting-panel .user-fonts-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.typesetting-panel .user-fonts-actions button {
+  justify-content: center;
+  height: 30px;
+  padding: 0 8px;
 }
 .typesetting-panel .settings-toggles {
   background: var(--surface);

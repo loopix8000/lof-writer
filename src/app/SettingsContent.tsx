@@ -63,6 +63,7 @@ type Props = {
   renderSyncConnections: () => React.JSX.Element;
   skillDownloading: boolean;
   setSkillDownloading: React.Dispatch<React.SetStateAction<boolean>>;
+  onOpenExport: () => void;
 };
 
 export default function SettingsContent({
@@ -95,6 +96,7 @@ export default function SettingsContent({
   renderSyncConnections,
   skillDownloading,
   setSkillDownloading,
+  onOpenExport,
 }: Props) {
 
   return (
@@ -195,6 +197,7 @@ export default function SettingsContent({
           <section id="settings-typesetting" className="settings-section" hidden={settingsPage !== "typesetting"}>
             {<TypesettingSettings
               prefs={prefs}
+              savePrefs={savePrefs}
               saveKindPrefs={saveKindPrefs}
               report={report}
               message={message}
@@ -247,6 +250,20 @@ export default function SettingsContent({
               여러 작품에서 함께 쓰는 메모를 이 폴더에 Markdown 파일로 보관합니다.
               기존 폴더를 고르면 안의 파일을 그대로 메모로 보여줍니다.
             </p>
+          </section>
+          <section className="settings-section" hidden={settingsPage !== "storage"}>
+            <h3>
+              <Download size={17} />
+              서재 내보내기
+            </h3>
+            <p className="settings-description">
+              서재의 모든 작품 원고, 플롯·메모, 공용 메모를 내부 관리용 메타 정보 없이 바로 열람할 수 있는 텍스트(.txt) 또는 마크다운(.md) 파일로 내보냅니다.
+            </p>
+            <div className="history-actions">
+              <button disabled={busy} onClick={onOpenExport}>
+                <Download size={16} /> 서재 내보내기
+              </button>
+            </div>
           </section>
           <section className="settings-section" hidden={settingsPage !== "storage"}>
             <h3>

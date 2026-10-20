@@ -75,6 +75,14 @@ const methods = [
   "memoRemove",
   "memoReveal",
   "chooseCommonMemo",
+  "installFontFiles",
+  "systemFonts",
+  "addSystemFont",
+  "removeUserFont",
+  "readUserFont",
+  "exportLibrary",
+  "exportProject",
+  "openExportFolder",
 ] as const;
 
 export function installTauriBridge() {

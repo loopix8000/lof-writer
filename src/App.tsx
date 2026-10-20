@@ -3,6 +3,7 @@ import BookmarksPage from "./app/BookmarksPage";
 import BrokenFiles from "./app/BrokenFiles";
 import { icons, labels } from "./app/document-ui";
 import DocumentLinksWidget from "./app/DocumentLinksWidget";
+import ExportDialog from "./app/ExportDialog";
 import FileTree from "./app/FileTree";
 import LibraryPage from "./app/LibraryPage";
 import ProjectForm from "./app/ProjectForm";
@@ -2004,6 +2005,7 @@ export default function App() {
               <div className="typesetting-panel">
                 {<TypesettingSettings
                   prefs={prefs}
+                  savePrefs={savePrefs}
                   saveKindPrefs={saveKindPrefs}
                   report={report}
                   message={message}
@@ -2153,11 +2155,17 @@ export default function App() {
                     linkEpisode: "회차에 연결",
                     recovery: "임시 원고 복구",
                     setup: "처음 집필 환경 설정",
+                    export: dialog.value ? "작품 내보내기" : "서재 내보내기",
                   }[dialog.type]
                 }
               </h2>
               {dialog.type !== "setup" && (
-                <button aria-label="닫기" onClick={() => setDialog(null)}>
+                <button
+                  aria-label="닫기"
+                  onClick={() =>
+                    setDialog(dialog.returnToSettings ? { type: "settings" } : null)
+                  }
+                >
                   <X size={19} />
                 </button>
               )}
@@ -2384,6 +2392,33 @@ export default function App() {
                 <RealtimeSync onClose={() => setDialog(null)} />
               </div>
             )}
+            {dialog.type === "export" && (
+              <ExportDialog
+                lib={lib}
+                projectId={dialog.value}
+                defaultPreserveBreaks={prefs.copyWithBlankLines === true}
+                busy={busy}
+                setBusy={setBusy}
+                flush={flush}
+                report={report}
+                onCancel={() =>
+                  setDialog(dialog.returnToSettings ? { type: "settings" } : null)
+                }
+                onSuccess={(res) => {
+                  setDialog(dialog.returnToSettings ? { type: "settings" } : null);
+                  const targetLabel = dialog.value ? "작품을" : "서재를";
+                  message(
+                    `${targetLabel} 내보냈습니다 (파일 ${res.fileCount}개)`,
+                    {
+                      label: "폴더 열기",
+                      run: () => {
+                        call("openExportFolder", { path: res.path }).catch(report);
+                      },
+                    },
+                  );
+                }}
+              />
+            )}
             {dialog.type === "settings" && (<SettingsContent
               settingsPage={settingsPage}
               setSettingsPage={setSettingsPage}
@@ -2414,6 +2449,9 @@ export default function App() {
               renderSyncConnections={renderSyncConnections}
               skillDownloading={skillDownloading}
               setSkillDownloading={setSkillDownloading}
+              onOpenExport={() =>
+                setDialog({ type: "export", returnToSettings: true })
+              }
             />)}
           </div>
         </div>
