@@ -1,12 +1,9 @@
 import { Fragment, useCallback, useEffect, useState, type ReactNode } from "react";
 import { marked, type Token, type Tokens } from "marked";
 import { ChevronDown, RefreshCw, Sparkles, X } from "lucide-react";
-import currentNotes from "../RELEASE_NOTES.md?raw";
+import { fetchRelease, fetchReleases, type Release } from "./github-releases";
 
-const RELEASES_URL = "https://api.github.com/repos/loopix8000/lof-writer/releases?per_page=30";
 const SEEN_KEY = "lof.releaseNotesSeenVersion";
-
-type Release = { version: string; name: string; body: string; date: string; prerelease: boolean };
 
 // 릴리즈 본문을 HTML로 넣지 않고 토큰을 React 요소로 그려 스크립트나 외부 리소스가 실행되지 않게 한다.
 function inline(tokens: Token[] | undefined): ReactNode {
@@ -56,6 +53,32 @@ export function ReleaseNotesBody({ markdown }: { markdown: string }) {
   return <div className="release-notes-body">{blocks(marked.lexer(text, { gfm: true }))}</div>;
 }
 
+export function ReleaseNotesForVersion({ version }: { version: string }) {
+  const [release, setRelease] = useState<Release | null>(null);
+  const [error, setError] = useState("");
+  const [attempt, setAttempt] = useState(0);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setRelease(null);
+    setError("");
+    void fetchRelease(version, controller.signal).then(result => {
+      if (!controller.signal.aborted) setRelease(result);
+    }).catch(error => {
+      if (!controller.signal.aborted) setError(String(error instanceof Error ? error.message : error));
+    });
+    return () => controller.abort();
+  }, [version, attempt]);
+
+  if (error) return <div>
+    <p className="updater-error" role="alert">변경 사항을 불러오지 못했습니다. {error}</p>
+    <button type="button" onClick={() => setAttempt(value => value + 1)}><RefreshCw size={13} />다시 시도</button>
+  </div>;
+  if (!release || release.version !== version.replace(/^v/, ""))
+    return <p className="updater-status" role="status">변경 사항을 불러오고 있습니다.</p>;
+  return <ReleaseNotesBody markdown={release.body} />;
+}
+
 export function ReleaseNotesDialog({ version, onClose }: { version: string; onClose: () => void }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
@@ -68,7 +91,7 @@ export function ReleaseNotesDialog({ version, onClose }: { version: string; onCl
         <h2>Lof Writer {version} 변경 사항</h2>
         <button type="button" aria-label="닫기" onClick={onClose}><X size={18} /></button>
       </div>
-      <ReleaseNotesBody markdown={currentNotes} />
+      <ReleaseNotesForVersion key={version} version={version} />
     </div>
   </div>;
 }
@@ -101,58 +124,39 @@ export function ReleaseNotice({ version, onOpen, onClose }: { version: string; o
   </aside>;
 }
 
-let cache: Release[] | null = null;
-
-async function fetchReleases(): Promise<Release[]> {
-  const res = await fetch(RELEASES_URL, { headers: { Accept: "application/vnd.github+json" } });
-  if (res.status === 403 || res.status === 429) throw Error("요청이 많아 잠시 뒤에 다시 시도해 주세요.");
-  if (!res.ok) throw Error(`응답 코드 ${res.status}`);
-  const list = await res.json() as any[];
-  // 버전 태그(v1.2.3)만 보여 주고, 업데이트 채널용 고정 릴리즈와 초안은 뺀다.
-  return list
-    .filter((r) => !r.draft && /^v\d/.test(String(r.tag_name)))
-    .map((r) => ({
-      version: String(r.tag_name).slice(1),
-      name: String(r.name || r.tag_name),
-      body: String(r.body || ""),
-      date: String(r.published_at || r.created_at || ""),
-      prerelease: !!r.prerelease,
-    }));
-}
-
 const formatDate = (iso: string) => {
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? "" : `${d.getFullYear()}.${d.getMonth() + 1}.${d.getDate()}`;
 };
 
 export function ReleaseHistory({ version }: { version: string }) {
-  const [releases, setReleases] = useState<Release[] | null>(cache);
+  const [releases, setReleases] = useState<Release[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [open, setOpen] = useState(false);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError("");
-    try {
-      cache = await fetchReleases();
-      setReleases(cache);
-    } catch (e) {
-      setError(String(e instanceof Error ? e.message : e));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
-    if (open && !cache && !loading && !error) void load();
-  }, [open, load, loading, error]);
+    if (!open) return;
+    const controller = new AbortController();
+    setLoading(true);
+    setError("");
+    setReleases(null);
+    void fetchReleases(controller.signal).then(result => {
+      if (!controller.signal.aborted) setReleases(result);
+    }).catch(error => {
+      if (!controller.signal.aborted) setError(String(error instanceof Error ? error.message : error));
+    }).finally(() => {
+      if (!controller.signal.aborted) setLoading(false);
+    });
+    return () => controller.abort();
+  }, [open, attempt]);
 
   return <details className="release-history" onToggle={(e) => setOpen(e.currentTarget.open)}>
     <summary>버전별 릴리즈 노트</summary>
     <div className="release-history-head">
       <p className="settings-description">GitHub에 공개된 버전별 변경 사항입니다.</p>
-      <button type="button" disabled={loading} onClick={() => void load()}>
+      <button type="button" disabled={loading} onClick={() => setAttempt(value => value + 1)}>
         <RefreshCw size={13} className={loading ? "spin" : undefined} />새로고침
       </button>
     </div>

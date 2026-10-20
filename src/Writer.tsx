@@ -50,6 +50,7 @@ import { TextSelection } from "@tiptap/pm/state";
 import type { EditorProps, EditorView } from "@tiptap/pm/view";
 import { createCachedMarkdown } from "./cached-markdown";
 import EditorFind, { FindHighlights } from "./EditorFind";
+import { registerEditorDraft } from "./editor-drafts";
 
 const SourceEditor = lazy(() => import("./SourceEditor"));
 
@@ -322,6 +323,7 @@ export default function Writer({
   id,
   body,
   onChange,
+  onPendingChange,
   countingRules,
   fontSize,
   lineHeight,
@@ -354,6 +356,7 @@ export default function Writer({
   id: string;
   body: string;
   onChange: (body: string, delta?: ManuscriptCounts | null, markdownCopy?: boolean) => void;
+  onPendingChange?: () => void;
   countingRules?: WritingRules;
   fontSize: number;
   lineHeight: number;
@@ -402,6 +405,14 @@ export default function Writer({
   onCursorLine?: (line: number) => void;
 }) {
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
+  const [shownBody, setShownBody] = useState(body);
+  const pendingChange = useRef<{
+    editor: Editor; delta: ManuscriptCounts | null;
+    notify: typeof onChange; bookmarks: typeof onBookmarksChange;
+  } | null>(null);
+  const publishTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const publishStarted = useRef(0);
+  const pendingCallback = useRef(onPendingChange); pendingCallback.current = onPendingChange;
   const style = normalizeEditorStyle({
     ...typingOptions,
     ...editorStyle,
@@ -420,6 +431,7 @@ export default function Writer({
   const sourceRef = useRef<SourceEditorHandle>(null);
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
+  const lastEmittedBody = useRef(body);
   const protection = useRef<{ id: string; key: string; body: string; source: boolean; required: boolean } | null>(null);
   const imagesRef = useRef(images);
   imagesRef.current = images;
@@ -428,20 +440,52 @@ export default function Writer({
   const previousProtection = protection.current;
   // 로컬 입력은 통지할 때 기록한다. 전체 검사는 읽기·외부 변경·원문에서 복귀할 때만 한다.
   if (!previousProtection || previousProtection.id !== id || previousProtection.key !== protectionKey ||
-      previousProtection.body !== body || (previousProtection.source && !source)) {
+      (previousProtection.body !== body && lastEmittedBody.current !== body) || (previousProtection.source && !source)) {
     protection.current = {
       id, key: protectionKey, body, source,
-      required: source ? previousProtection?.id === id && previousProtection.required || false
-        : requiresSource(body, { tables, links, images: hasImages }),
+      // 대용량 원고는 열 때 원문 편집기를 사용한다. 입력 중에는 모드를 바꾸지 않는다.
+      required: body.length >= 100_000 || (source ? previousProtection?.id === id && previousProtection.required || false
+        : requiresSource(body, { tables, links, images: hasImages })),
     };
   }
   protection.current!.source = source;
+  protection.current!.body = body;
   const protectedSource = protection.current!.required;
   // 원문으로 연 문서는 필요해질 때 서식 편집기를 준비한다. 로컬 입력을 다시 읽지는 않는다.
-  const loadedBody = useRef<string | null>(source || protectedSource ? null : body);
-  function notifyChange(nextBody: string, delta?: ManuscriptCounts | null, markdownCopy = true) {
-    if (protection.current) protection.current.body = nextBody;
-    onChangeRef.current(nextBody, delta, markdownCopy);
+  const richNeedsLoad = useRef(source || protectedSource);
+  function notifyChange(nextBody: string, delta?: ManuscriptCounts | null, markdownCopy = true, notify = onChangeRef.current) {
+    lastEmittedBody.current = nextBody;
+    if (source || protectedSource) richNeedsLoad.current = true;
+    setShownBody(nextBody);
+    notify(nextBody, delta, markdownCopy);
+  }
+  const publishPending = useRef<() => void>(() => {});
+  publishPending.current = () => {
+    const pending = pendingChange.current;
+    if (!pending) return;
+    if (pending.editor.view.composing) throw Error("한글 입력 조합이 끝난 뒤 다시 저장해 주세요.");
+    if (publishTimer.current) clearTimeout(publishTimer.current);
+    publishTimer.current = null;
+    publishStarted.current = 0;
+    const nextBody = markdown.serialize(pending.editor);
+    const markdownCopy = docNeedsMarkdownCopy(pending.editor.state.doc);
+    // 통지 전에 비워 두어 세션 저장 절차에서 다시 호출해도 중복 전달하지 않는다.
+    pendingChange.current = null;
+    notifyChange(nextBody, pending.delta, markdownCopy, pending.notify);
+    notifyBookmarks(pending.editor, pending.bookmarks);
+  };
+  function schedulePublish() {
+    if (publishTimer.current) clearTimeout(publishTimer.current);
+    publishStarted.current ||= Date.now();
+    const publish = () => {
+      publishTimer.current = null;
+      if (pendingChange.current?.editor.view.composing) {
+        publishTimer.current = setTimeout(publish, 200);
+        return;
+      }
+      publishPending.current();
+    };
+    publishTimer.current = setTimeout(publish, Math.max(0, Math.min(200, publishStarted.current + 2_000 - Date.now())));
   }
   // 초기 내용은 편집기를 새로 만들 때만 준비한다. 로컬 입력과 외부 수정은 각각 아래 갱신 경로를 쓴다.
   const initialContent = useMemo(() => splitSoftBreaks(body, !manualLineBreak), [id, tables, links, hasImages]);
@@ -562,21 +606,52 @@ export default function Writer({
         if (!editableRef.current) return;
         const rules = countingRulesRef.current;
         const delta = rules ? paragraphCountDelta(transaction.before, editor.state.doc, rules) : null;
-        notifyChange(markdown.serialize(editor), delta, docNeedsMarkdownCopy(editor.state.doc));
+        const previous = pendingChange.current;
+        let combined = delta;
+        if (previous) {
+          if (!previous.delta || !delta) combined = null;
+          else {
+            combined = { ...delta };
+            for (const key of Object.keys(combined) as (keyof ManuscriptCounts)[]) combined[key] += previous.delta[key];
+          }
+        }
+        pendingChange.current = { editor, delta: combined, notify: onChangeRef.current, bookmarks: onBookmarksRef.current };
+        pendingCallback.current?.();
+        schedulePublish();
       },
       // 북마크를 넣고 빼거나, 본문이 바뀌어 북마크 문단의 순서·글이 달라지면 알린다.
       onTransaction: ({ editor, transaction: tr }) => {
         if (tr.getMeta(BOOKMARK_LOAD) || tr.getMeta("preventUpdate")) return;
-        if (!tr.docChanged && !tr.getMeta(bookmarkPluginKey)) return;
-        const list = readBookmarks(editor.state),
-          key = JSON.stringify(list);
-        if (key === bookmarkKey.current.key) return;
-        bookmarkKey.current = { editor, key };
-        onBookmarksRef.current?.(list);
+        // 본문에 따른 변경은 Markdown과 함께 알린다. 북마크 직접 조작은 즉시 반영한다.
+        if (tr.docChanged || !tr.getMeta(bookmarkPluginKey)) return;
+        notifyBookmarks(editor);
       },
     },
     [id, tables, links, hasImages],
   );
+  function notifyBookmarks(editor: Editor, notify = onBookmarksRef.current) {
+    const list = readBookmarks(editor.state), key = JSON.stringify(list);
+    if (key === bookmarkKey.current.key) return;
+    bookmarkKey.current = { editor, key };
+    notify?.(list);
+  }
+  useLayoutEffect(() => {
+    const unregister = registerEditorDraft({ id, pending: () => pendingChange.current !== null,
+      composing: () => !!pendingChange.current?.editor.view.composing, flush: () => publishPending.current() });
+    return () => {
+      unregister();
+      if (publishTimer.current) clearTimeout(publishTimer.current);
+      publishTimer.current = null;
+      pendingChange.current = null;
+      publishStarted.current = 0;
+    };
+  }, [id, editor]);
+  useLayoutEffect(() => { setShownBody(body); }, [body, id, revision]);
+  useLayoutEffect(() => {
+    if (source || protectedSource) richNeedsLoad.current = true;
+    if ((source || protectedSource || inactive || !visible) && pendingChange.current && !editor?.view.composing)
+      publishPending.current();
+  }, [source, protectedSource, inactive, visible, editor]);
   // 이 원고를 인용한 메모 목록이 바뀌면 메모 표시를 다시 단다.
   useEffect(() => {
     if (!editor || editor.isDestroyed) return;
@@ -632,11 +707,11 @@ export default function Writer({
       !editor.isDestroyed &&
       !source &&
       !protectedSource &&
-      body !== loadedBody.current &&
-      markdown.serialize(editor) !== body &&
+      (richNeedsLoad.current || body !== lastEmittedBody.current) &&
       !editor.view.composing
     ) {
-      loadedBody.current = body;
+      richNeedsLoad.current = false;
+      if (markdown.serialize(editor) === body) return;
       editor.commands.setContent(splitSoftBreaks(body, !manualLineBreak), {
         contentType: "markdown",
         emitUpdate: false,
@@ -645,9 +720,8 @@ export default function Writer({
       bookmarkKey.current = { editor, key: JSON.stringify(bookmarksRef.current || []) };
       loadBookmarks(editor, bookmarksRef.current);
     }
-    // Only replace editor content for a document revision or a mode transition.
-    // Mirroring every local keystroke can replay a stale React effect over newer input.
-  }, [revision, source, protectedSource, editor, id]);
+    // 로컬 입력의 회신은 건너뛰고 외부 수정과 모드 전환만 반영한다.
+  }, [revision, source, protectedSource, editor, id, body]);
   // 강제 줄바꿈 들여쓰기 설정이 바뀌면 장식(Decoration)을 즉시 갱신한다.
   useEffect(() => {
     if (editor && !editor.isDestroyed && editor.view) {
@@ -820,7 +894,7 @@ export default function Writer({
   if (source || protectedSource)
     return (
       <div className="source-editor">
-        <EditorFind sourceRef={sourceRef} body={body} enabled={visible && !inactive} />
+        <EditorFind sourceRef={sourceRef} body={shownBody} enabled={visible && !inactive} />
         {protectedSource && <div className="source-hint">원문 편집</div>}
         <div onContextMenu={(event) => {
           const handle = sourceRef.current, view = handle?.view;
@@ -837,7 +911,7 @@ export default function Writer({
         }}>
           <Suspense fallback={<div role="status">원문 편집기를 준비하고 있습니다…</div>}>
           <SourceEditor
-            ref={sourceRef} id={id} body={body} editable={editable} inactive={inactive} visible={visible}
+            ref={sourceRef} id={id} body={shownBody} editable={editable} inactive={inactive} visible={visible}
             manualLineBreak={manualLineBreak} typingOptions={typingOptions} countingRules={countingRules}
             fontSize={style.fontSize} lineHeight={style.lineHeight} normalizePaste={normalizePastedText}
             reveal={reveal}

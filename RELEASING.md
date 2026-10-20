@@ -9,7 +9,8 @@
 - 다운로드가 끝나면 편집과 단축키를 잠그고 원고·메모 저장이 완료될 때까지 기다린다.
 - 한글 조합, 저장 실패, 충돌, 진행 중인 작업이 있으면 설치를 중단하고 편집 화면으로 돌아간다.
 - 서명을 검증한 설치 파일을 MSI 설치 프로그램으로 실행한다. Windows 앱은 종료되고 설치 완료 후 다시 실행된다.
-- 업데이트 후 처음 실행하면 오른쪽 위에 업데이트 알림을 한 번 띄운다. 알림을 누르면 빌드에 포함된 `RELEASE_NOTES.md`를 현재 버전의 변경 사항으로 보여 준다. 따라서 릴리즈 전에 `RELEASE_NOTES.md`를 해당 버전 내용으로 갱신해야 한다.
+- 업데이트 후 처음 실행하면 오른쪽 위에 업데이트 알림을 한 번 띄운다. 알림을 누르면 현재 버전에 해당하는 GitHub 릴리즈 본문을 불러와 보여 준다.
+- 설치 전 업데이트 안내도 대상 버전의 GitHub 릴리즈 본문을 보여 준다. 조회에 실패하면 다시 시도할 수 있다.
 - 설정 > 앱 업데이트의 **버전별 릴리즈 노트**는 GitHub 릴리즈 목록(`v`로 시작하는 태그)을 불러와 보여 준다. 고정 채널 릴리즈(`beta`)와 초안은 제외한다.
 
 ## 서명 설정
@@ -31,7 +32,7 @@
    | Secret | `TAURI_SIGNING_PRIVATE_KEY` | 비밀키 파일 내용 |
    | Secret | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | 비밀키에 암호를 설정했다면 그 암호 |
 
-3. `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`의 버전을 함께 올리고 두 잠금 파일의 앱 버전도 맞춘다. 준비 스크립트는 버전이 다르면 빌드를 중단한다. MSI 내부 버전인 `bundle.windows.wix.version`은 앱 버전과 별도로 매 릴리즈마다 증가시킨다. 현재 앱 버전 `1.0.5-beta.1`의 MSI 내부 버전은 `1.0.30`이다. [Windows Installer는 버전의 앞 세 자리만 비교](https://learn.microsoft.com/en-us/windows/win32/msi/productversion)하므로 네 번째 자리만 올리면 업그레이드를 구분할 수 없다. 기존 MSI의 UpgradeCode는 유지한다.
+3. `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`의 버전을 함께 올리고 두 잠금 파일의 앱 버전도 맞춘다. 준비 스크립트는 버전이 다르면 빌드를 중단한다. MSI 내부 버전인 `bundle.windows.wix.version`은 앱 버전과 별도로 매 릴리즈마다 증가시킨다. 현재 앱 버전 `1.0.5-beta.2`의 MSI 내부 버전은 `1.0.31`이다. [Windows Installer는 버전의 앞 세 자리만 비교](https://learn.microsoft.com/en-us/windows/win32/msi/productversion)하므로 네 번째 자리만 올리면 업그레이드를 구분할 수 없다. 기존 MSI의 UpgradeCode는 유지한다.
 4. GitHub Actions의 **Build Windows MSI release**를 `main`에서 수동 실행한다. **Publish the release and update the beta channel after building**을 선택하면 MSI·서명·`latest.json`을 업로드한 뒤 공개하고 베타 채널을 갱신한다. 선택하지 않으면 초안으로 남는다.
 
 `beta` 릴리즈의 `latest.json`은 버전별 릴리즈의 MSI 주소를 가리킨다. 버전별 설치 파일은 유지하고, 새 베타 버전을 공개할 때 고정 채널의 JSON만 갱신한다. 공개 스크립트는 버전·MSI 존재 여부·서명을 확인하고 설치 파일을 먼저 공개한다. 공개 단계만 재시도할 때는 해당 버전의 소스를 체크아웃하고 `GITHUB_REPOSITORY=loopix8000/lof-writer` 환경 변수를 설정한 뒤 `node scripts/publish-release.mjs`를 실행한다.

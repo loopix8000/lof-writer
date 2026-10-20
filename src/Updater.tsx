@@ -3,6 +3,7 @@ import { flushSync } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { Download, RefreshCw, X } from "lucide-react";
+import { ReleaseNotesForVersion } from "./ReleaseNotes";
 
 type Phase = "idle" | "checking" | "current" | "available" | "downloading" | "saving" | "installing" | "error";
 
@@ -13,7 +14,7 @@ export function useAppUpdater({ loaded, autoCheck, beforeInstall }: {
 }) {
   const [configured, setConfigured] = useState<boolean | null>(null);
   const [phase, setPhase] = useState<Phase>("idle");
-  const [available, setAvailable] = useState<{ version: string; notes: string } | null>(null);
+  const [available, setAvailable] = useState<{ version: string } | null>(null);
   const [error, setError] = useState("");
   const [progress, setProgress] = useState<number | null>(null);
   const [dismissed, setDismissed] = useState(false);
@@ -63,7 +64,7 @@ export function useAppUpdater({ loaded, autoCheck, beforeInstall }: {
         return;
       }
       updateRef.current = update;
-      setAvailable(update ? { version: update.version, notes: update.body || "" } : null);
+      setAvailable(update ? { version: update.version } : null);
       setPhase(update ? "available" : "current");
     } catch (e) {
       if (current === generation.current) {
@@ -166,7 +167,7 @@ export function UpdateSettings({ updater, version, autoCheck, onAutoCheck }: {
     {updater.error && <p className="updater-error" role="alert">업데이트를 완료하지 못했습니다. {updater.error}</p>}
     {updater.available && <>
       <p className="settings-note">설치 전에 열린 원고와 메모를 저장합니다. 저장에 실패하면 설치를 중단합니다. 설치가 시작되면 앱이 종료되고 완료 후 다시 실행됩니다.</p>
-      {updater.available.notes && <div className="updater-notes">{updater.available.notes}</div>}
+      <ReleaseNotesForVersion key={updater.available.version} version={updater.available.version} />
     </>}
   </>;
 }
