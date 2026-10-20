@@ -4,6 +4,7 @@ import { Fragment, Slice } from "@tiptap/pm/model";
 import { Plugin, TextSelection } from "@tiptap/pm/state";
 import { requiresSource } from "../core/text.mjs";
 import { tableStart } from "../core/markdown-table.mjs";
+import { changedBlocks, docIndex } from "./doc-index";
 
 const ManuscriptTable = Table.extend({
   markdownTokenizer: { ...Table.config.markdownTokenizer!, start: tableStart },
@@ -23,12 +24,17 @@ export const MarkdownTables = Extension.create({
   addProseMirrorPlugins() {
     const editor = this.editor;
     return [new Plugin({
-      appendTransaction(transactions, _oldState, state) {
+      appendTransaction(transactions, oldState, state) {
         if (!transactions.some((tr) => tr.docChanged)) return null;
         const tr = state.tr;
         // GFM은 첫 행만 머리글이다. 행 추가·삭제 뒤에도 저장 전후의 구조를 맞춘다.
-        state.doc.descendants((node, pos) => {
-          if (node.type.name !== "table") return;
+        // 바뀐 맨 위 블록 안의 표만 보고, 문단 안쪽으로는 내려가지 않는다.
+        const { start, endB } = changedBlocks(oldState.doc, state.doc);
+        if (start >= endB) return null;
+        const index = docIndex(state.doc);
+        state.doc.nodesBetween(index.starts[start], index.starts[endB], (node, pos) => {
+          if (node.isTextblock) return false;
+          if (node.type.name !== "table") return true;
           node.forEach((row, rowOffset, rowIndex) => {
             const type = rowIndex === 0 ? state.schema.nodes.tableHeader : state.schema.nodes.tableCell;
             row.forEach((cell, cellOffset) => {

@@ -43,12 +43,28 @@ function buildJsdocDecorations(state: EditorState): DecorationSet {
   return marks.length ? Decoration.set(marks, true) : Decoration.none;
 }
 
-const jsdocHighlights = StateField.define<DecorationSet>({
-  create: (state) => buildJsdocDecorations(state),
-  update(marks, tr) {
-    return tr.docChanged ? buildJsdocDecorations(tr.state) : marks;
+const hasCommentToken = (text: string) => text.includes("/*") || text.includes("*/");
+// 바뀐 줄(바뀌기 전과 후)에 주석 기호가 있는지. 기호는 두 글자가 한 줄에 붙어 있어야 하므로 바뀐 줄만 보면 된다.
+function touchesCommentToken(tr: Transaction) {
+  let found = false;
+  tr.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
+    if (found) return;
+    const before = tr.startState.doc, after = tr.newDoc;
+    found = hasCommentToken(before.sliceString(before.lineAt(fromA).from, before.lineAt(toA).to)) ||
+      hasCommentToken(after.sliceString(after.lineAt(fromB).from, after.lineAt(toB).to));
+  });
+  return found;
+}
+
+// 주석 장식과, 원문 어딘가에 주석 열기(/*)가 있는지. 주석 기호와 무관한 입력은 위치만 옮긴다.
+const jsdocHighlights = StateField.define<{ marks: DecorationSet; open: boolean }>({
+  create: (state) => ({ marks: buildJsdocDecorations(state), open: state.doc.toString().includes("/*") }),
+  update(value, tr) {
+    if (!tr.docChanged) return value;
+    if (!touchesCommentToken(tr)) return { marks: value.marks.map(tr.changes), open: value.open };
+    return { marks: buildJsdocDecorations(tr.state), open: tr.newDoc.toString().includes("/*") };
   },
-  provide: (field) => EditorView.decorations.from(field),
+  provide: (field) => EditorView.decorations.from(field, (value) => value.marks),
 });
 
 function toggleSourceJsdocComment(view: EditorView): boolean {
@@ -118,7 +134,7 @@ function inCode(state: EditorState, position = state.selection.main.from): boole
 // 일반 문장의 한 줄 수정만 즉시 센다. 문법·블록 경계가 바뀌면 전체 계산 결과를 기다린다.
 function countDelta(update: ViewUpdate, rules?: WritingRules): ManuscriptCounts | null {
   if (!rules || update.changes.empty) return null;
-  if (update.startState.doc.toString().includes("/*") || update.state.doc.toString().includes("/*")) return null;
+  if (update.startState.field(jsdocHighlights).open || update.state.field(jsdocHighlights).open) return null;
   let changed: { fromA: number; toA: number; fromB: number; toB: number } | null = null;
   let ranges = 0;
   update.changes.iterChangedRanges((fromA, toA, fromB, toB) => { changed = { fromA, toA, fromB, toB }; ranges++; });

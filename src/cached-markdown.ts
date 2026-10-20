@@ -2,6 +2,7 @@ import { Node, type Editor, type JSONContent } from "@tiptap/core";
 import type { Node as PMNode } from "@tiptap/pm/model";
 import { Markdown, MarkdownManager } from "@tiptap/markdown";
 import { Marked, type marked } from "marked";
+import { changedBlocks } from "./doc-index";
 
 const originalParse = MarkdownManager.prototype.parse;
 MarkdownManager.prototype.parse = function (markdown: string): JSONContent {
@@ -30,13 +31,40 @@ MarkdownManager.prototype.parse = function (markdown: string): JSONContent {
   return doc;
 };
 
-// ProseMirror는 바뀌지 않은 노드를 재사용한다. 그 노드의 JSON과 문단 변환 결과도 함께 재사용한다.
+// 주석(/* */) 안의 기호는 Markdown 이스케이프 없이 그대로 둔다.
+function unescapeComments(markdown: string) {
+  return markdown.includes("\\*")
+    ? markdown
+        .replace(/\/\\\*[\s\S]*?\\\*\//g, (match) => match.replace(/\\([\\`*_[\]~])/g, "$1"))
+        .replace(/\/(\\\*)+/g, (match) => match.replace(/\\\*/g, "*"))
+        .replace(/(\\\*)+\//g, (match) => match.replace(/\\\*/g, "*"))
+    : markdown;
+}
+// 블록 끝까지 닫히지 않은 주석 열기가 남는지. 남으면 위 치환이 다음 블록까지 이어지므로 원고 전체를 한 번에 푼다.
+function dangles(markdown: string) {
+  if (!markdown.includes("/\\*")) return false;
+  let end = 0;
+  for (const match of markdown.matchAll(/\/\\\*[\s\S]*?\\\*\//g)) end = (match.index ?? 0) + match[0].length;
+  return markdown.includes("/\\*", end);
+}
+// 기본 직렬화의 빈 원고 판정과 같은 기준. 블록 사이 구분은 공백이므로 모든 블록이 비었을 때만 원고가 빈다.
+const isBlank = (markdown: string) => markdown.replace(/&nbsp;/g, "").replace(/ /g, "").trim() === "";
+
+type Block = { markdown: string; clean: string; blank: boolean; dangling: boolean; marked: boolean };
+const CHUNK = 64;
+
+// ProseMirror는 바뀌지 않은 노드를 재사용한다. 그 노드의 JSON과 블록 변환 결과도 함께 재사용한다.
 // 저장 시점을 미루지 않고 입력 직후의 본문을 계속 전달하므로 저장·문서 전환 경로는 그대로 쓴다.
 export function createCachedMarkdown() {
   const jsonCache = new WeakMap<PMNode, JSONContent>();
   const paragraphCache = new WeakMap<JSONContent, { previousEmpty: boolean; markdown: string }>();
+  const blockCache = new WeakMap<PMNode, Block[]>();
   let lastDoc: PMNode | undefined;
   let lastMarkdown = "";
+  // lastDoc의 맨 위 블록별 변환 결과와, 이를 CHUNK개씩 이어 붙인 글(joined일 때만 유효).
+  let blocks: Block[] = [];
+  const chunks: string[] = [];
+  let joined = false;
 
   const document = Node.create({
     name: "doc",
@@ -63,27 +91,70 @@ export function createCachedMarkdown() {
     },
   });
 
+  const json = (node: PMNode) => {
+    let value = jsonCache.get(node);
+    if (!value) jsonCache.set(node, (value = node.toJSON() as JSONContent));
+    return value;
+  };
+  // 맨 위 블록 하나를 문서 직렬화 때와 같은 문맥으로 변환한다. 빈 문단의 출력은 앞 문단도 비어 있는지에 따라 달라지므로
+  // 앞 문단 모양만 함께 넘기고, 결과는 노드와 그 조건별로 보관한다.
+  function render(manager: MarkdownManager, doc: PMNode, i: number): Block {
+    const node = doc.child(i), previous = i > 0 ? doc.child(i - 1) : null;
+    const previousEmpty = previous?.type.name === "paragraph" && previous.childCount === 0;
+    let cached = blockCache.get(node);
+    if (!cached) blockCache.set(node, (cached = []));
+    let block = cached[+previousEmpty];
+    if (!block) {
+      const value = json(node);
+      const parent = { type: doc.type.name, content: previousEmpty ? [{ type: "paragraph" }, value] : [value] };
+      const markdown = manager.renderNodeToMarkdown(value, parent, previousEmpty ? 1 : 0, 0);
+      cached[+previousEmpty] = block = {
+        markdown, clean: unescapeComments(markdown), blank: isBlank(markdown), dangling: dangles(markdown), marked: node.marks.length > 0,
+      };
+    }
+    return block;
+  }
+
   function serialize(editor: Editor) {
     const doc = editor.state.doc;
     if (doc === lastDoc) return lastMarkdown;
     const manager = editor.markdown;
     if (!manager) return editor.getMarkdown();
-    const content: JSONContent[] = [];
-    doc.forEach((child) => {
-      const json: JSONContent = jsonCache.get(child) ?? child.toJSON();
-      jsonCache.set(child, json);
-      content.push(json);
-    });
-    // 공백만 있는 원고와 엔티티 처리도 기본 Markdown 직렬화 규칙을 따른다.
-    const rawMarkdown = manager.serialize({ type: doc.type.name, content });
-    const markdown = rawMarkdown.includes("\\*")
-      ? rawMarkdown
-          .replace(/\/\\\*[\s\S]*?\\\*\//g, (match) =>
-            match.replace(/\\([\\`*_[\]~])/g, "$1"),
-          )
-          .replace(/\/(\\\*)+/g, (match) => match.replace(/\\\*/g, "*"))
-          .replace(/(\\\*)+\//g, (match) => match.replace(/\\\*/g, "*"))
-      : rawMarkdown;
+    const count = doc.childCount;
+    // 바뀐 블록과 그 바로 다음 블록만 다시 변환하고, 나머지는 앞 문서의 결과를 옮겨 쓴다.
+    const { start, endA, endB } = lastDoc ? changedBlocks(lastDoc, doc) : { start: 0, endA: 0, endB: count };
+    const shift = endA - endB, renewTo = Math.min(count, endB + 1);
+    const next = new Array<Block>(count);
+    let empty = true, dangling = false, marked = false;
+    for (let i = 0; i < count; i++) {
+      const block = (next[i] = i < start ? blocks[i] : i < renewTo ? render(manager, doc, i) : blocks[i + shift]);
+      empty &&= block.blank;
+      dangling ||= block.dangling;
+      marked ||= block.marked;
+    }
+    let markdown: string;
+    if (marked) {
+      // 블록 자체에 마크가 있으면 기본 렌더러의 마크 경계 처리를 쓴다.
+      const content: JSONContent[] = [];
+      doc.forEach((child) => content.push(json(child)));
+      markdown = unescapeComments(manager.serialize({ type: doc.type.name, content }));
+    } else if (empty) {
+      // 공백만 있는 원고는 기본 Markdown 직렬화 규칙처럼 빈 글로 둔다.
+      markdown = "";
+    } else if (dangling) {
+      markdown = unescapeComments(next.map((block) => block.markdown).join("\n\n"));
+    } else {
+      // 블록을 CHUNK개씩 묶어 두고, 바뀐 블록이 든 묶음만 다시 이어 붙인다.
+      const chunkCount = Math.ceil(count / CHUNK);
+      const from = joined ? Math.floor(start / CHUNK) : 0;
+      const to = joined && shift === 0 ? Math.floor((Math.max(start, renewTo) - 1) / CHUNK) + 1 : chunkCount;
+      chunks.length = chunkCount;
+      for (let c = from; c < to; c++)
+        chunks[c] = next.slice(c * CHUNK, (c + 1) * CHUNK).map((block) => block.clean).join("\n\n");
+      markdown = chunks.join("\n\n");
+    }
+    joined = !marked && !empty && !dangling;
+    blocks = next;
     lastDoc = doc;
     lastMarkdown = markdown;
     return markdown;

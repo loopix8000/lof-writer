@@ -1,109 +1,91 @@
 import { Extension } from "@tiptap/core";
-import { Plugin, PluginKey, TextSelection, type EditorState } from "@tiptap/pm/state";
+import { Plugin, PluginKey, TextSelection, type EditorState, type Transaction } from "@tiptap/pm/state";
 import { Decoration, DecorationSet, type EditorView } from "@tiptap/pm/view";
 import { closeHistory } from "@tiptap/pm/history";
+import type { Node as PMNode } from "@tiptap/pm/model";
+import {
+  blockInfo, blockMapping, changedBlocks, commentStateAt, docIndex, eachTextblock, isHardBreak, scanComments, textPos, textblockText,
+} from "./doc-index";
 import { typingPlan, pairedBackspace, smartClosingEnter } from "../core/typing.mjs";
 
-export const typesettingPluginKey = new PluginKey("lofTypesetting");
+export const typesettingPluginKey = new PluginKey<DecorationSet>("lofTypesetting");
+const commentPluginKey = new PluginKey<DecorationSet>("lofJsdocComments");
 
-function addJsdocDecorations(doc: any, decorations: Decoration[]) {
-  let hasOpen = false;
-  doc.descendants((node: any) => {
-    if (hasOpen) return false;
-    if (node.isText && node.text?.includes("/*")) {
-      hasOpen = true;
-      return false;
-    }
-    return true;
-  });
-  if (!hasOpen) return;
-
-  const blocks: {
-    text: string;
-    charToPos: number[];
-  }[] = [];
-  const blockOffsets: { start: number; end: number; blockIndex: number }[] = [];
-  let fullText = "";
-
-  doc.descendants((node: any, pos: number) => {
-    if (!node.isTextblock) return true;
-    const charToPos: number[] = [];
-    let text = "";
-    node.forEach((child: any, offset: number) => {
-      const childPos = pos + 1 + offset;
-      if (child.isText && child.text) {
-        for (let i = 0; i < child.text.length; i++) {
-          charToPos.push(childPos + i);
-        }
-        text += child.text;
-      } else {
-        charToPos.push(childPos);
-        text += child.type.name === "hardBreak" ? "\n" : "\uFFFC";
-      }
-    });
-    charToPos.push(pos + node.nodeSize - 1);
-    const start = fullText.length;
-    fullText += text + "\n";
-    const end = fullText.length - 1;
-    const blockIndex = blocks.length;
-    blocks.push({ text, charToPos });
-    blockOffsets.push({ start, end, blockIndex });
-    return false;
-  });
-
-  const commentRe = /\/\*[\s\S]*?\*\//g;
-  for (const match of fullText.matchAll(commentRe)) {
-    const matchStart = match.index ?? 0;
-    const matchEnd = matchStart + match[0].length;
-    for (const bo of blockOffsets) {
-      if (bo.end <= matchStart) continue;
-      if (bo.start >= matchEnd) break;
-      const block = blocks[bo.blockIndex];
-      const localStart = Math.max(0, matchStart - bo.start);
-      const localEnd = Math.min(block.text.length, matchEnd - bo.start);
-      if (localEnd > localStart) {
-        const fromPos = block.charToPos[localStart];
-        const toPos = block.charToPos[localEnd];
-        if (toPos > fromPos) {
-          decorations.push(Decoration.inline(fromPos, toPos, { class: "jsdoc-comment" }));
-        }
-      }
-    }
-  }
-}
-
-function buildTypesettingDecorations(doc: any, opts: Record<string, any>) {
-  const brIndent = !!opts.hardBreakIndent && Number(opts.indent || 0) > 0;
+// 주석 장식. 닫히지 않은 주석(/* 뒤에 */가 없는 부분)은 칠하지 않는다.
+function commentDecorations(doc: PMNode): DecorationSet {
+  if (!docIndex(doc).tokens) return DecorationSet.empty;
   const decorations: Decoration[] = [];
-
-  if (brIndent) {
-    doc.descendants((node: any, pos: number) => {
-      if (node.type.name === "hardBreak" || node.type.name === "hard_break") {
-        decorations.push(
-          Decoration.widget(
-            pos + node.nodeSize,
-            () => {
-              const span = document.createElement("span");
-              span.setAttribute("data-br-indent", "");
-              span.contentEditable = "false";
-              return span;
-            },
-            { side: -1, key: `indent-br-${pos}` },
-          ),
-        );
-      }
+  const state = { open: false, stray: false };
+  let pending: Decoration[] = [];
+  doc.forEach((block, offset) => {
+    if (!state.open && !blockInfo(block).tokens) return;
+    eachTextblock(block, offset, (node, pos) => {
+      scanComments(textblockText(node), state, (from, to, closed) => {
+        if (to > from) {
+          const start = textPos(node, pos, from), end = textPos(node, pos, to);
+          if (end > start) pending.push(Decoration.inline(start, end, { class: "jsdoc-comment" }));
+        }
+        if (closed) {
+          decorations.push(...pending);
+          pending = [];
+        }
+      });
     });
-  }
-
-  addJsdocDecorations(doc, decorations);
+  });
   return decorations.length ? DecorationSet.create(doc, decorations) : DecorationSet.empty;
 }
 
-function hasUnclosedCommentBefore(doc: any, pos: number): boolean {
-  const prefix = doc.textBetween(0, pos, "\n");
-  if (!prefix.includes("/*")) return false;
-  const rest = prefix.replace(/\/\*[\s\S]*?\*\//g, "");
-  return rest.includes("/*");
+const breakIndentEnabled = (opts: Record<string, any>) => !!opts.hardBreakIndent && Number(opts.indent || 0) > 0;
+const breakIndent = () => {
+  const span = document.createElement("span");
+  span.setAttribute("data-br-indent", "");
+  span.contentEditable = "false";
+  return span;
+};
+// 강제 줄바꿈 뒤 들여쓰기 자리. 모양이 모두 같으므로 같은 key로 두어 다시 그리지 않게 한다.
+function addBreakIndents(block: PMNode, pos: number, decorations: Decoration[]) {
+  if (!blockInfo(block).breaks) return;
+  block.descendants((node, offset) => {
+    if (isHardBreak(node))
+      decorations.push(Decoration.widget(pos + 1 + offset + node.nodeSize, breakIndent, { side: -1, key: "indent-br" }));
+    return !node.isInline;
+  });
+}
+function breakDecorations(doc: PMNode, opts: Record<string, any>): DecorationSet {
+  if (!breakIndentEnabled(opts)) return DecorationSet.empty;
+  const decorations: Decoration[] = [];
+  doc.forEach((block, offset) => addBreakIndents(block, offset, decorations));
+  return decorations.length ? DecorationSet.create(doc, decorations) : DecorationSet.empty;
+}
+
+// 바뀐 블록의 장식만 새로 만들고, 나머지는 위치만 옮긴다.
+function updateBreakDecorations(tr: Transaction, set: DecorationSet, opts: Record<string, any>): DecorationSet {
+  if (!breakIndentEnabled(opts)) return DecorationSet.empty;
+  const before = docIndex(tr.before), after = docIndex(tr.doc, tr.before);
+  const changed = changedBlocks(tr.before, tr.doc);
+  let next = set.map(blockMapping(before, after, changed), tr.doc);
+  next = next.remove(next.find(after.starts[changed.start], after.starts[changed.endB]));
+  const added: Decoration[] = [];
+  for (let i = changed.start; i < changed.endB; i++) addBreakIndents(tr.doc.child(i), after.starts[i], added);
+  return added.length ? next.add(tr.doc, added) : next;
+}
+
+// 주석 밖에서 주석 기호와 무관한 블록만 바뀌었으면 기존 장식의 위치만 옮긴다.
+function updateCommentDecorations(tr: Transaction, set: DecorationSet): DecorationSet {
+  const before = docIndex(tr.before), after = docIndex(tr.doc, tr.before);
+  if (!before.tokens && !after.tokens) return DecorationSet.empty;
+  const changed = changedBlocks(tr.before, tr.doc);
+  const touches = (doc: PMNode, from: number, to: number) => {
+    for (let i = from; i < to; i++) if (blockInfo(doc.child(i)).tokens) return true;
+    return false;
+  };
+  if (before.open[changed.start] || touches(tr.before, changed.start, changed.endA) || touches(tr.doc, changed.start, changed.endB))
+    return commentDecorations(tr.doc);
+  return set.map(blockMapping(before, after, changed), tr.doc);
+}
+
+function hasUnclosedCommentBefore(doc: PMNode, pos: number): boolean {
+  return commentStateAt(doc, pos).open;
 }
 
 function findEnclosingBlockComment(state: EditorState): { from: number; to: number; raw: string; cursorOffset: number } | null {
@@ -211,13 +193,11 @@ export const TypingAssist = Extension.create<{
         key: typesettingPluginKey,
         state: {
           init(_, { doc }) {
-            return buildTypesettingDecorations(doc, getOptions());
+            return breakDecorations(doc, getOptions());
           },
-          apply(tr, old, _, newState) {
-            if (tr.docChanged || tr.getMeta(typesettingPluginKey)) {
-              return buildTypesettingDecorations(newState.doc, getOptions());
-            }
-            return old;
+          apply(tr, old) {
+            if (tr.getMeta(typesettingPluginKey)) return breakDecorations(tr.doc, getOptions());
+            return tr.docChanged ? updateBreakDecorations(tr, old, getOptions()) : old;
           },
         },
         props: {
@@ -363,6 +343,18 @@ export const TypingAssist = Extension.create<{
               closeHistory(view.state.tr).delete(position - 1, position + 1),
             );
             return true;
+          },
+        },
+      }),
+      new Plugin<DecorationSet>({
+        key: commentPluginKey,
+        state: {
+          init: (_, { doc }) => commentDecorations(doc),
+          apply: (tr, old) => (tr.docChanged ? updateCommentDecorations(tr, old) : old),
+        },
+        props: {
+          decorations(state) {
+            return this.getState(state);
           },
         },
       }),

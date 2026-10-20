@@ -4,6 +4,7 @@ import { Decoration, DecorationSet, type EditorView } from "@tiptap/pm/view";
 import type { Node as PMNode } from "@tiptap/pm/model";
 import type { Bookmark } from "./types";
 import { NOTE_GUTTER } from "./note-extension";
+import { blockAt, docIndex } from "./doc-index";
 
 // 원고 북마크. 본문 맨 위 단계의 문단에 붙이고, 왼쪽 여백을 눌러 넣고 뺀다.
 // 붙인 자리는 편집하는 동안 문단을 따라 옮겨 가고, 저장할 때는 문단 순서와 앞부분 글로 남긴다.
@@ -16,7 +17,12 @@ const hoverKey = new PluginKey<number | null>("lofBookmarkHover");
 type BookmarkMeta = { set: number[] } | { toggle: number };
 
 const markable = (node: PMNode) => node.type.name !== "horizontalRule" && node.type.name !== "table";
-export const bookmarkSnippet = (node: PMNode) => node.textContent.replace(/\s+/g, " ").trim().slice(0, 80);
+const snippets = new WeakMap<PMNode, string>();
+export function bookmarkSnippet(node: PMNode) {
+  let text = snippets.get(node);
+  if (text === undefined) snippets.set(node, (text = node.textContent.replace(/\s+/g, " ").trim().slice(0, 80)));
+  return text;
+}
 
 function mark(doc: PMNode, pos: number) {
   const node = doc.nodeAt(pos);
@@ -44,12 +50,15 @@ function setHover(view: EditorView, pos: number | null) {
 export function readBookmarks(state: EditorState): Bookmark[] {
   const set = bookmarkPluginKey.getState(state);
   if (!set) return [];
-  const starts = new Set(set.find().map((d) => d.from));
-  if (!starts.size) return [];
-  const out: Bookmark[] = [];
-  state.doc.forEach((node, offset, index) => {
-    if (starts.has(offset)) out.push({ index, text: bookmarkSnippet(node) });
-  });
+  const starts = [...new Set(set.find().map((d) => d.from))].sort((a, b) => a - b);
+  if (!starts.length) return [];
+  // 본문 전체를 돌지 않고 북마크 자리의 문단만 찾는다.
+  const blocks = docIndex(state.doc), out: Bookmark[] = [];
+  for (const offset of starts) {
+    const index = blockAt(blocks, offset);
+    if (index < state.doc.childCount && blocks.starts[index] === offset)
+      out.push({ index, text: bookmarkSnippet(state.doc.child(index)) });
+  }
   return out;
 }
 

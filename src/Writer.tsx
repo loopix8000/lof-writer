@@ -34,7 +34,7 @@ import { BubbleMenu } from "@tiptap/react/menus";
 import { getTextBetween, getTextSerializersFromSchema, type Editor } from "@tiptap/core";
 import { requiresSource, splitSoftBreaks } from "../core/text.mjs";
 import type { SourceEditorHandle } from "./SourceEditor";
-import { needsMarkdownCopy } from "./source-protection";
+import { blockAt, docIndex, docNeedsMarkdownCopy, nodeLineCount } from "./doc-index";
 import { normalizeEditorStyle } from "../core/typesetting.mjs";
 import { TypingAssist, isInsideJsdocComment, toggleJsdocComment, typesettingPluginKey } from "./typing-extension";
 import { MarkdownTables } from "./table-extension";
@@ -147,24 +147,14 @@ function offsetToPos(node: PMNode, pos: number, offset: number) {
   }
   return p;
 }
-// 바뀌지 않은 문단·목록·표의 줄 수는 다시 세지 않는다.
-const lineCounts = new WeakMap<PMNode, number>();
-function nodeLineCount(node: PMNode): number {
-  const cached = lineCounts.get(node);
-  if (cached !== undefined) return cached;
-  let count = 0;
-  if (node.isTextblock) {
-    count = 1;
-    node.forEach((child) => { if (child.type.name === "hardBreak") count++; });
-  } else if (node.isBlock && node.isLeaf) count = 1;
-  else node.forEach((child) => { count += nodeLineCount(child); });
-  lineCounts.set(node, count);
-  return count;
-}
 // 커서가 있는 줄 번호(1부터). 문단(표 칸·목록 항목 포함)과 구분선을 한 줄로 센다.
+// 앞쪽 블록의 줄 수는 색인에 모아 둔 누적값을 쓰고, 커서가 있는 블록 안만 센다.
 function cursorLineAt(doc: PMNode, pos: number) {
-  let line = 0;
-  doc.nodesBetween(0, pos, (node, start) => {
+  if (pos <= 0) return 1;
+  const index = docIndex(doc), i = blockAt(index, pos - 1);
+  if (i >= doc.childCount) return Math.max(1, index.lines[i]);
+  let line = index.lines[i];
+  const visit = (node: PMNode, start: number) => {
     if (start + node.nodeSize <= pos) {
       line += nodeLineCount(node);
       return false;
@@ -176,7 +166,9 @@ function cursorLineAt(doc: PMNode, pos: number) {
         if (child.type.name === "hardBreak" && start + 1 + offset < pos) line++;
       });
     return false;
-  });
+  };
+  const block = doc.child(i), start = index.starts[i];
+  if (visit(block, start)) block.nodesBetween(0, Math.min(block.content.size, pos - start - 1), visit, start + 1);
   return Math.max(1, line);
 }
 // 줄바꿈 방식을 바꿀 때 본문의 실제 빈 줄을 맞춘다. 맨 위 단계에서 글이 있는 블록 사이의 빈 문단 묶음만 바꾼다.
@@ -570,7 +562,7 @@ export default function Writer({
         if (!editableRef.current) return;
         const rules = countingRulesRef.current;
         const delta = rules ? paragraphCountDelta(transaction.before, editor.state.doc, rules) : null;
-        notifyChange(markdown.serialize(editor), delta, needsMarkdownCopy(editor.state.doc));
+        notifyChange(markdown.serialize(editor), delta, docNeedsMarkdownCopy(editor.state.doc));
       },
       // 북마크를 넣고 빼거나, 본문이 바뀌어 북마크 문단의 순서·글이 달라지면 알린다.
       onTransaction: ({ editor, transaction: tr }) => {

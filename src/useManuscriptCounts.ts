@@ -28,6 +28,7 @@ export function useManuscriptCounts({ scope, id, body, rules, onBaseline, onErro
     model.body = body; model.sequence++; model.changes.push({ sequence: model.sequence, delta: null });
   }
   const pump = useRef<() => void>(() => {});
+  const schedule = useRef<() => void>(() => {});
   useEffect(() => {
     let instance: Worker;
     try { instance = new Worker(new URL("./counts-worker.ts", import.meta.url), { type: "module" }); }
@@ -36,6 +37,7 @@ export function useManuscriptCounts({ scope, id, body, rules, onBaseline, onErro
     if (current.current) current.current.sent = -1;
     let disposed = false;
     let job: { model: Model; sequence: number } | null = null;
+    let idle: ReturnType<typeof setTimeout> | null = null;
     pump.current = () => {
       const target = current.current;
       if (disposed || busy.current || !target || target.sent === target.sequence) return;
@@ -44,6 +46,15 @@ export function useManuscriptCounts({ scope, id, body, rules, onBaseline, onErro
       target.sent = first ? 0 : target.sequence;
       job = { model: target, sequence: target.sent };
       instance.postMessage({ sequence: target.sent, body: first ? target.initialBody : target.body });
+    };
+    schedule.current = () => {
+      if (idle) clearTimeout(idle);
+      idle = null;
+      const target = current.current, last = target?.changes[target.changes.length - 1];
+      // 문단 증감으로 이미 맞춘 입력이면 원고 전체 계산은 입력이 잠시 멈춘 뒤에 한 번만 한다.
+      if (target?.stats && last?.delta && last.sequence === target.sequence)
+        idle = setTimeout(() => { idle = null; pump.current(); }, 700);
+      else pump.current();
     };
     instance.onmessage = async (event: MessageEvent<{ sequence: number; text?: string; error?: string }>) => {
       const pending = job;
@@ -68,16 +79,19 @@ export function useManuscriptCounts({ scope, id, body, rules, onBaseline, onErro
         }
       } catch (error) { if (!disposed) callbacks.current.onError(error); }
       finally {
-        if (!disposed) { job = null; busy.current = false; pump.current(); }
+        if (!disposed) { job = null; busy.current = false; schedule.current(); }
       }
     };
     instance.onerror = event => {
       if (!disposed) { busy.current = false; callbacks.current.onError(Error(event.message || "글자 수 계산 작업을 시작하지 못했습니다.")); }
     };
     pump.current();
-    return () => { disposed = true; instance.terminate(); worker.current = null; busy.current = false; };
+    return () => {
+      disposed = true; if (idle) clearTimeout(idle);
+      instance.terminate(); worker.current = null; busy.current = false;
+    };
   }, []);
-  useEffect(() => { pump.current(); }, [scope, id, body, rulesKey]);
+  useEffect(() => { schedule.current(); }, [scope, id, body, rulesKey]);
   const update = useCallback((nextBody: string, delta?: ManuscriptCounts | null) => {
     const target = current.current;
     if (!target || target.body === nextBody) return;

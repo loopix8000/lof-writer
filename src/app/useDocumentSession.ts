@@ -38,20 +38,40 @@ type DraftState = {
   edited: boolean;
 };
 
-function changedChars(before: string, after: string): number {
-  const a = Array.from(before);
-  const b = Array.from(after);
-  let pre = 0;
-  while (pre < a.length && pre < b.length && a[pre] === b[pre]) pre++;
-  let suf = 0;
-  while (
-    suf < a.length - pre &&
-    suf < b.length - pre &&
-    a[a.length - 1 - suf] === b[b.length - 1 - suf]
-  ) {
-    suf++;
+const isHighSurrogate = (code: number) => code >= 0xd800 && code <= 0xdbff;
+const isLowSurrogate = (code: number) => code >= 0xdc00 && code <= 0xdfff;
+function codePoints(text: string, from: number, to: number) {
+  let count = 0;
+  for (let i = from; i < to; i++) {
+    if (isHighSurrogate(text.charCodeAt(i)) && i + 1 < to && isLowSurrogate(text.charCodeAt(i + 1))) i++;
+    count++;
   }
-  return Math.max(a.length - pre - suf, b.length - pre - suf);
+  return count;
+}
+// 앞뒤로 같은 부분을 뺀 가운데 구간의 글자(코드 포인트) 수. 긴 원고에서도 글자 배열을 만들지 않도록
+// 같은 구간은 큰 묶음으로 비교해 건너뛰고, 서로게이트 쌍은 쪼개지 않는다.
+const SKIP = 4096;
+function changedChars(before: string, after: string): number {
+  if (before === after) return 0;
+  const min = Math.min(before.length, after.length);
+  let pre = 0;
+  while (pre + SKIP <= min && before.slice(pre, pre + SKIP) === after.slice(pre, pre + SKIP)) pre += SKIP;
+  while (pre < min && before.charCodeAt(pre) === after.charCodeAt(pre)) pre++;
+  if (pre > 0 && pre < min && isHighSurrogate(before.charCodeAt(pre - 1))) pre--;
+  let endA = before.length, endB = after.length;
+  while (endA - SKIP >= pre && endB - SKIP >= pre && before.slice(endA - SKIP, endA) === after.slice(endB - SKIP, endB)) {
+    endA -= SKIP;
+    endB -= SKIP;
+  }
+  while (endA > pre && endB > pre && before.charCodeAt(endA - 1) === after.charCodeAt(endB - 1)) {
+    endA--;
+    endB--;
+  }
+  if (endA < before.length && endA > pre && isLowSurrogate(before.charCodeAt(endA))) {
+    endA++;
+    endB++;
+  }
+  return Math.max(codePoints(before, pre, endA), codePoints(after, pre, endB));
 }
 
 // 원고와 저장 버전은 이 훅 안에서만 변경한다. 화면 이동은 저장 완료 뒤 commitDocument를 호출한다.

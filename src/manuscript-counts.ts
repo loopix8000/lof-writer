@@ -1,6 +1,7 @@
 import type { Node as PMNode } from "@tiptap/pm/model";
 import { countForWriting, stripJsdocComments } from "../core/text.mjs";
 import type { WritingRules } from "./types";
+import { commentStateAt } from "./doc-index";
 
 export type ManuscriptCounts = {
   withoutSpaces: number; withSpaces: number; withLineBreaks: number;
@@ -49,10 +50,10 @@ export function paragraphCountDelta(before: PMNode, after: PMNode, rules: Writin
   if (!oldStart.sameParent(oldEnd) || !newStart.sameParent(newEnd) ||
       !oldStart.parent.isTextblock || !newStart.parent.isTextblock || oldStart.parent.type !== newStart.parent.type)
     return null;
-  if (hasUnclosedComment(oldStart.parent.textContent) ||
-      hasUnclosedComment(newStart.parent.textContent) ||
-      hasUnclosedComment(before.textBetween(0, oldStart.before(), "\n")))
-    return null;
+  if (hasUnclosedComment(oldStart.parent.textContent) || hasUnclosedComment(newStart.parent.textContent)) return null;
+  // 앞쪽 원고를 다시 읽지 않고, 블록별로 모아 둔 주석 상태로 판단한다.
+  const prior = commentStateAt(before, oldStart.before());
+  if (prior.open || prior.stray) return null;
   const oldCounts = blockCounts(oldStart.parent, rules), newCounts = blockCounts(newStart.parent, rules);
   for (const key of Object.keys(newCounts) as (keyof ManuscriptCounts)[]) newCounts[key] -= oldCounts[key];
   return newCounts;
