@@ -1331,6 +1331,31 @@ body.sidebar-resizing * {
   background: var(--soft);
   color: var(--text);
 }
+.editor-tabs-actions {
+  position: sticky;
+  right: 0;
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  padding: 0 6px;
+  background: var(--sidebar);
+}
+.tab-split-button {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  color: var(--muted);
+  background: none;
+  cursor: pointer;
+}
+.tab-split-button:hover {
+  background: var(--hover);
+  color: var(--text);
+}
 .context-target {
   outline: 1px solid var(--accent);
   outline-offset: -1px;
@@ -3137,16 +3162,28 @@ textarea::-webkit-scrollbar-track {
 }
 .grid-sash {
   z-index: 5;
+  transition: background-color 100ms ease-out;
 }
 .group-sash.horizontal {
   cursor: row-resize;
   padding: 1.5px 0;
 }
-.group-sash.horizontal:hover {
+.group-sash.horizontal:not(.grid-sash):hover,
+.group-sash.horizontal.hover {
   padding: 0;
 }
 body.sash-dragging-horizontal {
   cursor: row-resize;
+  user-select: none;
+}
+.group-sash-intersection {
+  position: absolute;
+  z-index: 7;
+  cursor: all-scroll;
+  touch-action: none;
+}
+body.sash-dragging-all {
+  cursor: all-scroll;
   user-select: none;
 }
 .group-body {
@@ -3154,6 +3191,11 @@ body.sash-dragging-horizontal {
   display: flex;
   flex-direction: column;
   min-height: 0;
+}
+body.split-dragging .group-body,
+body.split-dragging .memo-blank {
+  pointer-events: none;
+  user-select: none;
 }
 /* 탭 본문은 마운트 상태를 유지하고, 선택한 탭만 그룹의 공간을 차지한다. */
 .retained-tab {
@@ -3172,7 +3214,8 @@ body.sash-dragging-horizontal {
   padding: 0 1.5px;
   touch-action: none;
 }
-.group-sash:hover {
+.group-sash:not(.grid-sash):hover,
+.group-sash.hover {
   background-color: var(--accent);
   padding: 0;
 }
@@ -3196,6 +3239,19 @@ body.sash-dragging {
   z-index: 20;
   background: color-mix(in srgb, var(--accent) 14%, transparent);
   border: 1px solid var(--accent);
+  pointer-events: none;
+  transition:
+    left 70ms ease-out,
+    top 70ms ease-out,
+    width 70ms ease-out,
+    height 70ms ease-out;
+}
+.tab-drop-indicator {
+  position: absolute;
+  width: 2px;
+  margin-left: -1px;
+  z-index: 25;
+  background: var(--accent);
   pointer-events: none;
 }
 

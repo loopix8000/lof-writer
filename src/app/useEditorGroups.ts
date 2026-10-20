@@ -183,15 +183,19 @@ export function useEditorGroups(options: Options) {
     pending, checks, groupStyle: split.groupStyle,
     retainDocument, getRetainedDocument, clearRetainedDocuments, clearSideDocument,
     pruneDocuments, resetGroups, commitOpenDocument, replaceDocumentId, getProjectDocument,
-    openDoc, openLinked, pinTab, cycleTab: split.cycleTab, canSplit: split.canSplit,
+    openDoc, openLinked, pinTab, pinSideTab: split.pinOtherTab, cycleTab: split.cycleTab, shiftTab: split.shiftTab, canSplit: split.canSplit,
     closeTab: split.closeTab, closeTabs: split.closeTabs, moveTab: split.moveTab,
     focusOther: (id?: string, pinned = false, side?: Side, closeSource = false) =>
       split.focusOther(id ? tabFor(id) : undefined, pinned, side, closeSource),
-    focusSide: split.focusGroup, focusGroupAt: split.focusGroupAt, closeGroup: split.closeGroup, closeOtherGroup: split.closeOtherGroup,
+    focusSide: split.focusGroup, focusGroupAt: split.focusGroupAt, focusDirection: split.focusDirection,
+    closeGroup: split.closeGroup, closeOtherGroup: split.closeOtherGroup,
     openInGroup: (id: string, side: Side, move = false, source?: Side, direction?: SplitDirection) =>
       split.openInGroup(tabFor(id), side, move, source, direction),
     splitTo: (id: string, direction?: SplitDirection, from?: Side) => split.splitTo(tabFor(id), direction, from),
     moveToOther: (id: string) => split.moveToOther(tabFor(id)),
+    moveToDirection: (id: string, step: 1 | -1) => split.moveToDirection(tabFor(id), step),
     closeSideTab: (id: string, side?: Side) => split.closeOtherTab(id, side),
+    closeSideTabs: (keep: (tab: EditorTab, index: number) => boolean, side: Side, focusId?: string) =>
+      split.closeOtherTabs(keep, side, focusId),
   };
 }

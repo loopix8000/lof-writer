@@ -14,11 +14,11 @@ export function splitMenuItems({ focused, split, canSplit, splitTo, moveToOther,
   return [
     ...splitDirections.map(({ direction, label }) => ({
       label,
-      shortcut: focused && direction === defaultSplitDirection ? "Ctrl+\\" : undefined,
+      shortcut: !focused ? undefined : direction === defaultSplitDirection ? "Ctrl+\\" : direction === "down" ? "Ctrl+K Ctrl+\\" : undefined,
       disabled: !canSplit(direction),
       action: () => splitTo(direction),
     })),
-    ...(split ? [{ label: "다른 그룹으로 이동", action: moveToOther }] : []),
+    ...(split ? [{ label: "다른 그룹으로 이동", shortcut: focused ? "Ctrl+Alt+→" : undefined, action: moveToOther }] : []),
     { label: "그룹 닫기", disabled: !split, action: closeGroup },
   ];
 }

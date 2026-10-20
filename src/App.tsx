@@ -25,6 +25,7 @@ import {
   Check,
   Cloud,
   Code2,
+  Columns2,
   Copy,
   Download,
   FileText,
@@ -82,9 +83,9 @@ import RealtimeSync from "./RealtimeSync";
 import { ReleaseNotesDialog, ReleaseNotice, useReleaseNotice } from "./ReleaseNotes";
 import ResizableSidebar from "./ResizableSidebar";
 import { initializeWorkspaceState, flushWorkspaceState, workspaceKey } from "./workspace-state";
-import { groupShortcutIndex } from "./split/layout";
+import { groupShortcutIndex, type SplitDirection } from "./split/layout";
 import { splitMenuItems } from "./split/menu";
-import { groupAttributes, tabBarAttributes, type SplitDrag } from "./split/controller";
+import { groupAttributes, tabAttributes, tabBarAttributes, type SplitDrag } from "./split/controller";
 import SplitArea from "./split/SplitArea";
 import RetainedTab from "./RetainedTab";
 import {
@@ -198,8 +199,11 @@ export default function App() {
   const tabActions = useRef<{
     closeTab: (id: string) => Promise<void>;
     cycleTab: (direction: number) => Promise<void>;
-    splitTo: (id: string) => Promise<unknown>;
+    shiftTab: (step: 1 | -1) => void;
+    splitTo: (id: string, direction?: SplitDirection) => Promise<unknown>;
     focusGroupAt: (index: number) => Promise<void>;
+    focusDirection: (direction: SplitDirection) => Promise<void>;
+    moveToDirection: (id: string, step: 1 | -1) => Promise<void>;
     togglePreview: () => void;
     report: (e: any) => void;
   }>(null!);
@@ -250,8 +254,8 @@ export default function App() {
     area, tabs: editorTabs, split, groups, sides, focusedSide, pending: sideSyncKeys, checks: sideChecks,
     retainDocument, getRetainedDocument, clearRetainedDocuments, clearSideDocument,
     pruneDocuments, resetGroups, commitOpenDocument, replaceDocumentId: replaceGroupDocumentId, getProjectDocument,
-    openDoc, openLinked, pinTab, closeTab, closeTabs, cycleTab, moveTab,
-    focusOther, focusSide, focusGroupAt, openInGroup, splitTo, canSplit, closeGroup, closeOtherGroup, moveToOther, closeSideTab,
+    openDoc, openLinked, pinTab, pinSideTab, closeTab, closeTabs, cycleTab, shiftTab, moveTab,
+    focusOther, focusSide, focusGroupAt, focusDirection, openInGroup, splitTo, canSplit, closeGroup, closeOtherGroup, moveToOther, moveToDirection, closeSideTab, closeSideTabs,
     groupStyle,
   } = useEditorGroups({
     active,
@@ -643,6 +647,7 @@ export default function App() {
       { label: "열기", action: attempt(() => openDoc(d.id, false)) },
       // 미리보기 탭을 바꾸지 않고 고정 탭으로 연다(더블클릭과 같다).
       { label: "새 탭으로 열기", action: attempt(() => openDoc(d.id, true)) },
+      { label: "옆으로 열기", action: attempt(() => (view === "workspace" && active ? openLinked(d.id, true) : openDoc(d.id, true))) },
       "separator",
       { label: "이름 바꾸기", shortcut: "F2", action: () => startRename(d) },
       { label: "복제", action: attempt(() => duplicateDoc(d)) },
@@ -719,11 +724,18 @@ export default function App() {
     ];
   }
   // 포커스되지 않은 그룹의 탭 메뉴.
-  function sideTabMenu(t: EditorTab, side: Side): MenuItem[] {
+  function sideTabMenu(t: EditorTab, side: Side, index: number): MenuItem[] {
     const doc = lib.documents.find((d) => d.id === t.id);
+    const sideTabs = groups[side]?.tabs ?? [];
     return [
       { label: "열기", action: attempt(() => focusOther(t.id, false, side)) },
       { label: "닫기", action: () => closeSideTab(t.id, side) },
+      { label: "다른 탭 닫기", disabled: sideTabs.length < 2, action: () => closeSideTabs((x) => x.id === t.id, side, t.id) },
+      { label: "오른쪽 탭 닫기", disabled: index >= sideTabs.length - 1, action: () => closeSideTabs((_, i) => i <= index, side, t.id) },
+      { label: "모두 닫기", action: () => closeOtherGroup(side) },
+      "separator",
+      { label: "탭 고정", disabled: t.pinned, action: () => pinSideTab(t.id, side) },
+      "separator",
       ...splitMenuItems({
         focused: false, split: true, canSplit: (direction) => canSplit(side, direction),
         splitTo: (direction) => attempt(() => splitTo(t.id, direction, side))(),
@@ -1328,6 +1340,7 @@ export default function App() {
   function sideGroup(side: Side) {
     const group = groups[side];
     if (!group || !active) return null;
+    const canSplitSide = canSplit(side, "right") || canSplit(side, "down");
     return (
       <section
         key={side}
@@ -1336,7 +1349,7 @@ export default function App() {
         style={groupStyle(side)}
       >
         <div className="editor-tabs" {...tabBarAttributes} role="tablist" aria-label="다른 그룹의 열린 문서">
-          {group.tabs.map((t) => {
+          {group.tabs.map((t, index) => {
             const meta =
               t.id === active.id ? active : lib.documents.find((d) => d.id === t.id);
             if (!meta) return null;
@@ -1346,6 +1359,7 @@ export default function App() {
             return (
               <div
                 key={t.id}
+                {...tabAttributes(t.id)}
                 role="tab"
                 tabIndex={-1}
                 aria-selected={current}
@@ -1354,31 +1368,26 @@ export default function App() {
                 onClick={attempt(() => focusOther(t.id, false, side))}
                 onDoubleClick={attempt(() => focusOther(t.id, true, side))}
                 draggable
-                onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; dragSide.current = side; setDragTab(t.id); }}
+                onDragStart={(event) => { event.dataTransfer.effectAllowed = "copyMove"; dragSide.current = side; setDragTab(t.id); }}
                 onDragEnd={() => { setDragTab(""); area.clearDropZone(); }}
-                onDragOver={(e) => { if (dragTab && dragSide.current === side) e.preventDefault(); }}
-                onDrop={(e) => {
-                  if (!dragTab || dragSide.current !== side) return;
-                  e.preventDefault(); e.stopPropagation();
-                  moveTab(dragTab, t.id, side); setDragTab("");
-                }}
                 onMouseDown={(e) => {
                   if (e.button === 1) e.preventDefault();
                 }}
                 onAuxClick={(e) => {
                   if (e.button === 1) closeSideTab(t.id, side);
                 }}
-                onContextMenu={(e) => openMenu(e, sideTabMenu(t, side), "side:" + t.id)}
+                onContextMenu={(e) => openMenu(e, sideTabMenu(t, side, index), "side:" + t.id)}
               >
                 <Icon size={14} />
                 <span>{title}</span>
                 {current && <i className="saved-dot" />}
                 <button
                   aria-label={`다른 그룹의 ${title} 닫기`}
-                  title="닫기"
+                  title="닫기 (Alt+클릭: 다른 탭 닫기)"
                   onClick={(e) => {
                     e.stopPropagation();
-                    closeSideTab(t.id, side);
+                    if (e.altKey) closeSideTabs((x) => x.id === t.id, side, t.id);
+                    else closeSideTab(t.id, side);
                   }}
                 >
                   <X size={14} />
@@ -1386,6 +1395,25 @@ export default function App() {
               </div>
             );
           })}
+          {canSplitSide && (
+            <div className="editor-tabs-actions">
+              <button
+                type="button"
+                className="tab-split-button"
+                aria-label="편집기 분할"
+                title="오른쪽으로 분할 (Alt+클릭: 아래로 분할)"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const dir = e.altKey
+                    ? (canSplit(side, "down") ? "down" : "right")
+                    : (canSplit(side, "right") ? "right" : "down");
+                  attempt(() => splitTo(group.current, dir, side))();
+                }}
+              >
+                <Columns2 size={14} />
+              </button>
+            </div>
+          )}
         </div>
         {documentTabs(group.tabs, group.current, false, side)}
       </section>
@@ -1394,13 +1422,13 @@ export default function App() {
   const [previewOpen, setPreviewOpen] = useState(false);
   const chordAt = useRef(0);
   const togglePreview = () => setPreviewOpen((open) => !open);
-  tabActions.current = { closeTab, cycleTab, splitTo, focusGroupAt, togglePreview, report };
+  tabActions.current = { closeTab, cycleTab, shiftTab, splitTo, focusGroupAt, focusDirection, moveToDirection, togglePreview, report };
   useEffect(() => {
     if (!isWorkspace) return;
     // VS Code 배치: Ctrl+B 기본 사이드바(파일 트리), Ctrl+Alt+B 보조 사이드바(메모 보드).
     // 캡처 단계에서 가로채 에디터의 Ctrl+B(굵게)보다 먼저 처리한다.
-    // 탭: Ctrl+W 닫기, Ctrl+PageDown/PageUp·Ctrl+Tab/Ctrl+Shift+Tab 이동.
-    // 모바일 미리보기: VS Code의 측면 미리 보기처럼 Ctrl+K 다음 V.
+    // 탭: Ctrl+W 닫기, Ctrl+PageDown/PageUp·Ctrl+Tab/Ctrl+Shift+Tab 이동, Ctrl+Shift+PageUp/PageDown 순서 변경.
+    // 창 분할: Ctrl+\ 우측 분할, Ctrl+K Ctrl+\ 하단 분할, Ctrl+1~4 그룹 포커스, Ctrl+K 방향키 인접 그룹 포커스, Ctrl+Alt+좌/우 탭 그룹 이동.
     const handler = (e: KeyboardEvent) => {
       if (document.documentElement.dataset.pinLocked === "true") return;
       if (updater.lockRef.current) {
@@ -1409,15 +1437,21 @@ export default function App() {
         return;
       }
       if (["Control", "Shift", "Alt", "Meta"].includes(e.key)) return;
-      const { closeTab, cycleTab, splitTo, focusGroupAt, togglePreview, report } =
+      const { closeTab, cycleTab, shiftTab, splitTo, focusGroupAt, focusDirection, moveToDirection, togglePreview, report } =
         tabActions.current;
       const chord = chordAt.current && Date.now() - chordAt.current < 1500;
       chordAt.current = 0;
-      if (chord && e.code === "KeyV" && !e.shiftKey && !e.altKey) {
-        e.preventDefault();
-        e.stopPropagation();
-        togglePreview();
-        return;
+      if (chord) {
+        if (e.code === "KeyV" && !e.shiftKey && !e.altKey) {
+          e.preventDefault(); e.stopPropagation(); togglePreview(); return;
+        }
+        if (e.code === "Backslash" && !e.shiftKey && !e.altKey) {
+          e.preventDefault(); e.stopPropagation(); splitTo(session.currentId(), "down").catch(report); return;
+        }
+        const dirMap: Record<string, SplitDirection> = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down" };
+        if (dirMap[e.key] && !e.shiftKey && !e.altKey) {
+          e.preventDefault(); e.stopPropagation(); focusDirection(dirMap[e.key]).catch(report); return;
+        }
       }
       if (!(e.ctrlKey || e.metaKey)) return;
       if (e.code === "KeyK" && !e.shiftKey && !e.altKey)
@@ -1426,14 +1460,18 @@ export default function App() {
         splitTo(session.currentId()).catch(report);
       else if (groupShortcutIndex(e.code) >= 0 && !e.shiftKey && !e.altKey)
         focusGroupAt(groupShortcutIndex(e.code)).catch(report);
+      else if (e.altKey && !e.shiftKey && (e.key === "ArrowLeft" || e.key === "ArrowRight"))
+        moveToDirection(session.currentId(), e.key === "ArrowRight" ? 1 : -1).catch(report);
       else if (e.code === "KeyB" && !e.shiftKey) {
         if (e.altKey) setRight((r) => !r);
         else toggleTree();
       } else if (e.code === "KeyW" && !e.shiftKey && !e.altKey)
         closeTab(session.currentId()).catch(report);
-      else if (e.key === "PageDown" || (e.key === "Tab" && !e.shiftKey))
+      else if (e.shiftKey && !e.altKey && (e.key === "PageDown" || e.key === "PageUp"))
+        shiftTab(e.key === "PageDown" ? 1 : -1);
+      else if ((e.key === "PageDown" && !e.shiftKey) || (e.key === "Tab" && !e.shiftKey))
         cycleTab(1).catch(report);
-      else if (e.key === "PageUp" || (e.key === "Tab" && e.shiftKey))
+      else if ((e.key === "PageUp" && !e.shiftKey) || (e.key === "Tab" && e.shiftKey))
         cycleTab(-1).catch(report);
       else return;
       e.preventDefault();
@@ -1827,6 +1865,7 @@ export default function App() {
                   return (
                     <div
                       key={t.id}
+                      {...tabAttributes(t.id)}
                       role="tab"
                       tabIndex={current ? 0 : -1}
                       aria-selected={current}
@@ -1834,21 +1873,13 @@ export default function App() {
                       className={`editor-tab ${current ? "current" : ""} ${t.pinned ? "" : "preview"} ${dragTab === t.id ? "dragging" : ""} ${menu?.target === "tab:" + t.id ? "context-target" : ""}`}
                       draggable
                       onDragStart={(e) => {
-                        e.dataTransfer.effectAllowed = "move";
+                        e.dataTransfer.effectAllowed = "copyMove";
                         dragSide.current = focusedSide;
                         setDragTab(t.id);
                       }}
                       onDragEnd={() => {
                         setDragTab("");
                         area.clearDropZone();
-                      }}
-                      onDragOver={(e) => {
-                        if (dragTab) e.preventDefault();
-                      }}
-                      onDrop={(e) => {
-                        e.preventDefault();
-                        moveTab(dragTab, t.id);
-                        setDragTab("");
                       }}
                       onClick={attempt(() => openDoc(t.id, false))}
                       onDoubleClick={() =>
@@ -1875,10 +1906,11 @@ export default function App() {
                       )}
                       <button
                         aria-label={`${title} 닫기`}
-                        title="닫기 (Ctrl+W)"
+                        title="닫기 (Ctrl+W, Alt+클릭: 다른 탭 닫기)"
                         onClick={(e) => {
                           e.stopPropagation();
-                          attempt(() => closeTab(t.id))();
+                          if (e.altKey) attempt(() => closeTabs((x) => x.id === t.id, t.id))();
+                          else attempt(() => closeTab(t.id))();
                         }}
                       >
                         <X size={14} />
@@ -1886,6 +1918,25 @@ export default function App() {
                     </div>
                   );
                 })}
+                {(canSplit(focusedSide, "right") || canSplit(focusedSide, "down")) && (
+                  <div className="editor-tabs-actions">
+                    <button
+                      type="button"
+                      className="tab-split-button"
+                      aria-label="편집기 분할"
+                      title="오른쪽으로 분할 (Ctrl+\, Alt+클릭: 아래로 분할)"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const dir = e.altKey
+                          ? (canSplit(focusedSide, "down") ? "down" : "right")
+                          : (canSplit(focusedSide, "right") ? "right" : "down");
+                        attempt(() => splitTo(active.id, dir, focusedSide))();
+                      }}
+                    >
+                      <Columns2 size={14} />
+                    </button>
+                  </div>
+                )}
               </div>
               {documentTabs(editorTabs, active.id, true)}
               </section>

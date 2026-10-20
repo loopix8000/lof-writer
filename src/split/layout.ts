@@ -26,7 +26,7 @@ export type SplitDirection = typeof splitDirections[number]["direction"];
 export const defaultSplitDirection: SplitDirection = "right";
 
 export type SplitLayout = GroupId | { axis: "x" | "y"; ratio: number; first: SplitLayout; second: SplitLayout };
-const clampRatio = (value: unknown) => typeof value === "number" && Number.isFinite(value) ? Math.min(0.8, Math.max(0.2, value)) : 0.5;
+const clampRatio = (value: unknown) => typeof value === "number" && Number.isFinite(value) ? Math.min(0.85, Math.max(0.15, value)) : 0.5;
 const branch = (axis: "x" | "y", first: SplitLayout, second: SplitLayout, ratio = 0.5): SplitLayout => ({ axis, ratio: clampRatio(ratio), first, second });
 const sameShape = (a: SplitLayout, b: SplitLayout): boolean => typeof a === "string" || typeof b === "string" ? a === b
   : a.axis === b.axis && sameShape(a.first, b.first) && sameShape(a.second, b.second);
@@ -88,9 +88,29 @@ const minimumGroupSize = { x: 240, y: 160 };
 export const splitFits = (rect: { width: number; height: number }, direction: SplitDirection) =>
   direction === "left" || direction === "right" ? rect.width / 2 >= minimumGroupSize.x : rect.height / 2 >= minimumGroupSize.y;
 
+function subtreeMinSpan(node: SplitLayout, axis: "x" | "y"): number {
+  if (typeof node === "string") return minimumGroupSize[axis];
+  return node.axis === axis
+    ? subtreeMinSpan(node.first, axis) + subtreeMinSpan(node.second, axis) + 4
+    : Math.max(subtreeMinSpan(node.first, axis), subtreeMinSpan(node.second, axis));
+}
+
 type Length = { percent: number; pixels: number };
 type LayoutBox = { left: Length; top: Length; width: Length; height: Length };
-export type SplitSash = { path: string; axis: "x" | "y"; style: CSSProperties; parent: LayoutBox };
+export type SplitSash = {
+  path: string;
+  axis: "x" | "y";
+  style: CSSProperties;
+  parent: LayoutBox;
+  minFirst: number;
+  minSecond: number;
+  linkedPath?: string;
+};
+export type SplitIntersection = {
+  style: CSSProperties;
+  xSash: SplitSash;
+  ySash: SplitSash;
+};
 const length = (percent: number, pixels = 0): Length => ({ percent, pixels });
 const add = (a: Length, b: Length): Length => length(a.percent + b.percent, a.pixels + b.pixels);
 const scale = (value: Length, ratio: number): Length => length(value.percent * ratio, value.pixels * ratio);
@@ -100,18 +120,90 @@ const boxStyle = (box: LayoutBox): CSSProperties => ({ position: "absolute", lef
 // 트리를 평면 좌표로 그려 그룹이 재배치되어도 편집기 DOM과 탭별 스크롤을 유지한다.
 export function layoutGeometry(layout: SplitLayout) {
   const groups: Partial<Record<GroupId, CSSProperties>> = {}, sashes: SplitSash[] = [], order: GroupId[] = [];
+  const bounds: Partial<Record<GroupId, { left: number; top: number; right: number; bottom: number }>> = {};
   function visit(node: SplitLayout, box: LayoutBox, path: string) {
-    if (typeof node === "string") { groups[node] = boxStyle(box); order.push(node); return; }
+    if (typeof node === "string") {
+      groups[node] = boxStyle(box);
+      order.push(node);
+      bounds[node] = {
+        left: box.left.percent,
+        top: box.top.percent,
+        right: box.left.percent + box.width.percent,
+        bottom: box.top.percent + box.height.percent,
+      };
+      return;
+    }
     const horizontal = node.axis === "x", start = horizontal ? "left" : "top", size = horizontal ? "width" : "height";
     const first = add(scale(box[size], node.ratio), length(0, -2));
     const second = add(scale(box[size], 1 - node.ratio), length(0, -2));
-    sashes.push({ path, axis: node.axis, parent: box,
-      style: boxStyle({ ...box, [start]: add(box[start], first), [size]: length(0, 4) }) });
+    sashes.push({
+      path, axis: node.axis, parent: box,
+      minFirst: subtreeMinSpan(node.first, node.axis),
+      minSecond: subtreeMinSpan(node.second, node.axis),
+      style: boxStyle({ ...box, [start]: add(box[start], first), [size]: length(0, 4) }),
+    });
     visit(node.first, { ...box, [size]: first }, path + "0");
     visit(node.second, { ...box, [start]: add(add(box[start], first), length(0, 4)), [size]: second }, path + "1");
   }
   visit(layout, { left: length(0), top: length(0), width: length(1), height: length(1) }, "");
-  return { groups, sashes, order };
+
+  // 2×2 4분할에서 양쪽 하위 분할선의 비율이 같으면 하나로 묶어 함께 움직이고, 중앙 교차점에 4방향 조절점을 둔다.
+  let intersection: SplitIntersection | null = null;
+  if (
+    typeof layout !== "string" &&
+    typeof layout.first !== "string" &&
+    typeof layout.second !== "string" &&
+    layout.first.axis !== layout.axis &&
+    layout.second.axis !== layout.axis &&
+    Math.abs(layout.first.ratio - layout.second.ratio) < 0.005
+  ) {
+    const rootSash = sashes.find(s => s.path === "");
+    const sash0 = sashes.find(s => s.path === "0");
+    const sash1 = sashes.find(s => s.path === "1");
+    if (rootSash && sash0 && sash1) {
+      sash0.linkedPath = "1";
+      sash1.linkedPath = "0";
+      const xSash = layout.axis === "x" ? rootSash : sash0;
+      const ySash = layout.axis === "y" ? rootSash : sash0;
+      const xRatio = layout.axis === "x" ? layout.ratio : layout.first.ratio;
+      const yRatio = layout.axis === "y" ? layout.ratio : layout.first.ratio;
+      intersection = {
+        style: boxStyle({
+          left: add(length(xRatio), length(0, -6)),
+          top: add(length(yRatio), length(0, -6)),
+          width: length(0, 12),
+          height: length(0, 12),
+        }),
+        xSash,
+        ySash,
+      };
+    }
+  }
+  return { groups, sashes, order, bounds, intersection };
+}
+
+export function findAdjacentGroup(layout: SplitLayout, from: GroupId, direction: SplitDirection): GroupId | undefined {
+  const { bounds } = layoutGeometry(layout), cur = bounds[from];
+  if (!cur) return undefined;
+  let best: GroupId | undefined, bestScore = -1;
+  for (const id of groupIds) {
+    if (id === from) continue;
+    const b = bounds[id];
+    if (!b) continue;
+    const touches = direction === "left" ? Math.abs(b.right - cur.left) < 1e-4
+      : direction === "right" ? Math.abs(b.left - cur.right) < 1e-4
+      : direction === "up" ? Math.abs(b.bottom - cur.top) < 1e-4
+      : Math.abs(b.top - cur.bottom) < 1e-4;
+    if (!touches) continue;
+    const overlap = direction === "left" || direction === "right"
+      ? Math.min(b.bottom, cur.bottom) - Math.max(b.top, cur.top)
+      : Math.min(b.right, cur.right) - Math.max(b.left, cur.left);
+    if (overlap > 1e-4 && overlap > bestScore) {
+      bestScore = overlap;
+      best = id;
+    }
+  }
+  return best;
 }
 
 type Rect = { left: number; top: number; width: number; height: number };
@@ -119,7 +211,11 @@ export function sashRatio(sash: SplitSash, root: Rect, x: number, y: number) {
   const horizontal = sash.axis === "x", size = horizontal ? root.width : root.height;
   const start = sash.parent[horizontal ? "left" : "top"], extent = sash.parent[horizontal ? "width" : "height"];
   const pixels = extent.percent * size + extent.pixels;
-  return pixels > 0 ? clampRatio(((horizontal ? x - root.left : y - root.top) - start.percent * size - start.pixels) / pixels) : 0.5;
+  if (pixels <= 0) return 0.5;
+  const raw = ((horizontal ? x - root.left : y - root.top) - start.percent * size - start.pixels) / pixels;
+  const minRatio = Math.min(0.45, Math.max(0.15, (sash.minFirst ?? minimumGroupSize[sash.axis]) / pixels));
+  const maxRatio = Math.max(0.55, Math.min(0.85, 1 - (sash.minSecond ?? minimumGroupSize[sash.axis]) / pixels));
+  return Math.min(maxRatio, Math.max(minRatio, raw));
 }
 
 export type DropZone = {
@@ -131,9 +227,13 @@ export type DropZone = {
   tabs?: boolean;
   height?: number;
   direction?: SplitDirection;
+  copy?: boolean;
+  insertIndex?: number;
+  indicatorLeft?: number;
 };
 export const sameDropZone = (a: DropZone | null, b: DropZone | null) => a === b || !!a && !!b &&
-  a.id === b.id && a.direction === b.direction && a.tabs === b.tabs &&
+  a.id === b.id && a.direction === b.direction && a.tabs === b.tabs && a.copy === b.copy &&
+  a.insertIndex === b.insertIndex && a.indicatorLeft === b.indicatorLeft &&
   a.left === b.left && a.top === b.top && a.width === b.width && a.height === b.height;
 
 export type DropTarget = {
@@ -149,30 +249,43 @@ export type DropTarget = {
   own: boolean;
   sole: boolean;
   empty: boolean;
+  copy?: boolean;
+  disableSplit?: boolean;
+  insertIndex?: number;
+  indicatorLeft?: number;
   canSplit: (direction: SplitDirection) => boolean;
 };
 
-// 탭 막대와 본문 중앙은 합치기, 본문 가장자리는 분할하기에 쓴다. 빈 그룹은 열기만 하고, 바뀌는 것이 없는 곳은 표시하지 않는다.
+// 탭 막대와 본문 중앙(80%×80%)은 합치기, 본문 가장자리(10%)는 3등분(좌 1/3·우 1/3·중앙 상하) 규칙으로 분할한다.
 export function resolveDropZone(t: DropTarget): DropZone | null {
-  if (t.overTabBar && t.tabBar) return t.own ? null : {
-    id: t.id, tabs: true, left: t.tabBar.left - t.container.left, top: t.tabBar.top - t.container.top,
-    width: t.tabBar.width, height: t.tabBar.height,
-  };
-  if (t.own && t.sole) return null;
+  const effectiveOwn = t.own && !t.copy;
+  if (t.overTabBar && t.tabBar) {
+    if (effectiveOwn && t.insertIndex === undefined) return null;
+    return {
+      id: t.id, tabs: true, copy: t.copy, insertIndex: t.insertIndex, indicatorLeft: t.indicatorLeft,
+      left: t.tabBar.left - t.container.left, top: t.tabBar.top - t.container.top,
+      width: t.tabBar.width, height: t.tabBar.height,
+    };
+  }
+  if (effectiveOwn && t.sole) return null;
   const top = (t.tabBar ? t.tabBar.top + t.tabBar.height : t.group.top) - t.container.top;
   const height = t.group.top + t.group.height - t.container.top - top, left = t.group.left - t.container.left;
   if (t.group.width <= 0 || height <= 0) return null;
-  const whole = t.own ? null : { id: t.id, left, top, width: t.group.width, height };
-  if (t.empty) return whole;
+  const whole: DropZone | null = effectiveOwn ? null : { id: t.id, copy: t.copy, left, top, width: t.group.width, height };
+  if (t.empty || t.disableSplit) return whole;
   const x = (t.x - t.group.left) / t.group.width, y = (t.y - t.container.top - top) / height;
-  const edges: [SplitDirection, number][] = [["left", x], ["right", 1 - x], ["up", y], ["down", 1 - y]];
-  const edge = edges.sort((a, b) => a[1] - b[1]).find(([direction, distance]) =>
-    distance < 0.25 && splitFits(t.group, direction) && t.canSplit(direction));
-  if (!edge) return whole;
-  const direction = edge[0], horizontal = direction === "left" || direction === "right";
-  return { id: t.id, direction,
+  const inEdge = x < 0.1 || x >= 0.9 || y < 0.1 || y >= 0.9;
+  if (!inEdge) return whole;
+  const primary: SplitDirection = x < 1 / 3 ? "left" : x > 2 / 3 ? "right" : y < 0.5 ? "up" : "down";
+  const secondary: SplitDirection | null = (x < 1 / 3 || x > 2 / 3) && (y < 0.1 || y >= 0.9) ? (y < 0.5 ? "up" : "down") : null;
+  const direction = [primary, secondary].find((d): d is SplitDirection => !!d && splitFits(t.group, d) && t.canSplit(d));
+  if (!direction) return whole;
+  const horizontal = direction === "left" || direction === "right";
+  return {
+    id: t.id, direction, copy: t.copy,
     left: left + (direction === "right" ? t.group.width / 2 : 0),
     top: top + (direction === "down" ? height / 2 : 0),
     width: horizontal ? t.group.width / 2 : t.group.width,
-    height: horizontal ? height : height / 2 };
+    height: horizontal ? height : height / 2,
+  };
 }

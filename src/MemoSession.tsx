@@ -2,6 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import {
   ChevronDown,
   ChevronRight,
+  Columns2,
   FilePlus,
   FileText,
   Folder,
@@ -17,7 +18,7 @@ import Writer from "./Writer";
 import EditorScroll, { type EditorScrollPositions } from "./EditorScroll";
 import RetainedTab from "./RetainedTab";
 import { groupIds, groupShortcutIndex, isGroupId, legacyPairedGroup, type GroupId, type SplitDirection } from "./split/layout";
-import { groupAttributes, tabBarAttributes, type SplitDrag, type SplitGroups } from "./split/controller";
+import { groupAttributes, tabAttributes, tabBarAttributes, type SplitDrag, type SplitGroups } from "./split/controller";
 import { useSplitGroups } from "./split/useSplitGroups";
 import SplitArea from "./split/SplitArea";
 import { splitMenuItems } from "./split/menu";
@@ -469,14 +470,30 @@ export default function MemoSession({
     setCurrent(null);
   }
   // ---- 분할 보기 (집필 창과 같은 공통 규칙) ----
-  const { focusOther, focusGroup: focusSide, focusGroupAt, openInGroup, closeGroup, closeOtherGroup, moveToOther, canSplit } = area;
-  const closeTabs = (keep: (t: MemoTab, i: number) => boolean) => area.closeTabs(keep);
+  const { focusOther, focusGroup: focusSide, focusGroupAt, focusDirection, openInGroup, closeGroup, closeOtherGroup, moveToOther, moveToDirection: areaMoveToDirection, shiftTab, canSplit } = area;
+  const closeTabs = (keep: (t: MemoTab, i: number) => boolean, focusTab?: MemoTab) => area.closeTabs(keep, focusTab ? tabKey(focusTab) : undefined);
   const closeTab = (t: MemoTab) => area.closeTab(tabKey(t));
   const closeSideTab = (t: MemoTab, side?: Side) => area.closeOtherTab(tabKey(t), side);
-  const moveTab = (from: MemoTab, to: MemoTab, side?: Side) => area.moveTab(tabKey(from), tabKey(to), side);
+  const closeSideTabs = (keep: (t: MemoTab, i: number) => boolean, side: Side, focusTab?: MemoTab) =>
+    area.closeOtherTabs(keep, side, focusTab ? tabKey(focusTab) : undefined);
+  const pinSideTab = (t: MemoTab, side: Side) => area.pinOtherTab(tabKey(t), side);
   const cycleTab = area.cycleTab;
   async function splitTo(t: MemoTab | null = currentTab(), direction?: SplitDirection, fromSide?: Side) {
     if (t) await area.splitTo(t, direction, fromSide);
+  }
+  async function moveToDirection(step: 1 | -1) {
+    const cur = currentTab();
+    if (cur) await areaMoveToDirection(cur, step);
+  }
+  async function openMemoBeside(t: MemoTab) {
+    if (!memoRef.current) {
+      await activateTab(t, true);
+      return;
+    }
+    await flush();
+    const opening = await readForOpening(t.space, t.path);
+    setSideMemo(opening.doc);
+    area.openBeside({ ...t, pinned: true }, true);
   }
   function selectGroupMemo(next: Memo | null, stale = false) {
     dirty.current = { seq: stale ? 1 : 0, saved: 0 };
@@ -603,28 +620,49 @@ export default function MemoSession({
     setDragTab(null);
     attempt(run)();
   }
-  // 집필 창과 같은 탭 단축키: Ctrl+W 닫기, Ctrl+Tab·Ctrl+PageDown 다음, Ctrl+Shift+Tab·Ctrl+PageUp 이전.
-  const keys = useRef({ closeTab, cycleTab, splitTo, focusGroupAt });
-  keys.current = { closeTab, cycleTab, splitTo, focusGroupAt };
+  // 집필 창과 같은 탭·분할 단축키.
+  const chordAt = useRef(0);
+  const keys = useRef({ closeTab, cycleTab, shiftTab, splitTo, focusGroupAt, focusDirection, moveToDirection });
+  keys.current = { closeTab, cycleTab, shiftTab, splitTo, focusGroupAt, focusDirection, moveToDirection };
   if (apiRef) apiRef.current = { open: (space, path, pinned) => activateTab({ space, path }, pinned) };
   const activeRef = useRef(active);
   activeRef.current = active;
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (document.documentElement.dataset.pinLocked === "true") return;
-      if (!activeRef.current || !(e.ctrlKey || e.metaKey) || e.altKey) return;
+      if (!activeRef.current || ["Control", "Shift", "Alt", "Meta"].includes(e.key)) return;
+      const chord = chordAt.current && Date.now() - chordAt.current < 1500;
+      chordAt.current = 0;
+      if (chord) {
+        if (e.code === "Backslash" && !e.shiftKey && !e.altKey) {
+          e.preventDefault(); e.stopPropagation(); keys.current.splitTo(undefined, "down").catch(report); return;
+        }
+        const dirMap: Record<string, SplitDirection> = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down" };
+        if (dirMap[e.key] && !e.shiftKey && !e.altKey) {
+          e.preventDefault(); e.stopPropagation(); keys.current.focusDirection(dirMap[e.key]).catch(report); return;
+        }
+      }
+      if (!(e.ctrlKey || e.metaKey)) return;
       const current = currentTab();
-      let run: (() => Promise<unknown>) | null = null;
-      if (e.code === "KeyW" && !e.shiftKey) run = current ? () => keys.current.closeTab(current) : null;
-      else if (e.key === "PageDown" || (e.key === "Tab" && !e.shiftKey)) run = () => keys.current.cycleTab(1);
-      else if (e.key === "PageUp" || (e.key === "Tab" && e.shiftKey)) run = () => keys.current.cycleTab(-1);
+      let run: (() => Promise<unknown> | void) | null = null;
+      if (e.code === "KeyK" && !e.shiftKey && !e.altKey) {
+        chordAt.current = Date.now();
+        e.preventDefault(); e.stopPropagation(); return;
+      } else if (e.altKey && !e.shiftKey && (e.key === "ArrowLeft" || e.key === "ArrowRight"))
+        run = () => keys.current.moveToDirection(e.key === "ArrowRight" ? 1 : -1);
+      else if (e.altKey) return;
+      else if (e.code === "KeyW" && !e.shiftKey) run = current ? () => keys.current.closeTab(current) : null;
+      else if (e.shiftKey && (e.key === "PageDown" || e.key === "PageUp"))
+        run = () => keys.current.shiftTab(e.key === "PageDown" ? 1 : -1);
+      else if ((e.key === "PageDown" && !e.shiftKey) || (e.key === "Tab" && !e.shiftKey)) run = () => keys.current.cycleTab(1);
+      else if ((e.key === "PageUp" && !e.shiftKey) || (e.key === "Tab" && e.shiftKey)) run = () => keys.current.cycleTab(-1);
       else if (e.code === "Backslash" && !e.shiftKey) run = () => keys.current.splitTo();
       else if (groupShortcutIndex(e.code) >= 0 && !e.shiftKey)
         run = () => keys.current.focusGroupAt(groupShortcutIndex(e.code));
       else return;
       e.preventDefault();
       e.stopPropagation();
-      run?.().catch(report);
+      Promise.resolve(run?.()).catch(report);
     };
     window.addEventListener("keydown", handler, true);
     return () => window.removeEventListener("keydown", handler, true);
@@ -762,6 +800,7 @@ export default function MemoSession({
         : ([
             { label: "열기", action: attempt(() => openMemo(entry.path)) },
             { label: "새 탭으로 열기", action: attempt(() => openMemo(entry.path, spaceRef.current, true)) },
+            { label: "옆으로 열기", action: attempt(() => openMemoBeside({ space: spaceRef.current, path: entry.path })) },
             "separator",
           ] as MenuItem[])),
       {
@@ -868,11 +907,11 @@ export default function MemoSession({
     const root = spaces.find((x) => x.id === t.space)?.root;
     return [
       { label: "닫기", shortcut: "Ctrl+W", action: attempt(() => closeTab(t)) },
-      { label: "다른 탭 닫기", disabled: tabs.length < 2, action: attempt(() => closeTabs((x) => sameTab(x, t))) },
+      { label: "다른 탭 닫기", disabled: tabs.length < 2, action: attempt(() => closeTabs((x) => sameTab(x, t), t)) },
       {
         label: "오른쪽 탭 닫기",
         disabled: index >= tabs.length - 1,
-        action: attempt(() => closeTabs((_, i) => i <= index)),
+        action: attempt(() => closeTabs((_, i) => i <= index, t)),
       },
       { label: "모두 닫기", action: attempt(() => closeTabs(() => false)) },
       "separator",
@@ -911,10 +950,17 @@ export default function MemoSession({
         : []),
     ];
   }
-  function sideTabMenu(t: MemoTab, side: Side): MenuItem[] {
+  function sideTabMenu(t: MemoTab, side: Side, index: number): MenuItem[] {
+    const sideTabs = groups[side]?.tabs ?? [];
     return [
       { label: "열기", action: attempt(() => focusOther(t, false, side)) },
       { label: "닫기", action: () => closeSideTab(t, side) },
+      { label: "다른 탭 닫기", disabled: sideTabs.length < 2, action: () => closeSideTabs((x) => sameTab(x, t), side, t) },
+      { label: "오른쪽 탭 닫기", disabled: index >= sideTabs.length - 1, action: () => closeSideTabs((_, i) => i <= index, side, t) },
+      { label: "모두 닫기", action: () => closeOtherGroup(side) },
+      "separator",
+      { label: "탭 고정", disabled: t.pinned !== false, action: () => pinSideTab(t, side) },
+      "separator",
       ...splitMenuItems({
         focused: false, split: true, canSplit: (direction) => canSplit(side, direction),
         splitTo: (direction) => attempt(() => splitTo(t, direction, side))(),
@@ -1140,13 +1186,14 @@ export default function MemoSession({
         style={groupStyle(side)}
       >
         <div className="editor-tabs" {...tabBarAttributes} role="tablist" aria-label="다른 그룹의 열린 메모">
-          {group.tabs.map((t) => {
+          {group.tabs.map((t, index) => {
             const current = !!cur && sameTab(t, cur),
               name = nameOf(t),
               key = `${t.space}\n${t.path}`;
             return (
               <div
                 key={key}
+                {...tabAttributes(key)}
                 role="tab"
                 tabIndex={-1}
                 aria-selected={current}
@@ -1157,31 +1204,26 @@ export default function MemoSession({
                 onClick={attempt(() => focusOther(t, false, side))}
                 onDoubleClick={attempt(() => focusOther(t, true, side))}
                 draggable
-                onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; dragSide.current = side; setDragTab(t); }}
+                onDragStart={(event) => { event.dataTransfer.effectAllowed = "copyMove"; dragSide.current = side; setDragTab(t); }}
                 onDragEnd={() => { setDragTab(null); area.clearDropZone(); }}
-                onDragOver={(e) => { if (dragTab && dragSide.current === side) e.preventDefault(); }}
-                onDrop={(e) => {
-                  if (!dragTab || dragSide.current !== side) return;
-                  e.preventDefault(); e.stopPropagation();
-                  moveTab(dragTab, t, side); setDragTab(null);
-                }}
                 onMouseDown={(e) => {
                   if (e.button === 1) e.preventDefault();
                 }}
                 onAuxClick={(e) => {
                   if (e.button === 1) closeSideTab(t, side);
                 }}
-                onContextMenu={(e) => openMenu(e, sideTabMenu(t, side), "side:" + key)}
+                onContextMenu={(e) => openMenu(e, sideTabMenu(t, side, index), "side:" + key)}
               >
                 <FileText size={14} />
                 <span>{name}</span>
                 {current && <i className="saved-dot" />}
                 <button
                   aria-label={`다른 그룹의 ${name} 닫기`}
-                  title="닫기"
+                  title="닫기 (Alt+클릭: 다른 탭 닫기)"
                   onClick={(e) => {
                     e.stopPropagation();
-                    closeSideTab(t, side);
+                    if (e.altKey) closeSideTabs((x) => sameTab(x, t), side, t);
+                    else closeSideTab(t, side);
                   }}
                 >
                   <X size={14} />
@@ -1189,6 +1231,19 @@ export default function MemoSession({
               </div>
             );
           })}
+          {cur && (
+            <div className="editor-tabs-actions">
+              <button
+                type="button"
+                className="tab-split-button"
+                aria-label="편집기 분할"
+                title="오른쪽으로 분할 (Alt+클릭: 아래로 분할)"
+                onClick={attempt((e) => splitTo(cur, e.altKey ? "down" : "right", side))}
+              >
+                <Columns2 size={14} />
+              </button>
+            </div>
+          )}
         </div>
         {memoTabs(group.tabs, cur, false, side)}
       </section>
@@ -1232,6 +1287,7 @@ export default function MemoSession({
               e,
               [
                 { label: "열기", action: attempt(() => activateTab(t)) },
+                { label: "옆으로 열기", action: attempt(() => openMemoBeside(t)) },
                 "separator",
                 { label: "집필 창에서 열기", action: () => onOpenDoc(d.id) },
               ],
@@ -1533,6 +1589,7 @@ export default function MemoSession({
               return (
                 <div
                   key={key}
+                  {...tabAttributes(key)}
                   role="tab"
                   tabIndex={current ? 0 : -1}
                   aria-selected={current}
@@ -1542,21 +1599,13 @@ export default function MemoSession({
                   } ${menu?.target === "tab:" + key ? "context-target" : ""}`}
                   draggable
                   onDragStart={(e) => {
-                    e.dataTransfer.effectAllowed = "move";
+                    e.dataTransfer.effectAllowed = "copyMove";
                     dragSide.current = focusedSide;
                     setDragTab(t);
                   }}
                   onDragEnd={() => {
                     setDragTab(null);
                     area.clearDropZone();
-                  }}
-                  onDragOver={(e) => {
-                    if (dragTab) e.preventDefault();
-                  }}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    if (dragTab) moveTab(dragTab, t);
-                    setDragTab(null);
                   }}
                   onClick={attempt(() => activateTab(t))}
                   onDoubleClick={() => keepTab(t)}
@@ -1573,10 +1622,11 @@ export default function MemoSession({
                   {current && <i className={status === "저장됨" ? "saved-dot" : "dirty-dot"} />}
                   <button
                     aria-label={`${name} 닫기`}
-                    title="닫기 (Ctrl+W)"
+                    title="닫기 (Ctrl+W, Alt+클릭: 다른 탭 닫기)"
                     onClick={(e) => {
                       e.stopPropagation();
-                      attempt(() => closeTab(t))();
+                      if (e.altKey) attempt(() => closeTabs((x) => sameTab(x, t), t))();
+                      else attempt(() => closeTab(t))();
                     }}
                   >
                     <X size={14} />
@@ -1584,6 +1634,19 @@ export default function MemoSession({
                 </div>
               );
             })}
+            {memo && (
+              <div className="editor-tabs-actions">
+                <button
+                  type="button"
+                  className="tab-split-button"
+                  aria-label="편집기 분할"
+                  title="오른쪽으로 분할 (Ctrl+\, Alt+클릭: 아래로 분할)"
+                  onClick={attempt((e) => splitTo(memo, e.altKey ? "down" : "right"))}
+                >
+                  <Columns2 size={14} />
+                </button>
+              </div>
+            )}
           </div>
         )}
         {memoTabs(tabs, memo, true)}
