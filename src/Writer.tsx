@@ -26,6 +26,7 @@ import {
   SquareDashed,
   ClipboardPaste,
   ImagePlus,
+  MessageSquareCode,
 } from "lucide-react";
 import { createPortal } from "react-dom";
 import ContextMenu, { type MenuItem } from "./ContextMenu";
@@ -35,7 +36,7 @@ import { requiresSource, splitSoftBreaks } from "../core/text.mjs";
 import type { SourceEditorHandle } from "./SourceEditor";
 import { needsMarkdownCopy } from "./source-protection";
 import { normalizeEditorStyle } from "../core/typesetting.mjs";
-import { TypingAssist, typesettingPluginKey } from "./typing-extension";
+import { TypingAssist, isInsideJsdocComment, toggleJsdocComment, typesettingPluginKey } from "./typing-extension";
 import { MarkdownTables } from "./table-extension";
 import { Bookmarks, BOOKMARK_LOAD, bookmarkPluginKey, readBookmarks, resolveBookmarks } from "./bookmark-extension";
 import { call, type Bookmark, type WritingRules } from "./types";
@@ -919,6 +920,12 @@ export default function Writer({
       label: "장면 구분",
       icon: Minus,
       action: () => editor.chain().focus().setHorizontalRule().run(),
+    },
+    {
+      label: "주석 (Ctrl+/)",
+      icon: MessageSquareCode,
+      active: isInsideJsdocComment(editor.state),
+      action: () => toggleJsdocComment(editor.view),
     },
     ...(onReplaceSymbols && !readOnly
       ? [

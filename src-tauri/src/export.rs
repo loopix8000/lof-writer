@@ -6,7 +6,7 @@ use crate::store::{
     abs, base_name, by_order_cmp, pad, safe_name, skipped_name, strip_verbatim_prefix, unique_name,
     walk_rel, Store,
 };
-use crate::text::plain_text;
+use crate::text::{plain_text, strip_jsdoc_comments};
 use regex::Regex;
 use rfd::FileDialog;
 use serde_json::{json, Map, Value};
@@ -109,7 +109,8 @@ fn strip_frontmatter(raw: &str) -> (String, Map<String, Value>) {
 }
 
 fn plain_text_preserving_breaks(markdown: &str) -> String {
-    let normalized = markdown.replace("\r\n", "\n").replace('\r', "\n");
+    let stripped = strip_jsdoc_comments(markdown);
+    let normalized = stripped.replace("\r\n", "\n").replace('\r', "\n");
     let lines: Vec<&str> = normalized.split('\n').collect();
     let mut expanded = Vec::with_capacity(lines.len() * 2);
     let mut fence = false;
@@ -163,12 +164,13 @@ fn plain_text_preserving_breaks(markdown: &str) -> String {
 }
 
 fn format_body(body: &str, opts: &ExportOptions, manual_line_break: bool) -> String {
+    let stripped = strip_jsdoc_comments(body);
     if opts.format == "md" {
-        body.to_string()
+        stripped
     } else if !manual_line_break && opts.preserve_paragraph_breaks {
-        plain_text_preserving_breaks(body)
+        plain_text_preserving_breaks(&stripped)
     } else {
-        plain_text(body)
+        plain_text(&stripped)
     }
 }
 

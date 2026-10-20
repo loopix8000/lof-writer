@@ -275,19 +275,20 @@ export default function MemoSession({
           ? await call<Memo>("saveDocument", {
               id: m.path.slice(DOC.length),
               body: m.body,
-              expectedRevision: m.revision,
+              expectedRevision: m.revision, forceHistory: !auto,
             })
           : await call<Memo>("memoSave", {
               space: m.space,
               path: m.path,
               body: m.body,
-              expectedRevision: m.revision,
+              expectedRevision: m.revision, forceHistory: !auto,
             });
         dirty.current.saved = seq;
         const now = memoRef.current;
         if (now && now.space === m.space && now.path === m.path)
           setCurrent({ ...now, revision: saved.revision, updatedAt: saved.updatedAt });
         setStatus(dirty.current.seq === dirty.current.saved ? "저장됨" : "저장 대기");
+        if (!auto) void call("requestSyncNow").catch(() => {});
       } catch (e: any) {
         if (closing && e.code === "CONFLICT") { await loadExternalOnClose(); return; }
         if (e.code === "CONFLICT") {
@@ -308,7 +309,7 @@ export default function MemoSession({
       throw Error("메모 변경 충돌을 해결해 주세요.");
     await save(false, closing);
   }, [save]);
-  const gitActivity = useGitActivity(async () => {
+  const gitActivity = useGitActivity(async () => { if (!composing.current) return true;
     await flush();
     return !composing.current && !conflictRef.current && dirty.current.seq === dirty.current.saved;
   }, report);

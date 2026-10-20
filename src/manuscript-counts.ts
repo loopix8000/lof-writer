@@ -1,5 +1,5 @@
 import type { Node as PMNode } from "@tiptap/pm/model";
-import { countForWriting } from "../core/text.mjs";
+import { countForWriting, stripJsdocComments } from "../core/text.mjs";
 import type { WritingRules } from "./types";
 
 export type ManuscriptCounts = {
@@ -29,8 +29,14 @@ export function textCounts(raw: string, rules: WritingRules): ManuscriptCounts {
     platformCharacters: countForWriting({ text }, rules),
   };
 }
+function hasUnclosedComment(text: string): boolean {
+  if (!text.includes("/*") && !text.includes("*/")) return false;
+  const rest = text.replace(/\/\*[\s\S]*?\*\//g, "");
+  return rest.includes("/*") || rest.includes("*/");
+}
 function blockCounts(node: PMNode, rules: WritingRules): ManuscriptCounts {
-  return textCounts(node.textBetween(0, node.content.size, "\n", (leaf) => leaf.type.name === "hardBreak" ? "\n" : ""), rules);
+  const raw = node.textBetween(0, node.content.size, "\n", (leaf) => leaf.type.name === "hardBreak" ? "\n" : "");
+  return textCounts(stripJsdocComments(raw), rules);
 }
 // 일반 입력은 바뀐 문단만 센다. 구조가 바뀐 편집은 백그라운드 전체 계산에 맡긴다.
 export function paragraphCountDelta(before: PMNode, after: PMNode, rules: WritingRules): ManuscriptCounts | null {
@@ -42,6 +48,10 @@ export function paragraphCountDelta(before: PMNode, after: PMNode, rules: Writin
   const newStart = after.resolve(start), newEnd = after.resolve(Math.max(start, end.b));
   if (!oldStart.sameParent(oldEnd) || !newStart.sameParent(newEnd) ||
       !oldStart.parent.isTextblock || !newStart.parent.isTextblock || oldStart.parent.type !== newStart.parent.type)
+    return null;
+  if (hasUnclosedComment(oldStart.parent.textContent) ||
+      hasUnclosedComment(newStart.parent.textContent) ||
+      hasUnclosedComment(before.textBetween(0, oldStart.before(), "\n")))
     return null;
   const oldCounts = blockCounts(oldStart.parent, rules), newCounts = blockCounts(newStart.parent, rules);
   for (const key of Object.keys(newCounts) as (keyof ManuscriptCounts)[]) newCounts[key] -= oldCounts[key];

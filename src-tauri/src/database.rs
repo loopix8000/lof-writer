@@ -162,6 +162,7 @@ impl LibraryDb {
             CREATE INDEX IF NOT EXISTS history_time ON history(doc_id,saved_at DESC,name DESC);
             CREATE INDEX IF NOT EXISTS history_git_migration_time ON history(saved_at,doc_id,name);
             CREATE TABLE IF NOT EXISTS pending_writes (doc_id TEXT PRIMARY KEY, previous BLOB NOT NULL, started_at TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS drafts (doc_id TEXT PRIMARY KEY, data BLOB NOT NULL, saved_at TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS legacy_sources (path TEXT PRIMARY KEY, hash TEXT NOT NULL);
             PRAGMA user_version=1;")?;
         let db = Self {
@@ -202,6 +203,7 @@ impl LibraryDb {
             .pragma_update(None, "wal_autocheckpoint", 500)?;
         crate::library_sync_reset::migrate_database(&db.connection)?;
         db.recover_pending()?;
+        db.migrate_drafts(root)?;
         Ok(db)
     }
 
@@ -668,6 +670,8 @@ impl LibraryDb {
             .execute("DELETE FROM bodies WHERE doc_id=?1", [id])?;
         self.connection
             .execute("DELETE FROM pending_writes WHERE doc_id=?1", [id])?;
+        self.connection
+            .execute("DELETE FROM drafts WHERE doc_id=?1", [id])?;
         transaction.commit()?;
         Ok(())
     }
@@ -685,10 +689,10 @@ impl LibraryDb {
         {
             return Ok(());
         }
-        let limit = limit.max(HISTORY_MINIMUM);
+        let limit = limit.max(1);
         let cutoff = (chrono::Utc::now() - chrono::Duration::days(days.max(1))).to_rfc3339();
         let transaction = self.connection.unchecked_transaction()?;
-        self.connection.execute("DELETE FROM history WHERE pinned=0 AND rowid IN (SELECT rowid FROM (SELECT rowid,saved_at,ROW_NUMBER() OVER(PARTITION BY doc_id ORDER BY saved_at DESC,name DESC) AS position FROM history WHERE pinned=0) WHERE position>?1 OR (position>?2 AND saved_at<?3))",params![limit as i64,HISTORY_MINIMUM as i64,cutoff])?;
+        self.connection.execute("DELETE FROM history WHERE pinned=0 AND rowid IN (SELECT rowid FROM (SELECT rowid,saved_at,ROW_NUMBER() OVER(PARTITION BY doc_id ORDER BY saved_at DESC,name DESC) AS position FROM history WHERE pinned=0) WHERE position>?1 OR saved_at<?2)",params![limit as i64,cutoff])?;
         self.set("lastHistoryCleanup", &json!(today))?;
         transaction.commit()?;
         self.connection
@@ -729,5 +733,87 @@ impl LibraryDb {
 
     pub fn status(&self) -> Value {
         json!({"ready":true,"schemaVersion":SCHEMA,"path":self.path.to_string_lossy(),"historyDays":HISTORY_DAYS,"historyLimit":HISTORY_LIMIT,"historyMinimum":HISTORY_MINIMUM,"historyLocalOnly":true})
+    }
+
+    fn migrate_drafts(&self, root: &Path) -> Result<(), LofError> {
+        let dir = root.join(".lof").join("drafts");
+        let Ok(rd) = fs::read_dir(&dir) else {
+            return Ok(());
+        };
+        for entry in rd.flatten() {
+            let path = entry.path();
+            if path.extension().is_some_and(|e| e == "json") {
+                if let Ok(raw) = fs::read_to_string(&path) {
+                    if let Ok(val) = serde_json::from_str::<Value>(&raw) {
+                        if let Some(id) = val.get("id").and_then(Value::as_str).filter(|id| valid_id(id)) {
+                            let _ = self.save_draft(id, &val);
+                        }
+                    }
+                }
+                let _ = fs::remove_file(&path);
+            }
+        }
+        let _ = fs::remove_dir(&dir);
+        Ok(())
+    }
+
+    pub fn save_draft(&self, id: &str, value: &Value) -> Result<(), LofError> {
+        if !valid_id(id) {
+            return Err(fail_invalid("잘못된 문서 ID"));
+        }
+        let saved_at = value
+            .get("savedAt")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(now_iso);
+        self.connection.execute(
+            "INSERT INTO drafts(doc_id, data, saved_at) VALUES(?1, ?2, ?3)
+             ON CONFLICT(doc_id) DO UPDATE SET data=excluded.data, saved_at=excluded.saved_at",
+            params![id, encode(value)?, saved_at],
+        )?;
+        Ok(())
+    }
+
+    pub fn drafts(&self) -> Result<Vec<Value>, LofError> {
+        let mut query = self
+            .connection
+            .prepare("SELECT data FROM drafts ORDER BY doc_id")?;
+        let rows = query
+            .query_map([], |row| row.get::<_, Vec<u8>>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows.iter().map(|data| decode(data)).collect()
+    }
+
+    pub fn clear_draft(&self, id: &str) -> Result<(), LofError> {
+        if !valid_id(id) {
+            return Err(fail_invalid("잘못된 ID"));
+        }
+        self.connection
+            .execute("DELETE FROM drafts WHERE doc_id=?1", [id])?;
+        Ok(())
+    }
+
+    pub fn mark_latest_history_manual(&self, id: &str) -> Result<bool, LofError> {
+        let row: Option<(String, Vec<u8>)> = self
+            .connection
+            .query_row(
+                "SELECT name, data FROM history WHERE doc_id=?1 ORDER BY saved_at DESC, name DESC LIMIT 1",
+                [id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let Some((name, bytes)) = row else {
+            return Ok(false);
+        };
+        let mut doc = decode(&bytes)?;
+        if doc["manual"].as_bool() == Some(true) {
+            return Ok(false);
+        }
+        doc["manual"] = json!(true);
+        self.connection.execute(
+            "UPDATE history SET data=?1 WHERE doc_id=?2 AND name=?3",
+            params![encode(&doc)?, id, name],
+        )?;
+        Ok(true)
     }
 }

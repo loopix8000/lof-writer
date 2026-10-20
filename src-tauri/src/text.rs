@@ -255,8 +255,117 @@ fn parse_html_tag(chars: &[char], start: usize) -> Option<(String, usize)> {
     Some((String::new(), i + 1))
 }
 
-pub fn plain_text(markdown: &str) -> String {
+pub fn strip_jsdoc_comments(markdown: &str) -> String {
+    if markdown.is_empty() || !markdown.contains("/*") {
+        return markdown.to_string();
+    }
+    const MARKER: &str = "\u{E002}";
     let normalized = markdown.replace("\r\n", "\n").replace('\r', "\n");
+    static FENCE_RE: OnceLock<Regex> = OnceLock::new();
+    let fence_re = FENCE_RE.get_or_init(|| {
+        Regex::new(r"(?ms)^[ \t]*(?:```|~~~)[^\n]*\n.*?(?:^[ \t]*(?:```|~~~)[^\n]*$|\z)").unwrap()
+    });
+    static COMMENT_RE: OnceLock<Regex> = OnceLock::new();
+    let comment_re = COMMENT_RE.get_or_init(|| Regex::new(r"(?s)/\*.*?\*/").unwrap());
+
+    let mut marked = String::with_capacity(normalized.len());
+    let mut last_idx = 0;
+    for m in fence_re.find_iter(&normalized) {
+        if m.start() > last_idx {
+            marked.push_str(&comment_re.replace_all(&normalized[last_idx..m.start()], MARKER));
+        }
+        marked.push_str(m.as_str());
+        last_idx = m.end();
+    }
+    if last_idx < normalized.len() {
+        marked.push_str(&comment_re.replace_all(&normalized[last_idx..], MARKER));
+    }
+    if !marked.contains(MARKER) {
+        return markdown.to_string();
+    }
+
+    static LEAD_RE: OnceLock<Regex> = OnceLock::new();
+    let lead_re = LEAD_RE.get_or_init(|| Regex::new(r"^([ \t]*)\u{E002}+[ \t]?").unwrap());
+    static TRAIL_RE: OnceLock<Regex> = OnceLock::new();
+    let trail_re = TRAIL_RE.get_or_init(|| Regex::new(r"[ \t]*\u{E002}+[ \t]*$").unwrap());
+    static MID_RE: OnceLock<Regex> = OnceLock::new();
+    let mid_re = MID_RE.get_or_init(|| Regex::new(r"([ \t]+)\u{E002}+[ \t]+").unwrap());
+
+    #[derive(PartialEq, Eq)]
+    enum LineKind {
+        Text,
+        Blank,
+        Removed,
+    }
+
+    let items: Vec<(LineKind, String)> = marked
+        .split('\n')
+        .map(|line| {
+            if !line.contains(MARKER) {
+                let kind = if line.trim().is_empty() {
+                    LineKind::Blank
+                } else {
+                    LineKind::Text
+                };
+                return (kind, line.to_string());
+            }
+            if line.replace(MARKER, "").trim().is_empty() {
+                return (LineKind::Removed, String::new());
+            }
+            let s1 = lead_re.replace(line, "$1");
+            let s2 = trail_re.replace(&s1, "");
+            let s3 = mid_re.replace_all(&s2, "$1");
+            let cleaned = s3.replace(MARKER, "");
+            if cleaned.trim().is_empty() {
+                (LineKind::Removed, String::new())
+            } else {
+                (LineKind::Text, cleaned)
+            }
+        })
+        .collect();
+
+    let mut out: Vec<String> = Vec::with_capacity(items.len());
+    let mut i = 0;
+    while i < items.len() {
+        if items[i].0 == LineKind::Text {
+            out.push(items[i].1.clone());
+            i += 1;
+            continue;
+        }
+        let start = i;
+        let mut has_removed = false;
+        let mut blanks_before = 0usize;
+        let mut seen_removed = false;
+        let mut trailing_blanks = 0usize;
+        while i < items.len() && items[i].0 != LineKind::Text {
+            if items[i].0 == LineKind::Removed {
+                has_removed = true;
+                seen_removed = true;
+                trailing_blanks = 0;
+            } else if !seen_removed {
+                blanks_before += 1;
+            } else {
+                trailing_blanks += 1;
+            }
+            i += 1;
+        }
+        if !has_removed {
+            for item in &items[start..i] {
+                out.push(item.1.clone());
+            }
+        } else if !out.is_empty() && i < items.len() {
+            let keep_blanks = blanks_before.max(trailing_blanks);
+            for _ in 0..keep_blanks {
+                out.push(String::new());
+            }
+        }
+    }
+    out.join("\n")
+}
+
+pub fn plain_text(markdown: &str) -> String {
+    let stripped = strip_jsdoc_comments(markdown);
+    let normalized = stripped.replace("\r\n", "\n").replace('\r', "\n");
     let lines: Vec<&str> = normalized.split('\n').collect();
     let mut out = String::with_capacity(normalized.len());
     let mut i = 0;

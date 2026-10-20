@@ -62,6 +62,7 @@ impl LocalHistory {
         offset: usize,
         limit: usize,
         anchor: Option<&str>,
+        policy: crate::store::HistoryPolicy,
     ) -> Result<Value, LofError> {
         if !valid_id(id) {
             return Err(fail_invalid("잘못된 문서 ID입니다."));
@@ -86,15 +87,14 @@ impl LocalHistory {
                 }
             }
         }
+        let keep_count = policy.keep_count.max(1);
+        let cutoff = chrono::Utc::now() - chrono::Duration::days(policy.keep_days.max(1));
         let mut entries = Vec::new();
         let mut skipped = 0;
+        let mut total_for_doc = 0;
         for oid in walk(&repo, head)? {
             let commit = repo.find_commit(oid?)?;
             if !changed(&commit, id)? {
-                continue;
-            }
-            if skipped < offset {
-                skipped += 1;
                 continue;
             }
             let value = read_json(
@@ -103,6 +103,24 @@ impl LocalHistory {
                 &format!("documents/{id}/metadata.json"),
             )?;
             let legacy = commit.message()?.contains("\nLof-Legacy: ");
+            let saved_at = if legacy {
+                value["savedAt"].as_str().unwrap_or(&time(&commit)).to_string()
+            } else {
+                time(&commit)
+            };
+            if total_for_doc >= keep_count {
+                break;
+            }
+            if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(&saved_at) {
+                if parsed.with_timezone(&chrono::Utc) < cutoff {
+                    break;
+                }
+            }
+            total_for_doc += 1;
+            if skipped < offset {
+                skipped += 1;
+                continue;
+            }
             let kind = if manual.contains(&commit.id()) || value["manual"].as_bool() == Some(true) {
                 "manual"
             } else if restored.contains(&commit.id())
@@ -117,8 +135,7 @@ impl LocalHistory {
                 "auto"
             };
             entries.push(json!({"name":format!("git-{}",commit.id()),"commit":commit.id().to_string(),
-                "savedAt":if legacy{value["savedAt"].as_str().unwrap_or(&time(&commit)).to_string()}else{time(&commit)},
-                "title":value["title"],"kind":kind}));
+                "savedAt":saved_at,"title":value["title"],"kind":kind}));
             if entries.len() > limit {
                 break;
             }
@@ -128,6 +145,27 @@ impl LocalHistory {
         Ok(
             json!({"entries":entries,"nextOffset":if more{Some(offset+limit)}else{None},"anchor":head.to_string(),"migrating":false}),
         )
+    }
+
+    pub fn latest_document(&self, id: &str) -> Result<Option<(u64, String)>, LofError> {
+        if !valid_id(id) {
+            return Ok(None);
+        }
+        let repo = self.repository()?;
+        let Ok(head) = latest(&repo) else {
+            return Ok(None);
+        };
+        for oid in walk(&repo, head.id())? {
+            let commit = repo.find_commit(oid?)?;
+            if !changed(&commit, id)? {
+                continue;
+            }
+            let doc = read_document(&repo, &commit.tree()?, id)?;
+            let body = doc["body"].as_str().unwrap_or("").to_string();
+            let at = (commit.author().when().seconds().max(0) as u64) * 1000;
+            return Ok(Some((at, body)));
+        }
+        Ok(None)
     }
 
     pub fn history_read(&self, id: &str, name: &str) -> Result<Value, LofError> {

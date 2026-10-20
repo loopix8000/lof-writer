@@ -358,6 +358,8 @@ impl Memos {
                     "id": doc_id,
                     "body": body,
                     "expectedRevision": expected_rev,
+                    "forceHistory": input.get("forceHistory").and_then(|v| v.as_bool()).unwrap_or(false),
+                    "manualHistory": input.get("manualHistory").and_then(|v| v.as_bool()).unwrap_or(false),
                 }))?;
             } else {
                 let doc = markdown_entry(

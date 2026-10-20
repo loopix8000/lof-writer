@@ -1,6 +1,7 @@
 import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { marked, type Token, type TokensList } from "marked";
 import { X } from "lucide-react";
+import { stripJsdocComments } from "../core/text.mjs";
 
 export const devices = [
   { id: "galaxy", name: "Galaxy (360)", width: 360, height: 780 },
@@ -15,7 +16,7 @@ const escape = (s: string) =>
 // 웹소설 플랫폼처럼 빈 줄을 그대로 보여 준다. 줄 수 규칙은 core/text.mjs의 plainText와 같다.
 function render(markdown: string) {
   const options = { gfm: true, breaks: true };
-  const tokens = marked.lexer(markdown, options);
+  const tokens = marked.lexer(stripJsdocComments(markdown), options);
   return tokens
     .map((t: Token) => {
       if (t.type === "space") {

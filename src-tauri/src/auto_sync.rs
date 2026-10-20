@@ -32,6 +32,7 @@ struct Queue {
     local_error: Option<String>,
     interval: Duration,
     status: Value,
+    realtime: Value,
 }
 
 pub struct AutoSyncState {
@@ -55,6 +56,7 @@ impl Default for AutoSyncState {
                 local_error: None,
                 interval: DEFAULT_INTERVAL,
                 status: json!({ "phase": "idle", "message": "", "hasConnections": false }),
+                realtime: json!({ "phase": "idle", "message": "", "hasConnections": false }),
             }),
             wake: Condvar::new(),
             periodic_started: AtomicBool::new(false),
@@ -117,7 +119,34 @@ fn publish(app:&AppHandle, queue:&mut Queue, connections:&[Destination]) {
     if let Some(error)=&queue.local_error {errors.push(error.clone());}
     let phase=if connections.iter().any(|c|queue.active.contains(&c.id)){"syncing"}else if !errors.is_empty(){"error"}else if connections.iter().any(|c|queue.pending.contains(&c.id)){"pending"}else{"idle"};
     let progress=json!({"phase":phase,"message":errors.join(" · "),"hasConnections":!connections.is_empty()});
-    let mut status=progress.clone();status["channels"]=json!({"files":progress});
+    let realtime = queue.realtime.clone();
+    let has_files = progress["hasConnections"].as_bool().unwrap_or(false);
+    let has_realtime = realtime["hasConnections"].as_bool().unwrap_or(false);
+    let overall_phase = if progress["phase"] == "syncing" || realtime["phase"] == "syncing" {
+        "syncing"
+    } else if progress["phase"] == "error" || realtime["phase"] == "error" {
+        "error"
+    } else if progress["phase"] == "pending" || realtime["phase"] == "pending" {
+        "pending"
+    } else {
+        "idle"
+    };
+    let mut messages = Vec::new();
+    if let Some(m) = realtime["message"].as_str().filter(|s| !s.is_empty()) {
+        messages.push(m.to_string());
+    }
+    if let Some(m) = progress["message"].as_str().filter(|s| !s.is_empty()) {
+        messages.push(m.to_string());
+    }
+    let status = json!({
+        "phase": overall_phase,
+        "message": messages.join(" · "),
+        "hasConnections": has_files || has_realtime,
+        "channels": {
+            "realtime": realtime,
+            "files": progress,
+        }
+    });
     if queue.status!=status {queue.status=status;let _=app.emit("lof:auto-sync",queue.status.clone());}
 }
 
@@ -127,7 +156,21 @@ pub fn request(app: &AppHandle) {
     enqueue(app, None, false);
 }
 
+pub fn refresh_realtime(app: &AppHandle) {
+    let auto = app.state::<AutoSyncState>();
+    if auto.stopped.load(Ordering::SeqCst) {
+        return;
+    }
+    let (root, connections) = destinations(app);
+    let realtime = crate::realtime::progress(app);
+    let mut queue = auto.queue.lock().unwrap();
+    reconcile(&mut queue, &root, &connections);
+    queue.realtime = realtime;
+    publish(app, &mut queue, &connections);
+}
+
 fn enqueue(app: &AppHandle, target: Option<&str>, immediate: bool) {
+    let realtime = crate::realtime::progress(app);
     let auto = app.state::<AutoSyncState>();
     if auto.stopped.load(Ordering::SeqCst) {
         return;
@@ -135,6 +178,7 @@ fn enqueue(app: &AppHandle, target: Option<&str>, immediate: bool) {
     let (root, connections) = destinations(app);
     let mut queue = auto.queue.lock().unwrap();
     reconcile(&mut queue, &root, &connections);
+    queue.realtime = realtime;
     if !root.as_os_str().is_empty() {
         for connection in connections
             .iter()
@@ -168,6 +212,7 @@ pub fn configure(app: &AppHandle) {
 
 // 수동 저장·최초 연결처럼 명시적인 요청은 주기를 기다리지 않는다.
 pub fn request_now(app: &AppHandle) {
+    crate::realtime::changed(app);
     enqueue(app, None, true);
 }
 

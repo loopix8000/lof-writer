@@ -5,12 +5,12 @@ use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 const MAIN: &str = "refs/heads/main";
 const IMPORT: &str = "refs/lof/legacy-import-v1";
 const MIGRATION: &str = "refs/lof/migration-v1";
-const IDLE: Duration = Duration::from_secs(10);
+
 
 pub struct Snapshot {
     pub documents: Vec<Value>,
@@ -324,8 +324,9 @@ impl LocalHistory {
         self.migration_files = None;
     }
 
-    pub fn due(&self, force: bool, editing: bool) -> bool {
-        self.pending && (force || (!editing && self.changed_at.elapsed() >= IDLE))
+    pub fn due(&self, force: bool, _editing: bool) -> bool {
+        self.pending && force
+
     }
 
     pub fn commit(&mut self, vault_id: &str, snapshot: &Snapshot) -> Result<(), LofError> {

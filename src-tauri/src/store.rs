@@ -955,7 +955,11 @@ impl Store {
     pub fn require_database(&self) -> Result<(),LofError> { self.database().map(|_|()) }
 
     // 이전 호출부와 호환하되 기존 이력과 Git 커밋을 그대로 보관한다.
-    pub fn retain_history(&self, _force: bool) -> Result<(), LofError> {
+    pub fn retain_history(&self, force: bool) -> Result<(), LofError> {
+        let p = self.history_policy;
+        if let Some(db) = &self.index.database {
+            db.retain_history(p.keep_count, p.keep_days, force)?;
+        }
         // Git 이력 전환 후에는 기존 DB와 Git 기록 모두 자동으로 삭제하지 않는다.
         Ok(())
     }
@@ -3724,6 +3728,35 @@ impl Store {
         self.database()?.begin_write(&current)?;
         let saved=self.save_inner(input)?;
         self.database()?.finish_write(&saved)?;
+        let saved_id = saved.get("id").and_then(Value::as_str).unwrap_or(id);
+        let _ = self.clear_draft(id);
+        if saved_id != id {
+            let _ = self.clear_draft(saved_id);
+        }
+        let force_history = input.get("forceHistory").and_then(Value::as_bool).unwrap_or(false);
+        let manual_history = input.get("manualHistory").and_then(Value::as_bool).unwrap_or(false);
+        let restoring = input.get("restoring").and_then(Value::as_bool).unwrap_or(false);
+        let current_body = current.get("body").and_then(Value::as_str).unwrap_or("");
+        let saved_body = saved.get("body").and_then(Value::as_str).unwrap_or("");
+        let renamed = saved.get("title") != current.get("title");
+        if !restoring && (manual_history || ((saved_body != current_body || renamed) && (force_history || renamed || self.history_due(saved_id, saved_body)))) {
+            if self.local_git.ready {
+                self.local_git.capture_document(saved_id, &saved, if manual_history { "수동 저장한 원고 기록" } else { "원고 저장 기록" })?;
+                if manual_history {
+                    let _ = self.local_git.mark(saved_id, "manual");
+                }
+                self.last_snapshot.insert(saved_id.to_string(), Some(SnapshotEntry { at: Self::now_ms(), body: saved_body.to_string() }));
+            } else if manual_history {
+                let mut value = crate::database::history_value(&saved, &now_iso());
+                value["manual"] = json!(true);
+                let at = Self::now_ms();
+                self.database()?.insert_history(saved_id, &format!("{at}-{}.md", Uuid::new_v4()), &value)?;
+                self.last_snapshot.insert(saved_id.to_string(), Some(SnapshotEntry { at, body: saved_body.to_string() }));
+            } else {
+                self.write_history(saved_id, &saved, "")?;
+            }
+            let _ = self.retain_history(false);
+        }
         Ok(saved)
     }
 
@@ -3911,7 +3944,10 @@ impl Store {
         // 북마크는 본문을 고치면 문단 번호가 따라 바뀌어 자동 저장마다 함께 실리므로, 속성 변경으로 남기면
         // 최소 간격·글자 수 조건을 건너뛰고 저장할 때마다 이력이 쌓인다.
         let renamed = changed.iter().any(|k| k == "title");
-        if force_history || renamed || (!self.local_git.ready && body != current_body && self.history_due(id, &current_body)) {
+        let restoring = input.get("restoring").and_then(Value::as_bool).unwrap_or(false);
+        if (force_history || renamed || (body != current_body && self.history_due(id, &current_body)))
+            && (restoring || (self.latest_snapshot(id).is_none() && !current_body.is_empty()))
+        {
             self.write_history(id, &current, &raw)?;
         }
 
@@ -4110,7 +4146,10 @@ impl Store {
 
     fn write_history(&mut self, id: &str, doc: &Value, previous_raw: &str) -> Result<(), LofError> {
         if self.local_git.ready {
-            return self.local_git.capture_document(id, doc, "변경 전 원고 보존");
+            let body = doc.get("body").and_then(|v| v.as_str()).unwrap_or("");
+            self.local_git.capture_document(id, doc, "변경 전 원고 보존")?;
+            self.last_snapshot.insert(id.to_string(), Some(SnapshotEntry { at: Self::now_ms(), body: body.to_string() }));
+            return Ok(());
         }
         let at = Self::now_ms();
         let body = doc.get("body").and_then(|v| v.as_str()).unwrap_or("");
@@ -4143,7 +4182,11 @@ impl Store {
             return cached.clone();
         }
         if let Some(db)=&self.index.database {
-            let latest=db.latest_history(id).ok().flatten().map(|(at,body)|SnapshotEntry{at,body});
+            let latest = if self.local_git.ready {
+                self.local_git.latest_document(id).ok().flatten().map(|(at, body)| SnapshotEntry { at, body })
+            } else {
+                db.latest_history(id).ok().flatten().map(|(at,body)|SnapshotEntry{at,body})
+            };
             self.last_snapshot.insert(id.to_string(),latest.clone());
             return latest;
         }
@@ -4225,14 +4268,26 @@ impl Store {
             .to_string();
         let current = doc_of(&f_proj.dir, &proj_id, &f_entry, &raw)?;
         if self.local_git.ready {
-            if !force { return Ok(false) }
-            self.local_git.capture_document(id, &current, "수동 저장한 원고 기록")?;
-            return self.local_git.mark(id, "manual");
+            let body = current.get("body").and_then(|v| v.as_str()).unwrap_or("");
+            self.local_git.capture_document(id, &current, if force { "수동 저장한 원고 기록" } else { "원고 이력 기록" })?;
+            self.last_snapshot.insert(id.to_string(), Some(SnapshotEntry { at: Self::now_ms(), body: body.to_string() }));
+            if force {
+                let _ = self.local_git.mark(id, "manual")?;
+            }
+            return Ok(true);
+
+
         }
         let body = current.get("body").and_then(|v| v.as_str()).unwrap_or("");
         let latest = self.latest_snapshot(id);
         let prev_body = latest.as_ref().map(|l| l.body.as_str()).unwrap_or("");
-        if body == prev_body || (!force && changed_chars(prev_body, body) < self.history_policy.min_chars) {
+        if body == prev_body {
+            if force {
+                return self.database()?.mark_latest_history_manual(id);
+            }
+            return Ok(false);
+        }
+        if false {
             return Ok(false);
         }
         if force {
@@ -4249,7 +4304,7 @@ impl Store {
         if !valid_id(id) {
             return Err(fail_invalid("잘못된 ID"));
         }
-        if self.local_git.ready { return Ok(self.local_git.history_page(id, 0, 100, None)?["entries"].clone()) }
+        if self.local_git.ready { return Ok(self.local_git.history_page(id, 0, 100, None, self.history_policy)?["entries"].clone()) }
         if let Some(db)=&self.index.database {return db.history(id);}
         let dir = self.root.join(".lof").join("history").join(id);
         let mut names: Vec<String> = fs::read_dir(&dir)
@@ -4269,7 +4324,7 @@ impl Store {
 
     pub fn history_page(&self, id: &str, offset: usize, limit: usize, anchor: Option<&str>) -> Result<Value, LofError> {
         if !valid_id(id) { return Err(fail_invalid("잘못된 문서 ID입니다.")); }
-        if self.local_git.ready { self.local_git.history_page(id, offset, limit, anchor) }
+        if self.local_git.ready { self.local_git.history_page(id, offset, limit, anchor, self.history_policy) }
         else { self.database()?.legacy_history_page(id, offset, limit) }
     }
 
@@ -4402,6 +4457,7 @@ impl Store {
         attrs.insert("id".to_string(), json!(id));
         attrs.insert("expectedRevision".to_string(), expected_rev);
         attrs.insert("forceHistory".to_string(), json!(true));
+        attrs.insert("restoring".to_string(), json!(true));
         attrs.insert(
             "body".to_string(),
             old.get("body").cloned().unwrap_or(json!("")),
@@ -4745,6 +4801,10 @@ impl Store {
         }
         let mut payload = input.as_object().cloned().unwrap_or_default();
         payload.insert("savedAt".to_string(), json!(now_iso()));
+        if let Some(db) = &self.index.database {
+            db.save_draft(id, &Value::Object(payload))?;
+            return Ok(true);
+        }
         let file = self
             .root
             .join(".lof")
@@ -4755,6 +4815,9 @@ impl Store {
     }
 
     pub fn drafts(&self) -> Result<Vec<Value>, LofError> {
+        if let Some(db) = &self.index.database {
+            return db.drafts();
+        }
         let dir = self.root.join(".lof").join("drafts");
         let mut out = Vec::new();
         let Ok(rd) = fs::read_dir(&dir) else {
@@ -4776,6 +4839,12 @@ impl Store {
     }
 
     pub fn clear_draft(&self, id: &str) -> Result<(), LofError> {
+        if !valid_id(id) {
+            return Err(fail_invalid("잘못된 ID"));
+        }
+        if let Some(db) = &self.index.database {
+            db.clear_draft(id)?;
+        }
         if !valid_id(id) {
             return Err(fail_invalid("잘못된 ID"));
         }

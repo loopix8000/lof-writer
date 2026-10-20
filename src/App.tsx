@@ -56,6 +56,7 @@ import {
   countForRule,
   plainText,
   requiresSource,
+  stripJsdocComments,
 } from "../core/text.mjs";
 import {
   normalizeEditorStyle,
@@ -235,7 +236,7 @@ export default function App() {
     setError(e.message || String(e));
   }, []);
   const session = useDocumentSession({
-    loaded, visible: view === "workspace" && !memoOpen, memoOpen,
+    loaded, visible: view === "workspace" && !memoOpen, memoOpen, prefs,
     flushMemo: (options) => memoFlush.current?.(options),
     waitForWriting: () => writingQueue.current,
     pendingDocumentMove: () => documentMove.current,
@@ -568,7 +569,7 @@ export default function App() {
       rawMarkdown ??
       (active?.id === latest.id && (source || requiresSource(latest.body)));
     if (copyAsMarkdown) {
-      await call("copyManuscript", { id: latest.id, text: latest.body });
+      await call("copyManuscript", { id: latest.id, text: stripJsdocComments(latest.body) });
       message("Markdown 원문을 복사했습니다.");
       return;
     }
@@ -820,7 +821,10 @@ export default function App() {
     await flush();
     const s = await call("settings");
     setConnections(s.connections);
-    if (s.autoSync) setAutoSync(s.autoSync);
+    if (s.autoSync) {
+      setAutoSync(s.autoSync);
+      if (s.autoSync.hasConnections !== undefined) setSyncAvailable(s.autoSync.hasConnections);
+    }
     setCommonMemoPath(s.commonMemoPath || "");
     if (active?.kind) setTypesettingKind(active.kind === "episode" ? "episode" : "document");
     setDialog({ type });
@@ -1575,7 +1579,11 @@ export default function App() {
             aria-label="메모"
             className={memoOpen ? "selected" : ""}
             onClick={attempt(async () => {
-              if (memoOpen) return setMemoOpen(false);
+              if (memoOpen) {
+                await flush();
+                setMemoOpen(false);
+                return;
+              }
               await flush();
               setMemoOpen(true);
             })}

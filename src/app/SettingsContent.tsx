@@ -268,15 +268,78 @@ export default function SettingsContent({
           <section className="settings-section" hidden={settingsPage !== "storage"}>
             <h3>
               <History size={17} />
-              로컬 Git 기록
+              자동 저장 및 변경 이력
             </h3>
             <p role="status" className={lib.localGit?.message ? "pin-error" : "muted"}>
               {lib.localGit?.message ? `로컬 Git 기록 대기 · ${lib.localGit.message}`
                 : lib.localGit?.ready ? "로컬 Git 기록 사용 중"
                   : `기존 이력을 로컬 Git으로 옮기는 중 · ${lib.localGit?.importedHistory ?? 0}개 완료`}
             </p>
-            <p className="settings-description">입력이 10초간 멈추고 원고 저장이 완료되면 로컬 Git에 기록합니다. 인터넷 연결이나 별도 Git 설치 없이 작동하며, 기존 원고와 변경 이력은 보존합니다.</p>
-            <p className="settings-description">수동 저장 기록은 별도로 표시합니다. 모든 기록은 기간과 개수에 관계없이 그대로 보관하며, 자동으로 합치거나 삭제하지 않습니다. 이전 원고를 복원하면 현재 원고를 먼저 보존한 뒤 복원 결과를 새 기록으로 남깁니다.</p>
+            <p className="settings-description">집필 중 설정한 주기와 최소 변경 글자 수가 모두 충족될 때만 자동 저장과 변경 이력을 생성합니다. 입력 중인 임시 저장본은 데이터베이스에 실시간으로 저장되며, 수동 저장(Ctrl+S)하거나 집필 화면을 나가면 즉시 이력 저장과 동기화가 실행됩니다.</p>
+            <div className="settings-grid">
+              <label>
+                자동 저장 주기 (분)
+                <input
+                  type="number"
+                  aria-label="자동 저장 주기 (분)"
+                  min={1}
+                  max={1440}
+                  value={prefs.historyMaxMinutes ?? 1}
+                  onChange={(e) => {
+                    const v = Number(e.target.value);
+                    if (Number.isFinite(v) && v >= 1 && v <= 1440)
+                      savePrefs({ historyMaxMinutes: Math.round(v) }).catch(report);
+                  }}
+                />
+              </label>
+              <label>
+                최소 변경 글자 수 (자)
+                <input
+                  type="number"
+                  aria-label="최소 변경 글자 수 (자)"
+                  min={0}
+                  max={100000}
+                  step={10}
+                  value={prefs.historyMinChars ?? 200}
+                  onChange={(e) => {
+                    const v = Number(e.target.value);
+                    if (Number.isFinite(v) && v >= 0 && v <= 100000)
+                      savePrefs({ historyMinChars: Math.round(v) }).catch(report);
+                  }}
+                />
+              </label>
+              <label>
+                이력 보관 기간 (일)
+                <input
+                  type="number"
+                  aria-label="이력 보관 기간 (일)"
+                  min={1}
+                  max={3650}
+                  value={prefs.historyKeepDays ?? 30}
+                  onChange={(e) => {
+                    const v = Number(e.target.value);
+                    if (Number.isFinite(v) && v >= 1 && v <= 3650)
+                      savePrefs({ historyKeepDays: Math.round(v) }).catch(report);
+                  }}
+                />
+              </label>
+              <label>
+                문서당 최대 보관 개수 (개)
+                <input
+                  type="number"
+                  aria-label="문서당 최대 보관 개수 (개)"
+                  min={1}
+                  max={10000}
+                  value={prefs.historyKeepCount ?? 100}
+                  onChange={(e) => {
+                    const v = Number(e.target.value);
+                    if (Number.isFinite(v) && v >= 1 && v <= 10000)
+                      savePrefs({ historyKeepCount: Math.round(v) }).catch(report);
+                  }}
+                />
+              </label>
+            </div>
+            <p className="settings-description">수동 저장 기록은 별도로 표시합니다. 이전 원고를 복원하면 현재 원고를 먼저 보존한 뒤 복원 결과를 새 기록으로 남깁니다.</p>
             <div className="history-actions">
               <button disabled={busy || !lib.localGit?.ready} onClick={attempt(async () => {
                 setBusy(true);

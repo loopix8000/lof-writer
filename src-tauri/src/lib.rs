@@ -238,7 +238,7 @@ fn history_policy_from_settings(settings: &Value) -> HistoryPolicy {
             .unwrap_or(default)
     };
     HistoryPolicy {
-        max_minutes: number("historyMaxMinutes", 30.0).max(1.0),
+        max_minutes: number("historyMaxMinutes", 1.0).max(1.0),
         min_chars: number("historyMinChars", 200.0).max(0.0) as usize,
         keep_count: number("historyKeepCount", 100.0).max(1.0) as usize,
         keep_days: number("historyKeepDays", 30.0).max(1.0) as i64,
@@ -1099,7 +1099,7 @@ fn dispatch_method(
         }
         "copyManuscript" => {
             if let Some(custom_text) = args.get("text").and_then(|v| v.as_str()) {
-                set_clipboard_text(custom_text)?;
+                set_clipboard_text(&text::strip_jsdoc_comments(custom_text))?;
                 return Ok(json!(true));
             }
             let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
@@ -1135,7 +1135,7 @@ fn dispatch_method(
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                let m = st.markdown(id)?;
+                let m = text::strip_jsdoc_comments(&st.markdown(id)?);
                 (t, b, m)
             };
             let safe_title: String = title

@@ -31,6 +31,80 @@ const findHighlights = StateField.define<DecorationSet>({
   provide: field => EditorView.decorations.from(field),
 });
 
+function buildJsdocDecorations(state: EditorState): DecorationSet {
+  const text = state.doc.toString();
+  if (!text.includes("/*")) return Decoration.none;
+  const marks = [];
+  for (const match of text.matchAll(/\/\*[\s\S]*?\*\//g)) {
+    const from = match.index ?? 0;
+    const to = from + match[0].length;
+    if (to > from) marks.push(Decoration.mark({ class: "jsdoc-comment" }).range(from, to));
+  }
+  return marks.length ? Decoration.set(marks, true) : Decoration.none;
+}
+
+const jsdocHighlights = StateField.define<DecorationSet>({
+  create: (state) => buildJsdocDecorations(state),
+  update(marks, tr) {
+    return tr.docChanged ? buildJsdocDecorations(tr.state) : marks;
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});
+
+function toggleSourceJsdocComment(view: EditorView): boolean {
+  if (view.state.readOnly) return false;
+  const { from, to } = view.state.selection.main;
+  const text = view.state.doc.toString();
+  if (from === to) {
+    if (text.includes("/*")) {
+      for (const match of text.matchAll(/\/\*[\s\S]*?\*\//g)) {
+        const mStart = match.index ?? 0;
+        const mEnd = mStart + match[0].length;
+        if (mStart <= from && from <= mEnd) {
+          const raw = match[0];
+          const openLen = raw.match(/^\/\*+\s?/)?.[0].length ?? 2;
+          const closeLen = raw.match(/\s?\*+\/$/)?.[0].length ?? 2;
+          const inner = raw.slice(openLen, Math.max(openLen, raw.length - closeLen));
+          const nextCursor = mStart + Math.max(0, Math.min(inner.length, from - mStart - openLen));
+          view.dispatch({
+            changes: { from: mStart, to: mEnd, insert: inner },
+            selection: { anchor: nextCursor },
+            scrollIntoView: true,
+            annotations: Transaction.userEvent.of("input"),
+          });
+          return true;
+        }
+      }
+    }
+    view.dispatch({
+      changes: { from, to, insert: "/**  */" },
+      selection: { anchor: from + 4 },
+      scrollIntoView: true,
+      annotations: Transaction.userEvent.of("input"),
+    });
+    return true;
+  }
+  const selected = view.state.sliceDoc(from, to);
+  if (/^\s*\/\*[\s\S]*\*\/\s*$/.test(selected)) {
+    const unwrapped = selected.replace(/^(\s*)\/\*+\s?/, "$1").replace(/\s?\*+\/(\s*)$/, "$1");
+    view.dispatch({
+      changes: { from, to, insert: unwrapped },
+      selection: { anchor: from, head: from + unwrapped.length },
+      scrollIntoView: true,
+      annotations: Transaction.userEvent.of("input"),
+    });
+    return true;
+  }
+  const wrapped = `/** ${selected} */`;
+  view.dispatch({
+    changes: { from, to, insert: wrapped },
+    selection: { anchor: from + 4, head: to + 4 },
+    scrollIntoView: true,
+    annotations: Transaction.userEvent.of("input"),
+  });
+  return true;
+}
+
 function inCode(state: EditorState, position = state.selection.main.from): boolean {
   const tree = ensureSyntaxTree(state, position, 2) ?? syntaxTree(state);
   // 아직 해석되지 않은 위치에서는 자동 완성을 보수적으로 생략한다.
@@ -44,6 +118,7 @@ function inCode(state: EditorState, position = state.selection.main.from): boole
 // 일반 문장의 한 줄 수정만 즉시 센다. 문법·블록 경계가 바뀌면 전체 계산 결과를 기다린다.
 function countDelta(update: ViewUpdate, rules?: WritingRules): ManuscriptCounts | null {
   if (!rules || update.changes.empty) return null;
+  if (update.startState.doc.toString().includes("/*") || update.state.doc.toString().includes("/*")) return null;
   let changed: { fromA: number; toA: number; fromB: number; toB: number } | null = null;
   let ranges = 0;
   update.changes.iterChangedRanges((fromA, toA, fromB, toB) => { changed = { fromA, toA, fromB, toB }; ranges++; });
@@ -148,8 +223,9 @@ const SourceEditor = forwardRef<SourceEditorHandle, Props>(function SourceEditor
       parent: host.current,
       state: EditorState.create({ doc: latest.current.body, extensions: [
         markdown({ extensions: GFM, addKeymap: false, completeHTMLTags: false, pasteURLAsLink: false }),
-        history(), keymap.of([...historyKeymap, ...defaultKeymap]), EditorView.lineWrapping,
+        history(), keymap.of([{ key: "Mod-/", run: toggleSourceJsdocComment }, ...historyKeymap, ...defaultKeymap]), EditorView.lineWrapping,
         findHighlights,
+        jsdocHighlights,
         editableConfig.of(editable()), contentConfig.of(attributes()),
         EditorView.clipboardInputFilter.of((text, state) => latest.current.manualLineBreak || inCode(state)
           ? text : latest.current.normalizePaste(text, false)),

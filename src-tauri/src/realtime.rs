@@ -357,6 +357,52 @@ fn peers(app: &AppHandle) -> Vec<Value> {
         .map(|member| peer_value(member, &current, &aliases))
         .collect()
 }
+pub fn progress(app: &AppHandle) -> Value {
+    let list = peers(app);
+    if list.is_empty() {
+        return json!({ "phase": "idle", "message": "", "hasConnections": false });
+    }
+    let rt = app.state::<Realtime>();
+    let fatal = rt.error.lock().unwrap().clone();
+    if !fatal.is_empty() {
+        return json!({ "phase": "error", "message": fatal, "hasConnections": true });
+    }
+    let statuses = rt.statuses.lock().unwrap();
+    let mut syncing = false;
+    let mut pending = false;
+    let mut errors = Vec::new();
+    for peer in &list {
+        let id = peer["id"].as_str().unwrap_or("");
+        let name = peer["name"].as_str().unwrap_or("다른 장치");
+        let status = statuses.get(id);
+        match status.and_then(|s| s["phase"].as_str()) {
+            Some("syncing") => syncing = true,
+            Some("error") => {
+                let msg = status
+                    .and_then(|s| s["message"].as_str())
+                    .filter(|m| !m.is_empty())
+                    .unwrap_or("재연결 대기");
+                errors.push(format!("{name}: {msg}"));
+            }
+            Some("connected") => {}
+            _ => pending = true,
+        }
+    }
+    let phase = if syncing {
+        "syncing"
+    } else if !errors.is_empty() {
+        "error"
+    } else if pending {
+        "pending"
+    } else {
+        "idle"
+    };
+    json!({
+        "phase": phase,
+        "message": errors.join(" · "),
+        "hasConnections": true,
+    })
+}
 fn members(app: &AppHandle) -> Vec<Member> {
     with_group(app, |group| {
         Ok(group.as_ref().map(|g| g.members.clone()).unwrap_or_default())
@@ -427,6 +473,7 @@ pub fn changed(app: &AppHandle) {
 fn wake(app: &AppHandle) {
     let rt = app.state::<Realtime>();
     *rt.urgent.lock().unwrap() = true;
+    crate::auto_sync::refresh_realtime(app);
     rt.wake.notify_all();
 }
 fn remote_changed(app: &AppHandle) {
@@ -446,7 +493,9 @@ fn release(app: &AppHandle, session: &str) {
 struct WriterHost(AppHandle);
 impl Host for WriterHost {
     fn handle(&self, peer: &str, session: &str, message: Message) -> lof_realtime::Result<Message> {
-        self.handle_inner(peer, session, message)
+        let res = self.handle_inner(peer, session, message);
+        crate::auto_sync::refresh_realtime(&self.0);
+        res
             .map_err(|e| e.message)
     }
     fn disconnected(&self, session: &str) {
@@ -597,7 +646,13 @@ impl WriterHost {
             *lease = Some((
                 session.into(),
                 current,
-                Instant::now() + Duration::from_secs(180),
+                {
+                    rt.statuses.lock().unwrap().insert(
+                        peer_config["id"].as_str().unwrap_or("").into(),
+                        json!({"phase":"syncing"}),
+                    );
+                    Instant::now() + Duration::from_secs(180)
+                },
             ));
             return Ok(Message::json(json!(true)));
         }
@@ -969,6 +1024,7 @@ pub fn start(app: &AppHandle) {
                                 .lock()
                                 .unwrap()
                                 .insert(id.clone(), json!({"phase":"connecting"}));
+                            crate::auto_sync::refresh_realtime(&app);
                             let endpoint = peer["endpoint"]
                                 .as_str()
                                 .unwrap_or("")
@@ -1003,17 +1059,21 @@ pub fn start(app: &AppHandle) {
                             .lock()
                             .unwrap()
                             .insert(id.clone(), json!({"phase":"syncing"}));
+                        crate::auto_sync::refresh_realtime(&app);
                         let leader = peer["storage"].as_bool().unwrap_or(false)
                             || own < peer["endpoint"].as_str().unwrap_or("").to_string();
                         if leader {
                             let outcome = sync(&app, &peer, conn, runtime.handle())?;
                             rt.statuses.lock().unwrap().insert(id.clone(),json!({"phase":"connected","lastSync":chrono::Utc::now().to_rfc3339(),"conflicts":outcome["fileConflicts"]}));
+                            crate::auto_sync::refresh_realtime(&app);
                         } else {
                             runtime.block_on(lof_realtime::request(conn,Message::json(json!({"op":"notify","vault":vault(&app)?,"target":peer["remoteVault"]})))).map_err(net)?;
                             let mut statuses = rt.statuses.lock().unwrap();
                             let status = statuses.entry(id.clone()).or_insert_with(|| json!({}));
                             status["phase"] = json!("connected");
                             status["message"] = Value::Null;
+                            drop(statuses);
+                            crate::auto_sync::refresh_realtime(&app);
                         }
                         *seen = generation;
                         Ok(())
@@ -1035,6 +1095,7 @@ pub fn start(app: &AppHandle) {
                         }
                     }
                 }
+                crate::auto_sync::refresh_realtime(&app);
                 *rt.live.lock().unwrap() = connected
                     .iter()
                     .map(|(id, (conn, _))| (id.clone(), conn.clone()))

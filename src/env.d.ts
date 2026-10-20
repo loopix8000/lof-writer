@@ -15,6 +15,7 @@ declare module "*/LICENSE?raw" {
 
 declare module "*.mjs" {
   export function tableStart(source: string): number;
+  export function stripJsdocComments(markdown: string): string;
   export function plainText(text: string, options?: { preserveParagraphBreaks?: boolean; dividerText?: string }): string;
   export function splitSoftBreaks(markdown: string, hardBreaks: boolean): string;
   export function characterCount(text: string, spaces?: boolean): number;

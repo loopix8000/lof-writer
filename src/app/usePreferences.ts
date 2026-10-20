@@ -17,6 +17,10 @@ export function usePreferences() {
     autoSymbolReplacement: true,
     autoDividerReplacement: true,
     quoteStyle: "straight",
+    historyMaxMinutes: 1,
+    historyMinChars: 200,
+    historyKeepCount: 100,
+    historyKeepDays: 30,
   });
   const prefsRef = useRef(prefs);
   prefsRef.current = prefs;

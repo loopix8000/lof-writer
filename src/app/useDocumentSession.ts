@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { EditorScrollPositions } from "../EditorScroll";
 import { call, type Doc } from "../types";
 import { useGitActivity } from "../useGitActivity";
@@ -6,11 +6,12 @@ import { readFileForClose, useSyncFileUpdates } from "../useSyncFileUpdates";
 import { cloneDocument, editDocument, relocateDocument, sameDocumentContent, updateDocumentLocation } from "./model";
 
 export const composingError = "한글 입력 조합이 끝난 뒤 다시 저장해 주세요.";
-type FlushOptions = { auto?: boolean; closing?: boolean; skipMemo?: boolean };
+type FlushOptions = { auto?: boolean; closing?: boolean; skipMemo?: boolean; manual?: boolean };
 type Options = {
   loaded: boolean;
   visible: boolean;
   memoOpen: boolean;
+  prefs?: Record<string, any>;
   flushMemo: (options: { closing?: boolean }) => Promise<void> | undefined;
   waitForWriting: () => Promise<void>;
   pendingDocumentMove: () => Promise<void> | null;
@@ -27,15 +28,42 @@ type Options = {
   report: (error: any) => void;
 };
 
+type DraftState = {
+  doc: Doc;
+  base: Doc;
+  seq: number;
+  saved: number;
+  draftSaved: number;
+  lastSavedAt: number;
+  edited: boolean;
+};
+
+function changedChars(before: string, after: string): number {
+  const a = Array.from(before);
+  const b = Array.from(after);
+  let pre = 0;
+  while (pre < a.length && pre < b.length && a[pre] === b[pre]) pre++;
+  let suf = 0;
+  while (
+    suf < a.length - pre &&
+    suf < b.length - pre &&
+    a[a.length - 1 - suf] === b[b.length - 1 - suf]
+  ) {
+    suf++;
+  }
+  return Math.max(a.length - pre - suf, b.length - pre - suf);
+}
+
 // 원고와 저장 버전은 이 훅 안에서만 변경한다. 화면 이동은 저장 완료 뒤 commitDocument를 호출한다.
 export function useDocumentSession(options: Options) {
   const latest = useRef(options); latest.current = options;
   const [active, setActiveState] = useState<Doc | null>(null);
   const [saveStatus, setSaveStatus] = useState("저장됨");
   const [conflict, setConflict] = useState(false);
-  const draft = useRef<{ doc: Doc; base: Doc; seq: number; saved: number } | null>(null);
+  const draft = useRef<DraftState | null>(null);
   const saveChain = useRef(Promise.resolve());
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const composing = useRef(false);
   const conflictRef = useRef(false);
   const activeId = useRef("");
@@ -49,10 +77,77 @@ export function useDocumentSession(options: Options) {
     if (doc) latest.current.retainDocument(doc);
     setActiveState(doc);
   }, []);
-  const flush = useCallback(async ({ auto = false, closing = false, skipMemo = false }: FlushOptions = {}) => {
+
+  const autoSaveCondition = useCallback((d: DraftState) => {
+    const maxMinutes = Math.max(1, Number(latest.current.prefs?.historyMaxMinutes ?? 1));
+    const minChars = Math.max(0, Number(latest.current.prefs?.historyMinChars ?? 200));
+    const intervalMs = maxMinutes * 60_000;
+    const elapsed = Date.now() - d.lastSavedAt;
+    const chars = changedChars(d.base.body, d.doc.body);
+    return {
+      intervalMs,
+      elapsed,
+      chars,
+      minChars,
+      met: chars >= minChars && elapsed >= intervalMs,
+    };
+  }, []);
+
+  const persistDraftNow = useCallback((target = draft.current) => {
+    if (draftTimer.current) {
+      clearTimeout(draftTimer.current);
+      draftTimer.current = null;
+    }
+    if (!target || target.seq === target.saved || target.draftSaved === target.seq) return;
+    const seq = target.seq;
+    const payload = { ...target.doc, expectedRevision: target.doc.revision };
+    void call("saveDraft", payload)
+      .then(() => {
+        if (draft.current === target && target.seq === seq && target.seq !== target.saved && !conflictRef.current) {
+          target.draftSaved = seq;
+          setSaveStatus("임시 저장됨");
+        }
+      })
+      .catch(report);
+  }, [report]);
+
+  const scheduleDraftSave = useCallback(() => {
+    if (draftTimer.current) clearTimeout(draftTimer.current);
+    draftTimer.current = setTimeout(() => {
+      draftTimer.current = null;
+      persistDraftNow();
+    }, 150);
+  }, [persistDraftNow]);
+
+  const flushRef = useRef<(options?: FlushOptions) => Promise<void>>(async () => {});
+
+  const scheduleAutoSave = useCallback(() => {
+    if (timer.current) {
+      clearTimeout(timer.current);
+      timer.current = null;
+    }
+    const d = draft.current;
+    if (!d || d.seq === d.saved || composing.current || conflictRef.current) return;
+    const { intervalMs, elapsed, chars, minChars } = autoSaveCondition(d);
+    if (chars < minChars) return;
+    const delay = Math.max(650, intervalMs - elapsed);
+    timer.current = setTimeout(() => {
+      timer.current = null;
+      void flushRef.current({ auto: true }).catch(report);
+    }, delay);
+  }, [autoSaveCondition, report]);
+
+  const flush = useCallback(async ({ auto = false, closing = false, skipMemo = false, manual = false }: FlushOptions = {}) => {
     if (!auto && !skipMemo) await latest.current.flushMemo({ closing });
     await latest.current.waitForWriting();
-    if (timer.current) clearTimeout(timer.current);
+    if (timer.current) {
+      clearTimeout(timer.current);
+      timer.current = null;
+    }
+    if (!auto && draftTimer.current) {
+      clearTimeout(draftTimer.current);
+      draftTimer.current = null;
+    }
     const run = async () => {
       const moving = latest.current.pendingDocumentMove();
       if (moving) await moving;
@@ -71,6 +166,9 @@ export function useDocumentSession(options: Options) {
         d.doc = fresh;
         d.base = fresh;
         d.saved = seq;
+        d.draftSaved = seq;
+        d.lastSavedAt = Date.now();
+        d.edited = false;
         conflictRef.current = false;
         setConflict(false);
         setActive(fresh);
@@ -79,10 +177,30 @@ export function useDocumentSession(options: Options) {
       };
       // 닫기는 파일의 최신 내용을 채택하며, 일반 저장은 기존 충돌 처리를 유지한다.
       if (closing && await loadExternalOnClose(true)) return;
-      if (d.seq === d.saved) return;
+      if (d.seq === d.saved) {
+        if (!auto && !manual && d.edited) {
+          d.edited = false;
+          await call("checkpointDocument", { id: d.doc.id, force: false }).catch(() => {});
+          void call("requestSyncNow").catch(() => {});
+        }
+        return;
+      }
+      if (auto) {
+        const cond = autoSaveCondition(d);
+        if (!cond.met) {
+          if (cond.chars >= cond.minChars) scheduleAutoSave();
+          return;
+        }
+      }
       const seq = d.seq,
-        payload = { ...d.doc, expectedRevision: d.doc.revision };
-      await call("saveDraft", payload);
+        payload = {
+          ...d.doc,
+          expectedRevision: d.doc.revision,
+          forceHistory: true,
+          ...(manual ? { manualHistory: true } : {}),
+        };
+      await call("saveDraft", { ...d.doc, expectedRevision: d.doc.revision });
+      d.draftSaved = seq;
       if (conflictRef.current) {
         if (closing) { await loadExternalOnClose(); return; }
         if (auto) return;
@@ -110,16 +228,22 @@ export function useDocumentSession(options: Options) {
           conflictRef.current = false;
           setConflict(false);
           if (composing.current) {
-            setSaveStatus("편집 중");
+            setSaveStatus("임시 저장됨");
             if (auto) return;
             throw Error(composingError);
           }
           saved = await call<Doc>("saveDocument", {
-            ...updateDocumentLocation(payload, fresh), expectedRevision: fresh.revision,
+            ...updateDocumentLocation(payload, fresh),
+            expectedRevision: fresh.revision,
+            forceHistory: true,
+            ...(manual ? { manualHistory: true } : {}),
           });
         }
         if (draft.current === d) {
           d.saved = seq;
+          d.draftSaved = seq;
+          d.lastSavedAt = Date.now();
+          if (!auto) d.edited = false;
           d.base = saved;
           // 메모는 이름이 바뀌면 파일 경로로 만든 ID도 바뀐다.
           if (saved.id !== d.doc.id) replaceDocId(d.doc.id, saved.id);
@@ -133,8 +257,15 @@ export function useDocumentSession(options: Options) {
           });
           setActive(cloneDocument(d.doc));
           latest.current.onSaved();
-          setSaveStatus(d.seq === seq ? "저장됨" : "편집 중");
+          setSaveStatus(d.seq === seq ? "저장됨" : "임시 저장됨");
           if (d.seq === seq) await call("clearDraft", { id: d.doc.id });
+          else {
+            scheduleDraftSave();
+            scheduleAutoSave();
+          }
+          if (!auto && !manual) {
+            void call("requestSyncNow").catch(() => {});
+          }
         }
       } catch (e: any) {
         if (closing && e.code === "CONFLICT") { await loadExternalOnClose(); return; }
@@ -149,12 +280,23 @@ export function useDocumentSession(options: Options) {
     const task = saveChain.current.then(run);
     saveChain.current = task.catch(() => {});
     return task;
-  }, []);
-  // 자동 저장은 별도 이력을 남기지 않는다. 입력이 멈추고 저장이 끝나면 저장소의 규칙에 따라 이력을 남긴다.
+  }, [autoSaveCondition, scheduleAutoSave, scheduleDraftSave, setActive]);
+  flushRef.current = flush;
+
+  useEffect(() => {
+    scheduleAutoSave();
+  }, [options.prefs?.historyMaxMinutes, options.prefs?.historyMinChars, scheduleAutoSave]);
+
+  const prevVisible = useRef(options.visible);
+  useEffect(() => {
+    if (prevVisible.current && !options.visible) {
+      void flush().catch(report);
+    }
+    prevVisible.current = options.visible;
+  }, [options.visible, flush, report]);
+
   const gitActivity = useGitActivity(async () => {
-    await flush();
-    const pending = draft.current;
-    return !composing.current && !conflictRef.current && (!pending || pending.seq === pending.saved);
+    return !composing.current;
   }, report);
   const checkOpenDocument = useSyncFileUpdates({
     fileKey: active?.id ?? "",
@@ -175,15 +317,16 @@ export function useDocumentSession(options: Options) {
       conflictRef.current = false;
       setConflict(false);
       setActive(cloneDocument(d.doc));
-      setSaveStatus(d.seq === d.saved ? "저장됨" : "편집 중");
+      setSaveStatus(d.seq === d.saved ? "저장됨" : "임시 저장됨");
       if (d.seq !== d.saved && !composing.current) {
-        if (timer.current) clearTimeout(timer.current);
-        timer.current = setTimeout(() => flush({ auto: true }).catch(report), 650);
+        scheduleDraftSave();
+        scheduleAutoSave();
       }
       return true;
     },
     pending: () => {
       if (timer.current) clearTimeout(timer.current);
+      if (draftTimer.current) clearTimeout(draftTimer.current);
       conflictRef.current = true;
       setConflict(true);
       const d = draft.current;
@@ -199,7 +342,7 @@ export function useDocumentSession(options: Options) {
       const previousSeq = previous.seq;
       await call("clearDraft", { id: doc.id });
       if (draft.current !== previous || previous.seq !== previousSeq) return;
-      draft.current = { doc, base: doc, seq: 0, saved: 0 };
+      draft.current = { doc, base: doc, seq: 0, saved: 0, draftSaved: 0, lastSavedAt: Date.now(), edited: false };
       conflictRef.current = false;
       setActive(doc);
       setConflict(false);
@@ -208,10 +351,10 @@ export function useDocumentSession(options: Options) {
     },
     report,
   });
-  // 직접 저장은 현재 문서의 Git 기록에 수동 저장 표시를 남긴다.
+  // 직접 저장은 현재 문서의 Git 기록에 수동 저장 표시를 남기고 즉시 동기화한다.
   const manualSave = useCallback(async () => {
     const memoOpen = latest.current.memoOpen;
-    await flush();
+    await flush({ manual: true });
     if (memoOpen) {
       await latest.current.saveMemoManually();
     } else {
@@ -226,19 +369,20 @@ export function useDocumentSession(options: Options) {
     gitActivity();
     d.doc = editDocument(d.doc, patch, markdownCopy);
     d.seq++;
+    d.edited = true;
     pinTab(d.doc.id);
     setActive(cloneDocument(d.doc));
     setSaveStatus("편집 중");
-    if (timer.current) clearTimeout(timer.current);
-    if (!composing.current)
-      timer.current = setTimeout(() => flush({ auto: true }).catch(report), 650);
+    scheduleDraftSave();
+    scheduleAutoSave();
   }
   function composition(value: boolean) {
     gitActivity();
     composing.current = value;
-    if (timer.current) clearTimeout(timer.current);
-    if (!value)
-      timer.current = setTimeout(() => flush({ auto: true }).catch(report), 800);
+    if (!value) {
+      persistDraftNow();
+      scheduleAutoSave();
+    }
   }
   const reconcileDocuments = useCallback((documents: Doc[]) => {
     const d = draft.current;
@@ -321,7 +465,17 @@ export function useDocumentSession(options: Options) {
   }
 
   function commitDocument(doc: Doc, keepOlder: boolean) {
-    draft.current = { doc, base: doc, seq: keepOlder ? 1 : 0, saved: 0 };
+    if (timer.current) clearTimeout(timer.current);
+    if (draftTimer.current) clearTimeout(draftTimer.current);
+    draft.current = {
+      doc,
+      base: doc,
+      seq: keepOlder ? 1 : 0,
+      saved: 0,
+      draftSaved: 0,
+      lastSavedAt: Date.now(),
+      edited: keepOlder,
+    };
     if (keepOlder) void call("saveDraft", { ...doc, expectedRevision: doc.revision }).catch(report);
     activeId.current = doc.id;
     setActive(doc);
@@ -332,6 +486,8 @@ export function useDocumentSession(options: Options) {
 
   function discardDraft(id?: string) {
     if (id !== undefined && draft.current?.doc.id !== id) return;
+    if (timer.current) clearTimeout(timer.current);
+    if (draftTimer.current) clearTimeout(draftTimer.current);
     draft.current = null;
     conflictRef.current = false;
     setConflict(false);
@@ -350,6 +506,8 @@ export function useDocumentSession(options: Options) {
   function resetVault() {
     sessionStarts.current.clear();
     scrollPositions.current.clear();
+    if (timer.current) clearTimeout(timer.current);
+    if (draftTimer.current) clearTimeout(draftTimer.current);
     draft.current = null;
     activeId.current = "";
     setActive(null);
@@ -383,7 +541,15 @@ export function useDocumentSession(options: Options) {
       id, name, expectedRevision: current.doc.revision,
     });
     if (restored.id !== id) replaceDocId(id, restored.id);
-    draft.current = { doc: restored, base: restored, seq: 0, saved: 0 };
+    draft.current = {
+      doc: restored,
+      base: restored,
+      seq: 0,
+      saved: 0,
+      draftSaved: 0,
+      lastSavedAt: Date.now(),
+      edited: false,
+    };
     setActive(restored);
     afterCommit();
     return restored;
