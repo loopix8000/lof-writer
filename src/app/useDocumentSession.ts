@@ -105,7 +105,7 @@ export function useDocumentSession(options: Options) {
       .then(() => {
         if (draft.current === target && target.seq === seq && target.seq !== target.saved && !conflictRef.current) {
           target.draftSaved = seq;
-          setSaveStatus("임시 저장됨");
+          setSaveStatus("편집 중");
         }
       })
       .catch(report);
@@ -228,7 +228,7 @@ export function useDocumentSession(options: Options) {
           conflictRef.current = false;
           setConflict(false);
           if (composing.current) {
-            setSaveStatus("임시 저장됨");
+            setSaveStatus("편집 중");
             if (auto) return;
             throw Error(composingError);
           }
@@ -257,7 +257,7 @@ export function useDocumentSession(options: Options) {
           });
           setActive(cloneDocument(d.doc));
           latest.current.onSaved();
-          setSaveStatus(d.seq === seq ? "저장됨" : "임시 저장됨");
+          setSaveStatus(d.seq === seq ? "저장됨" : "편집 중");
           if (d.seq === seq) await call("clearDraft", { id: d.doc.id });
           else {
             scheduleDraftSave();
@@ -317,7 +317,7 @@ export function useDocumentSession(options: Options) {
       conflictRef.current = false;
       setConflict(false);
       setActive(cloneDocument(d.doc));
-      setSaveStatus(d.seq === d.saved ? "저장됨" : "임시 저장됨");
+      setSaveStatus(d.seq === d.saved ? "저장됨" : "편집 중");
       if (d.seq !== d.saved && !composing.current) {
         scheduleDraftSave();
         scheduleAutoSave();

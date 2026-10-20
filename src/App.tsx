@@ -1130,7 +1130,7 @@ export default function App() {
             <span />
             {groupSaveStatus}
           </span>
-          <SyncStatus status={autoSync} checking={syncChecking} available={syncAvailable} />
+          <SyncStatus status={autoSync} checking={syncChecking} available={syncAvailable} editing={groupSaveStatus !== "저장됨"} />
           </div>
           <div className="editor-action-buttons" aria-hidden={!focused}>
             <button

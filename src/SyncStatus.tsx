@@ -19,10 +19,12 @@ export default function SyncStatus({
   status,
   checking,
   available,
+  editing = false,
 }: {
   status: AutoSyncStatus;
   checking: boolean;
   available: boolean;
+  editing?: boolean;
 }) {
   const realtime = status.channels?.realtime;
   const files = status.channels ? status.channels.files : available ? status : undefined;
@@ -57,7 +59,7 @@ export default function SyncStatus({
     <>
       {showRealtime && realtime && (
         <span
-          className={`auto-sync-status realtime ${realtime.phase}`}
+          className={`auto-sync-status realtime ${realtime.phase}${editing ? " editing" : ""}`}
           role="status"
           aria-live="off"
           aria-label={realtimeDesc}
@@ -68,7 +70,7 @@ export default function SyncStatus({
       )}
       {showFiles && files && (
         <span
-          className={`auto-sync-status files ${files.phase}`}
+          className={`auto-sync-status files ${files.phase}${editing ? " editing" : ""}`}
           role="status"
           aria-live="off"
           aria-label={fileDesc}

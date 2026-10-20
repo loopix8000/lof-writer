@@ -45,7 +45,8 @@
 .pin-settings-form { max-width: 360px; display: flex; flex-direction: column; gap: 16px; }
 .pin-settings-form > label { display: flex; flex-direction: column; gap: 7px; font-size: 13px; }
 .auto-sync-status { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); white-space: nowrap; }
-.auto-sync-status.idle { color: var(--muted); }
+.auto-sync-status.idle { color: var(--sync-done, #0078d4); }
+.auto-sync-status.idle.editing, .save-status-group:has(.pending) .auto-sync-status.idle { color: var(--muted); }
 .auto-sync-status.pending { color: var(--warning-text); opacity: 0.85; }
 .auto-sync-status.syncing { color: var(--accent); animation: sync-pulse 1.2s ease-in-out infinite; }
 .auto-sync-status.error { color: var(--danger-text); }
@@ -170,6 +171,7 @@ button:focus-visible {
   --toast-accent: #616161;
   --comment-text: #6a9955;
   --comment-bg: #6a995514;
+  --sync-done: #0078d4;
   --scrollbar: #64646466;
   --scrollbar-hover: #646464b3;
   accent-color: var(--accent);
@@ -225,6 +227,7 @@ button:focus-visible {
   --toast-accent: #9d9d9d;
   --comment-text: #6a9955;
   --comment-bg: #6a99551f;
+  --sync-done: #4daafc;
   --scrollbar: #79797966;
   --scrollbar-hover: #797979b3;
 }

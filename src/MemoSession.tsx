@@ -1063,7 +1063,7 @@ export default function MemoSession({
           </span>
           <div className="save-status-group">
             <span className={`memo-status ${groupStatus === "저장됨" ? "" : "pending"}`}>{groupStatus}</span>
-            <SyncStatus status={syncStatus} checking={syncChecking} available={syncAvailable} />
+            <SyncStatus status={syncStatus} checking={syncChecking} available={syncAvailable} editing={groupStatus !== "저장됨"} />
           </div>
         </div>
         {focused && conflict && (
