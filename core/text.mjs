@@ -5,10 +5,10 @@ import { decodeHTMLStrict } from "entities";
 const textParser = new Marked();
 const COMMENT_MARKER = "\uE002";
 
-// 본문의 JSDoc·블록 주석(/** ... */, /* ... */)을 제거한다.
+// 본문 주석(<!-- ... -->)을 제거한다.
 // 코드 블록(``` · ~~~) 안의 내용은 건드리지 않으며, 주석만 있던 줄·문단은 빈 줄을 남기지 않고 함께 정리한다.
 export function stripJsdocComments(markdown) {
-  if (!markdown || !markdown.includes("/*")) return markdown;
+  if (!markdown || !markdown.includes("<!--")) return markdown;
   const normalized = markdown.replace(/\r\n?|\n/g, "\n");
   let marked = "";
   const fenceRe = /(^[ \t]*(?:```|~~~)[^\n]*\n[\s\S]*?(?:^[ \t]*(?:```|~~~)[^\n]*$|(?![\s\S])))/gm;
@@ -16,13 +16,13 @@ export function stripJsdocComments(markdown) {
   for (const match of normalized.matchAll(fenceRe)) {
     const idx = match.index ?? 0;
     if (idx > lastIndex) {
-      marked += normalized.slice(lastIndex, idx).replace(/\/\*[\s\S]*?\*\//g, COMMENT_MARKER);
+      marked += normalized.slice(lastIndex, idx).replace(/<!--[\s\S]*?-->/g, COMMENT_MARKER);
     }
     marked += match[0];
     lastIndex = idx + match[0].length;
   }
   if (lastIndex < normalized.length) {
-    marked += normalized.slice(lastIndex).replace(/\/\*[\s\S]*?\*\//g, COMMENT_MARKER);
+    marked += normalized.slice(lastIndex).replace(/<!--[\s\S]*?-->/g, COMMENT_MARKER);
   }
   if (!marked.includes(COMMENT_MARKER)) return markdown;
 
@@ -162,7 +162,9 @@ function someToken(tokens, test) {
   return false;
 }
 export function requiresSource(markdown, { tables = false, links = false, images = false } = {}) {
-  return someToken(lex(markdown), (t) => {
+  // 편집기에서 직접 표시하는 주석 때문에 원문 모드로 전환하지 않는다.
+  const content = stripJsdocComments(markdown).replaceAll("<!--", "&lt;!--");
+  return someToken(lex(content), (t) => {
     if (tables && (t.type === "table" ||
       (t.type === "html" && /^<br\s*\/?\s*>$/i.test(t.raw.trim())))) return false;
     if (links && t.type === "link") return false;

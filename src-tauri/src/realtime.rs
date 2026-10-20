@@ -369,37 +369,35 @@ pub fn progress(app: &AppHandle) -> Value {
     }
     let statuses = rt.statuses.lock().unwrap();
     let mut syncing = false;
-    let mut pending = false;
-    let mut errors = Vec::new();
+    let mut reached = false;
+    let mut unreached = Vec::new();
     for peer in &list {
         let id = peer["id"].as_str().unwrap_or("");
         let name = peer["name"].as_str().unwrap_or("다른 장치");
-        let status = statuses.get(id);
-        match status.and_then(|s| s["phase"].as_str()) {
+        match statuses.get(id).and_then(|s| s["phase"].as_str()) {
             Some("syncing") => syncing = true,
-            Some("error") => {
-                let msg = status
-                    .and_then(|s| s["message"].as_str())
-                    .filter(|m| !m.is_empty())
-                    .unwrap_or("재연결 대기");
-                errors.push(format!("{name}: {msg}"));
-            }
-            Some("connected") => {}
-            _ => pending = true,
+            Some("connected") => reached = true,
+            Some("offline" | "error") => unreached.push(name.to_string()),
+            _ => {}
         }
     }
+    // 장치 간 연결은 늘 보장되지 않으므로 한 곳이라도 동기화되면 완료로 본다.
     let phase = if syncing {
         "syncing"
-    } else if !errors.is_empty() {
-        "error"
-    } else if pending {
-        "pending"
-    } else {
+    } else if reached {
         "idle"
+    } else {
+        "pending"
+    };
+    // 연결되지 않은 장치는 오류로 보지 않고 이름만 안내한다.
+    let message = if unreached.is_empty() {
+        String::new()
+    } else {
+        format!("연결되지 않은 장치: {}", unreached.join(", "))
     };
     json!({
         "phase": phase,
-        "message": errors.join(" · "),
+        "message": message,
         "hasConnections": true,
     })
 }
@@ -1018,12 +1016,15 @@ pub fn start(app: &AppHandle) {
                         continue;
                     }
                     let mut initial = false;
+                    let mut unreachable = false;
                     let result = (|| -> Result<(), LofError> {
                         if !connected.contains_key(&id) {
-                            rt.statuses
-                                .lock()
-                                .unwrap()
-                                .insert(id.clone(), json!({"phase":"connecting"}));
+                            // 꺼져 있는 장치는 재시도 중에도 오프라인으로 둔다.
+                            let mut statuses = rt.statuses.lock().unwrap();
+                            if statuses.get(&id).map(|s| &s["phase"]) != Some(&json!("offline")) {
+                                statuses.insert(id.clone(), json!({"phase":"connecting"}));
+                            }
+                            drop(statuses);
                             crate::auto_sync::refresh_realtime(&app);
                             let endpoint = peer["endpoint"]
                                 .as_str()
@@ -1032,7 +1033,10 @@ pub fn start(app: &AppHandle) {
                                 .map_err(net)?;
                             let conn = runtime
                                 .block_on(node.connect(EndpointAddr::new(endpoint)))
-                                .map_err(net)?;
+                                .map_err(|error| {
+                                    unreachable = true;
+                                    net(error)
+                                })?;
                             let hello = json!({"op":"hello","vault":vault(&app)?,"target":peer["remoteVault"],"members":members(&app)});
                             let reply = runtime
                                 .block_on(lof_realtime::request(&conn, Message::json(hello)))
@@ -1083,10 +1087,15 @@ pub fn start(app: &AppHandle) {
                             retry.remove(&id);
                         }
                         Err(error) => {
-                            rt.statuses.lock().unwrap().insert(
-                                id.clone(),
-                                json!({"phase":"error","message":error.message}),
-                            );
+                            let mut statuses = rt.statuses.lock().unwrap();
+                            let status = if unreachable {
+                                let last = statuses.get(&id).map(|s| s["lastSync"].clone());
+                                json!({"phase":"offline","lastSync":last.unwrap_or(Value::Null)})
+                            } else {
+                                json!({"phase":"error","message":error.message})
+                            };
+                            statuses.insert(id.clone(), status);
+                            drop(statuses);
                             if let Some((conn, _)) = connected.remove(&id) {
                                 conn.close(1u8.into(), b"retry");
                             }

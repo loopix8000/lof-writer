@@ -17,7 +17,7 @@ const tabs = [
 const copied = "페어링 코드를 복사했습니다.";
 const groupLabel = (id: string) => id.slice(0, 8).toUpperCase().replace(/(.{4})/, "$1-");
 type Tab = typeof tabs[number]["id"];
-const labels: Record<string, string> = { connecting: "연결 중", connected: "연결됨", syncing: "동기화 중", error: "재연결 대기" };
+const labels: Record<string, string> = { connecting: "연결 중", connected: "연결됨", syncing: "동기화 중", offline: "오프라인", error: "재연결 대기" };
 const problem = (error: unknown): Problem => ({ message: error instanceof Error ? error.message : String(error), code: (error as { code?: string })?.code });
 const time = (seconds: number) => `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
 

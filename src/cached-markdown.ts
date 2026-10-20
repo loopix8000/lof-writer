@@ -2,24 +2,24 @@ import { Node, type Editor, type JSONContent } from "@tiptap/core";
 import type { Node as PMNode } from "@tiptap/pm/model";
 import { Markdown, MarkdownManager } from "@tiptap/markdown";
 import { Marked, type marked } from "marked";
+import { decodeHTMLStrict } from "entities";
 import { changedBlocks } from "./doc-index";
 
 const originalParse = MarkdownManager.prototype.parse;
+// 주석을 가렸다가 글자로 되돌려 HTML 처리나 Markdown 구분선·목록으로 바뀌지 않게 한다.
 MarkdownManager.prototype.parse = function (markdown: string): JSONContent {
-  if (typeof markdown !== "string" || (!markdown.includes("/*") && !markdown.includes("*/"))) {
+  if (typeof markdown !== "string" || (!markdown.includes("<!--") && !markdown.includes("-->"))) {
     return originalParse.call(this, markdown);
   }
   const saved: string[] = [];
-  const maskLine = (line: string) => {
-    if (!line.trim()) return line;
-    const idx = saved.length;
-    saved.push(line);
-    return `\uE000JSDOC${idx}\uE001`;
+  const mask = (text: string) => {
+    if (!text.trim()) return text;
+    saved.push(text);
+    return `\uE000JSDOC${saved.length - 1}\uE001`;
   };
   const masked = markdown
-    .replace(/\/\*[\s\S]*?\*\//g, (comment) => comment.split("\n").map(maskLine).join("\n"))
-    .replace(/\/\*+|\*+\//g, (delim) => maskLine(delim));
-  if (!saved.length) return originalParse.call(this, markdown);
+    .replace(/<!--[\s\S]*?(?:-->|$)/g, (comment) => comment.split("\n").map(mask).join("\n"))
+    .replace(/-->/g, mask);
   const doc = originalParse.call(this, masked);
   const restore = (node: JSONContent) => {
     if (typeof node.text === "string" && node.text.includes("\uE000JSDOC")) {
@@ -31,21 +31,16 @@ MarkdownManager.prototype.parse = function (markdown: string): JSONContent {
   return doc;
 };
 
-// 주석(/* */) 안의 기호는 Markdown 이스케이프 없이 그대로 둔다.
+// 주석은 원문으로 읽으므로 직렬화가 붙인 문자 참조와 Markdown 이스케이프를 함께 푼다.
 function unescapeComments(markdown: string) {
-  return markdown.includes("\\*")
+  return markdown.includes("&lt;!--") || markdown.includes("--&gt;")
     ? markdown
-        .replace(/\/\\\*[\s\S]*?\\\*\//g, (match) => match.replace(/\\([\\`*_[\]~])/g, "$1"))
-        .replace(/\/(\\\*)+/g, (match) => match.replace(/\\\*/g, "*"))
-        .replace(/(\\\*)+\//g, (match) => match.replace(/\\\*/g, "*"))
+        .replace(/&lt;!--[\s\S]*?(?:--&gt;|$)/g, (comment) => decodeHTMLStrict(comment).replace(/\\([\\`*_[\]~])/g, "$1"))
+        .replaceAll("--&gt;", "-->")
     : markdown;
 }
-// 블록 끝까지 닫히지 않은 주석 열기가 남는지. 남으면 위 치환이 다음 블록까지 이어지므로 원고 전체를 한 번에 푼다.
 function dangles(markdown: string) {
-  if (!markdown.includes("/\\*")) return false;
-  let end = 0;
-  for (const match of markdown.matchAll(/\/\\\*[\s\S]*?\\\*\//g)) end = (match.index ?? 0) + match[0].length;
-  return markdown.includes("/\\*", end);
+  return markdown.includes("&lt;!--") && markdown.replace(/&lt;!--[\s\S]*?--&gt;/g, "").includes("&lt;!--");
 }
 // 기본 직렬화의 빈 원고 판정과 같은 기준. 블록 사이 구분은 공백이므로 모든 블록이 비었을 때만 원고가 빈다.
 const isBlank = (markdown: string) => markdown.replace(/&nbsp;/g, "").replace(/ /g, "").trim() === "";

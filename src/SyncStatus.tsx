@@ -1,4 +1,4 @@
-import { Cloud, CloudAlert, CloudUpload, FolderSync } from "lucide-react";
+import { Cloud, CloudUpload, FolderSync } from "lucide-react";
 import type { AutoSyncStatus } from "./types";
 
 const fileLabels = {
@@ -10,9 +10,9 @@ const fileLabels = {
 
 const realtimeLabels = {
   idle: "동기화 완료",
-  pending: "연결 및 동기화 대기",
+  pending: "연결된 장치 없음",
   syncing: "동기화 중",
-  error: "재연결 대기",
+  error: "연결된 장치 없음",
 };
 
 export default function SyncStatus({
@@ -34,16 +34,14 @@ export default function SyncStatus({
   );
   if (!showRealtime && !showFiles) return null;
 
-  const RealtimeIcon =
-    realtime?.phase === "error"
-      ? CloudAlert
-      : realtime?.phase === "syncing"
-        ? CloudUpload
-        : Cloud;
+  // 집필화면에서는 오류를 따로 드러내지 않고 재시도 대기로만 보여준다.
+  const visible = (phase: AutoSyncStatus["phase"]) => (phase === "error" ? "pending" : phase);
+  const detail = (progress: { phase: AutoSyncStatus["phase"]; message: string }) =>
+    progress.phase !== "error" && progress.message ? ` · ${progress.message}` : "";
+
+  const RealtimeIcon = realtime?.phase === "syncing" ? CloudUpload : Cloud;
   const realtimeLabel = realtime ? realtimeLabels[realtime.phase] : "";
-  const realtimeDesc = realtime
-    ? `실시간 동기화 · ${realtimeLabel}${realtime.message ? ` · ${realtime.message}` : ""}`
-    : "";
+  const realtimeDesc = realtime ? `실시간 동기화 · ${realtimeLabel}${detail(realtime)}` : "";
 
   const fileLabel =
     files && checking && files.phase === "idle"
@@ -51,15 +49,13 @@ export default function SyncStatus({
       : files
         ? fileLabels[files.phase]
         : "";
-  const fileDesc = files
-    ? `파일 동기화 · ${fileLabel}${files.message ? ` · ${files.message}` : ""}`
-    : "";
+  const fileDesc = files ? `파일 동기화 · ${fileLabel}${detail(files)}` : "";
 
   return (
     <>
       {showRealtime && realtime && (
         <span
-          className={`auto-sync-status realtime ${realtime.phase}${editing ? " editing" : ""}`}
+          className={`auto-sync-status realtime ${realtime.phase === "idle" || realtime.phase === "syncing" ? realtime.phase : "disconnected"}${editing ? " editing" : ""}`}
           role="status"
           aria-live="off"
           aria-label={realtimeDesc}
@@ -70,7 +66,7 @@ export default function SyncStatus({
       )}
       {showFiles && files && (
         <span
-          className={`auto-sync-status files ${files.phase}${editing ? " editing" : ""}`}
+          className={`auto-sync-status files ${visible(files.phase)}${editing ? " editing" : ""}`}
           role="status"
           aria-live="off"
           aria-label={fileDesc}

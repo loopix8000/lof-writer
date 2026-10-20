@@ -31,9 +31,9 @@ export function textCounts(raw: string, rules: WritingRules): ManuscriptCounts {
   };
 }
 function hasUnclosedComment(text: string): boolean {
-  if (!text.includes("/*") && !text.includes("*/")) return false;
-  const rest = text.replace(/\/\*[\s\S]*?\*\//g, "");
-  return rest.includes("/*") || rest.includes("*/");
+  if (!text.includes("<!--") && !text.includes("-->")) return false;
+  const rest = text.replace(/<!--[\s\S]*?-->/g, "");
+  return rest.includes("<!--") || rest.includes("-->");
 }
 function blockCounts(node: PMNode, rules: WritingRules): ManuscriptCounts {
   const raw = node.textBetween(0, node.content.size, "\n", (leaf) => leaf.type.name === "hardBreak" ? "\n" : "");

@@ -98,7 +98,7 @@ export function useManuscriptCounts({ scope, id, body, rules, onBaseline, onErro
     target.body = nextBody; target.sequence++;
     target.changes.push({ sequence: target.sequence, delta: delta ?? null });
     if (target.stats && delta) target.stats = addCounts(target.stats, delta);
-    redraw(value => value + 1);
+    // 화면은 따로 그리지 않는다. 같은 입력으로 바뀐 본문이 화면에 반영될 때 새 카운트도 함께 보인다.
   }, []);
   return { stats: current.current?.stats ?? null, update };
 }

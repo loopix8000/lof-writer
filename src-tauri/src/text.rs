@@ -256,7 +256,7 @@ fn parse_html_tag(chars: &[char], start: usize) -> Option<(String, usize)> {
 }
 
 pub fn strip_jsdoc_comments(markdown: &str) -> String {
-    if markdown.is_empty() || !markdown.contains("/*") {
+    if markdown.is_empty() || !markdown.contains("<!--") {
         return markdown.to_string();
     }
     const MARKER: &str = "\u{E002}";
@@ -266,7 +266,7 @@ pub fn strip_jsdoc_comments(markdown: &str) -> String {
         Regex::new(r"(?ms)^[ \t]*(?:```|~~~)[^\n]*\n.*?(?:^[ \t]*(?:```|~~~)[^\n]*$|\z)").unwrap()
     });
     static COMMENT_RE: OnceLock<Regex> = OnceLock::new();
-    let comment_re = COMMENT_RE.get_or_init(|| Regex::new(r"(?s)/\*.*?\*/").unwrap());
+    let comment_re = COMMENT_RE.get_or_init(|| Regex::new(r"(?s)<!--.*?-->").unwrap());
 
     let mut marked = String::with_capacity(normalized.len());
     let mut last_idx = 0;

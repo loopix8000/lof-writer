@@ -49,7 +49,6 @@
 .auto-sync-status.idle.editing, .save-status-group:has(.pending) .auto-sync-status.idle { color: var(--muted); }
 .auto-sync-status.pending { color: var(--warning-text); opacity: 0.85; }
 .auto-sync-status.syncing { color: var(--accent); animation: sync-pulse 1.2s ease-in-out infinite; }
-.auto-sync-status.error { color: var(--danger-text); }
 @keyframes sync-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.45; }
@@ -1800,11 +1799,8 @@ body.sidebar-resizing * {
 .tiptap .jsdoc-comment,
 .source-editor .jsdoc-comment {
   color: var(--comment-text, #6a9955);
-  background: var(--comment-bg, #6a995514);
-  font-style: italic;
-  border-radius: 3px;
-  padding: 1px 2px;
 }
+.source-editor .cm-line.comment-line { line-height: 1.3; }
 .editor-footer {
   height: 32px;
   min-height: 32px;
@@ -4893,6 +4889,16 @@ input.property-text {
 
 .manual-break .tiptap p {
   margin: 0;
+}
+
+/* 첫 줄과 닫는 줄을 포함해 주석 문단은 조판의 줄간격과 문단 여백을 쓰지 않는다. */
+.editor-content .tiptap p.comment-line {
+  line-height: 1.3;
+  margin: 0;
+}
+/* 주석 다음 본문에도 앞쪽 본문과 같은 문단 여백을 둔다. */
+.editor-content .tiptap p.comment-line + p:not(.comment-line) {
+  margin-top: var(--editor-block-gap, 1.05em);
 }
 
 .tiptap [data-br-indent] {

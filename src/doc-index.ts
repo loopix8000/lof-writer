@@ -14,9 +14,9 @@ export type DocIndex = {
   starts: Int32Array;
   // 블록 i 앞까지의 줄 수.
   lines: Int32Array;
-  // 블록 i에 들어설 때 닫히지 않은 주석(/*)이 열려 있는지.
+  // 블록 i에 들어설 때 닫히지 않은 주석(<!--)이 열려 있는지.
   open: Uint8Array;
-  // 블록 i 앞에 짝 없는 주석 닫기(*/)가 있었는지.
+  // 블록 i 앞에 짝 없는 주석 닫기(-->)가 있었는지.
   stray: Uint8Array;
   // 원문 보관이 필요한 블록 수.
   copies: number;
@@ -78,30 +78,32 @@ export function eachTextblock(block: PMNode, pos: number, f: (node: PMNode, pos:
   });
 }
 
-// 주석 기호를 앞에서부터 짝짓는다(/\*[\s\S]*?\*\/ 정규식과 같은 짝). 주석이 걸친 구간마다 piece를 부르고,
-// 닫기(*/)로 끝난 구간이면 closed가 참이다.
+export const COMMENT_OPEN = "<!--", COMMENT_CLOSE = "-->";
+
+// 주석 기호를 앞에서부터 짝짓는다(/<!--[\s\S]*?-->/ 정규식과 같은 짝). 주석이 걸친 구간마다 piece를 부르고,
+// 닫기(-->)로 끝난 구간이면 closed가 참이다.
 export function scanComments(text: string, state: CommentState, piece?: (from: number, to: number, closed: boolean) => void) {
   let cursor = 0, start = 0;
   for (;;) {
     if (!state.open) {
-      const open = text.indexOf("/*", cursor);
+      const open = text.indexOf(COMMENT_OPEN, cursor);
       if (!state.stray) {
-        const close = text.indexOf("*/", cursor);
+        const close = text.indexOf(COMMENT_CLOSE, cursor);
         if (close >= 0 && (open < 0 || close < open)) state.stray = true;
       }
       if (open < 0) return;
       state.open = true;
       start = open;
-      cursor = open + 2;
+      cursor = open + COMMENT_OPEN.length;
     } else {
-      const close = text.indexOf("*/", cursor);
+      const close = text.indexOf(COMMENT_CLOSE, cursor);
       if (close < 0) {
         piece?.(start, text.length, false);
         return;
       }
-      piece?.(start, close + 2, true);
+      piece?.(start, close + COMMENT_CLOSE.length, true);
       state.open = false;
-      cursor = close + 2;
+      cursor = close + COMMENT_CLOSE.length;
     }
   }
 }
@@ -122,7 +124,7 @@ export function blockInfo(node: PMNode): BlockInfo {
       lines: nodeLineCount(node),
       copy: needsMarkdownCopy(node),
       breaks,
-      tokens: text.includes("/*") || text.includes("*/"),
+      tokens: text.includes(COMMENT_OPEN) || text.includes(COMMENT_CLOSE),
       exits: [],
     };
     infos.set(node, info);

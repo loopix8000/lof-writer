@@ -85,6 +85,20 @@ export function typingPlan(before, selected, after, input, options = {}) {
   const slashes = before.match(/\\+$/)?.[0].length || 0;
   const escaped = slashes % 2 === 1;
 
+  // 주석 기호(<!-- -->)는 줄표·화살표 대치어보다 먼저 처리한다.
+  if (!selected) {
+    if (input === "-" && before.endsWith("<!"))
+      return { deleteBefore: 0, deleteAfter: 0, insert: "-", caret: 1 };
+    // 주석 열기를 입력하면 닫기를 함께 넣는다. 주석 안에서는 바깥 주석이 일찍 닫히지 않게 생략한다.
+    if (input === "-" && before.endsWith("<!-")) {
+      const pair = !opts.inComment && opts.autoCloseBrackets !== false && !after.startsWith("-->");
+      return { deleteBefore: 0, deleteAfter: 0, insert: pair ? "-  -->" : "-", caret: pair ? 2 : 1 };
+    }
+    // 주석 닫기는 사용자 대치어보다 먼저 처리한다.
+    if (input === ">" && before.endsWith("--"))
+      return { deleteBefore: 0, deleteAfter: 0, insert: ">", caret: 1 };
+  }
+
   // 1) 스마트 괄호 업그레이드: 빈 (), [], {} 안에서 같은 여는 괄호를 한 번 더 누르면 겹화살괄호·낫표 등으로 전환
   if (
     !selected &&
@@ -108,7 +122,7 @@ export function typingPlan(before, selected, after, input, options = {}) {
   }
 
   // 2) 사용자 대치어 규칙 (괄호·기호 자동 완성보다 우선 적용)
-  if (!selected && !escaped && opts.autoSymbolReplacement !== false) {
+  if (!selected && !escaped && !opts.inComment && opts.autoSymbolReplacement !== false) {
     const rules = normalizeTextReplacements(opts.textReplacements)
       .filter((r) => r.enabled && r.from.length > 0 && r.from !== r.to)
       .sort((a, b) => b.from.length - a.from.length);
@@ -192,6 +206,24 @@ export function pairedBackspace(before, after, options = {}) {
   // At a line end `after` is empty; only delete when a real closer follows.
   const close = before ? pairs[before.at(-1)] : undefined;
   return !!close && after.startsWith(close);
+}
+
+const COMMENT_OPEN = "<!--";
+const COMMENT_CLOSE = "-->";
+
+// 빈 주석의 가운데에서 지우면 자동으로 넣은 공백과 닫기도 함께 지운다.
+export function commentBackspace(before, after, options = {}) {
+  const opts = { ...defaultTyping, ...options };
+  if (opts.composing || opts.inCode || opts.autoCloseBrackets === false) return false;
+  return (before.endsWith(COMMENT_OPEN) && after.startsWith(COMMENT_CLOSE)) ||
+    (before.endsWith(`${COMMENT_OPEN} `) && after.startsWith(` ${COMMENT_CLOSE}`));
+}
+
+// 주석 짝 사이(<!-- | -->)에서 줄을 바꾸는지.
+export function commentPairEnter(before, after, options = {}) {
+  const opts = { ...defaultTyping, ...options };
+  if (opts.composing || opts.inCode) return false;
+  return /<!--[ \t]*$/.test(before) && /^[ \t]*-->/.test(after);
 }
 
 const QUOTE_CLOSERS = new Set(['"', "'", "”", "’", "」", "』"]);

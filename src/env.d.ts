@@ -47,6 +47,8 @@ declare module "*.mjs" {
     after: string,
     options?: Record<string, any>,
   ): boolean;
+  export function commentBackspace(before: string, after: string, options?: Record<string, any>): boolean;
+  export function commentPairEnter(before: string, after: string, options?: Record<string, any>): boolean;
   export function smartClosingEnter(
     before: string,
     after: string,

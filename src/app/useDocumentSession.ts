@@ -93,10 +93,27 @@ export function useDocumentSession(options: Options) {
   const report = useCallback((error: any) => latest.current.report(error), []);
   const message = useCallback((text: string) => latest.current.message(text), []);
   const pinTab = (id: string) => latest.current.pinTab(id);
+  // 본문 입력은 앱 화면 갱신을 잠깐 모아서 한다(키를 누르고 있으면 초당 수십 번 들어온다).
+  // 그동안 다른 이유로 화면을 그려도 pendingActive로 최신 원고를 보여 준다.
+  const pendingActive = useRef<Doc | null>(null);
+  const renderTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const setActive = useCallback((doc: Doc | null) => {
+    if (renderTimer.current) clearTimeout(renderTimer.current);
+    renderTimer.current = null;
+    pendingActive.current = null;
     if (doc) latest.current.retainDocument(doc);
     setActiveState(doc);
   }, []);
+  const setActiveSoon = useCallback((doc: Doc) => {
+    pendingActive.current = doc;
+    latest.current.retainDocument(doc);
+    renderTimer.current ??= setTimeout(() => {
+      renderTimer.current = null;
+      if (pendingActive.current) setActive(pendingActive.current);
+    }, 80);
+  }, [setActive]);
+  useEffect(() => () => { if (renderTimer.current) clearTimeout(renderTimer.current); }, []);
+  const shownActive = pendingActive.current ?? active;
 
   const autoSaveCondition = useCallback((d: DraftState) => {
     const maxMinutes = Math.max(1, Number(latest.current.prefs?.historyMaxMinutes ?? 1));
@@ -319,8 +336,8 @@ export function useDocumentSession(options: Options) {
     return !composing.current;
   }, report);
   const checkOpenDocument = useSyncFileUpdates({
-    fileKey: active?.id ?? "",
-    enabled: options.loaded && !!active,
+    fileKey: shownActive?.id ?? "",
+    enabled: options.loaded && !!shownActive,
     canCheck: () => latest.current.visible && !composing.current && !latest.current.pendingDocumentMove(),
     current: () => {
       const d = draft.current;
@@ -391,7 +408,10 @@ export function useDocumentSession(options: Options) {
     d.seq++;
     d.edited = true;
     pinTab(d.doc.id);
-    setActive(cloneDocument(d.doc));
+    // 제목 같은 입력란은 바로 그려야 커서가 튀지 않는다. 본문은 편집기가 직접 그리므로 앱 화면 갱신을 모은다.
+    const bodyOnly = Object.keys(patch).every((key) => key === "body");
+    if (bodyOnly) setActiveSoon(cloneDocument(d.doc));
+    else setActive(cloneDocument(d.doc));
     setSaveStatus("편집 중");
     scheduleDraftSave();
     scheduleAutoSave();
@@ -400,7 +420,8 @@ export function useDocumentSession(options: Options) {
     gitActivity();
     composing.current = value;
     if (!value) {
-      persistDraftNow();
+      // 한글은 글자마다 조합이 끝나므로, 바로 저장하지 않고 일반 입력처럼 입력이 멈춘 뒤 임시 저장한다.
+      scheduleDraftSave();
       scheduleAutoSave();
     }
   }
@@ -584,7 +605,7 @@ export function useDocumentSession(options: Options) {
   }
 
   return {
-    active, saveStatus, conflict, scrollPositions: scrollPositions.current,
+    active: shownActive, saveStatus, conflict, scrollPositions: scrollPositions.current,
     currentId, currentDocument, waitForSave, flush, flushForClose, manualSave, prepareForInstall,
     edit, composition, checkOpenDocument, reconcileDocuments, commitDocument,
     discardDraft, detachDocument, closeDocument, resetVault, replaceDocId, writeMeta,

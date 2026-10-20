@@ -4,14 +4,15 @@ import { Decoration, DecorationSet, type EditorView } from "@tiptap/pm/view";
 import { closeHistory } from "@tiptap/pm/history";
 import type { Node as PMNode } from "@tiptap/pm/model";
 import {
-  blockInfo, blockMapping, changedBlocks, commentStateAt, docIndex, eachTextblock, isHardBreak, scanComments, textPos, textblockText,
+  COMMENT_CLOSE, COMMENT_OPEN, blockInfo, blockMapping, changedBlocks, commentStateAt, docIndex, eachTextblock, isHardBreak, scanComments, textPos, textblockText,
 } from "./doc-index";
-import { typingPlan, pairedBackspace, smartClosingEnter } from "../core/typing.mjs";
+import { typingPlan, pairedBackspace, commentBackspace, commentPairEnter, smartClosingEnter } from "../core/typing.mjs";
 
 export const typesettingPluginKey = new PluginKey<DecorationSet>("lofTypesetting");
 const commentPluginKey = new PluginKey<DecorationSet>("lofJsdocComments");
 
-// 주석 장식. 닫히지 않은 주석(/* 뒤에 */가 없는 부분)은 칠하지 않는다.
+// 주석 장식. 닫히지 않은 주석(<!-- 뒤에 -->가 없는 부분)은 칠하지 않는다.
+// 주석만 있는 문단에는 조판 줄간격 대신 촘촘한 간격을 쓰도록 문단 장식을 붙인다.
 function commentDecorations(doc: PMNode): DecorationSet {
   if (!docIndex(doc).tokens) return DecorationSet.empty;
   const decorations: Decoration[] = [];
@@ -20,7 +21,13 @@ function commentDecorations(doc: PMNode): DecorationSet {
   doc.forEach((block, offset) => {
     if (!state.open && !blockInfo(block).tokens) return;
     eachTextblock(block, offset, (node, pos) => {
-      scanComments(textblockText(node), state, (from, to, closed) => {
+      const text = textblockText(node);
+      // 주석이 걸쳐 있고, 주석 밖에 남은 글이 공백뿐인지.
+      let seen = false, outside = "", last = 0;
+      scanComments(text, state, (from, to, closed) => {
+        seen = true;
+        outside += text.slice(last, from);
+        last = to;
         if (to > from) {
           const start = textPos(node, pos, from), end = textPos(node, pos, to);
           if (end > start) pending.push(Decoration.inline(start, end, { class: "jsdoc-comment" }));
@@ -30,6 +37,9 @@ function commentDecorations(doc: PMNode): DecorationSet {
           pending = [];
         }
       });
+      outside += text.slice(last);
+      if (seen && !outside.trim() && node.type.name === "paragraph")
+        (state.open ? pending : decorations).push(Decoration.node(pos, pos + node.nodeSize, { class: "comment-line" }));
     });
   });
   return decorations.length ? DecorationSet.create(doc, decorations) : DecorationSet.empty;
@@ -111,8 +121,8 @@ function findEnclosingBlockComment(state: EditorState): { from: number; to: numb
   });
   if (from === blockPos + $from.parent.nodeSize - 1) charOffset = text.length;
   charToPos.push(blockPos + $from.parent.nodeSize - 1);
-  if (!text.includes("/*")) return null;
-  for (const match of text.matchAll(/\/\*[\s\S]*?\*\//g)) {
+  if (!text.includes(COMMENT_OPEN)) return null;
+  for (const match of text.matchAll(/<!--[\s\S]*?-->/g)) {
     const mStart = match.index ?? 0;
     const mEnd = mStart + match[0].length;
     if (mStart <= charOffset && charOffset <= mEnd) {
@@ -131,7 +141,7 @@ export function isInsideJsdocComment(state: EditorState): boolean {
   const { from, to } = state.selection;
   if (from !== to) {
     const selected = state.doc.textBetween(from, to, "\n");
-    if (/^\s*\/\*[\s\S]*\*\/\s*$/.test(selected)) return true;
+    if (/^\s*<!--[\s\S]*-->\s*$/.test(selected)) return true;
   }
   return !!findEnclosingBlockComment(state) || hasUnclosedCommentBefore(state.doc, from);
 }
@@ -145,8 +155,8 @@ export function toggleJsdocComment(view: EditorView): boolean {
   if (from === to) {
     const enclosing = findEnclosingBlockComment(state);
     if (enclosing) {
-      const openLen = enclosing.raw.match(/^\/\*+\s?/)?.[0].length ?? 2;
-      const closeLen = enclosing.raw.match(/\s?\*+\/$/)?.[0].length ?? 2;
+      const openLen = enclosing.raw.match(/^<!--\s?/)?.[0].length ?? COMMENT_OPEN.length;
+      const closeLen = enclosing.raw.match(/\s?-->$/)?.[0].length ?? COMMENT_CLOSE.length;
       const inner = enclosing.raw.slice(openLen, Math.max(openLen, enclosing.raw.length - closeLen));
       tr = tr.insertText(inner, enclosing.from, enclosing.to);
       const nextCursor = enclosing.from + Math.max(0, Math.min(inner.length, enclosing.cursorOffset - openLen));
@@ -155,16 +165,16 @@ export function toggleJsdocComment(view: EditorView): boolean {
       view.focus();
       return true;
     }
-    tr = tr.insertText("/**  */", from, to);
-    tr = tr.setSelection(TextSelection.create(tr.doc, from + 4));
+    tr = tr.insertText(`${COMMENT_OPEN}  ${COMMENT_CLOSE}`, from, to);
+    tr = tr.setSelection(TextSelection.create(tr.doc, from + COMMENT_OPEN.length + 1));
     view.dispatch(tr.scrollIntoView());
     view.focus();
     return true;
   }
 
   const selected = state.doc.textBetween(from, to, "\n");
-  if (/^\s*\/\*[\s\S]*\*\/\s*$/.test(selected)) {
-    const unwrapped = selected.replace(/^(\s*)\/\*+\s?/, "$1").replace(/\s?\*+\/(\s*)$/, "$1");
+  if (/^\s*<!--[\s\S]*-->\s*$/.test(selected)) {
+    const unwrapped = selected.replace(/^(\s*)<!--\s?/, "$1").replace(/\s?-->(\s*)$/, "$1");
     tr = tr.insertText(unwrapped, from, to);
     tr = tr.setSelection(TextSelection.create(tr.doc, from, from + unwrapped.length));
     view.dispatch(tr.scrollIntoView());
@@ -172,8 +182,9 @@ export function toggleJsdocComment(view: EditorView): boolean {
     return true;
   }
 
-  tr = tr.insertText(" */", to).insertText("/** ", from);
-  tr = tr.setSelection(TextSelection.create(tr.doc, from + 4, to + 4));
+  const open = `${COMMENT_OPEN} `;
+  tr = tr.insertText(` ${COMMENT_CLOSE}`, to).insertText(open, from);
+  tr = tr.setSelection(TextSelection.create(tr.doc, from + open.length, to + open.length));
   view.dispatch(tr.scrollIntoView());
   view.focus();
   return true;
@@ -210,6 +221,7 @@ export const TypingAssist = Extension.create<{
             const opts: Record<string, any> = {
               ...getOptions(),
               composing: view.composing,
+              inComment,
               inCode:
                 !!resolved.parent.type.spec.code ||
                 resolved.marks().some((m) => m.type.name === "code"),
@@ -226,7 +238,7 @@ export const TypingAssist = Extension.create<{
                   view.state.doc.resolve(to).parent.content.size,
                   "\n",
                 );
-            // JSDoc 블록 주석 안에서 줄 시작에 '* '를 입력할 때 글머리 목록으로 바뀌지 않게 한다.
+            // 주석 안에서 줄 시작에 '* '를 입력할 때 글머리 목록으로 바뀌지 않게 한다.
             if (inComment && text === " " && from === to && /^\s*\*+$/.test(before)) {
               const tr = closeHistory(view.state.tr).insertText(" ", from, to);
               view.dispatch(tr.scrollIntoView());
@@ -264,7 +276,12 @@ export const TypingAssist = Extension.create<{
             }
             const selected = view.state.doc.textBetween(from, to, "\n");
             const plan = typingPlan(before, selected, after, text, opts);
-            if (!plan) return false;
+            if (!plan) {
+              // 주석에서는 Markdown 목록·구분선 입력 규칙도 실행하지 않는다.
+              if (!inComment || opts.composing || opts.inCode) return false;
+              view.dispatch(view.state.tr.insertText(text, from, to).scrollIntoView());
+              return true;
+            }
             let tr = closeHistory(view.state.tr);
             if (plan.skip)
               tr = tr.setSelection(
@@ -325,6 +342,20 @@ export const TypingAssist = Extension.create<{
               $from.parentOffset,
               $from.parent.content.size,
             );
+            // 주석 짝 사이에서 공백을 정리하고 세 문단으로 나눈 뒤 가운데 줄로 옮긴다.
+            if (
+              event.key === "Enter" &&
+              $from.depth === 1 &&
+              $from.parent.type.name === "paragraph" &&
+              commentPairEnter(before, after, opts)
+            ) {
+              const start = position - (before.match(/[ \t]*$/)?.[0].length ?? 0);
+              const end = position + (after.match(/^[ \t]*/)?.[0].length ?? 0);
+              let tr = closeHistory(view.state.tr).delete(start, end).split(start).split(start + 2);
+              tr = tr.setSelection(TextSelection.create(tr.doc, start + 2));
+              view.dispatch(tr.scrollIntoView());
+              return true;
+            }
             if (
               event.key === "Enter" &&
               $from.parent.type.name === "paragraph" &&
@@ -338,9 +369,12 @@ export const TypingAssist = Extension.create<{
               return true;
             }
             if (event.key !== "Backspace") return false;
-            if (!pairedBackspace(before, after, opts)) return false;
+            const commentPair = commentBackspace(before, after, opts);
+            const padding = commentPair && before.endsWith(`${COMMENT_OPEN} `) ? 1 : 0;
+            const closer = commentPair ? COMMENT_CLOSE.length + padding : pairedBackspace(before, after, opts) ? 1 : 0;
+            if (!closer) return false;
             view.dispatch(
-              closeHistory(view.state.tr).delete(position - 1, position + 1),
+              closeHistory(view.state.tr).delete(position - 1 - padding, position + closer),
             );
             return true;
           },

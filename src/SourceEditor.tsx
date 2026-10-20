@@ -1,12 +1,13 @@
 import { forwardRef, useImperativeHandle, useLayoutEffect, useRef } from "react";
-import { Annotation, Compartment, EditorState, StateEffect, StateField, Transaction } from "@codemirror/state";
+import { Annotation, Compartment, EditorState, Prec, StateEffect, StateField, Transaction } from "@codemirror/state";
 import { Decoration, EditorView, keymap, type DecorationSet, type ViewUpdate } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { markdown } from "@codemirror/lang-markdown";
 import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
 import { GFM } from "@lezer/markdown";
 import { plainText } from "../core/text.mjs";
-import { pairedBackspace, typingPlan } from "../core/typing.mjs";
+import { commentBackspace, commentPairEnter, pairedBackspace, typingPlan } from "../core/typing.mjs";
+import { COMMENT_CLOSE, COMMENT_OPEN, scanComments } from "./doc-index";
 import { markdownImage } from "./image-extension";
 import { textCounts, type ManuscriptCounts } from "./manuscript-counts";
 import type { WritingRules } from "./types";
@@ -33,18 +34,25 @@ const findHighlights = StateField.define<DecorationSet>({
 
 function buildJsdocDecorations(state: EditorState): DecorationSet {
   const text = state.doc.toString();
-  if (!text.includes("/*")) return Decoration.none;
+  if (!text.includes(COMMENT_OPEN)) return Decoration.none;
   const marks = [];
-  for (const match of text.matchAll(/\/\*[\s\S]*?\*\//g)) {
+  const lines = new Set<number>();
+  for (const match of text.matchAll(/<!--[\s\S]*?-->/g)) {
     const from = match.index ?? 0;
     const to = from + match[0].length;
     if (to > from) marks.push(Decoration.mark({ class: "jsdoc-comment" }).range(from, to));
+    for (let number = state.doc.lineAt(from).number; number <= state.doc.lineAt(to).number; number++) {
+      const line = state.doc.line(number);
+      const outside = text.slice(line.from, Math.max(line.from, from)) + text.slice(Math.min(line.to, to), line.to);
+      if (!outside.trim()) lines.add(line.from);
+    }
   }
+  for (const from of lines) marks.push(Decoration.line({ class: "comment-line" }).range(from));
   return marks.length ? Decoration.set(marks, true) : Decoration.none;
 }
 
-const hasCommentToken = (text: string) => text.includes("/*") || text.includes("*/");
-// 바뀐 줄(바뀌기 전과 후)에 주석 기호가 있는지. 기호는 두 글자가 한 줄에 붙어 있어야 하므로 바뀐 줄만 보면 된다.
+const hasCommentToken = (text: string) => text.includes(COMMENT_OPEN) || text.includes(COMMENT_CLOSE);
+// 기호는 한 줄에 붙어 있어야 하므로 바뀐 줄만 보면 된다.
 function touchesCommentToken(tr: Transaction) {
   let found = false;
   tr.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
@@ -56,13 +64,18 @@ function touchesCommentToken(tr: Transaction) {
   return found;
 }
 
-// 주석 장식과, 원문 어딘가에 주석 열기(/*)가 있는지. 주석 기호와 무관한 입력은 위치만 옮긴다.
+// 주석 장식과, 원문 어딘가에 주석 열기가 있는지. 주석 밖의 입력은 위치만 옮긴다.
 const jsdocHighlights = StateField.define<{ marks: DecorationSet; open: boolean }>({
-  create: (state) => ({ marks: buildJsdocDecorations(state), open: state.doc.toString().includes("/*") }),
+  create: (state) => ({ marks: buildJsdocDecorations(state), open: state.doc.toString().includes(COMMENT_OPEN) }),
   update(value, tr) {
     if (!tr.docChanged) return value;
-    if (!touchesCommentToken(tr)) return { marks: value.marks.map(tr.changes), open: value.open };
-    return { marks: buildJsdocDecorations(tr.state), open: tr.newDoc.toString().includes("/*") };
+    let inside = false;
+    tr.changes.iterChangedRanges((from, to) => {
+      value.marks.between(tr.startState.doc.lineAt(from).from, tr.startState.doc.lineAt(to).to,
+        () => { inside = true; });
+    });
+    if (!inside && !touchesCommentToken(tr)) return { marks: value.marks.map(tr.changes), open: value.open };
+    return { marks: buildJsdocDecorations(tr.state), open: tr.newDoc.toString().includes(COMMENT_OPEN) };
   },
   provide: (field) => EditorView.decorations.from(field, (value) => value.marks),
 });
@@ -72,14 +85,14 @@ function toggleSourceJsdocComment(view: EditorView): boolean {
   const { from, to } = view.state.selection.main;
   const text = view.state.doc.toString();
   if (from === to) {
-    if (text.includes("/*")) {
-      for (const match of text.matchAll(/\/\*[\s\S]*?\*\//g)) {
+    if (text.includes(COMMENT_OPEN)) {
+      for (const match of text.matchAll(/<!--[\s\S]*?-->/g)) {
         const mStart = match.index ?? 0;
         const mEnd = mStart + match[0].length;
         if (mStart <= from && from <= mEnd) {
           const raw = match[0];
-          const openLen = raw.match(/^\/\*+\s?/)?.[0].length ?? 2;
-          const closeLen = raw.match(/\s?\*+\/$/)?.[0].length ?? 2;
+          const openLen = raw.match(/^<!--\s?/)?.[0].length ?? COMMENT_OPEN.length;
+          const closeLen = raw.match(/\s?-->$/)?.[0].length ?? COMMENT_CLOSE.length;
           const inner = raw.slice(openLen, Math.max(openLen, raw.length - closeLen));
           const nextCursor = mStart + Math.max(0, Math.min(inner.length, from - mStart - openLen));
           view.dispatch({
@@ -93,16 +106,16 @@ function toggleSourceJsdocComment(view: EditorView): boolean {
       }
     }
     view.dispatch({
-      changes: { from, to, insert: "/**  */" },
-      selection: { anchor: from + 4 },
+      changes: { from, to, insert: `${COMMENT_OPEN}  ${COMMENT_CLOSE}` },
+      selection: { anchor: from + COMMENT_OPEN.length + 1 },
       scrollIntoView: true,
       annotations: Transaction.userEvent.of("input"),
     });
     return true;
   }
   const selected = view.state.sliceDoc(from, to);
-  if (/^\s*\/\*[\s\S]*\*\/\s*$/.test(selected)) {
-    const unwrapped = selected.replace(/^(\s*)\/\*+\s?/, "$1").replace(/\s?\*+\/(\s*)$/, "$1");
+  if (/^\s*<!--[\s\S]*-->\s*$/.test(selected)) {
+    const unwrapped = selected.replace(/^(\s*)<!--\s?/, "$1").replace(/\s?-->(\s*)$/, "$1");
     view.dispatch({
       changes: { from, to, insert: unwrapped },
       selection: { anchor: from, head: from + unwrapped.length },
@@ -111,10 +124,10 @@ function toggleSourceJsdocComment(view: EditorView): boolean {
     });
     return true;
   }
-  const wrapped = `/** ${selected} */`;
+  const wrapped = `${COMMENT_OPEN} ${selected} ${COMMENT_CLOSE}`;
   view.dispatch({
     changes: { from, to, insert: wrapped },
-    selection: { anchor: from + 4, head: to + 4 },
+    selection: { anchor: from + COMMENT_OPEN.length + 1, head: to + COMMENT_OPEN.length + 1 },
     scrollIntoView: true,
     annotations: Transaction.userEvent.of("input"),
   });
@@ -253,17 +266,27 @@ const SourceEditor = forwardRef<SourceEditorHandle, Props>(function SourceEditor
           if ((update.docChanged || update.selectionSet) && latest.current.visible && !latest.current.inactive)
             latest.current.onCursorLine?.(update.state.doc.lineAt(update.state.selection.main.head).number);
         }),
-        EditorView.domEventHandlers({
+        Prec.high(EditorView.domEventHandlers({
           paste(event) { return latest.current.editable && latest.current.onPasteImage(event, image => handle.current.insertImage(image)); },
           keydown(event, view) {
             if (!latest.current.editable || view.composing || event.isComposing || event.ctrlKey || event.metaKey || event.altKey ||
-                (event.key.length !== 1 && event.key !== "Backspace")) return false;
+                (event.key.length !== 1 && event.key !== "Backspace" && event.key !== "Enter")) return false;
             const { from, to } = view.state.selection.main, doc = view.state.doc;
             const beforeLine = doc.lineAt(from), afterLine = doc.lineAt(to);
             const before = doc.sliceString(beforeLine.from, from), after = doc.sliceString(to, afterLine.to);
-            const options = { ...latest.current.typingOptions, inCode: inCode(view.state) };
-            if (event.key === "Backspace" && from === to && pairedBackspace(before, after, options)) {
-              handle.current.replace(from - 1, to + 1, "", from - 1); return true;
+            const comment = { open: false, stray: false };
+            if (view.state.field(jsdocHighlights).open) scanComments(doc.sliceString(0, from), comment);
+            const options = { ...latest.current.typingOptions, inCode: inCode(view.state), inComment: comment.open };
+            if (event.key === "Enter" && !event.shiftKey && from === to && commentPairEnter(before, after, options)) {
+              const start = from - (before.match(/[ \t]*$/)?.[0].length ?? 0);
+              const end = to + (after.match(/^[ \t]*/)?.[0].length ?? 0);
+              handle.current.replace(start, end, "\n\n", start + 1); return true;
+            }
+            if (event.key === "Backspace" && from === to) {
+              const commentPair = commentBackspace(before, after, options);
+              const padding = commentPair && before.endsWith(`${COMMENT_OPEN} `) ? 1 : 0;
+              const closer = commentPair ? COMMENT_CLOSE.length + padding : pairedBackspace(before, after, options) ? 1 : 0;
+              if (closer) { handle.current.replace(from - 1 - padding, to + closer, "", from - 1 - padding); return true; }
             }
             const plan = typingPlan(before, doc.sliceString(from, to), after, event.key, options);
             if (!plan) return false;
@@ -274,7 +297,7 @@ const SourceEditor = forwardRef<SourceEditorHandle, Props>(function SourceEditor
             }
             return true;
           },
-        }),
+        })),
         EditorView.domEventObservers({
           compositionstart() { if (latest.current.editable) latest.current.onComposition(true); },
           compositionend() { if (latest.current.editable) latest.current.onComposition(false); },
