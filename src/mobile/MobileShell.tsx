@@ -688,6 +688,7 @@ export default function MobileShell({
             </header>
             <div className="m-scroll-body m-settings-host">
               <SettingsContent
+                isMobile
                 settingsPage={settingsPage}
                 setSettingsPage={setSettingsPage}
                 updater={updater}

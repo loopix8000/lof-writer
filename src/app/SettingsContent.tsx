@@ -39,6 +39,7 @@ import SettingsToggle from "./SettingsToggle";
 import TypesettingSettings from "./TypesettingSettings";
 
 type Props = {
+  isMobile?: boolean;
   settingsPage: SettingsPage;
   setSettingsPage: React.Dispatch<React.SetStateAction<SettingsPage>>;
   updater: ReturnType<typeof useAppUpdater>;
@@ -79,7 +80,8 @@ function formatStoragePath(rawPath: string | undefined, fallbackLabel: string): 
 }
 
 export default function SettingsContent({
-  settingsPage,
+  isMobile = false,
+  settingsPage: requestedSettingsPage,
   setSettingsPage,
   updater,
   lib,
@@ -113,6 +115,10 @@ export default function SettingsContent({
   mobileDetailOpen: controlledDetailOpen,
   onMobileDetailChange,
 }: Props) {
+  const visibleSettingPages = settingPages.filter((item) => isMobile || item.id !== "realtime");
+  const settingsPage = visibleSettingPages.some((item) => item.id === requestedSettingsPage)
+    ? requestedSettingsPage
+    : "editor";
   const [internalDetailOpen, setInternalDetailOpen] = useState(false);
   const mobileDetailOpen = controlledDetailOpen ?? internalDetailOpen;
   const setMobileDetailOpen = (open: boolean) => {
@@ -125,7 +131,7 @@ export default function SettingsContent({
     <>
       <div className={`settings-layout ${mobileDetailOpen ? "mobile-detail-open" : "mobile-menu-list"}`}>
         <nav className="settings-nav" aria-label="설정 분류">
-          {settingPages.map(({ id, label, desc, icon: Icon }) => (
+          {visibleSettingPages.map(({ id, label, desc, icon: Icon }) => (
             <button
               key={id}
               type="button"
@@ -471,7 +477,7 @@ export default function SettingsContent({
               <p className="settings-note">본문 전체 복사, 우클릭 복사와 Ctrl+C에 적용됩니다.</p>
             </fieldset>
           </section>
-          <section id="settings-realtime" className="settings-section m-realtime-section" hidden={settingsPage !== "realtime"}>
+          {isMobile && <section id="settings-realtime" className="settings-section m-realtime-section" hidden={settingsPage !== "realtime"}>
             <h3><Cloud size={18} />실시간 동기화</h3>
             {settingsPage === "realtime" && (
               <RealtimeSync
@@ -482,7 +488,7 @@ export default function SettingsContent({
                 report={report}
               />
             )}
-          </section>
+          </section>}
           <section id="settings-connections" className="settings-section" hidden={settingsPage !== "connections"}>
             <h3><FolderSync size={18} />파일 동기화</h3>
             {settingsPage === "connections" && renderSyncConnections()}
