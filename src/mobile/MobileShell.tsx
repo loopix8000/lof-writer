@@ -270,7 +270,7 @@ export default function MobileShell({
   deleteProject: (id: string) => Promise<void>;
   askDeleteProject: (id: string) => void;
   duplicateDoc: (doc: Doc) => Promise<void>;
-  copyDocManuscript: (doc: Doc, rawMarkdown?: boolean) => Promise<void>;
+  copyDocManuscript: (doc: Doc, rawMarkdown?: boolean, notify?: boolean) => Promise<void>;
   openBinding: (id: string) => Promise<void>;
   bindDocument: (id: string, episodeId: string | null) => Promise<void>;
   openNoteLink: (href: string, quote: string) => Promise<void>;

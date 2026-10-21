@@ -38,6 +38,7 @@ function editorAction(action: string) {
 
 export default function MobileEditorToolbar({
   disabled = false,
+  saveDisabled = false,
   moreOpen,
   onToggleMore,
   onReplaceSymbols,
@@ -48,6 +49,7 @@ export default function MobileEditorToolbar({
   onAddMemo,
 }: {
   disabled?: boolean;
+  saveDisabled?: boolean;
   moreOpen: boolean;
   onToggleMore: () => void;
   onReplaceSymbols: () => void;
@@ -93,7 +95,7 @@ export default function MobileEditorToolbar({
                   className="m-pill-tool-btn"
                   aria-label={label}
                   title={label}
-                  disabled={lockable ? disabled : false}
+                  disabled={(lockable && disabled) || (key === "save" && saveDisabled)}
                   onMouseDown={(event) => event.preventDefault()}
                   onClick={onClick}
                 >
@@ -150,13 +152,11 @@ export function MobileEditorMenuActions({
   tables,
   manualLineBreak,
   onClose,
-  onSave,
 }: {
   disabled?: boolean;
   tables: boolean;
   manualLineBreak: boolean;
   onClose: () => void;
-  onSave: () => void;
 }) {
   const actions = [
     { action: "image", label: "이미지 삽입", icon: ImagePlus },
@@ -165,20 +165,6 @@ export function MobileEditorMenuActions({
   ];
   return (
     <div className="m-floating-popup-section">
-      <button
-        type="button"
-        className="m-floating-popup-item"
-        role="menuitem"
-        disabled={disabled}
-        onMouseDown={(event) => event.preventDefault()}
-        onClick={() => {
-          onClose();
-          onSave();
-        }}
-      >
-        <Save size={16} />
-        <span>수동 저장</span>
-      </button>
       {actions.map(({ action, label, icon: Icon }) => (
         <button
           key={action}

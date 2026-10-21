@@ -622,7 +622,7 @@ export default function App() {
     await navigator.clipboard.writeText(meta.path);
     message("파일 경로를 복사했습니다.");
   }
-  async function copyDocManuscript(targetDoc: Doc, rawMarkdown?: boolean) {
+  async function copyDocManuscript(targetDoc: Doc, rawMarkdown?: boolean, notify = true) {
     await flush();
     const current = session.currentDocument();
     const latest =
@@ -634,7 +634,7 @@ export default function App() {
       (active?.id === latest.id && (source || requiresSource(latest.body)));
     if (copyAsMarkdown) {
       await call("copyManuscript", { id: latest.id, text: stripJsdocComments(latest.body) });
-      message("Markdown 원문을 복사했습니다.");
+      if (notify) message("Markdown 원문을 복사했습니다.");
       return;
     }
     await call("copyManuscript", {
@@ -644,7 +644,7 @@ export default function App() {
         dividerText: normalizeEditorStyle(prefs, latest.kind).dividerText,
       }),
     });
-    message("본문을 복사했습니다.");
+    if (notify) message("본문을 복사했습니다.");
   }
   function replaceActiveSymbols() {
     if (!active || isProtected) return;

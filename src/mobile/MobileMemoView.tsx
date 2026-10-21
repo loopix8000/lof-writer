@@ -626,6 +626,10 @@ export default function MobileMemoView({
         </EditorScroll>
 
         <MobileEditorToolbar
+          saveDisabled={status === "저장 중" || (
+            dirty.current.seq === dirty.current.saved &&
+            (!titleInput.trim() || titleInput.trim() === memo.title)
+          )}
           moreOpen={editorMenuOpen}
           onToggleMore={() => setEditorMenuOpen((open) => !open)}
           onReplaceSymbols={replaceMemoSymbols}
@@ -633,7 +637,7 @@ export default function MobileMemoView({
           onCopy={() => {
             void navigator.clipboard
               .writeText(plainText(memo.body))
-              .then(() => message("메모 본문을 복사했습니다."));
+              .catch(report);
           }}
           onAddMemo={() =>
             setPromptTarget({
@@ -657,32 +661,10 @@ export default function MobileMemoView({
               aria-label="메모 더보기 메뉴"
               onClick={(e) => e.stopPropagation()}
             >
-              <div className="m-floating-popup-section">
-                <button
-                  type="button"
-                  className="m-floating-popup-item"
-                  role="menuitem"
-                  onClick={() => {
-                    setEditorMenuOpen(false);
-                    setPromptTarget({
-                      mode: "newMemo",
-                      folder: parentOf(memo.path),
-                      initialValue: "새 메모",
-                    });
-                  }}
-                >
-                  <FilePlus size={16} />
-                  <span>새 메모 추가</span>
-                </button>
-              </div>
-
-              <div className="m-floating-popup-divider" />
-
               <MobileEditorMenuActions
                 tables={true}
                 manualLineBreak={!!memo.manualLineBreak}
                 onClose={() => setEditorMenuOpen(false)}
-                onSave={() => void manualSaveMemo().catch(report)}
               />
 
               <div className="m-floating-popup-divider" />
@@ -716,21 +698,6 @@ export default function MobileMemoView({
                 >
                   <FolderInput size={16} />
                   <span>폴더 위치 이동</span>
-                </button>
-
-                <button
-                  type="button"
-                  className="m-floating-popup-item"
-                  role="menuitem"
-                  onClick={() => {
-                    setEditorMenuOpen(false);
-                    void navigator.clipboard
-                      .writeText(plainText(memo.body))
-                      .then(() => message("메모 본문을 복사했습니다."));
-                  }}
-                >
-                  <Copy size={16} />
-                  <span>본문 전체 복사</span>
                 </button>
               </div>
 

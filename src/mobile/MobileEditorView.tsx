@@ -8,13 +8,11 @@ import {
   ChevronLeft,
   ChevronRight,
   Code2,
-  Copy,
   Download,
   FileText,
   Folder,
   FolderOpen,
   FolderPlus,
-  History,
   LayoutGrid,
   Link2,
   Lock,
@@ -177,7 +175,7 @@ export default function MobileEditorView({
   patchDoc: (id: string, patch: Partial<Doc>) => Promise<void>;
   archiveDoc: (doc: Doc) => Promise<void>;
   duplicateDoc: (doc: Doc) => Promise<void>;
-  copyDocManuscript: (doc: Doc, rawMarkdown?: boolean) => Promise<void>;
+  copyDocManuscript: (doc: Doc, rawMarkdown?: boolean, notify?: boolean) => Promise<void>;
   openBinding: (id: string) => Promise<void>;
   bindDocument: (id: string, episodeId: string | null) => Promise<void>;
   openNoteLink: (href: string, quote: string) => Promise<void>;
@@ -1055,15 +1053,17 @@ export default function MobileEditorView({
 
       <MobileEditorToolbar
         disabled={isProtected}
+        saveDisabled={saveStatus === "저장됨" || saveStatus === "저장 중"}
         moreOpen={moreMenuOpen}
         onToggleMore={() => setMoreMenuOpen((open) => !open)}
         onReplaceSymbols={replaceActiveSymbols}
         onHistory={attempt(showHistory)}
-        onSave={() => void manualSave().catch(report)}
+        onSave={() => void manualSave().then(() => message("저장했습니다.")).catch(report)}
         onCopy={attempt(() =>
           copyDocManuscript(
             active,
             sourceMode || requiresSource(active.body),
+            false,
           ),
         )}
         onAddPlot={() => {
@@ -1095,55 +1095,11 @@ export default function MobileEditorView({
             aria-label="편집 및 원고 더보기 메뉴"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="m-floating-popup-section">
-              <button
-                type="button"
-                className="m-floating-popup-item"
-                role="menuitem"
-                onClick={() => {
-                  setMoreMenuOpen(false);
-                  const epId =
-                    active.kind === "episode" ? active.id : active.episodeId;
-                  attempt(() =>
-                    createDoc("plot", epId ? { episodeId: epId } : undefined),
-                  )();
-                }}
-              >
-                <FileText size={16} />
-                <span>플롯 추가</span>
-                {active.kind === "episode" && (
-                  <small className="m-floating-popup-badge">현재 회차 연결</small>
-                )}
-              </button>
-              <button
-                type="button"
-                className="m-floating-popup-item"
-                role="menuitem"
-                onClick={() => {
-                  setMoreMenuOpen(false);
-                  const epId =
-                    active.kind === "episode" ? active.id : active.episodeId;
-                  attempt(() =>
-                    createDoc("memo", epId ? { episodeId: epId } : undefined),
-                  )();
-                }}
-              >
-                <StickyNote size={16} />
-                <span>메모 추가</span>
-                {active.kind === "episode" && (
-                  <small className="m-floating-popup-badge">현재 회차 연결</small>
-                )}
-              </button>
-            </div>
-
-            <div className="m-floating-popup-divider" />
-
             <MobileEditorMenuActions
               disabled={isProtected}
               tables={active.kind === "memo" || active.kind === "plot"}
               manualLineBreak={!!active.manualLineBreak}
               onClose={() => setMoreMenuOpen(false)}
-              onSave={() => void manualSave().catch(report)}
             />
 
             <div className="m-floating-popup-divider" />
@@ -1164,41 +1120,6 @@ export default function MobileEditorView({
                 <Code2 size={16} />
                 <span>
                   {sourceMode ? "일반 편집 모드로 전환" : "Markdown 원문 편집"}
-                </span>
-              </button>
-
-              <button
-                type="button"
-                className="m-floating-popup-item"
-                role="menuitem"
-                onClick={() => {
-                  setMoreMenuOpen(false);
-                  attempt(showHistory)();
-                }}
-              >
-                <History size={16} />
-                <span>변경 이력 및 복원</span>
-              </button>
-
-              <button
-                type="button"
-                className="m-floating-popup-item"
-                role="menuitem"
-                onClick={() => {
-                  setMoreMenuOpen(false);
-                  attempt(() =>
-                    copyDocManuscript(
-                      active,
-                      sourceMode || requiresSource(active.body),
-                    ),
-                  )();
-                }}
-              >
-                <Copy size={16} />
-                <span>
-                  {sourceMode || requiresSource(active.body)
-                    ? "Markdown 원문 복사"
-                    : "본문 텍스트 복사"}
                 </span>
               </button>
 
@@ -1281,6 +1202,7 @@ export default function MobileEditorView({
                     attempt(goProject)();
                   }}
                 >
+                  <ChevronLeft size={18} aria-hidden="true" style={{ flexShrink: 0 }} />
                   <strong>{project?.title || "제목 없는 작품"}</strong>
                 </button>
               </div>
