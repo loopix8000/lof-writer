@@ -648,6 +648,10 @@ fn sync_cycle(
             Ok(result) => {
                 retries.remove(id);
                 queue.errors.remove(id);
+                if result["deferredFiles"].as_u64().unwrap_or(0) > 0 {
+                    retries.insert(id.clone(), Instant::now() + RETRY_DELAY);
+                    queue.pending.insert(id.clone());
+                }
                 received_changes |= has_received_changes(&result);
             }
             Err(error) if matches!(error.code.as_str(), "CONNECTION_REMOVED" | "VAULT_CHANGED") => {

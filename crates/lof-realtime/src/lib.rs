@@ -7,6 +7,7 @@ use std::{sync::Arc, time::Duration};
 use tokio::sync::Semaphore;
 pub mod group;
 pub mod replica;
+pub mod scope;
 pub mod storage;
 
 pub const ALPN: &[u8] = b"lof/realtime-files/1";

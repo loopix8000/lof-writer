@@ -3,7 +3,7 @@
 //! 페어링 코드로 그룹에 한 번 가입하면 서명된 구성원 목록을 gossip과 연결 확인 요청으로 받아
 //! 다른 구성원을 자동으로 찾는다. 파일 비교는 구성원마다 기존 1:1 비교 엔진을 그대로 사용한다.
 use crate::{
-    error::{fail, fail_invalid, hash_bytes, LofError},
+    error::{fail, fail_invalid, LofError},
     sync::{
         file_remote::{self, FileRemote, Info, ID_FILE},
         files,
@@ -744,31 +744,10 @@ impl WriterHost {
             return Ok(Message::json(json!(true)));
         }
         if op == "inventory" {
-            let mut guard = state.store.lock().unwrap();
-            let store = guard
-                .as_mut()
-                .ok_or_else(|| fail_invalid("서재가 닫혔습니다."))?;
-            store.poll_disk()?;
-            let list = store.list()?;
-            let warnings = list["warnings"].as_array().cloned().unwrap_or_default();
-            let pending_missing = store.has_pending_disk_changes()?;
-            if !warnings.is_empty() || pending_missing {
-                return Err(fail_invalid(format!(
-                    "상대 서재 진단: warnings={}, pending_missing={pending_missing}",
-                    serde_json::to_string(&warnings).unwrap_or_default()
-                )));
-            }
-            // 덮어쓰기 전에 이전 원고를 로컬 이력에 기록한다.
-            for doc in list["documents"].as_array().into_iter().flatten() {
-                if let Some(id) = doc["id"].as_str() {
-                    store.read(id)?;
-                }
-            }
-            let mut inventory = file_remote::local_inventory(&current)?;
-            for (path, info) in &mut inventory {
-                let bytes = files::read_local(&current, path)?
-                    .ok_or_else(|| fail_invalid("목록을 읽는 중 파일이 변경되었습니다."))?;
-                info.etag = Some(hash_bytes(&bytes));
+            let mut inventory = files::inventory(&state.store, &current, true)?;
+            // 이전 클라이언트가 보류 표시를 삭제로 오인하지 않도록 지원 여부를 확인한다.
+            if request["deferredPaths"] != true && inventory.values().any(|info| info.unavailable) {
+                return Err(fail("일부 파일을 확인 중입니다. 연결한 앱을 업데이트해 주세요.", "SYNC_RETRY"));
             }
             inventory.insert(
                 ID_FILE.into(),
@@ -851,7 +830,7 @@ impl PeerRemote {
 }
 impl FileRemote for PeerRemote {
     fn inventory(&mut self) -> Result<BTreeMap<String, Info>, LofError> {
-        serde_json::from_value(self.rpc(json!({"op":"inventory"}), vec![])?.meta).map_err(net)
+        serde_json::from_value(self.rpc(json!({"op":"inventory","deferredPaths":true}), vec![])?.meta).map_err(net)
     }
     fn read(&mut self, path: &str) -> Result<Vec<u8>, LofError> {
         Ok(self.rpc(json!({"op":"read","path":path}), vec![])?.data)
@@ -1170,7 +1149,7 @@ pub fn start(app: &AppHandle) {
                         Ok(()) => {
                             retry.remove(&id);
                         }
-                        Err(error) if error.code == "SYNC_BUSY" => {
+                        Err(error) if matches!(error.code.as_str(), "SYNC_BUSY" | "SYNC_RETRY") => {
                             let mut statuses = rt.statuses.lock().unwrap();
                             let status = statuses.entry(id.clone()).or_insert_with(|| json!({}));
                             status["phase"] = json!("pending");

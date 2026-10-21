@@ -901,6 +901,33 @@ impl Store {
             .and_then(|value| value.as_object().map(|files| !files.is_empty())).unwrap_or(false))
     }
 
+    // 표시용 경고와 별개로 아직 안전하게 비교할 수 없는 경로만 동기화에서 보류한다.
+    pub fn sync_deferred_paths(&self) -> Result<Vec<String>, LofError> {
+        let mut paths = Vec::new();
+        if let Some(catalog) = &self.catalog {
+            for project in &catalog.projects {
+                let Some(folder) = project.dir.file_name().and_then(|name| name.to_str()) else { continue };
+                for relative in project.errors.keys() {
+                    let relative = if relative == "project" { "project.json" } else { relative };
+                    paths.push(if valid_rel(relative) {
+                        format!("{folder}/{relative}")
+                    } else {
+                        folder.to_string()
+                    });
+                }
+            }
+        }
+        if let Some(pending) = self.database()?.get("missingFiles")?.and_then(|value| value.as_object().cloned()) {
+            for info in pending.values() {
+                if let Some(relative) = info["path"].as_str().and_then(|path| Path::new(path).strip_prefix(&self.root).ok()) {
+                    let relative = relative.to_string_lossy().replace('\\', "/");
+                    if valid_rel(&relative) { paths.push(relative); }
+                }
+            }
+        }
+        Ok(paths)
+    }
+
     // 외부 편집기가 저장 중이라 읽지 못한 원고가 남아 있는지 확인한다.
     pub fn has_busy_files(&self) -> bool {
         !self.index.dirty.is_empty()
@@ -1351,7 +1378,7 @@ impl Store {
         for folder in ["episodes", "doc"] {
             match fs::read_dir(p.dir.join(folder)){
                 Ok(_)=>{p.errors.remove(folder);}
-                Err(e) if e.kind()==std::io::ErrorKind::NotFound=>{},
+                Err(e) if e.kind()==std::io::ErrorKind::NotFound=>{p.errors.remove(folder);},
                 Err(e)=>{p.errors.insert(folder.to_string(),format!("폴더를 읽지 못했습니다: {folder}: {e}"));return;}
             }
             for rel in walk_rel(&p.dir, folder) {
@@ -1367,6 +1394,10 @@ impl Store {
             }
         }
         p.files.retain(|rel, _| present.contains(rel));
+        // 사라진 원고의 이전 읽기 오류도 파일 목록과 함께 정리한다.
+        p.errors.retain(|rel, _| {
+            rel == "project" || rel == "episodes" || rel == "doc" || present.contains(rel)
+        });
         Self::reconcile_index_project(p);
     }
 
@@ -1401,21 +1432,23 @@ impl Store {
                         self.index.dirty.insert(name.to_string());
                     }
                 }
-                if let Ok(rd) = fs::read_dir(&self.root) {
-                    for e in rd.flatten() {
-                        // 루트의 일반 파일도 이전 버전이 남긴 잘못된 폴더 경고를 해제한다.
-                        if e.file_type().is_ok_and(|t| t.is_dir() || t.is_file()) {
-                            let name = e.file_name().to_string_lossy().to_string();
-                            if !name.starts_with('.') {
-                                self.index.dirty.insert(name);
-                            }
+                for entry in fs::read_dir(&self.root)? {
+                    let entry = entry?;
+                    let kind = entry.file_type()?;
+                    if kind.is_dir() || kind.is_file() {
+                        let name = entry.file_name().to_string_lossy().to_string();
+                        if !name.starts_with('.') {
+                            self.index.dirty.insert(name);
                         }
                     }
                 }
+                // 경고를 누적하지 않고 현재 파일 상태로 다시 판단한다.
+                // 이미 목록에서 빠진 작품의 폴더가 없어져도 이전 경고가 남지 않는다.
+                cat.warnings.clear();
             }
 
             let dirty: Vec<String> = self.index.dirty.drain().collect();
-            if dirty.is_empty() {
+            if dirty.is_empty() && !inventory {
                 return Ok(());
             }
 
@@ -1465,8 +1498,11 @@ impl Store {
                         Ok(None) => {
                             if let Some(idx) = p_idx {
                                 cat.projects.remove(idx);
-                                cat.warnings.push(format!("{}: 작품 정보 파일이 없어 변경을 확인하지 못했습니다.",folder));
                             }
+                            // 작품 정보가 없는 폴더는 전체 스캔과 동일하게 건너뛴다.
+                            // 남아 있는 원고는 건드리지 않고 목록과 이전 경고만 정리한다.
+                            let prefix = format!("{}:", folder);
+                            cat.warnings.retain(|warning| !warning.starts_with(&prefix));
                             continue;
                         }
                         Ok(Some((mut proj_val, from_backup))) => {
@@ -1652,7 +1688,7 @@ impl Store {
 
     fn reconcile_missing(&self,cat:&mut Catalog,before_projects:&[(String,PathBuf)])->Result<(),LofError>{
         let db=self.database()?;
-        if !cat.warnings.is_empty() || cat.projects.iter().any(|p|!p.errors.is_empty()){return Ok(());}
+        // 다른 파일의 경고와 무관하게 각 경로의 실제 존재 여부로 삭제를 확인한다.
         let present:HashSet<String>=cat.projects.iter().flat_map(|p|p.files.values())
             .filter_map(|f|f.doc["id"].as_str().map(str::to_string)).collect();
         let projects:HashSet<String>=cat.projects.iter().filter_map(|p|p.project["id"].as_str().map(str::to_string)).collect();

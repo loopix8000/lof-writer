@@ -1,5 +1,5 @@
 //! Library끼리도 같은 파일 요청으로 누락·동시 편집·삭제·이름 변경을 비교한다.
-use crate::{request, storage, Connection, Message, Result};
+use crate::{request, storage, scope::DeferredPaths, Connection, Message, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -9,6 +9,8 @@ use std::{
 #[derive(Clone, Deserialize)]
 struct Info {
     etag: Option<String>,
+    #[serde(default)]
+    unavailable: bool,
 }
 #[derive(Default, Deserialize, Serialize)]
 struct State {
@@ -171,7 +173,7 @@ async fn compare(
         return Err("상대 서재가 변경되었습니다. 다시 연결해 주세요.".into());
     }
     let mut other: BTreeMap<String, Info> =
-        serde_json::from_value(remote.call(json!({"op":"inventory"}), vec![]).await?.meta)
+        serde_json::from_value(remote.call(json!({"op":"inventory","deferredPaths":true}), vec![]).await?.meta)
             .map_err(|_| "파일 목록 형식 오류")?;
     other.remove(".lof-sync-id");
     let source = root.clone();
@@ -181,6 +183,10 @@ async fn compare(
             .map_err(|_| "파일 목록 읽기 실패")??,
     )
     .map_err(|_| "파일 목록 형식 오류")?;
+    let mut deferred = DeferredPaths::default();
+    for (path, info) in &other {
+        if info.unavailable { deferred.insert(path); }
+    }
     let names: BTreeSet<_> = local
         .keys()
         .chain(other.keys())
@@ -195,6 +201,7 @@ async fn compare(
         if !storage::allowed(path) || !folded.insert(path.to_lowercase()) {
             return Err("파일 경로 또는 대소문자 충돌을 확인해 주세요.".into());
         }
+        if deferred.contains(path) { continue; }
         for (index, _) in path.match_indices('/') {
             if names.contains(&path[..index]) {
                 return Err("파일과 폴더 경로가 겹칩니다.".into());
@@ -204,7 +211,9 @@ async fn compare(
     let mut pairs = BTreeMap::new();
     let mut identities: HashMap<String, BTreeSet<String>> = HashMap::new();
     let (mut seen_local, mut seen_remote) = (HashSet::new(), HashSet::new());
+    let mut duplicates = HashSet::new();
     for path in &names {
+        if deferred.contains(path) { continue; }
         heartbeat()?;
         let local_hash = local.get(path).and_then(|i| i.etag.clone());
         let remote_hash = other.get(path).and_then(|i| i.etag.clone());
@@ -236,7 +245,7 @@ async fn compare(
         for (id, seen) in [(&local_id, &mut seen_local), (&remote_id, &mut seen_remote)] {
             if let Some(id) = id {
                 if !seen.insert(id.clone()) {
-                    return Err("동일한 문서 ID가 여러 파일에 있습니다.".into());
+                    duplicates.insert(id.clone());
                 }
                 identities
                     .entry(id.clone())
@@ -254,8 +263,17 @@ async fn compare(
             },
         );
     }
+    for (id, paths) in &identities {
+        if duplicates.contains(id) {
+            for path in paths { deferred.insert(path); }
+        }
+    }
+    let aliases: Vec<_> = state.identities.iter().map(|(path, id)| (path.as_str(), id.as_str()))
+        .chain(identities.iter().flat_map(|(id, paths)| paths.iter().map(move |path| (path.as_str(), id.as_str())))).collect();
+    deferred.protect_identities(&aliases);
     let mut losers = HashSet::new();
     for paths in identities.values().filter(|paths| paths.len() > 1) {
+        if paths.iter().any(|path| deferred.contains(path)) { continue; }
         let new: Vec<_> = paths
             .iter()
             .filter(|path| !state.files.contains_key(*path))
@@ -294,6 +312,7 @@ async fn compare(
     }
     let mut conflicts = 0;
     for (path, pair) in pairs {
+        if deferred.contains(&path) { continue; }
         heartbeat()?;
         remote.call(json!({"op":"touch"}), vec![]).await?;
         let before = state.files.get(&path).cloned();

@@ -25,6 +25,13 @@ pub(crate) struct Info {
     pub size: u64,
     pub modified: Option<i64>,
     pub etag: Option<String>,
+    // 삭제와 읽기 실패를 구분한다. 이 경로의 이전 비교 기록은 유지한다.
+    #[serde(default)]
+    pub unavailable: bool,
+}
+
+impl Info {
+    pub fn unavailable() -> Self { Self { unavailable: true, ..Self::default() } }
 }
 
 pub(crate) trait FileRemote {
@@ -149,6 +156,7 @@ pub(crate) fn local_inventory(root: &Path) -> Result<BTreeMap<String, Info>, Lof
                         size: metadata.len(),
                         modified: metadata.modified().ok().and_then(seconds),
                         etag: None,
+                        ..Info::default()
                     },
                 )?;
             } else {
@@ -586,6 +594,7 @@ impl Ftp {
                         size,
                         modified,
                         etag: None,
+                        ..Info::default()
                     },
                 ));
             }
@@ -611,6 +620,7 @@ impl Ftp {
                     size: entry.size() as u64,
                     modified: seconds(entry.modified()),
                     etag: None,
+                    ..Info::default()
                 },
             ));
         }

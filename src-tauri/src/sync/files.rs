@@ -13,6 +13,7 @@ use std::path::Path;
 use std::sync::Mutex;
 use std::time::{Duration, UNIX_EPOCH};
 use uuid::Uuid;
+use lof_realtime::scope::DeferredPaths;
 
 #[derive(Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -61,13 +62,64 @@ fn identity(path: &str, bytes: &[u8]) -> Result<Option<String>, LofError> {
     }
 }
 
+fn can_defer_file(error: &LofError) -> bool {
+    matches!(error.code.as_str(), "ENOENT" | "EACCES" | "IO_ERROR" | "FILE_BUSY" | "FORMAT" | "INVALID" | "NOT_FOUND" | "CONFLICT" | "SYNC_RETRY")
+}
+
+// 목록 조회의 경고 문구로 전송 여부를 결정하지 않는다. 안전하지 않은 경로만 표시한다.
+pub(crate) fn inventory(
+    store: &Mutex<Option<Store>>, root: &Path, hashes: bool,
+) -> Result<BTreeMap<String, Info>, LofError> {
+    with_store(store, root, |st| {
+        st.require_database()?;
+        st.poll_disk()?;
+        let mut files = file_remote::local_inventory(root)?;
+        let mut deferred = DeferredPaths::default();
+        for path in st.sync_deferred_paths()? {
+            deferred.insert(&path);
+            files.insert(path, Info::unavailable());
+        }
+        // 덮어쓰기 전에 읽을 수 있는 원고만 로컬 이력에 기록한다.
+        let list = st.list()?;
+        for document in list["documents"].as_array().into_iter().flatten() {
+            let (Some(id), Some(path)) = (document["id"].as_str(), document["path"].as_str()) else { continue };
+            let Ok(relative) = Path::new(path).strip_prefix(root) else { continue };
+            let relative = relative.to_string_lossy().replace('\\', "/");
+            if deferred.contains(&relative) { continue; }
+            if let Err(error) = st.read(id) {
+                if !can_defer_file(&error) { return Err(error); }
+                deferred.insert(&relative);
+                files.insert(relative, Info::unavailable());
+            }
+        }
+        if hashes {
+            for (path, info) in &mut files {
+                if info.unavailable || deferred.contains(path) { continue; }
+                let checked = read_local(root, path).and_then(|bytes| {
+                    let bytes = bytes.ok_or_else(retry)?;
+                    original(path, &bytes)?;
+                    Ok(hash_bytes(&bytes))
+                });
+                match checked {
+                    Ok(hash) => info.etag = Some(hash),
+                    Err(error) if can_defer_file(&error) => { info.unavailable = true; deferred.insert(path); }
+                    Err(error) => return Err(error),
+                }
+            }
+        }
+        Ok(files)
+    })
+}
+
 // 이름 변경과 동시 편집이 겹쳐도 같은 ID의 문서를 두 경로에 만들지 않는다.
 fn rename_losers(
     pairs: &BTreeMap<String, Pair>,
     base: &BTreeMap<String, String>,
-) -> Result<HashSet<String>, LofError> {
+    deferred: &mut DeferredPaths,
+) -> HashSet<String> {
     let mut identities: HashMap<&str, BTreeSet<&str>> = HashMap::new();
     let (mut local, mut remote) = (HashSet::new(), HashSet::new());
+    let mut duplicates = HashSet::new();
     for (path, pair) in pairs {
         for (id, seen) in [
             (pair.local_id.as_deref(), &mut local),
@@ -75,14 +127,20 @@ fn rename_losers(
         ] {
             if let Some(id) = id {
                 if !seen.insert(id) {
-                    return Err(fail_invalid("같은 ID의 작품 또는 문서가 여러 파일에 있습니다. 중복 파일을 확인해 주세요."));
+                    duplicates.insert(id);
                 }
                 identities.entry(id).or_default().insert(path);
             }
         }
     }
+    for (id, paths) in &identities {
+        if duplicates.contains(id) {
+            for path in paths { deferred.insert(path); }
+        }
+    }
     let mut losers = HashSet::new();
     for paths in identities.values().filter(|paths| paths.len() > 1) {
+        if paths.iter().any(|path| deferred.contains(path)) { continue; }
         let new_paths: Vec<&str> = paths
             .iter()
             .copied()
@@ -99,7 +157,7 @@ fn rename_losers(
             }
         }
     }
-    Ok(losers)
+    losers
 }
 
 fn retry() -> LofError {
@@ -272,17 +330,6 @@ pub(super) fn sync(
     let key = format!("file-sync-v1:{device}:{connection}");
     let mut state: Checkpoint = with_store(store, root, |st| {
         st.require_database()?;
-        st.poll_disk()?;
-        let list = st.list()?;
-        if list["warnings"]
-            .as_array()
-            .is_some_and(|warnings| !warnings.is_empty())
-        {
-            return Err(fail("서재에서 읽지 못한 파일이 있어 동기화를 중단했습니다. 서재의 경고를 확인해 주세요.", "SYNC_LOCAL_ERROR"));
-        }
-        if st.has_pending_disk_changes()? {
-            return Err(retry());
-        }
         serde_json::from_value(st.database()?.get(&key)?.unwrap_or_else(|| json!({})))
             .map_err(|error| fail_invalid(error.to_string()))
     })?;
@@ -334,18 +381,17 @@ pub(crate) fn sync_peer(
     let key = format!("realtime-files-v2:{peer}");
     let mut state: Checkpoint = with_store(store, root, |st| {
         st.require_database()?;
-        st.poll_disk()?;
-        let list = st.list()?;
-        if list["warnings"].as_array().is_some_and(|w| !w.is_empty()) || st.has_pending_disk_changes()? {
-            return Err(fail("서재의 파일 경고 또는 삭제 확인을 마친 뒤 다시 동기화합니다.", "SYNC_RETRY"));
-        }
         serde_json::from_value(st.database()?.get(&key)?.unwrap_or_else(||json!({})))
             .map_err(|e|fail_invalid(e.to_string()))
     })?;
     let mut total=json!({"downloaded":0,"uploaded":0,"removed":0,"fileConflicts":0,"conflicts":0,"protocol":"realtime-files-v1"});
     let result=run(store,root,&key,&mut state,remote,false,&mut total);
     let refreshed=with_store(store,root,|st| {st.poll_disk()?; Ok(())});
-    result?; refreshed?; Ok(total)
+    result?; refreshed?;
+    if total["deferredFiles"].as_u64().unwrap_or(0) > 0 {
+        return Err(retry());
+    }
+    Ok(total)
 }
 
 fn run(
@@ -384,7 +430,7 @@ fn run(
         state.remote_id = Some(id);
     }
     save(store, root, key, state)?;
-    let mut local_files = with_store(store, root, |_| file_remote::local_inventory(root))?;
+    let mut local_files = inventory(store, root, false)?;
     local_files.remove(ID_FILE);
     let names: BTreeSet<_> = local_files
         .keys()
@@ -392,6 +438,10 @@ fn run(
         .chain(state.files.keys())
         .cloned()
         .collect();
+    let mut deferred = DeferredPaths::default();
+    for (path, info) in local_files.iter().chain(remote_files.iter()) {
+        if info.unavailable { deferred.insert(path); }
+    }
     let mut folded = HashSet::new();
     for path in &names {
         if !file_remote::path_ok(path)
@@ -402,6 +452,7 @@ fn run(
                 "동기화 경로가 올바르지 않거나 대소문자만 다른 파일이 있습니다.",
             ));
         }
+        if deferred.contains(path) { continue; }
         for (index, _) in path.match_indices('/') {
             if names.contains(&path[..index]) {
                 return Err(fail_invalid("동기화할 파일과 폴더의 경로가 겹칩니다."));
@@ -409,16 +460,24 @@ fn run(
         }
     }
     let mut pairs = BTreeMap::new();
-    for path in names {
+    for path in &names {
+        if deferred.contains(path) { continue; }
         remote.heartbeat()?;
-        let local_info = local_files.get(&path).cloned();
+        let local_info = local_files.get(path).cloned();
         let (local, local_id) = if local_info.is_some() {
-            let bytes = with_store(store, root, |_| read_local(root, &path))?.ok_or_else(retry)?;
-            (Some(hash_bytes(&bytes)), identity(&path, &bytes)?)
+            let checked = with_store(store, root, |_| {
+                let bytes = read_local(root, path)?.ok_or_else(retry)?;
+                Ok((Some(hash_bytes(&bytes)), identity(path, &bytes)?))
+            });
+            match checked {
+                Ok(value) => value,
+                Err(error) if can_defer_file(&error) => { deferred.insert(path); continue; }
+                Err(error) => return Err(error),
+            }
         } else {
             (None, None)
         };
-        let remote_info = remote_files.get(&path).cloned();
+        let remote_info = remote_files.get(path).cloned();
         let mut remote_id = None;
         let remote_hash = if let Some(info) = &remote_info {
             let cached = info
@@ -428,19 +487,23 @@ fn run(
                 .and_then(|tag| {
                     state
                         .tags
-                        .get(&path)
+                        .get(path)
                         .filter(|(previous, _)| previous == tag)
                 });
             match cached {
                 Some((_, hash)) => {
-                    remote_id = state.identities.get(&path).cloned();
+                    remote_id = state.identities.get(path).cloned();
                     Some(hash.clone())
                 }
                 None => {
                     let bytes = remote.read(&path)?;
                     add(total, "downloadedBytes", bytes.len());
                     add(total, "downloadedFiles", 1);
-                    remote_id = identity(&path, &bytes)?;
+                    remote_id = match identity(path, &bytes) {
+                        Ok(id) => id,
+                        Err(error) if can_defer_file(&error) => { deferred.insert(path); continue; }
+                        Err(error) => return Err(error),
+                    };
                     Some(hash_bytes(&bytes))
                 }
             }
@@ -448,7 +511,7 @@ fn run(
             None
         };
         pairs.insert(
-            path,
+            path.clone(),
             Pair {
                 local,
                 remote: remote_hash,
@@ -459,170 +522,172 @@ fn run(
             },
         );
     }
+    let renamed = rename_losers(&pairs, &state.files, &mut deferred);
+    // 읽을 수 없는 파일의 이름 변경 전 경로도 보존한다.
+    let identities: Vec<(&str, &str)> = state.identities.iter().map(|(path, id)| (path.as_str(), id.as_str()))
+        .chain(pairs.iter().flat_map(|(path, pair)| [pair.local_id.as_deref(), pair.remote_id.as_deref()]
+            .into_iter().flatten().map(move |id| (path.as_str(), id)))).collect();
+    deferred.protect_identities(&identities);
     let protected = protected_projects(&pairs, &state.files);
-    let renamed = rename_losers(&pairs, &state.files)?;
-    if pairs.values().any(|pair| pair.local != pair.remote) {
-        // 파일 교체·삭제 전에 현재 원고를 관찰해 기기별 로컬 이력을 유지한다.
-        // 적용 중에는 목록을 다시 열지 않아 미완료 작품 메타 정보를 보정하지 않는다.
-        with_store(store, root, |st| {
-            let list = st.list()?;
-            for document in list["documents"].as_array().into_iter().flatten() {
-                if let Some(id) = document["id"].as_str() {
-                    st.read(id)?;
-                }
-            }
-            Ok(())
-        })?;
-    }
     // 원고 삭제를 먼저, 작품 메타 정보 삭제를 마지막에 적용한다.
     let mut paths: Vec<_> = pairs.keys().cloned().collect();
     paths.sort_by_key(|path| (path.ends_with("/project.json"), path.clone()));
     for path in paths {
-        let pair = &pairs[&path];
-        let base = state.files.get(&path);
-        let local = pair.local.as_deref();
-        let other = pair.remote.as_deref();
-        if renamed.contains(&path) {
-            let bytes = if local.is_some() {
-                with_store(store, root, |_| read_local(root, &path))?.ok_or_else(retry)?
-            } else {
-                remote.read(&path)?
-            };
-            let expected = local.or(other);
-            if Some(hash_bytes(&bytes)).as_deref() != expected {
-                return Err(retry());
-            }
-            if base.map(String::as_str) != expected && archive(store, root, &path, &bytes)? {
-                add(total, "conflicts", 1);
-                add(total, "fileConflicts", 1);
-            }
-            if local.is_some() {
-                apply_local(store, root, &path, None, local, None)?;
-                add(total, "removed", 1);
-            }
-            if let Some(info) = &pair.remote_info {
-                if Some(hash_bytes(&remote.read(&path)?)).as_deref() != other {
-                    return Err(retry());
-                }
-                remote.remove(&path, info)?;
-                add(total, "cleanedFiles", 1);
-            }
-            checkpoint(state, &path, None, None);
-            state.identities.remove(&path);
-            save(store, root, key, state)?;
-            continue;
-        }
-        if local == other {
-            checkpoint(state, &path, local, pair.remote_info.as_ref());
-            if let Some(id) = &pair.remote_id {
-                state.identities.insert(path.clone(), id.clone());
-            } else {
-                state.identities.remove(&path);
-            }
-            continue;
-        }
-        let protected = protected
-            .iter()
-            .any(|folder| path.starts_with(&format!("{folder}/")));
-        let take_remote = if protected && (local.is_none() || other.is_none()) {
-            other.is_some()
-        } else if base.map(String::as_str) == local {
-            true
-        } else if base.map(String::as_str) == other {
-            false
-        } else if local.is_none() || other.is_none() {
-            // 삭제와 편집이 동시에 발생하면 편집한 원본을 살린다.
-            other.is_some()
-        } else {
-            let take_remote = if latest {
-                (
-                    pair.remote_info.as_ref().and_then(|info| info.modified),
-                    other,
-                ) > (
-                    pair.local_info.as_ref().and_then(|info| info.modified),
-                    local,
-                )
-            } else {
-                other > local
-            };
-            if !latest {
-                let bytes = if take_remote {
+        if deferred.contains(&path) { continue; }
+        let operation = (|| -> Result<(), LofError> {
+            let pair = &pairs[&path];
+            let base = state.files.get(&path);
+            let local = pair.local.as_deref();
+            let other = pair.remote.as_deref();
+            if renamed.contains(&path) {
+                let bytes = if local.is_some() {
                     with_store(store, root, |_| read_local(root, &path))?.ok_or_else(retry)?
                 } else {
                     remote.read(&path)?
                 };
-                let expected = if take_remote { local } else { other };
+                let expected = local.or(other);
                 if Some(hash_bytes(&bytes)).as_deref() != expected {
                     return Err(retry());
                 }
-                if archive(store, root, &path, &bytes)? {
+                if base.map(String::as_str) != expected && archive(store, root, &path, &bytes)? {
                     add(total, "conflicts", 1);
                     add(total, "fileConflicts", 1);
                 }
-            }
-            take_remote
-        };
-        if take_remote {
-            let bytes = if other.is_some() {
-                Some(remote.read(&path)?)
-            } else {
-                None
-            };
-            if bytes.as_deref().map(hash_bytes).as_deref() != other {
-                return Err(retry());
-            }
-            apply_local(
-                store,
-                root,
-                &path,
-                bytes.as_deref(),
-                local,
-                pair.remote_info.as_ref().and_then(|info| info.modified),
-            )?;
-            if bytes.is_some() {
-                add(total, "downloaded", 1);
-            } else {
-                add(total, "removed", 1);
-            }
-            checkpoint(state, &path, other, pair.remote_info.as_ref());
-            if let Some(id) = &pair.remote_id {
-                state.identities.insert(path.clone(), id.clone());
-            } else {
+                if local.is_some() {
+                    apply_local(store, root, &path, None, local, None)?;
+                    add(total, "removed", 1);
+                }
+                if let Some(info) = &pair.remote_info {
+                    if Some(hash_bytes(&remote.read(&path)?)).as_deref() != other {
+                        return Err(retry());
+                    }
+                    remote.remove(&path, info)?;
+                    add(total, "cleanedFiles", 1);
+                }
+                checkpoint(state, &path, None, None);
                 state.identities.remove(&path);
+                save(store, root, key, state)?;
+                return Ok(());
             }
-        } else {
-            let bytes = with_store(store, root, |_| read_local(root, &path))?;
-            if bytes.as_deref().map(hash_bytes).as_deref() != local {
-                return Err(retry());
+            if local == other {
+                checkpoint(state, &path, local, pair.remote_info.as_ref());
+                if let Some(id) = &pair.remote_id {
+                    state.identities.insert(path.clone(), id.clone());
+                } else {
+                    state.identities.remove(&path);
+                }
+                return Ok(());
             }
-            if other.is_some() {
-                if Some(hash_bytes(&remote.read(&path)?)).as_deref() != other {
+            let protected = protected
+                .iter()
+                .any(|folder| path.starts_with(&format!("{folder}/")));
+            let take_remote = if protected && (local.is_none() || other.is_none()) {
+                other.is_some()
+            } else if base.map(String::as_str) == local {
+                true
+            } else if base.map(String::as_str) == other {
+                false
+            } else if local.is_none() || other.is_none() {
+                // 삭제와 편집이 동시에 발생하면 편집한 원본을 살린다.
+                other.is_some()
+            } else {
+                let take_remote = if latest {
+                    (
+                        pair.remote_info.as_ref().and_then(|info| info.modified),
+                        other,
+                    ) > (
+                        pair.local_info.as_ref().and_then(|info| info.modified),
+                        local,
+                    )
+                } else {
+                    other > local
+                };
+                if !latest {
+                    let bytes = if take_remote {
+                        with_store(store, root, |_| read_local(root, &path))?.ok_or_else(retry)?
+                    } else {
+                        remote.read(&path)?
+                    };
+                    let expected = if take_remote { local } else { other };
+                    if Some(hash_bytes(&bytes)).as_deref() != expected {
+                        return Err(retry());
+                    }
+                    if archive(store, root, &path, &bytes)? {
+                        add(total, "conflicts", 1);
+                        add(total, "fileConflicts", 1);
+                    }
+                }
+                take_remote
+            };
+            if take_remote {
+                let bytes = if other.is_some() {
+                    Some(remote.read(&path)?)
+                } else {
+                    None
+                };
+                if bytes.as_deref().map(hash_bytes).as_deref() != other {
                     return Err(retry());
                 }
-            } else if remote.exists(&path)? {
-                return Err(retry());
-            }
-            // 전송 직전에 서재가 바뀌거나 닫히지 않았는지도 확인한다.
-            with_store(store, root, |st| st.require_database())?;
-            if let Some(bytes) = bytes {
-                original(&path, &bytes)?;
-                remote.write(&path, &bytes, pair.remote_info.as_ref())?;
-                add(total, "uploaded", 1);
-                add(total, "uploadedBytes", bytes.len());
+                apply_local(
+                    store,
+                    root,
+                    &path,
+                    bytes.as_deref(),
+                    local,
+                    pair.remote_info.as_ref().and_then(|info| info.modified),
+                )?;
+                if bytes.is_some() {
+                    add(total, "downloaded", 1);
+                } else {
+                    add(total, "removed", 1);
+                }
+                checkpoint(state, &path, other, pair.remote_info.as_ref());
+                if let Some(id) = &pair.remote_id {
+                    state.identities.insert(path.clone(), id.clone());
+                } else {
+                    state.identities.remove(&path);
+                }
             } else {
-                remote.remove(&path, pair.remote_info.as_ref().ok_or_else(retry)?)?;
-                add(total, "cleanedFiles", 1);
+                let bytes = with_store(store, root, |_| read_local(root, &path))?;
+                if bytes.as_deref().map(hash_bytes).as_deref() != local {
+                    return Err(retry());
+                }
+                if other.is_some() {
+                    if Some(hash_bytes(&remote.read(&path)?)).as_deref() != other {
+                        return Err(retry());
+                    }
+                } else if remote.exists(&path)? {
+                    return Err(retry());
+                }
+                // 전송 직전에 서재가 바뀌거나 닫히지 않았는지도 확인한다.
+                with_store(store, root, |st| st.require_database())?;
+                if let Some(bytes) = bytes {
+                    original(&path, &bytes)?;
+                    remote.write(&path, &bytes, pair.remote_info.as_ref())?;
+                    add(total, "uploaded", 1);
+                    add(total, "uploadedBytes", bytes.len());
+                } else {
+                    remote.remove(&path, pair.remote_info.as_ref().ok_or_else(retry)?)?;
+                    add(total, "cleanedFiles", 1);
+                }
+                // 쓴 뒤의 ETag는 다음에 확인한다. 예전 값을 캐시하지 않는다.
+                checkpoint(state, &path, local, None);
+                if let Some(id) = &pair.local_id {
+                    state.identities.insert(path.clone(), id.clone());
+                } else {
+                    state.identities.remove(&path);
+                }
             }
-            // 쓴 뒤의 ETag는 다음에 확인한다. 예전 값을 캐시하지 않는다.
-            checkpoint(state, &path, local, None);
-            if let Some(id) = &pair.local_id {
-                state.identities.insert(path.clone(), id.clone());
-            } else {
-                state.identities.remove(&path);
-            }
+            save(store, root, key, state)?;
+            Ok(())
+        })();
+        match operation {
+            Ok(()) => {},
+            Err(error) if can_defer_file(&error) => { deferred.insert(&path); },
+            Err(error) => return Err(error),
         }
-        save(store, root, key, state)?;
     }
+    total["deferredFiles"] = json!(names.iter().filter(|path| deferred.contains(path)).count());
     save(store, root, key, state)?;
     Ok(())
 }
