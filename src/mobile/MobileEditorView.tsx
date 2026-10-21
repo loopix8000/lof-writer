@@ -487,6 +487,10 @@ export default function MobileEditorView({
     openSibling(dx < 0 ? nextEpisode : prevEpisode);
   };
 
+  // 문서 폴더 경로는 doc/ 아래 기준이라 문서 경로에서도 doc/를 떼고 비교한다.
+  const docFolderOf = (d: Doc) =>
+    parentOfRel((d.relPath || "").replace(/^doc\//, ""));
+
   const allFolders = useMemo(() => {
     const set = new Set<string>(
       tree.memoEntries
@@ -494,7 +498,7 @@ export default function MobileEditorView({
         .map((e) => e.path),
     );
     for (const d of docItems) {
-      const f = parentOfRel(d.relPath || "");
+      const f = docFolderOf(d);
       if (f) {
         const parts = f.split("/");
         let acc = "";
@@ -589,9 +593,7 @@ export default function MobileEditorView({
       return parent === parentPath;
     });
 
-    const childDocs = docItems.filter(
-      (d) => parentOfRel(d.relPath || "") === parentPath,
-    );
+    const childDocs = docItems.filter((d) => docFolderOf(d) === parentPath);
 
     return (
       <>
@@ -599,7 +601,7 @@ export default function MobileEditorView({
           const name = folderPath.split("/").pop() || folderPath;
           const isCollapsed = Boolean(collapsedPaths[folderPath]);
           const countInFolder = docItems.filter((d) => {
-            const f = parentOfRel(d.relPath || "");
+            const f = docFolderOf(d);
             return f === folderPath || f.startsWith(`${folderPath}/`);
           }).length;
 
