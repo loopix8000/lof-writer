@@ -71,6 +71,8 @@ import {
 } from "./MobileActionSheet";
 
 type TreeTab = "episode" | "document";
+
+const LARGE_SOURCE_CHARS = 100_000;
 type RightWidgetTab = "widgets" | "typesetting" | "bookmarks";
 
 export default function MobileEditorView({
@@ -350,6 +352,15 @@ export default function MobileEditorView({
     longPressRef.current = null;
     return fired;
   };
+  // 10만 자 이상인 문서는 일반 편집기가 무거워 원문 편집으로 연다. 편집하다 기준을 넘거나 내려가도
+  // 편집기가 바뀌지 않게 문서를 열 때 한 번만 정하고, 더보기 메뉴에서 일반 편집으로 바꿀 수 있다.
+  const [largeSource, setLargeSource] = useState(() => ({
+    id: active.id,
+    on: active.body.length >= LARGE_SOURCE_CHARS,
+  }));
+  if (largeSource.id !== active.id)
+    setLargeSource({ id: active.id, on: active.body.length >= LARGE_SOURCE_CHARS });
+  const sourceMode = source || (largeSource.id === active.id && largeSource.on);
   const norm = normalizeEditorStyle(prefs, active.kind);
   const num = numberOf(active);
 
@@ -778,7 +789,7 @@ export default function MobileEditorView({
               setRightDrawerOpen(true);
             }}
           >
-            {charCountLabel}
+            <span className="m-char-badge-label">{charCountLabel}</span>
           </button>
           <button
             type="button"
@@ -925,7 +936,7 @@ export default function MobileEditorView({
             }}
             fontSize={norm.fontSize}
             lineHeight={norm.lineHeight}
-            source={source}
+            source={sourceMode}
             typingOptions={{
               autoCloseQuotes: prefs.autoCloseQuotes,
               autoCloseBrackets: prefs.autoCloseBrackets,
@@ -1045,12 +1056,15 @@ export default function MobileEditorView({
                 role="menuitem"
                 onClick={() => {
                   setMoreMenuOpen(false);
-                  setSource((s) => !s);
+                  if (sourceMode) {
+                    setSource(false);
+                    setLargeSource({ id: active.id, on: false });
+                  } else setSource(true);
                 }}
               >
                 <Code2 size={16} />
                 <span>
-                  {source ? "일반 편집 모드로 전환" : "Markdown 원문 편집"}
+                  {sourceMode ? "일반 편집 모드로 전환" : "Markdown 원문 편집"}
                 </span>
               </button>
 
@@ -1076,14 +1090,14 @@ export default function MobileEditorView({
                   attempt(() =>
                     copyDocManuscript(
                       active,
-                      source || requiresSource(active.body),
+                      sourceMode || requiresSource(active.body),
                     ),
                   )();
                 }}
               >
                 <Copy size={16} />
                 <span>
-                  {source || requiresSource(active.body)
+                  {sourceMode || requiresSource(active.body)
                     ? "Markdown 원문 복사"
                     : "본문 텍스트 복사"}
                 </span>

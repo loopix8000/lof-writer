@@ -1158,11 +1158,52 @@
   user-select: text;
 }
 
+/* 상단바는 띠 배경 없이 원고 위에 띄우고, 버튼마다 따로 떠 있는 섬처럼 보이게 한다.
+   섬 사이 빈 곳으로는 아래 원고가 지나가 보인다. */
 .m-editor-topbar {
-  padding: 4px 8px;
-  min-height: 48px;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  padding: 6px 10px;
+  min-height: 50px;
   border-bottom: none;
+  background: transparent;
+  pointer-events: none;
+  z-index: 30;
+}
+
+.m-editor-topbar > * {
+  pointer-events: auto;
+}
+
+.m-editor-topbar .m-icon-btn,
+.m-editor-topbar .m-editor-title-nav,
+.m-editor-topbar .m-char-badge-btn {
+  height: 38px;
+  min-height: 38px;
+  border: 1px solid rgba(128, 128, 128, 0.16);
+  border-radius: 999px;
   background: var(--surface);
+  box-shadow:
+    0 4px 16px rgba(0, 0, 0, 0.08),
+    0 1px 3px rgba(0, 0, 0, 0.05);
+  box-sizing: border-box;
+}
+
+.m-editor-topbar .m-icon-btn:active {
+  background: var(--accent-soft);
+}
+
+.mobile-app.dark .m-editor-topbar .m-icon-btn,
+.mobile-app.dark .m-editor-topbar .m-editor-title-nav,
+.mobile-app.dark .m-editor-topbar .m-char-badge-btn {
+  border-color: rgba(255, 255, 255, 0.1);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.42);
+}
+
+.m-editor-topbar + .m-conflict-banner {
+  margin-top: 50px;
 }
 
 .m-editor-topbar-left {
@@ -1214,6 +1255,10 @@
   background: var(--panel);
 }
 
+.m-editor-topbar .m-char-badge-btn:active {
+  background: var(--panel);
+}
+
 .m-editor-title-lock {
   flex: 0 0 auto;
   color: var(--muted);
@@ -1246,6 +1291,24 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 상단바 글자는 폰트의 위아래 여백 차이로 가운데보다 살짝 떠 보인다. 글자 상자를 대문자 높이와 기준선으로
+   잘라 둥근 칸 가운데에 놓는다. 제목은 넘치는 글자를 가리므로 위아래 같은 여백을 다시 줘 글자가 잘리지 않게 한다. */
+.m-editor-topbar .m-editor-doc-title,
+.m-char-badge-label {
+  display: block;
+  text-box: trim-both cap alphabetic;
+}
+
+.m-editor-topbar .m-editor-doc-title {
+  padding-block: 0.3em;
+}
+
+.m-char-badge-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .m-save-dot {
@@ -1306,7 +1369,8 @@
 
 .m-editor-sync-status {
   position: absolute;
-  top: 14px;
+  /* 원고 위에 떠 있는 상단바(50px) 아래에 둔다 */
+  top: 62px;
   right: 20px;
   display: flex;
   align-items: center;
@@ -1393,7 +1457,7 @@
   border-radius: 999px;
   /* 뒤의 원고가 은은하게 비치도록 표면색을 반투명하게 깔고 흐림 효과를 준다. */
   background: var(--surface);
-  background: color-mix(in srgb, var(--surface) 72%, transparent);
+  background: color-mix(in srgb, var(--surface) 52%, transparent);
   -webkit-backdrop-filter: blur(18px) saturate(1.6);
   backdrop-filter: blur(18px) saturate(1.6);
   border: 1px solid rgba(128, 128, 128, 0.16);
@@ -1409,7 +1473,7 @@
 }
 
 .mobile-app.dark .m-floating-pill-bar {
-  background: color-mix(in srgb, var(--surface) 68%, transparent);
+  background: color-mix(in srgb, var(--surface) 50%, transparent);
   border-color: rgba(255, 255, 255, 0.1);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.06),
@@ -1536,10 +1600,11 @@
   }
 }
 
+/* 드로어(280)에서 꾹 눌러 띄우는 집필 상태 메뉴도 드로어 위에 보이도록 그보다 위에 둔다 */
 .m-floating-popup-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 260;
+  z-index: 290;
   background: rgba(0, 0, 0, 0.14);
 }
 
@@ -3099,6 +3164,15 @@
 .m-editor-screen > .editor-scroll,
 .m-memo-editor-screen > .editor-scroll {
   scroll-padding-bottom: 76px;
+}
+
+/* 원고 첫 줄과 입력 중인 줄이 떠 있는 상단바에 가리지 않게 한다 */
+.m-editor-screen > .editor-scroll {
+  scroll-padding-top: 58px;
+}
+
+.m-editor-screen .m-manuscript-sheet {
+  padding-top: 62px;
 }
 
 .mobile-app .property-remove,
