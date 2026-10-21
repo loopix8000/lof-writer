@@ -967,7 +967,11 @@ pub fn start(app: &AppHandle) {
             let mut announced = u64::MAX;
             while !crate::auto_sync::stopped(&app) {
                 let rt = app.state::<Realtime>();
-                let current = root(&app)?;
+                // Android는 저장공간 권한을 확인한 뒤 서재를 열므로 서재가 열릴 때까지 기다린다.
+                let Ok(current) = root(&app) else {
+                    std::thread::sleep(Duration::from_millis(500));
+                    continue;
+                };
                 if current != previous_root {
                     for (conn, _) in connected.values() {
                         conn.close(0u8.into(), b"vault changed");
