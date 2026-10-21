@@ -1,6 +1,7 @@
 pub mod api;
 pub mod assets;
 mod auto_sync;
+mod android_updater;
 pub mod database;
 mod document_patch;
 pub mod episode;
@@ -1942,6 +1943,9 @@ fn window_minimize(window: WebviewWindow) {
 
 #[tauri::command]
 fn updater_status(app: AppHandle) -> Value {
+    if cfg!(target_os = "android") {
+        return json!({ "supported": true, "configured": true, "platform": "android" });
+    }
     let updater = app.config().plugins.0.get("updater");
     let has_key = updater
         .and_then(|v| v.get("pubkey"))
@@ -1953,7 +1957,7 @@ fn updater_status(app: AppHandle) -> Value {
         .is_some_and(|urls| !urls.is_empty() && urls.iter().all(|v| {
             v.as_str().is_some_and(|s| s.starts_with("https://"))
         }));
-    json!({ "supported": cfg!(target_os = "windows"), "configured": has_key && has_endpoint })
+    json!({ "supported": cfg!(target_os = "windows"), "configured": has_key && has_endpoint, "platform": "windows" })
 }
 
 #[tauri::command]
@@ -2213,6 +2217,8 @@ pub fn run() {
     let user_dir_for_exit = user_dir.clone();
 
     let builder = tauri::Builder::default();
+    #[cfg(target_os = "android")]
+    let builder = builder.plugin(android_updater::init());
     #[cfg(not(target_os = "android"))]
     let builder = builder
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -2233,6 +2239,9 @@ pub fn run() {
             window_close,
             window_start_dragging,
             updater_status,
+            android_updater::android_update_check,
+            android_updater::android_update_download,
+            android_updater::android_update_install,
         ])
         .setup(move |app| {
             #[cfg(not(target_os = "android"))]

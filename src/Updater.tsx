@@ -6,6 +6,18 @@ import { Download, RefreshCw, X } from "lucide-react";
 import { ReleaseNotesForVersion } from "./ReleaseNotes";
 
 type Phase = "idle" | "checking" | "current" | "available" | "downloading" | "saving" | "installing" | "error";
+type UpdateHandle = Pick<Update, "version" | "download" | "install" | "close">;
+
+async function checkAndroidUpdate(): Promise<UpdateHandle | null> {
+  const result = await invoke<{ available: boolean; version?: string }>("android_update_check");
+  if (!result.available || !result.version) return null;
+  return {
+    version: result.version,
+    download: async () => { await invoke("android_update_download"); },
+    install: async () => { await invoke("android_update_install"); },
+    close: async () => {},
+  };
+}
 
 export function useAppUpdater({ loaded, autoCheck, beforeInstall }: {
   loaded: boolean;
@@ -13,12 +25,14 @@ export function useAppUpdater({ loaded, autoCheck, beforeInstall }: {
   beforeInstall: () => Promise<void>;
 }) {
   const [configured, setConfigured] = useState<boolean | null>(null);
+  const [platform, setPlatform] = useState("windows");
+  const platformRef = useRef("windows");
   const [phase, setPhase] = useState<Phase>("idle");
   const [available, setAvailable] = useState<{ version: string } | null>(null);
   const [error, setError] = useState("");
   const [progress, setProgress] = useState<number | null>(null);
   const [dismissed, setDismissed] = useState(false);
-  const updateRef = useRef<Update | null>(null);
+  const updateRef = useRef<UpdateHandle | null>(null);
   const running = useRef(false);
   const generation = useRef(0);
   const autoChecked = useRef(false);
@@ -29,9 +43,13 @@ export function useAppUpdater({ loaded, autoCheck, beforeInstall }: {
   useEffect(() => {
     const current = ++generation.current;
     if (loaded) {
-      invoke<{ configured: boolean; supported: boolean }>("updater_status")
+      invoke<{ configured: boolean; supported: boolean; platform?: string }>("updater_status")
         .then((status) => {
-          if (current === generation.current) setConfigured(status.configured && status.supported);
+          if (current === generation.current) {
+            platformRef.current = status.platform || "windows";
+            setPlatform(platformRef.current);
+            setConfigured(status.configured && status.supported);
+          }
         })
         .catch(() => {
           if (current === generation.current) setConfigured(false);
@@ -58,7 +76,7 @@ export function useAppUpdater({ loaded, autoCheck, beforeInstall }: {
     updateRef.current = null;
     try {
       await previous?.close();
-      const update = await check({ timeout: 15000 });
+      const update = platformRef.current === "android" ? await checkAndroidUpdate() : await check({ timeout: 15000 });
       if (current !== generation.current) {
         await update?.close();
         return;
@@ -107,6 +125,7 @@ export function useAppUpdater({ loaded, autoCheck, beforeInstall }: {
       await prepareRef.current();
       setPhase("installing");
       await update.install({ restartAfterInstall: true });
+      if (current === generation.current && platformRef.current === "android") setPhase("available");
     } catch (e) {
       if (current === generation.current) {
         setError(String(e instanceof Error ? e.message : e));
@@ -119,7 +138,7 @@ export function useAppUpdater({ loaded, autoCheck, beforeInstall }: {
   }, []);
 
   return {
-    configured, phase, available, error, progress, dismissed, lockRef,
+    configured, platform, phase, available, error, progress, dismissed, lockRef,
     locked: phase === "saving" || phase === "installing",
     busy: ["checking", "downloading", "saving", "installing"].includes(phase),
     checkNow, install, dismiss: () => setDismissed(true),
@@ -166,7 +185,9 @@ export function UpdateSettings({ updater, version, autoCheck, onAutoCheck }: {
     </div>
     {updater.error && <p className="updater-error" role="alert">업데이트를 완료하지 못했습니다. {updater.error}</p>}
     {updater.available && <>
-      <p className="settings-note">설치 전에 열린 원고와 메모를 저장합니다. 저장에 실패하면 설치를 중단합니다. 설치가 시작되면 앱이 종료되고 완료 후 다시 실행됩니다.</p>
+      <p className="settings-note">{updater.platform === "android"
+        ? "설치 전에 원고와 메모를 저장합니다. Android 설치 화면에서 업데이트를 확인해 주세요. 처음에는 이 앱의 설치 허용이 필요할 수 있습니다."
+        : "설치 전에 열린 원고와 메모를 저장합니다. 저장에 실패하면 설치를 중단합니다. 설치가 시작되면 앱이 종료되고 완료 후 다시 실행됩니다."}</p>
       <ReleaseNotesForVersion key={updater.available.version} version={updater.available.version} />
     </>}
   </>;
