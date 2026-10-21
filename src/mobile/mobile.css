@@ -20,6 +20,17 @@
   -webkit-tap-highlight-color: transparent;
 }
 
+@media (hover: none) {
+  .mobile-app button:active:not(:disabled) {
+    filter: brightness(0.96);
+  }
+
+  .mobile-app .settings-toggle:active,
+  .mobile-app .linebreak-choice:active {
+    background: var(--hover);
+  }
+}
+
 .m-viewport {
   flex: 1 1 auto;
   min-height: 0;
@@ -3109,9 +3120,9 @@
   resize: vertical;
 }
 
-.m-dialog-body input:focus,
-.m-dialog-body select:focus,
-.m-dialog-body textarea:focus {
+.m-dialog-body input:focus-visible,
+.m-dialog-body select:focus-visible,
+.m-dialog-body textarea:focus-visible {
   outline: none;
   border-color: var(--accent);
 }

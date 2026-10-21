@@ -88,9 +88,11 @@ button {
     color 0.12s,
     border-color 0.12s;
 }
-button:hover {
-  background: var(--hover);
-  border-color: var(--border-hover);
+@media (hover: hover) and (pointer: fine) {
+  button:hover {
+    background: var(--hover);
+    border-color: var(--border-hover);
+  }
 }
 button:disabled {
   opacity: 0.45;
@@ -107,9 +109,9 @@ textarea {
   outline: none;
   min-width: 0;
 }
-input:focus,
-select:focus,
-textarea:focus {
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--focus-ring);
 }
@@ -119,6 +121,9 @@ textarea::placeholder {
 }
 textarea {
   resize: vertical;
+}
+button:focus:not(:focus-visible) {
+  outline: none;
 }
 button:focus-visible {
   outline: 2px solid var(--accent);
@@ -374,9 +379,11 @@ button:focus-visible {
   color: var(--muted);
   justify-content: center;
 }
-.history-navigation button:hover:not(:disabled) {
-  background: var(--soft);
-  color: var(--text);
+@media (hover: hover) and (pointer: fine) {
+  .history-navigation button:hover:not(:disabled) {
+    background: var(--soft);
+    color: var(--text);
+  }
 }
 .layout-controls {
   display: flex;
@@ -399,9 +406,11 @@ button:focus-visible {
   color: var(--muted);
   justify-content: center;
 }
-.layout-controls button:hover:not(:disabled) {
-  background: var(--soft);
-  color: var(--text);
+@media (hover: hover) and (pointer: fine) {
+  .layout-controls button:hover:not(:disabled) {
+    background: var(--soft);
+    color: var(--text);
+  }
 }
 .layout-controls button:disabled {
   opacity: 0.3;
@@ -471,10 +480,15 @@ button:focus-visible {
   color: var(--muted);
   background: transparent;
 }
-.rail button.selected,
-.rail button:hover {
+.rail button.selected {
   color: var(--text);
   background: var(--soft);
+}
+@media (hover: hover) and (pointer: fine) {
+  .rail button:hover {
+    color: var(--text);
+    background: var(--soft);
+  }
 }
 .rail button.selected {
   color: var(--selection-text);
@@ -567,8 +581,10 @@ h1 small {
   box-shadow: 0 3px 8px #0000001a;
   white-space: nowrap;
 }
-.primary:hover {
-  background: var(--primary-hover) !important;
+@media (hover: hover) and (pointer: fine) {
+  .primary:hover {
+    background: var(--primary-hover) !important;
+  }
 }
 .project-grid {
   display: grid;
@@ -591,10 +607,12 @@ h1 small {
   min-height: 175px;
   border-radius: 10px;
 }
-.project-card:hover {
-  background: var(--surface);
-  border-color: var(--border);
-  box-shadow: 0 6px 26px #00000008;
+@media (hover: hover) and (pointer: fine) {
+  .project-card:hover {
+    background: var(--surface);
+    border-color: var(--border);
+    box-shadow: 0 6px 26px #00000008;
+  }
 }
 .project-card[draggable="true"] {
   user-select: none;
@@ -828,8 +846,10 @@ h1 small {
   border-radius: 7px;
   color: var(--muted);
 }
-.project-tabs .row:first-child button:hover:not(.selected) {
-  color: var(--text);
+@media (hover: hover) and (pointer: fine) {
+  .project-tabs .row:first-child button:hover:not(.selected) {
+    color: var(--text);
+  }
 }
 .project-tabs button.selected {
   background: var(--surface) !important;
@@ -926,10 +946,14 @@ h1 small {
   cursor: col-resize;
   touch-action: none;
 }
-.sidebar-sash:hover,
 .sidebar-sash:focus-visible,
 .resizable-sidebar.resizing > .sidebar-sash {
   background: var(--accent);
+}
+@media (hover: hover) and (pointer: fine) {
+  .sidebar-sash:hover {
+    background: var(--accent);
+  }
 }
 body.sidebar-resizing,
 body.sidebar-resizing * {
@@ -1027,8 +1051,10 @@ body.sidebar-resizing * {
 .tree-heading .heading-extra {
   margin-left: 8px;
 }
-.tree-heading button:hover:not(:disabled) {
-  color: var(--text);
+@media (hover: hover) and (pointer: fine) {
+  .tree-heading button:hover:not(:disabled) {
+    color: var(--text);
+  }
 }
 .tree-item {
   width: 100%;
@@ -1107,9 +1133,11 @@ body.sidebar-resizing * {
   font-size: 13px;
   font-weight: 600;
 }
-.tree-tabs button:hover {
-  background: none;
-  color: var(--text);
+@media (hover: hover) and (pointer: fine) {
+  .tree-tabs button:hover {
+    background: none;
+    color: var(--text);
+  }
 }
 .tree-tabs button.active {
   color: var(--text);
@@ -1137,8 +1165,10 @@ body.sidebar-resizing * {
   color: var(--muted);
   font-size: 13px;
 }
-.doc-scope button:hover {
-  background: var(--hover);
+@media (hover: hover) and (pointer: fine) {
+  .doc-scope button:hover {
+    background: var(--hover);
+  }
 }
 .doc-scope button.active {
   color: var(--accent);
@@ -1187,9 +1217,11 @@ body.sidebar-resizing * {
   background: none;
   color: var(--muted);
 }
-.tree-search button:hover,
-.tree-search-action:hover:not(:disabled) {
-  color: var(--text);
+@media (hover: hover) and (pointer: fine) {
+  .tree-search button:hover,
+  .tree-search-action:hover:not(:disabled) {
+    color: var(--text);
+  }
 }
 .tree-scroll {
   flex: 1;
@@ -1257,8 +1289,10 @@ body.sidebar-resizing * {
   font-size: 13px;
   font-weight: 600;
 }
-.episode-add:hover {
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
+@media (hover: hover) and (pointer: fine) {
+  .episode-add:hover {
+    background: color-mix(in srgb, var(--accent) 16%, transparent);
+  }
 }
 .sidebar-footer {
   margin-top: auto;
@@ -1319,8 +1353,10 @@ body.sidebar-resizing * {
   font-style: italic;
   font-synthesis: style;
 }
-.editor-tab:hover {
-  background: var(--hover);
+@media (hover: hover) and (pointer: fine) {
+  .editor-tab:hover {
+    background: var(--hover);
+  }
 }
 .editor-tab.current {
   border-top-color: var(--accent);
@@ -1340,13 +1376,19 @@ body.sidebar-resizing * {
   visibility: hidden;
 }
 .editor-tab.current button,
-.editor-tab:hover button,
 .editor-tab:focus-within button {
   visibility: visible;
 }
-.editor-tab button:hover {
-  background: var(--soft);
-  color: var(--text);
+@media (hover: hover) and (pointer: fine) {
+  .editor-tab:hover button {
+    visibility: visible;
+  }
+}
+@media (hover: hover) and (pointer: fine) {
+  .editor-tab button:hover {
+    background: var(--soft);
+    color: var(--text);
+  }
 }
 .editor-tabs-actions {
   position: sticky;
@@ -1369,9 +1411,11 @@ body.sidebar-resizing * {
   background: none;
   cursor: pointer;
 }
-.tab-split-button:hover {
-  background: var(--hover);
-  color: var(--text);
+@media (hover: hover) and (pointer: fine) {
+  .tab-split-button:hover {
+    background: var(--hover);
+    color: var(--text);
+  }
 }
 .context-target {
   outline: 1px solid var(--accent);
@@ -1420,14 +1464,20 @@ body.sidebar-resizing * {
   color: inherit;
   text-align: left;
 }
-.context-menu button:hover:not(:disabled),
+.context-menu button.danger {
+  color: var(--danger-text);
+}
 .context-menu button:focus-visible {
   background: var(--primary-bg);
   color: var(--primary-text);
   outline: none;
 }
-.context-menu button.danger:not(:hover):not(:focus-visible) {
-  color: var(--danger-text);
+@media (hover: hover) and (pointer: fine) {
+  .context-menu button:hover:not(:disabled) {
+    background: var(--primary-bg);
+    color: var(--primary-text);
+    outline: none;
+  }
 }
 .context-menu button:disabled {
   opacity: 0.4;
@@ -1494,10 +1544,15 @@ body.sidebar-resizing * {
   color: var(--muted);
   background: none;
 }
-.editor-actions button:hover,
 .editor-actions button.active {
   color: var(--text);
   background: var(--soft);
+}
+@media (hover: hover) and (pointer: fine) {
+  .editor-actions button:hover {
+    color: var(--text);
+    background: var(--soft);
+  }
 }
 .save-indicator {
   font-size: 13px;
@@ -1592,10 +1647,15 @@ body.sidebar-resizing * {
   color: var(--muted);
   border-radius: 4px;
 }
-.format-bar button.active,
-.format-bar button:hover {
+.format-bar button.active {
   color: var(--text);
   background: var(--soft);
+}
+@media (hover: hover) and (pointer: fine) {
+  .format-bar button:hover {
+    color: var(--text);
+    background: var(--soft);
+  }
 }
 .format-bar.inactive {
   pointer-events: none;
@@ -1626,7 +1686,9 @@ body.sidebar-resizing * {
 .editor-find > svg { flex-shrink: 0; color: var(--muted); }
 .editor-find input { flex: 1 1 100px; width: 0; padding: 5px 7px; font-size: 13px; }
 .editor-find button { flex-shrink: 0; padding: 5px; min-height: 28px; border: 0; border-radius: 4px; color: var(--muted); }
-.editor-find button:hover { color: var(--text); }
+@media (hover: hover) and (pointer: fine) {
+  .editor-find button:hover { color: var(--text); }
+}
 .editor-find button.active { color: var(--accent); background: var(--selection-bg); }
 .editor-find button:disabled { cursor: default; }
 .editor-find-count { color: var(--muted); white-space: nowrap; padding: 0 4px; font-variant-numeric: tabular-nums; }
@@ -1713,12 +1775,16 @@ body.sidebar-resizing * {
   background: none;
   color: var(--muted);
 }
-.table-tools button:hover {
-  color: var(--text);
-  background: var(--soft);
+@media (hover: hover) and (pointer: fine) {
+  .table-tools button:hover {
+    color: var(--text);
+    background: var(--soft);
+  }
 }
-.table-tools-group.danger button:hover {
-  color: var(--danger-text);
+@media (hover: hover) and (pointer: fine) {
+  .table-tools-group.danger button:hover {
+    color: var(--danger-text);
+  }
 }
 /* 이미지를 눌렀을 때의 크기·삭제 도구. 손가락으로도 누르기 쉽게 조금 크게 둔다. */
 .image-tools button {
@@ -1844,8 +1910,10 @@ body.sidebar-resizing * {
   margin-left: auto;
   white-space: nowrap;
 }
-.editor-footer .footer-exit-focus:hover {
-  color: var(--text);
+@media (hover: hover) and (pointer: fine) {
+  .editor-footer .footer-exit-focus:hover {
+    color: var(--text);
+  }
 }
 .widget-sidebar {
   width: 260px;
@@ -2066,8 +2134,10 @@ body.sidebar-resizing * {
   background: none;
   cursor: zoom-in;
 }
-.cover-zoom:hover {
-  background: none;
+@media (hover: hover) and (pointer: fine) {
+  .cover-zoom:hover {
+    background: none;
+  }
 }
 .cover-zoom > img {
   width: 100%;
@@ -2234,8 +2304,10 @@ body.sidebar-resizing * {
   width: 30px;
   height: 30px;
 }
-.settings-modal > .modal-header button:hover {
-  background: var(--hover);
+@media (hover: hover) and (pointer: fine) {
+  .settings-modal > .modal-header button:hover {
+    background: var(--hover);
+  }
 }
 .settings-layout {
   display: grid;
@@ -2264,9 +2336,11 @@ body.sidebar-resizing * {
   color: var(--muted);
   text-align: left;
 }
-.settings-nav button:hover {
-  background: var(--hover);
-  color: var(--text);
+@media (hover: hover) and (pointer: fine) {
+  .settings-nav button:hover {
+    background: var(--hover);
+    color: var(--text);
+  }
 }
 .settings-nav button[aria-pressed="true"] {
   background: var(--selection-bg);
@@ -2334,8 +2408,10 @@ body.sidebar-resizing * {
 .settings-toggle + .settings-toggle {
   border-top: 1px solid var(--border);
 }
-.settings-toggle:hover {
-  background: var(--hover);
+@media (hover: hover) and (pointer: fine) {
+  .settings-toggle:hover {
+    background: var(--hover);
+  }
 }
 .settings-toggle > span {
   min-width: 0;
@@ -2406,8 +2482,10 @@ body.sidebar-resizing * {
   border-radius: 8px;
   cursor: pointer;
 }
-.linebreak-choice:hover {
-  background: var(--hover);
+@media (hover: hover) and (pointer: fine) {
+  .linebreak-choice:hover {
+    background: var(--hover);
+  }
 }
 .linebreak-choice.selected {
   border-color: var(--accent);
@@ -3098,8 +3176,10 @@ body.sidebar-resizing * {
   box-shadow: 0 2px 12px #00000008;
   opacity: 0.65;
 }
-.exit-focus:hover {
-  opacity: 1;
+@media (hover: hover) and (pointer: fine) {
+  .exit-focus:hover {
+    opacity: 1;
+  }
 }
 /* The thumb sits 2px inside the track so it never touches a box edge. */
 ::-webkit-scrollbar {
@@ -3116,9 +3196,11 @@ body.sidebar-resizing * {
   border: 2px solid transparent;
   border-radius: 6px;
 }
-::-webkit-scrollbar-thumb:hover {
-  background: var(--scrollbar-hover);
-  background-clip: padding-box;
+@media (hover: hover) and (pointer: fine) {
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--scrollbar-hover);
+    background-clip: padding-box;
+  }
 }
 /* Rounded scroll boxes: keep the thumb clear of the curved corners. */
 .modal::-webkit-scrollbar-track {
@@ -3203,9 +3285,13 @@ textarea::-webkit-scrollbar-track {
   cursor: row-resize;
   padding: 1.5px 0;
 }
-.group-sash.horizontal:not(.grid-sash):hover,
 .group-sash.horizontal.hover {
   padding: 0;
+}
+@media (hover: hover) and (pointer: fine) {
+  .group-sash.horizontal:not(.grid-sash):hover {
+    padding: 0;
+  }
 }
 body.sash-dragging-horizontal {
   cursor: row-resize;
@@ -3249,10 +3335,15 @@ body.split-dragging .memo-blank {
   padding: 0 1.5px;
   touch-action: none;
 }
-.group-sash:not(.grid-sash):hover,
 .group-sash.hover {
   background-color: var(--accent);
   padding: 0;
+}
+@media (hover: hover) and (pointer: fine) {
+  .group-sash:not(.grid-sash):hover {
+    background-color: var(--accent);
+    padding: 0;
+  }
 }
 body.sash-dragging {
   cursor: col-resize;
@@ -3409,14 +3500,18 @@ body.sash-dragging {
   color: #ffffff;
 }
 /* 공통 button:hover 배경보다 앞서도록 호버에서도 빨간 배경을 다시 지정한다. */
-.danger-solid:hover:not(:disabled) {
-  background: var(--danger-text);
-  border-color: var(--danger-text);
-  filter: brightness(1.1);
+@media (hover: hover) and (pointer: fine) {
+  .danger-solid:hover:not(:disabled) {
+    background: var(--danger-text);
+    border-color: var(--danger-text);
+    filter: brightness(1.1);
+  }
 }
-.danger-solid:disabled:hover {
-  background: var(--danger-text);
-  border-color: var(--danger-text);
+@media (hover: hover) and (pointer: fine) {
+  .danger-solid:disabled:hover {
+    background: var(--danger-text);
+    border-color: var(--danger-text);
+  }
 }
 .modal .danger-outline + .danger-outline {
   margin-left: 8px;
@@ -3428,9 +3523,11 @@ body.sash-dragging {
   box-shadow: none;
   color: var(--muted);
 }
-.new-project-card:hover .new-cover {
-  border-color: var(--accent);
-  color: var(--accent);
+@media (hover: hover) and (pointer: fine) {
+  .new-project-card:hover .new-cover {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
 }
 /* 표지 숨기기: 작품 카드를 제목 중심으로 줄이고 새 이야기 카드는 작은 점선 칸만 남긴다. */
 .project-card.no-cover {
@@ -3446,8 +3543,10 @@ body.sash-dragging {
 .new-project-card .project-info h3 {
   color: var(--muted);
 }
-.new-project-card:hover .project-info h3 {
-  color: var(--text);
+@media (hover: hover) and (pointer: fine) {
+  .new-project-card:hover .project-info h3 {
+    color: var(--text);
+  }
 }
 /* 메모 세션: 왼쪽 폴더 트리, 오른쪽 편집기 */
 .memo-session {
@@ -3463,9 +3562,11 @@ body.sash-dragging {
 .memo-sidebar .caption-actions button {
   border-radius: 4px;
 }
-.memo-sidebar .caption-actions button:hover {
-  background: var(--hover);
-  color: var(--text);
+@media (hover: hover) and (pointer: fine) {
+  .memo-sidebar .caption-actions button:hover {
+    background: var(--hover);
+    color: var(--text);
+  }
 }
 .memo-space {
   display: flex;
@@ -3644,15 +3745,23 @@ select:not([multiple]) {
   border-radius: 4px;
   background: var(--hover);
 }
-.tree-item:hover .tree-actions,
 .tree-item:focus-visible .tree-actions {
   display: flex;
 }
+@media (hover: hover) and (pointer: fine) {
+  .tree-item:hover .tree-actions {
+    display: flex;
+  }
+}
 /* 버튼 묶음이 뜨는 동안에는 같은 자리의 연결 회차 배지를 감춘다(자리는 그대로 두어 제목이 밀리지 않는다).
    다중 선택한 줄은 버튼 묶음을 띄우지 않으므로 배지를 그대로 둔다. */
-.tree-item:not(.multi-selected):hover .tree-badge,
 .tree-item:not(.multi-selected):focus-visible .tree-badge {
   visibility: hidden;
+}
+@media (hover: hover) and (pointer: fine) {
+  .tree-item:not(.multi-selected):hover .tree-badge {
+    visibility: hidden;
+  }
 }
 .tree-item.current .tree-actions {
   background: var(--selection-bg);
@@ -3668,18 +3777,26 @@ select:not([multiple]) {
 .tree-item.memo-folder {
   gap: 5px;
 }
-.tree-item .tree-action:hover {
-  background: var(--soft);
-  color: var(--text);
+@media (hover: hover) and (pointer: fine) {
+  .tree-item .tree-action:hover {
+    background: var(--soft);
+    color: var(--text);
+  }
 }
 /* Shift·Ctrl+클릭으로 여러 줄을 고른 상태(파일 트리·메모 트리).
    줄마다 칠하면 줄 사이 틈과 둥근 모서리 때문에 끊겨 보이므로, 줄 뒤에 틈까지 덮는 배경(::after)을 깔아
    이어진 줄을 한 덩어리로 보이게 하고 덩어리의 처음과 끝에만 모서리를 둥글린다. 겹쳐도 진해지지 않게 불투명한 색을 쓴다. */
-.tree-item.multi-selected,
-.tree-item.multi-selected:hover {
+.tree-item.multi-selected {
   background: transparent;
   color: var(--text);
   isolation: isolate;
+}
+@media (hover: hover) and (pointer: fine) {
+  .tree-item.multi-selected:hover {
+    background: transparent;
+    color: var(--text);
+    isolation: isolate;
+  }
 }
 .tree-item.multi-selected::after {
   content: "";
@@ -3766,9 +3883,11 @@ select:not([multiple]) {
   border-radius: 5px;
   color: var(--muted);
 }
-.episode-plots .widget-title .widget-quick-add:hover:not(:disabled) {
-  background: var(--soft);
-  color: var(--text);
+@media (hover: hover) and (pointer: fine) {
+  .episode-plots .widget-title .widget-quick-add:hover:not(:disabled) {
+    background: var(--soft);
+    color: var(--text);
+  }
 }
 .episode-plots .widget-title .widget-quick-add:disabled {
   opacity: 0.4;
@@ -3918,8 +4037,10 @@ select:not([multiple]) {
   margin: 0;
   color: var(--muted);
 }
-.episode-binding-picker .episode-picker button:hover:not(:disabled) {
-  background: var(--hover);
+@media (hover: hover) and (pointer: fine) {
+  .episode-binding-picker .episode-picker button:hover:not(:disabled) {
+    background: var(--hover);
+  }
 }
 .binding-episode-title {
   flex: 1;
@@ -4009,10 +4130,15 @@ select:not([multiple]) {
   text-overflow: ellipsis;
   min-width: 0;
 }
-.quick-item.selected,
-.quick-item.selected:hover {
+.quick-item.selected {
   background: var(--primary-bg);
   color: var(--primary-text);
+}
+@media (hover: hover) and (pointer: fine) {
+  .quick-item.selected:hover {
+    background: var(--primary-bg);
+    color: var(--primary-text);
+  }
 }
 .quick-item.selected > small {
   color: inherit;
@@ -4237,9 +4363,11 @@ select:not([multiple]) {
   background: transparent;
   color: var(--muted);
 }
-.custom-property-list-remove:hover {
-  color: var(--text);
-  background: var(--hover);
+@media (hover: hover) and (pointer: fine) {
+  .custom-property-list-remove:hover {
+    color: var(--text);
+    background: var(--hover);
+  }
 }
 select.property-choice {
   min-width: 96px;
@@ -4256,8 +4384,10 @@ select.property-choice {
   background-position: right 5px center;
   background-size: 12px;
 }
-select.property-choice:hover:not(:disabled) {
-  background-color: var(--hover);
+@media (hover: hover) and (pointer: fine) {
+  select.property-choice:hover:not(:disabled) {
+    background-color: var(--hover);
+  }
 }
 select.property-choice:disabled {
   cursor: default;
@@ -4530,9 +4660,11 @@ input.property-text {
   color: var(--muted);
   cursor: pointer;
 }
-.episode-tag-remove:hover {
-  background: var(--surface);
-  color: var(--text);
+@media (hover: hover) and (pointer: fine) {
+  .episode-tag-remove:hover {
+    background: var(--surface);
+    color: var(--text);
+  }
 }
 .episode-tag-error {
   flex-basis: 100%;
@@ -4569,8 +4701,10 @@ input.property-text {
 .property-select svg {
   flex-shrink: 0;
 }
-.property-select:hover:not(:disabled) {
-  background: var(--hover);
+@media (hover: hover) and (pointer: fine) {
+  .property-select:hover:not(:disabled) {
+    background: var(--hover);
+  }
 }
 .property-select:disabled {
   cursor: default;
@@ -4612,9 +4746,11 @@ input.property-text {
   line-height: 20px;
   white-space: nowrap;
 }
-.property-binding-action:hover {
-  background: var(--hover);
-  color: var(--text);
+@media (hover: hover) and (pointer: fine) {
+  .property-binding-action:hover {
+    background: var(--hover);
+    color: var(--text);
+  }
 }
 .property-text {
   width: 100%;
@@ -4647,12 +4783,18 @@ input.property-text {
   opacity: 0;
   transition: opacity 0.15s ease;
 }
-.property-row:hover .property-remove,
 .property-remove:focus-visible {
   opacity: 1;
 }
-.property-remove:hover {
-  background: var(--hover);
+@media (hover: hover) and (pointer: fine) {
+  .property-row:hover .property-remove {
+    opacity: 1;
+  }
+}
+@media (hover: hover) and (pointer: fine) {
+  .property-remove:hover {
+    background: var(--hover);
+  }
 }
 .property-add {
   grid-column: 1 / -1;
@@ -4667,8 +4809,10 @@ input.property-text {
   color: var(--placeholder);
   font-size: 13px;
 }
-.property-add:hover {
-  color: var(--text);
+@media (hover: hover) and (pointer: fine) {
+  .property-add:hover {
+    color: var(--text);
+  }
 }
 .episode-info-toggle {
   display: inline-flex;
@@ -4682,8 +4826,10 @@ input.property-text {
   color: var(--muted);
   font-size: 13px;
 }
-.episode-info-toggle:hover {
-  color: var(--text);
+@media (hover: hover) and (pointer: fine) {
+  .episode-info-toggle:hover {
+    color: var(--text);
+  }
 }
 .episode-info-toggle .flipped {
   transform: rotate(180deg);
@@ -4703,9 +4849,13 @@ input.property-text {
   flex-shrink: 0;
   color: var(--accent);
 }
-.context-menu button:hover:not(:disabled) .menu-icon,
 .context-menu button:focus-visible .menu-icon {
   color: inherit;
+}
+@media (hover: hover) and (pointer: fine) {
+  .context-menu button:hover:not(:disabled) .menu-icon {
+    color: inherit;
+  }
 }
 .menu-badge {
   margin-left: auto;
@@ -4721,8 +4871,10 @@ input.property-text {
   opacity: 0.5;
   color: var(--text);
 }
-.context-menu button:hover:not(:disabled) .faded-icon {
-  color: inherit;
+@media (hover: hover) and (pointer: fine) {
+  .context-menu button:hover:not(:disabled) .faded-icon {
+    color: inherit;
+  }
 }
 .tone-green { display: inline-flex; color: #2f9e44; }
 .tone-blue { display: inline-flex; color: #1c7ed6; }
@@ -4730,8 +4882,10 @@ input.property-text {
 .tone-orange { display: inline-flex; color: #f76707; }
 .tone-red { display: inline-flex; color: #e03131; }
 .tone-gray { display: inline-flex; color: #868e96; }
-.context-menu button:hover:not(:disabled) [class^="tone-"] {
-  color: inherit;
+@media (hover: hover) and (pointer: fine) {
+  .context-menu button:hover:not(:disabled) [class^="tone-"] {
+    color: inherit;
+  }
 }
 .toast-action {
   margin-left: 8px;
@@ -4743,8 +4897,10 @@ input.property-text {
   font-size: 13px;
   font-weight: 600;
 }
-.toast-action:hover {
-  background: var(--hover);
+@media (hover: hover) and (pointer: fine) {
+  .toast-action:hover {
+    background: var(--hover);
+  }
 }
 /* 수동 줄바꿈 관리: 단락 간격 없이 Enter 한 번이 한 줄. */
 .manual-break .tiptap p {
@@ -4802,12 +4958,16 @@ input.property-text {
   align-items: center;
   justify-content: center;
 }
-.window-control:hover {
-  background: var(--soft);
+@media (hover: hover) and (pointer: fine) {
+  .window-control:hover {
+    background: var(--soft);
+  }
 }
-.window-control.close:hover {
-  background: #e81123;
-  color: #ffffff;
+@media (hover: hover) and (pointer: fine) {
+  .window-control.close:hover {
+    background: #e81123;
+    color: #ffffff;
+  }
 }
 
 .open-source-licenses {
@@ -5033,9 +5193,11 @@ input.property-text {
   text-align: left;
 }
 
-.preset-card:hover {
-  border-color: var(--accent);
-  background: var(--hover);
+@media (hover: hover) and (pointer: fine) {
+  .preset-card:hover {
+    border-color: var(--accent);
+    background: var(--hover);
+  }
 }
 
 .preset-card strong {
@@ -5103,9 +5265,11 @@ input.property-text {
   font-weight: 500;
 }
 
-.typesetting-kind-tab:hover {
-  border-color: var(--accent);
-  color: var(--text);
+@media (hover: hover) and (pointer: fine) {
+  .typesetting-kind-tab:hover {
+    border-color: var(--accent);
+    color: var(--text);
+  }
 }
 
 .typesetting-kind-tab.active {
@@ -5239,8 +5403,10 @@ input.property-text {
   color: var(--muted);
 }
 
-.system-font-toolbar > button:hover {
-  color: var(--text);
+@media (hover: hover) and (pointer: fine) {
+  .system-font-toolbar > button:hover {
+    color: var(--text);
+  }
 }
 
 .system-font-toolbar .spin {
@@ -5276,9 +5442,11 @@ input.property-text {
   text-align: left;
 }
 
-.system-font-option:hover {
-  border-color: var(--border);
-  background: var(--hover);
+@media (hover: hover) and (pointer: fine) {
+  .system-font-option:hover {
+    border-color: var(--border);
+    background: var(--hover);
+  }
 }
 
 .system-font-option.selected {
@@ -5355,8 +5523,10 @@ input.property-text {
   text-align: left;
 }
 
-.user-font-select:hover {
-  background: transparent;
+@media (hover: hover) and (pointer: fine) {
+  .user-font-select:hover {
+    background: transparent;
+  }
 }
 
 .user-font-head {
@@ -5410,10 +5580,12 @@ input.property-text {
   color: var(--muted);
 }
 
-.user-font-delete:hover {
-  border-color: var(--danger);
-  background: var(--surface);
-  color: var(--danger);
+@media (hover: hover) and (pointer: fine) {
+  .user-font-delete:hover {
+    border-color: var(--danger);
+    background: var(--surface);
+    color: var(--danger);
+  }
 }
 
 .typesetting-scope-header {
@@ -5498,9 +5670,11 @@ input.property-text {
   color: var(--muted);
 }
 
-.replacement-delete:hover {
-  color: var(--danger);
-  border-color: var(--danger);
+@media (hover: hover) and (pointer: fine) {
+  .replacement-delete:hover {
+    color: var(--danger);
+    border-color: var(--danger);
+  }
 }
 
 .updater-actions {
@@ -5618,8 +5792,10 @@ input.property-text {
   color: var(--accent);
   font-size: 11px;
 }
-.release-notice-open:hover small {
-  text-decoration: underline;
+@media (hover: hover) and (pointer: fine) {
+  .release-notice-open:hover small {
+    text-decoration: underline;
+  }
 }
 .release-notice-close {
   padding: 8px;
@@ -5808,8 +5984,10 @@ input.property-text {
 .panel-caption .bookmark-toggle {
   border-radius: 5px;
 }
-.panel-caption .bookmark-toggle:hover {
-  color: var(--text);
+@media (hover: hover) and (pointer: fine) {
+  .panel-caption .bookmark-toggle:hover {
+    color: var(--text);
+  }
 }
 .panel-caption .bookmark-toggle.active {
   color: var(--bookmark);
@@ -5823,8 +6001,10 @@ input.property-text {
   display: inline-flex;
   border-radius: 5px;
 }
-.panel-caption-actions button:hover {
-  color: var(--text);
+@media (hover: hover) and (pointer: fine) {
+  .panel-caption-actions button:hover {
+    color: var(--text);
+  }
 }
 /* 위젯 보드 자리에 펼친 조판 설정. 설정 창보다 좁으므로 한 열로 쌓는다. */
 .widget-sidebar.typesetting-open {
@@ -5928,8 +6108,10 @@ input.property-text {
   gap: 2px;
   border-radius: 6px;
 }
-.bookmark-item:hover {
-  background: var(--hover);
+@media (hover: hover) and (pointer: fine) {
+  .bookmark-item:hover {
+    background: var(--hover);
+  }
 }
 .bookmark-jump {
   flex: 1;
@@ -5944,8 +6126,10 @@ input.property-text {
   font-size: 13px;
   text-align: left;
 }
-.bookmark-jump:hover {
-  background: none;
+@media (hover: hover) and (pointer: fine) {
+  .bookmark-jump:hover {
+    background: none;
+  }
 }
 .bookmark-jump > svg {
   flex-shrink: 0;
@@ -5968,9 +6152,13 @@ input.property-text {
   color: var(--muted);
   opacity: 0;
 }
-.bookmark-item:hover .bookmark-remove,
 .bookmark-remove:focus-visible {
   opacity: 1;
+}
+@media (hover: hover) and (pointer: fine) {
+  .bookmark-item:hover .bookmark-remove {
+    opacity: 1;
+  }
 }
 /* 레일의 전체 북마크 화면: 작품별 묶음 아래 문서 제목, 그 아래 북마크한 문단 */
 .bookmarks-page {
@@ -6083,9 +6271,11 @@ input.property-text {
   background: none;
   color: var(--muted);
 }
-.quick-note-head button:hover {
-  background: var(--hover);
-  color: var(--text);
+@media (hover: hover) and (pointer: fine) {
+  .quick-note-head button:hover {
+    background: var(--hover);
+    color: var(--text);
+  }
 }
 .quick-note-source {
   margin-bottom: 14px;
@@ -6238,7 +6428,9 @@ input.property-text {
 .realtime-code-ready > svg { flex-shrink: 0; color: var(--success-text); }
 .realtime-code-ready > span { flex: 1; min-width: 0; font-size: 12px; color: var(--muted); }
 .realtime-sync .realtime-text-button { padding: 4px 6px; border: 0; color: var(--accent); background: transparent; font-size: 11px; white-space: nowrap; }
-.realtime-sync .realtime-text-button:hover { background: var(--selection-bg); }
+@media (hover: hover) and (pointer: fine) {
+  .realtime-sync .realtime-text-button:hover { background: var(--selection-bg); }
+}
 .realtime-clear { padding: 6px; border: 0; background: transparent; color: var(--muted); }
 .realtime-code-help { display: flex; align-items: center; gap: 10px; margin: 14px 0 0; font-size: 12px; color: var(--muted); line-height: 1.65; }
 .realtime-code-help > svg { flex-shrink: 0; }
