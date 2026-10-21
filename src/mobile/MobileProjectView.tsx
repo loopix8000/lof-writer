@@ -963,7 +963,7 @@ export default function MobileProjectView({
                   onClick={attempt(() => createDoc("episode"))}
                 >
                   <Plus size={15} />
-                  <span>새 회차</span>
+                  <span>새 에피소드</span>
                 </button>
               ) : (
                 <>
@@ -1079,7 +1079,7 @@ export default function MobileProjectView({
                 <p>
                   {archive
                     ? "보관함으로 옮긴 회차가 여기에 표시됩니다."
-                    : "새 회차 버튼을 눌러 첫 에피소드를 시작해 보세요."}
+                    : "새 에피소드 버튼을 눌러 첫 에피소드를 시작해 보세요."}
                 </p>
                 {!archive && !filterQuery.trim() && (
                   <button
@@ -1088,7 +1088,7 @@ export default function MobileProjectView({
                     onClick={attempt(() => createDoc("episode"))}
                   >
                     <Plus size={17} />
-                    <span>새 회차 쓰기</span>
+                    <span>새 에피소드 쓰기</span>
                   </button>
                 )}
               </div>

@@ -30,7 +30,6 @@ import {
   Redo2,
   Search,
   SlidersHorizontal,
-  Smartphone,
   Sparkles,
   StickyNote,
   Strikethrough,
@@ -58,7 +57,6 @@ import TypesettingSettings from "../app/TypesettingSettings";
 import type { FileTreeController } from "../app/useFileTree";
 import EditorScroll, { type EditorScrollPositions } from "../EditorScroll";
 import EpisodeProperties from "../EpisodeProperties";
-import MobilePreview from "../MobilePreview";
 import PlatformCount from "../PlatformCount";
 import SyncStatus from "../SyncStatus";
 import {
@@ -216,7 +214,6 @@ export default function MobileEditorView({
 
   // 하단 플로팅 필 툴바 우측 더보기 플로팅 팝업 & 상단 속성 작은 플로팅 팝업 상태
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
-  const [previewOpen, setPreviewOpen] = useState(false);
   const [propPopup, setPropPopup] = useState<{
     x: number;
     y: number;
@@ -271,10 +268,6 @@ export default function MobileEditorView({
         setMoreMenuOpen(false);
         return true;
       }
-      if (previewOpen) {
-        setPreviewOpen(false);
-        return true;
-      }
       if (leftDrawerOpen) {
         setLeftDrawerOpen(false);
         return true;
@@ -293,7 +286,6 @@ export default function MobileEditorView({
     newFolderParent,
     createMenuFolder,
     moreMenuOpen,
-    previewOpen,
     leftDrawerOpen,
     rightDrawerOpen,
   ]);
@@ -1230,19 +1222,6 @@ export default function MobileEditorView({
                 role="menuitem"
                 onClick={() => {
                   setMoreMenuOpen(false);
-                  setPreviewOpen(true);
-                }}
-              >
-                <Smartphone size={16} />
-                <span>모바일 독자 미리보기</span>
-              </button>
-
-              <button
-                type="button"
-                className="m-floating-popup-item"
-                role="menuitem"
-                onClick={() => {
-                  setMoreMenuOpen(false);
                   setSource((s) => !s);
                 }}
               >
@@ -1362,26 +1341,14 @@ export default function MobileEditorView({
                   에피소드 {episodes.length} · 문서 {docItems.length}
                 </small>
               </div>
-              <div className="m-drawer-header-actions">
-                <button
-                  type="button"
-                  className="m-scope-chip"
-                  onClick={() => {
-                    setLeftDrawerOpen(false);
-                    attempt(goBackToProject)();
-                  }}
-                >
-                  <span>전체 화면</span>
-                </button>
-                <button
-                  type="button"
-                  className="m-icon-btn"
-                  aria-label="파일 트리 닫기"
-                  onClick={() => setLeftDrawerOpen(false)}
-                >
-                  <X size={19} />
-                </button>
-              </div>
+              <button
+                type="button"
+                className="m-icon-btn"
+                aria-label="파일 트리 닫기"
+                onClick={() => setLeftDrawerOpen(false)}
+              >
+                <X size={19} />
+              </button>
             </div>
 
             <div className="m-drawer-controls">
@@ -1434,29 +1401,6 @@ export default function MobileEditorView({
                     </button>
                   )}
                 </div>
-
-                {treeTab === "episode" ? (
-                  <button
-                    type="button"
-                    className="m-btn-primary m-btn-sm"
-                    onClick={() => {
-                      setLeftDrawerOpen(false);
-                      attempt(() => createDoc("episode"))();
-                    }}
-                  >
-                    <Plus size={14} />
-                    <span>새 회차</span>
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    className="m-btn-primary m-btn-sm"
-                    onClick={() => setCreateMenuFolder("")}
-                  >
-                    <Plus size={14} />
-                    <span>추가</span>
-                  </button>
-                )}
               </div>
             </div>
 
@@ -1562,6 +1506,29 @@ export default function MobileEditorView({
                         })
                     : renderDrawerDocTree("", 0)}
                 </div>
+              )}
+
+              {treeTab === "episode" ? (
+                <button
+                  type="button"
+                  className="m-btn-primary m-tree-add-btn"
+                  onClick={() => {
+                    setLeftDrawerOpen(false);
+                    attempt(() => createDoc("episode"))();
+                  }}
+                >
+                  <Plus size={17} />
+                  <span>새 에피소드</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="m-btn-primary m-tree-add-btn"
+                  onClick={() => setCreateMenuFolder("")}
+                >
+                  <Plus size={17} />
+                  <span>추가</span>
+                </button>
               )}
             </div>
           </aside>
@@ -1809,29 +1776,7 @@ export default function MobileEditorView({
         </div>
       )}
 
-      {/* 3. 모바일 독자 미리보기 전체 화면 모달 */}
-      {previewOpen && (
-        <div className="m-fullscreen-overlay">
-          <MobilePreview
-            title={active.title}
-            label={`${labels[active.kind]} · ${num}`}
-            body={active.body}
-            manualLineBreak={!!active.manualLineBreak}
-            dark={prefs.theme === "dark"}
-            device={prefs.previewDevice || "iphone"}
-            fontSize={Number(prefs.previewFontSize) || 16}
-            onDevice={(previewDevice) =>
-              savePrefs({ previewDevice }).catch(report)
-            }
-            onFontSize={(previewFontSize) =>
-              savePrefs({ previewFontSize }).catch(report)
-            }
-            onClose={() => setPreviewOpen(false)}
-          />
-        </div>
-      )}
-
-      {/* 4. 상단 상태바 · 문서 속성 작은 플로팅 팝업 메뉴 */}
+      {/* 3. 상단 상태바 · 문서 속성 작은 플로팅 팝업 메뉴 */}
       {propPopup && (
         <div
           className="m-floating-popup-backdrop"

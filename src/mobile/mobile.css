@@ -1015,6 +1015,44 @@
   color: var(--accent);
 }
 
+/* 숫자 배지: 글꼴의 위아래 여백 차이로 숫자가 위로 떠 보이지 않도록 글자 상자를 잘라 가운데 정렬 */
+.m-pill-tab small,
+.m-tree-count,
+.m-ep-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding-top: 0;
+  padding-bottom: 0;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  text-box: trim-both cap alphabetic;
+}
+
+.m-pill-tab small {
+  min-width: 18px;
+  height: 18px;
+}
+
+.m-tree-count {
+  min-width: 20px;
+  height: 20px;
+}
+
+.m-ep-pill {
+  height: 22px;
+}
+
+/* 파일 트리 목록 하단의 새 에피소드 / 추가 버튼 */
+.m-tree-add-btn {
+  display: flex;
+  width: 100%;
+  min-height: 48px;
+  margin-top: 12px;
+  border-radius: 12px;
+  font-size: 15px;
+}
+
 .m-tree-action-btn {
   flex: 0 0 32px;
   width: 32px;
@@ -2858,15 +2896,6 @@
 .mobile-app .property-remove,
 .mobile-app .bookmark-remove {
   opacity: 1 !important;
-}
-
-.m-fullscreen-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 260;
-  background: var(--bg);
-  display: flex;
-  flex-direction: column;
 }
 
 /* ---------- 토스트 및 알림 배너 ---------- */

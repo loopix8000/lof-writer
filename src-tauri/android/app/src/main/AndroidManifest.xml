@@ -20,6 +20,10 @@
         android:label="@string/app_name"
         android:theme="@style/Theme.lof_writer"
         android:usesCleartextTraffic="${usesCleartextTraffic}">
+        <!-- 설치할 때 QR 코드 스캐너 모듈을 미리 받아 둔다. -->
+        <meta-data
+            android:name="com.google.mlkit.vision.DEPENDENCIES"
+            android:value="barcode_ui" />
         <activity
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
             android:launchMode="singleTask"

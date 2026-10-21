@@ -1,6 +1,8 @@
 pub mod api;
 pub mod assets;
 mod auto_sync;
+mod android_library;
+mod android_scanner;
 mod android_storage;
 mod android_updater;
 pub mod database;
@@ -95,9 +97,15 @@ pub fn get_user_dir() -> PathBuf {
 }
 
 pub fn get_documents_dir() -> PathBuf {
+    // Android 서재는 파일 관리자와 다른 앱에서도 보이는 내장 저장공간의 Documents 폴더에 둔다.
     #[cfg(target_os = "android")]
     {
-        return get_user_dir().join("Documents");
+        let storage = std::env::var("EXTERNAL_STORAGE")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| "/sdcard".to_string());
+        let storage = PathBuf::from(storage);
+        return fs::canonicalize(&storage).unwrap_or(storage).join("Documents");
     }
     #[cfg(windows)]
     {
@@ -519,6 +527,7 @@ fn dispatch_method(
             }
             Ok(json!(true))
         }
+        "prepareAndroidLibrary" => android_library::prepare(state, app),
         "bootstrap" => {
             let prefs = {
                 let s = state.settings.lock().unwrap();
@@ -557,6 +566,10 @@ fn dispatch_method(
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
             {
+                #[cfg(target_os = "android")]
+                if !Path::new(custom_path).is_absolute() || android_library::is_internal(Path::new(custom_path)) {
+                    return Err(fail_invalid("서재는 기기 폴더에만 둘 수 있습니다. 기기 폴더를 선택해 주세요."));
+                }
                 let folder = if Path::new(custom_path).is_absolute() {
                     PathBuf::from(custom_path)
                 } else {
@@ -1021,6 +1034,10 @@ fn dispatch_method(
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
             {
+                #[cfg(target_os = "android")]
+                if !Path::new(custom_path).is_absolute() || android_library::is_internal(Path::new(custom_path)) {
+                    return Err(fail_invalid("공용 메모는 기기 폴더에만 둘 수 있습니다. 기기 폴더를 선택해 주세요."));
+                }
                 let p = if Path::new(custom_path).is_absolute() {
                     PathBuf::from(custom_path)
                 } else {
@@ -1764,7 +1781,7 @@ async fn lof_invoke(
     window: WebviewWindow,
 ) -> Result<Value, String> {
     let args_val = args.unwrap_or_else(|| json!({}));
-    let result = if method.starts_with("realtime") || matches!(method.as_str(), "sync" | "pinUnlock" | "pinSave" | "backupStorage" | "backupGitHistory" | "history" | "historyPage" | "historyRead" | "restore" | "checkpointDocument" | "countManuscript" | "downloadSkill" | "checkSyncUpdates" | "systemFonts" | "readUserFont" | "exportLibrary" | "exportProject") {
+    let result = if method.starts_with("realtime") || matches!(method.as_str(), "sync" | "pinUnlock" | "pinSave" | "backupStorage" | "backupGitHistory" | "history" | "historyPage" | "historyRead" | "restore" | "checkpointDocument" | "countManuscript" | "downloadSkill" | "checkSyncUpdates" | "systemFonts" | "readUserFont" | "exportLibrary" | "exportProject" | "prepareAndroidLibrary") {
         tauri::async_runtime::spawn_blocking(move || {
             let state = app.state::<AppState>();
             if method == "pinUnlock" || method == "pinSave" {
@@ -2128,47 +2145,42 @@ pub fn run() {
         .unwrap_or_default();
     settings["connections"] = Value::Array(valid_conns);
 
-    let default_vault_root = get_documents_dir().join("Lof Library");
-    let vault_root = std::env::var("LOF_VAULT")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-        .map(PathBuf::from)
-        .or_else(|| {
-            settings
-                .get("vaultPath")
-                .and_then(|v| v.as_str())
-                .filter(|s| !s.trim().is_empty())
-                .map(PathBuf::from)
-        })
-        .unwrap_or_else(|| default_vault_root.clone());
-
-    let open_store = |root: &Path| {
-        Store::new(
-            root,
+    #[cfg(not(target_os = "android"))]
+    let initial_store = {
+        let vault_root = std::env::var("LOF_VAULT")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .map(PathBuf::from)
+            .or_else(|| {
+                settings
+                    .get("vaultPath")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.trim().is_empty())
+                    .map(PathBuf::from)
+            })
+            .unwrap_or_else(|| get_documents_dir().join("Lof Library"));
+        let opened = Store::new(
+            &vault_root,
             history_policy_from_settings(&settings),
             default_manual_line_break_from_settings(&settings),
-        )
-    };
-    let opened = open_store(&vault_root);
-    // 모든 파일 접근 권한이 해제되어 기기 폴더 서재를 열 수 없으면 앱 기본 서재로 시작한다.
-    #[cfg(target_os = "android")]
-    let opened = match opened {
-        Err(_) if vault_root != default_vault_root => open_store(&default_vault_root),
-        other => other,
-    };
-    let initial_store = match opened {
-        Ok(st) => st,
-        Err(e) => {
-            show_startup_error(e.message);
-            return;
+        );
+        match opened {
+            Ok(st) => {
+                settings["vaultPath"] = json!(st.root.to_string_lossy().to_string());
+                Some(st)
+            }
+            Err(e) => {
+                show_startup_error(e.message);
+                return;
+            }
         }
     };
-
-    let clean_vault_root = initial_store.root.clone();
-    settings["vaultPath"] = json!(clean_vault_root.to_string_lossy().to_string());
+    // Android는 화면에서 모든 파일 접근 권한을 확인한 뒤 기기 폴더의 서재를 연다.
+    #[cfg(target_os = "android")]
+    let initial_store: Option<Store> = None;
     let _ = persist_settings(&config_file, &settings);
 
-    let store_arc = Arc::new(Mutex::new(Some(initial_store)));
+    let store_arc = Arc::new(Mutex::new(initial_store));
     let settings_arc = Arc::new(Mutex::new(settings));
     let notify_seq = Arc::new(AtomicU64::new(0));
     let closing = Arc::new(AtomicBool::new(false));
@@ -2232,7 +2244,8 @@ pub fn run() {
     #[cfg(target_os = "android")]
     let builder = builder
         .plugin(android_updater::init())
-        .plugin(android_storage::init());
+        .plugin(android_storage::init())
+        .plugin(android_scanner::init());
     #[cfg(not(target_os = "android"))]
     let builder = builder
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -2257,6 +2270,8 @@ pub fn run() {
             android_updater::android_update_download,
             android_updater::android_update_install,
             android_storage::android_pick_folder,
+            android_storage::android_storage_access,
+            android_scanner::android_scan_qr,
         ])
         .setup(move |app| {
             #[cfg(not(target_os = "android"))]

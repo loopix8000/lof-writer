@@ -17,6 +17,7 @@ const methods = [
   "pinSave",
   "pinReady",
   "bootstrap",
+  "prepareAndroidLibrary",
   "chooseVault",
   "createProject",
   "updateProject",
@@ -90,127 +91,9 @@ export function isAndroidApp(): boolean {
   return typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent);
 }
 
-function pickAndroidFolderModal(options: {
-  title: string;
-  description: string;
-  defaultFolder: string;
-  placeholder: string;
-  pickDeviceFolder?: () => Promise<string | null>;
-}): Promise<string | null> {
-  return new Promise((resolve) => {
-    const backdrop = document.createElement("div");
-    backdrop.style.cssText =
-      "position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center;padding:18px;";
-    const card = document.createElement("div");
-    card.style.cssText =
-      "width:100%;max-width:380px;background:var(--surface,#fff);color:var(--text,#111);border:1px solid var(--border,#ddd);border-radius:16px;padding:18px;box-shadow:0 12px 36px rgba(0,0,0,0.25);display:flex;flex-direction:column;gap:12px;";
-    const h3 = document.createElement("h3");
-    h3.textContent = options.title;
-    h3.style.cssText = "margin:0;font-size:16px;font-weight:700;";
-    const p = document.createElement("p");
-    p.textContent = options.description;
-    p.style.cssText = "margin:0;font-size:13px;line-height:1.5;color:var(--muted,#666);";
-    const input = document.createElement("input");
-    input.type = "text";
-    input.value = options.defaultFolder;
-    input.placeholder = options.placeholder;
-    input.style.cssText =
-      "width:100%;min-height:42px;padding:0 12px;border-radius:10px;border:1px solid var(--border,#ccc);background:var(--bg,#f8f9fa);color:var(--text,#111);font-size:14px;box-sizing:border-box;";
-    const presetRow = document.createElement("div");
-    presetRow.style.cssText = "display:flex;flex-wrap:wrap;gap:6px;";
-    const presets =
-      options.defaultFolder === "CommonMemo"
-        ? [
-            { label: "기본 공용 메모 (CommonMemo)", value: "CommonMemo" },
-            { label: "보조 공용 메모 (CommonMemo2)", value: "CommonMemo2" },
-          ]
-        : [
-            { label: "기본 서재 (LofWriter)", value: "LofWriter" },
-            { label: "제2 서재 (LofWriter2)", value: "LofWriter2" },
-          ];
-    for (const preset of presets) {
-      const chip = document.createElement("button");
-      chip.type = "button";
-      chip.textContent = preset.label;
-      chip.style.cssText =
-        "padding:6px 10px;border-radius:8px;border:1px solid var(--border,#ccc);background:var(--sidebar,#f1f3f5);color:var(--text,#111);font-size:12px;font-weight:600;";
-      chip.onclick = () => {
-        input.value = preset.value;
-        input.focus();
-      };
-      presetRow.appendChild(chip);
-    }
-    const actions = document.createElement("div");
-    actions.style.cssText = "display:flex;justify-content:flex-end;gap:8px;margin-top:4px;";
-    const cancelBtn = document.createElement("button");
-    cancelBtn.type = "button";
-    cancelBtn.textContent = "취소";
-    cancelBtn.style.cssText =
-      "min-height:40px;padding:0 14px;border-radius:10px;border:1px solid var(--border,#ccc);background:transparent;color:var(--text,#111);font-size:13.5px;font-weight:600;";
-    const okBtn = document.createElement("button");
-    okBtn.type = "button";
-    okBtn.textContent = "변경";
-    okBtn.style.cssText =
-      "min-height:40px;padding:0 16px;border-radius:10px;border:none;background:var(--accent,#2563eb);color:#fff;font-size:13.5px;font-weight:600;";
-
-    let done = false;
-    const finish = (val: string | null) => {
-      if (done) return;
-      done = true;
-      backdrop.remove();
-      resolve(val);
-    };
-    cancelBtn.onclick = () => finish(null);
-    okBtn.onclick = () => {
-      const trimmed = input.value.trim();
-      finish(trimmed || null);
-    };
-    backdrop.onclick = (e) => {
-      if (e.target === backdrop) finish(null);
-    };
-    input.onkeydown = (e) => {
-      if (e.key === "Enter") {
-        e.preventDefault();
-        okBtn.click();
-      } else if (e.key === "Escape") {
-        e.preventDefault();
-        cancelBtn.click();
-      }
-    };
-    actions.append(cancelBtn, okBtn);
-    card.append(h3, p);
-    const pickDeviceFolder = options.pickDeviceFolder;
-    if (pickDeviceFolder) {
-      const deviceBtn = document.createElement("button");
-      deviceBtn.type = "button";
-      deviceBtn.textContent = "기기 폴더 선택";
-      deviceBtn.style.cssText =
-        "min-height:42px;padding:0 14px;border-radius:10px;border:none;background:var(--accent,#2563eb);color:#fff;font-size:14px;font-weight:700;";
-      const deviceError = document.createElement("p");
-      deviceError.style.cssText = "display:none;margin:0;font-size:12.5px;line-height:1.5;color:var(--danger,#d93025);";
-      const internalLabel = document.createElement("p");
-      internalLabel.textContent = "또는 앱 내부 서재 사용";
-      internalLabel.style.cssText = "margin:4px 0 0;font-size:12.5px;font-weight:700;color:var(--muted,#666);";
-      deviceBtn.onclick = async () => {
-        deviceBtn.disabled = true;
-        deviceError.style.display = "none";
-        try {
-          const path = await pickDeviceFolder();
-          if (path) finish(path);
-        } catch (error) {
-          deviceError.textContent = error instanceof Error ? error.message : String(error);
-          deviceError.style.display = "block";
-        } finally {
-          deviceBtn.disabled = false;
-        }
-      };
-      card.append(deviceBtn, deviceError, internalLabel);
-    }
-    card.append(presetRow, input, actions);
-    backdrop.appendChild(card);
-    document.body.appendChild(backdrop);
-    setTimeout(() => input.focus(), 30);
-  });
+async function pickAndroidFolder(): Promise<string | null> {
+  const picked = await invoke<{ path?: string | null }>("android_pick_folder");
+  return picked?.path || null;
 }
 
 function pickBrowserFiles(options: {
@@ -279,31 +162,10 @@ export function installTauriBridge() {
       async (args?: any) => {
         const payload = args ?? {};
         if (android) {
-          if (name === "chooseVault" && !payload.path) {
-            const folder = await pickAndroidFolderModal({
-              title: "서재 폴더 변경",
-              description: "기기의 원하는 폴더를 서재로 선택하거나, 앱 내부에 둘 서재 이름을 입력하세요. 앱 내부 서재는 앱을 삭제하면 함께 지워집니다.",
-              defaultFolder: "LofWriter",
-              placeholder: "서재 이름 (예: LofWriter, 내 소설 서재)",
-              pickDeviceFolder: async () => {
-                const picked = await invoke<{ path?: string | null }>("android_pick_folder");
-                return picked?.path || null;
-              },
-            });
-            if (!folder) return { ok: true, data: false };
-            return invoke("lof_invoke", {
-              method: name,
-              args: { ...payload, path: folder },
-            });
-          }
-          if (name === "chooseCommonMemo" && !payload.path) {
-            const folder = await pickAndroidFolderModal({
-              title: "공용 메모 폴더 변경",
-              description: "공용 메모를 보관할 폴더 이름을 입력하거나 선택하세요.",
-              defaultFolder: "CommonMemo",
-              placeholder: "폴더 이름 (예: CommonMemo)",
-            });
-            if (!folder) return { ok: true, data: null };
+          // Android 서재와 공용 메모는 기기 폴더에만 둔다.
+          if ((name === "chooseVault" || name === "chooseCommonMemo") && !payload.path) {
+            const folder = await pickAndroidFolder();
+            if (!folder) return { ok: true, data: name === "chooseVault" ? false : null };
             return invoke("lof_invoke", {
               method: name,
               args: { ...payload, path: folder },

@@ -6216,6 +6216,7 @@ input.property-text {
 .realtime-sync .realtime-pair-form > label { margin: 0; font-size: 13px; font-weight: 600; color: var(--text); }
 .realtime-pair-form > textarea { min-height: 200px; max-height: 360px; padding: 12px 14px; resize: vertical; word-break: break-all; }
 .realtime-pair-form > textarea[aria-invalid="true"] { border-color: var(--warning-border); }
+.realtime-sync .realtime-scan-button { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; min-height: 46px; margin-bottom: 10px; font-size: 14px; font-weight: 600; }
 .realtime-code-ready { display: flex; align-items: center; width: 100%; gap: 9px; min-height: 56px; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px 8px 14px; }
 .realtime-code-ready > svg { flex-shrink: 0; color: var(--success-text); }
 .realtime-code-ready > span { flex: 1; min-width: 0; font-size: 12px; color: var(--muted); }

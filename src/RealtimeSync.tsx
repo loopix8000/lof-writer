@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AlertCircle, ArrowLeft, ArrowRight, Check, CheckCircle2, ChevronDown, ChevronRight, Clock3, Cloud, Copy, Link, Loader2, LogOut, Monitor, Pencil, QrCode, RefreshCw, Server, Users, X } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
+import { AlertCircle, ArrowLeft, ArrowRight, Check, CheckCircle2, ChevronDown, ChevronRight, Clock3, Cloud, Copy, Link, Loader2, LogOut, Monitor, Pencil, QrCode, RefreshCw, ScanLine, Server, Users, X } from "lucide-react";
 import SettingsToggle from "./app/SettingsToggle";
+import { isAndroidApp } from "./tauri-bridge";
 import { call } from "./types";
 
 const PRESET_BG_SECONDS = [60, 180, 300, 600, 900, 1800, 3600];
@@ -196,6 +198,16 @@ export default function RealtimeSync({
     setStatus(current => ({ ...current, pairing: null })); setPairProblem(null);
   };
   const updateCode = (value: string) => { dismissPair(); setCode(value); setNotice(""); setActionProblem(null); };
+  // 그룹 장치의 초대 화면에 표시된 QR 코드를 읽어 페어링 코드로 입력한다.
+  const scanCode = async () => {
+    setActionProblem(null);
+    try {
+      const result = await invoke<{ text?: string | null }>("android_scan_qr");
+      const text = result?.text?.trim();
+      if (!text || !alive.current) return;
+      updateCode(text); setCodeVisible(false);
+    } catch (error) { if (alive.current) setActionProblem(problem(error)); }
+  };
   const cancelPair = async () => {
     cancelRequested.current = true; setCancelling(true);
     const id = ownedPair.current;
@@ -453,8 +465,9 @@ export default function RealtimeSync({
           <Loader2 size={50} className="realtime-spinner" /><h3 ref={heading} tabIndex={-1}>{cancelling ? "가입을 취소하는 중…" : "그룹에 가입하는 중…"}</h3><p>잠시만 기다려 주세요.</p>
         </div> : <>
           <h3 ref={heading} tabIndex={-1}>{failure?.code === "PAIR_CODE_EXPIRED" ? "페어링 코드가 만료되었어요" : "동기화 그룹에 가입하기"}</h3>
-          <p className="settings-description">{failure?.code === "PAIR_CODE_EXPIRED" ? "그룹의 장치에서 새 코드를 만들어 주세요." : "그룹의 장치 하나에서 만든 페어링 코드를 붙여넣으면 나머지 장치도 자동으로 찾아 연결합니다."}</p>
+          <p className="settings-description">{failure?.code === "PAIR_CODE_EXPIRED" ? "그룹의 장치에서 새 코드를 만들어 주세요." : `그룹의 장치 하나에서 만든 ${isAndroidApp() ? "QR 코드를 스캔하거나 " : ""}페어링 코드를 붙여넣으면 나머지 장치도 자동으로 찾아 연결합니다.`}</p>
           <form id="realtime-pair-form" className="realtime-pair-form" onSubmit={event => { event.preventDefault(); void pair(); }}>
+            {isAndroidApp() && <button type="button" className="realtime-scan-button" onClick={() => void scanCode()}><ScanLine size={17} />QR 코드 스캔</button>}
             <label htmlFor="realtime-code-input">페어링 코드</label>
             {validation === "valid" && !codeVisible ? <div className="realtime-code-ready">
               <CheckCircle2 size={19} /><span>페어링 코드가 입력되었습니다</span>

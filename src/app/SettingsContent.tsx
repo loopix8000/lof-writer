@@ -75,12 +75,7 @@ type Props = {
 };
 
 function formatStoragePath(rawPath: string | undefined, fallbackLabel: string): string {
-  if (!rawPath) return fallbackLabel;
-  if (/^\/data\/(?:data|user\/\d+)\/local\.lof\.writer\//i.test(rawPath)) {
-    const leaf = rawPath.split("/").filter(Boolean).pop();
-    return leaf ? `${fallbackLabel} (${leaf})` : fallbackLabel;
-  }
-  return rawPath;
+  return rawPath || fallbackLabel;
 }
 
 export default function SettingsContent({

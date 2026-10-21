@@ -31,22 +31,43 @@ class AndroidStoragePlugin(private val activity: Activity) : Plugin(activity) {
     if (Build.VERSION.SDK_INT >= 30) Environment.isExternalStorageManager()
     else ContextCompat.checkSelfPermission(activity, Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
 
+  private fun accessResponse() = JSObject().apply { put("granted", hasAccess()) }
+
+  @Command
+  fun accessStatus(invoke: Invoke) = invoke.resolve(accessResponse())
+
+  // 서재는 기기 폴더에만 두므로 앱을 시작할 때 모든 파일 접근 권한을 먼저 받는다.
+  @Command
+  fun requestAccess(invoke: Invoke) {
+    if (hasAccess()) invoke.resolve(accessResponse())
+    else askAccess(invoke, "requestAccessResult", "requestPermissionResult")
+  }
+
+  @ActivityCallback
+  fun requestAccessResult(invoke: Invoke, result: ActivityResult) = invoke.resolve(accessResponse())
+
+  @PermissionCallback
+  fun requestPermissionResult(invoke: Invoke) = invoke.resolve(accessResponse())
+
   @Command
   fun pickFolder(invoke: Invoke) {
-    if (hasAccess()) {
-      openTree(invoke)
-    } else if (Build.VERSION.SDK_INT >= 30) {
+    if (hasAccess()) openTree(invoke)
+    else askAccess(invoke, "accessResult", "storagePermissionResult")
+  }
+
+  private fun askAccess(invoke: Invoke, activityCallback: String, permissionCallback: String) {
+    if (Build.VERSION.SDK_INT >= 30) {
       try {
-        startActivityForResult(invoke, Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:${activity.packageName}")), "accessResult")
+        startActivityForResult(invoke, Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:${activity.packageName}")), activityCallback)
       } catch (_: Exception) {
         try {
-          startActivityForResult(invoke, Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION), "accessResult")
+          startActivityForResult(invoke, Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION), activityCallback)
         } catch (_: Exception) {
           invoke.reject("모든 파일 접근 권한 설정 화면을 열지 못했습니다. Android 설정에서 직접 허용해 주세요.")
         }
       }
     } else {
-      requestPermissionForAlias("storage", invoke, "storagePermissionResult")
+      requestPermissionForAlias("storage", invoke, permissionCallback)
     }
   }
 
