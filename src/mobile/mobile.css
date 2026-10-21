@@ -274,7 +274,8 @@
   text-align: left;
 }
 
-.m-project-card-main:active {
+/* 작품을 누를 때는 오른쪽 더보기 버튼 자리까지 카드 전체의 배경을 바꾼다 */
+.m-project-card:has(> .m-project-card-main:active) {
   background: var(--panel);
 }
 
