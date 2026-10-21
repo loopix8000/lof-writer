@@ -1403,7 +1403,8 @@ impl Store {
                 }
                 if let Ok(rd) = fs::read_dir(&self.root) {
                     for e in rd.flatten() {
-                        if e.file_type().is_ok_and(|t| t.is_dir()) {
+                        // 루트의 일반 파일도 이전 버전이 남긴 잘못된 폴더 경고를 해제한다.
+                        if e.file_type().is_ok_and(|t| t.is_dir() || t.is_file()) {
                             let name = e.file_name().to_string_lossy().to_string();
                             if !name.starts_with('.') {
                                 self.index.dirty.insert(name);
@@ -1441,6 +1442,16 @@ impl Store {
 
             for (folder, paths) in folders {
                 let dir = self.root.join(&folder);
+                // 루트의 일반 파일은 작품 폴더가 아니다. 파일 아래에서 project.json을 찾지 않는다.
+                if dir.is_file() {
+                    if let Some(project) = cat.projects.iter_mut().find(|project| project.dir == dir) {
+                        project.errors.insert("project".to_string(), format!("{}: 작품 폴더 위치에 일반 파일이 있습니다.", folder));
+                    } else {
+                        let prefix = format!("{}:", folder);
+                        cat.warnings.retain(|warning| !warning.starts_with(&prefix));
+                    }
+                    continue;
+                }
                 if !dir.exists() {
                     cat.projects.retain(|x| x.dir != dir);
                     let prefix = format!("{}:", folder);
