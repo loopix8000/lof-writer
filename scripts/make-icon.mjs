@@ -66,7 +66,7 @@ function smoothstep(edge0, edge1, x) {
   return t * t * (3 - 2 * t);
 }
 
-function render(n) {
+function render(n, round = false) {
   const rgba = Buffer.alloc(n * n * 4);
   const inset = n <= 24 ? 0.5 : n / 64;
   const radius = n * 0.2;
@@ -89,10 +89,11 @@ function render(n) {
       // Signed distance to rounded-rectangle tile
       const qx = Math.abs(px - n / 2) - (n / 2 - inset - radius);
       const qy = Math.abs(py - n / 2) - (n / 2 - inset - radius);
-      const tileDist =
-        Math.hypot(Math.max(qx, 0), Math.max(qy, 0)) +
-        Math.min(Math.max(qx, qy), 0) -
-        radius;
+      const tileDist = round
+        ? Math.hypot(px - n / 2, py - n / 2) - (n / 2 - inset)
+        : Math.hypot(Math.max(qx, 0), Math.max(qy, 0)) +
+          Math.min(Math.max(qx, qy), 0) -
+          radius;
 
       const tileAlpha = 1 - smoothstep(-0.6, 0.6, tileDist);
       if (tileAlpha <= 0) continue;
@@ -219,3 +220,13 @@ const icoBuf = Buffer.concat([head, ...images]);
 await fs.writeFile("assets/icon.ico", icoBuf);
 await fs.writeFile("src-tauri/icons/icon.ico", icoBuf);
 console.log(`Generated Windows icons: ${sizes.join(", ")}px`);
+
+// Android 7.x는 적응형 아이콘을 지원하지 않으므로 밀도별 PNG를 함께 둔다.
+const androidSizes = { mdpi: 48, hdpi: 72, xhdpi: 96, xxhdpi: 144, xxxhdpi: 192 };
+for (const [density, n] of Object.entries(androidSizes)) {
+  const dir = `src-tauri/android/app/src/main/res/mipmap-${density}`;
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(`${dir}/ic_launcher.png`, png(n, render(n)));
+  await fs.writeFile(`${dir}/ic_launcher_round.png`, png(n, render(n, true)));
+}
+console.log(`Generated Android legacy icons: ${Object.values(androidSizes).join(", ")}px`);

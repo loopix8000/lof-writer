@@ -95,6 +95,7 @@ function pickAndroidFolderModal(options: {
   description: string;
   defaultFolder: string;
   placeholder: string;
+  pickDeviceFolder?: () => Promise<string | null>;
 }): Promise<string | null> {
   return new Promise((resolve) => {
     const backdrop = document.createElement("div");
@@ -177,7 +178,35 @@ function pickAndroidFolderModal(options: {
       }
     };
     actions.append(cancelBtn, okBtn);
-    card.append(h3, p, presetRow, input, actions);
+    card.append(h3, p);
+    const pickDeviceFolder = options.pickDeviceFolder;
+    if (pickDeviceFolder) {
+      const deviceBtn = document.createElement("button");
+      deviceBtn.type = "button";
+      deviceBtn.textContent = "기기 폴더 선택";
+      deviceBtn.style.cssText =
+        "min-height:42px;padding:0 14px;border-radius:10px;border:none;background:var(--accent,#2563eb);color:#fff;font-size:14px;font-weight:700;";
+      const deviceError = document.createElement("p");
+      deviceError.style.cssText = "display:none;margin:0;font-size:12.5px;line-height:1.5;color:var(--danger,#d93025);";
+      const internalLabel = document.createElement("p");
+      internalLabel.textContent = "또는 앱 내부 서재 사용";
+      internalLabel.style.cssText = "margin:4px 0 0;font-size:12.5px;font-weight:700;color:var(--muted,#666);";
+      deviceBtn.onclick = async () => {
+        deviceBtn.disabled = true;
+        deviceError.style.display = "none";
+        try {
+          const path = await pickDeviceFolder();
+          if (path) finish(path);
+        } catch (error) {
+          deviceError.textContent = error instanceof Error ? error.message : String(error);
+          deviceError.style.display = "block";
+        } finally {
+          deviceBtn.disabled = false;
+        }
+      };
+      card.append(deviceBtn, deviceError, internalLabel);
+    }
+    card.append(presetRow, input, actions);
     backdrop.appendChild(card);
     document.body.appendChild(backdrop);
     setTimeout(() => input.focus(), 30);
@@ -253,9 +282,13 @@ export function installTauriBridge() {
           if (name === "chooseVault" && !payload.path) {
             const folder = await pickAndroidFolderModal({
               title: "서재 폴더 변경",
-              description: "사용할 서재 이름을 입력하거나 기본 서재를 선택하세요. 새 이름을 입력하면 새 서재가 생성됩니다.",
+              description: "기기의 원하는 폴더를 서재로 선택하거나, 앱 내부에 둘 서재 이름을 입력하세요. 앱 내부 서재는 앱을 삭제하면 함께 지워집니다.",
               defaultFolder: "LofWriter",
               placeholder: "서재 이름 (예: LofWriter, 내 소설 서재)",
+              pickDeviceFolder: async () => {
+                const picked = await invoke<{ path?: string | null }>("android_pick_folder");
+                return picked?.path || null;
+              },
             });
             if (!folder) return { ok: true, data: false };
             return invoke("lof_invoke", {

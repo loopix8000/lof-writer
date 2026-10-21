@@ -1,6 +1,7 @@
 pub mod api;
 pub mod assets;
 mod auto_sync;
+mod android_storage;
 mod android_updater;
 pub mod database;
 mod document_patch;
@@ -2127,6 +2128,7 @@ pub fn run() {
         .unwrap_or_default();
     settings["connections"] = Value::Array(valid_conns);
 
+    let default_vault_root = get_documents_dir().join("Lof Library");
     let vault_root = std::env::var("LOF_VAULT")
         .ok()
         .filter(|s| !s.trim().is_empty())
@@ -2138,13 +2140,23 @@ pub fn run() {
                 .filter(|s| !s.trim().is_empty())
                 .map(PathBuf::from)
         })
-        .unwrap_or_else(|| get_documents_dir().join("Lof Library"));
+        .unwrap_or_else(|| default_vault_root.clone());
 
-    let initial_store = match Store::new(
-        &vault_root,
-        history_policy_from_settings(&settings),
-        default_manual_line_break_from_settings(&settings),
-    ) {
+    let open_store = |root: &Path| {
+        Store::new(
+            root,
+            history_policy_from_settings(&settings),
+            default_manual_line_break_from_settings(&settings),
+        )
+    };
+    let opened = open_store(&vault_root);
+    // 모든 파일 접근 권한이 해제되어 기기 폴더 서재를 열 수 없으면 앱 기본 서재로 시작한다.
+    #[cfg(target_os = "android")]
+    let opened = match opened {
+        Err(_) if vault_root != default_vault_root => open_store(&default_vault_root),
+        other => other,
+    };
+    let initial_store = match opened {
         Ok(st) => st,
         Err(e) => {
             show_startup_error(e.message);
@@ -2218,7 +2230,9 @@ pub fn run() {
 
     let builder = tauri::Builder::default();
     #[cfg(target_os = "android")]
-    let builder = builder.plugin(android_updater::init());
+    let builder = builder
+        .plugin(android_updater::init())
+        .plugin(android_storage::init());
     #[cfg(not(target_os = "android"))]
     let builder = builder
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -2242,6 +2256,7 @@ pub fn run() {
             android_updater::android_update_check,
             android_updater::android_update_download,
             android_updater::android_update_install,
+            android_storage::android_pick_folder,
         ])
         .setup(move |app| {
             #[cfg(not(target_os = "android"))]
