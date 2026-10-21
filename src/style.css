@@ -5769,6 +5769,10 @@ input.property-text {
   mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M19 21l-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z'/%3E%3C/svg%3E")
     no-repeat center 0.2em / 16px 16px;
   opacity: var(--bookmark-opacity, 0);
+}
+/* 서서히 나타나는 효과는 여백에 마우스를 올렸을 때만 준다. 빈 문서의 안내 문구도 같은 ::before를 쓰므로
+   늘 효과를 두면 첫 글자를 입력할 때 안내 문구의 진하기에서 사라지며 리본이 잠깐 보인다. */
+.editor-content.bookmarkable .tiptap > .bookmark-target::before {
   transition: opacity 0.12s;
 }
 .editor-content .tiptap > .bookmark-flash {
