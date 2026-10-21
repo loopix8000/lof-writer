@@ -2055,10 +2055,14 @@
   align-items: center;
   gap: 8px;
   background: var(--bg);
-  border: 1.5px solid var(--accent);
+  border: 1.5px solid var(--line);
   border-radius: 11px;
   padding: 0 10px;
   min-height: 44px;
+}
+
+.m-search-input-box:focus-within {
+  border-color: var(--accent);
 }
 
 .m-search-icon {
@@ -2074,6 +2078,14 @@
   color: var(--ink);
   font-size: 15px;
   outline: none;
+}
+
+.m-search-input:focus {
+  box-shadow: none;
+}
+
+.m-search-input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
 }
 
 .m-case-btn {
