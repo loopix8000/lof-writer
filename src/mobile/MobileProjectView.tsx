@@ -34,7 +34,7 @@ import {
 } from "lucide-react";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { STATUS_SHORT, normalizeStatus } from "../../core/episode.mjs";
-import { normalizeWriting, writingName } from "../../core/platforms.mjs";
+import { normalizeWriting } from "../../core/platforms.mjs";
 import CoverImage from "../CoverImage";
 import { labels } from "../app/document-ui";
 import { EPISODE_GROUP, parentOfRel, type FolderEntry } from "../app/file-tree-model";
@@ -106,7 +106,6 @@ export default function MobileProjectView({
   const [openFolders, setOpenFolders] = useState<Set<string>>(() => new Set());
   const [openEpGroups, setOpenEpGroups] = useState<Set<number>>(() => new Set([0]));
   const [projectSwitcherOpen, setProjectSwitcherOpen] = useState(false);
-  const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const [activeDocSheet, setActiveDocSheet] = useState<Doc | null>(null);
   const [activeFolderSheet, setActiveFolderSheet] = useState<FolderEntry | null>(null);
   const [addMenuFolder, setAddMenuFolder] = useState<string | null>(null);
@@ -815,15 +814,6 @@ export default function MobileProjectView({
             >
               <Archive size={18} />
             </button>
-            <button
-              type="button"
-              className="m-icon-btn"
-              aria-label="작품 도구 및 설정"
-              title="작품 메뉴"
-              onClick={() => setProjectMenuOpen(true)}
-            >
-              <Settings size={18} />
-            </button>
           </div>
         </div>
 
@@ -1218,54 +1208,6 @@ export default function MobileProjectView({
         subtitle="작업할 작품을 선택하세요"
         items={projectSwitcherItems}
         onClose={() => setProjectSwitcherOpen(false)}
-      />
-
-      {/* 작품 설정 및 가져오기/내보내기 시트 */}
-      <MobileActionSheet
-        open={projectMenuOpen}
-        title={project.title || "작품 메뉴"}
-        subtitle={`${writingName(rules)} 기준 · 회차 ${episodes.length}편`}
-        items={[
-          {
-            label: "소설 정보 및 플랫폼 설정",
-            sublabel: "제목, 소개, 표지, 글자 수 계산 기준",
-            icon: <Settings size={18} />,
-            action: () =>
-              setDialog({
-                type: "editProject",
-                value: project.title,
-                description: project.description,
-                tags: project.tags || [],
-                manualLineBreak: project.manualLineBreak ?? null,
-                writing: rules,
-              }),
-          },
-          {
-            label: "원고 파일 가져오기",
-            sublabel: "TXT, Markdown 파일 일괄 등록",
-            icon: <Upload size={18} />,
-            action: attempt(async () => {
-              const result = await call("importFiles", { projectId: project.id });
-              if (result) {
-                await refresh();
-                message(`${result.count}편 가져옴`);
-              }
-            }),
-          },
-          {
-            label: "작품 내보내기",
-            sublabel: "TXT, Markdown 파일로 내보내기",
-            icon: <Download size={18} />,
-            action: () => setDialog({ type: "export", value: project.id }),
-          },
-          "separator",
-          {
-            label: archive ? "보관함 닫기 (현재 문서 보기)" : "보관함 열기",
-            icon: <Archive size={18} />,
-            action: () => setArchive((a) => !a),
-          },
-        ]}
-        onClose={() => setProjectMenuOpen(false)}
       />
 
       {/* 문서 탭 추가 메뉴 시트 (플롯 / 메모 / 폴더) */}

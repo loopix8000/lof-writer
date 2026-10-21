@@ -511,6 +511,9 @@
 
 /* 작품 화면 상단 영웅(Hero) 섹션: 좌측 표지 + 우측 작품 정보 */
 .m-project-back-link {
+  /* 옆의 접힌 제목이 늘어나도 '내 서재'가 줄어들어 한 글자씩 줄바꿈되지 않게 한다 */
+  flex: 0 0 auto;
+  white-space: nowrap;
   display: inline-flex;
   align-items: center;
   gap: 5px;
