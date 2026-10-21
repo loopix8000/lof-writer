@@ -46,7 +46,7 @@ import { NoteMarks, notePluginKey } from "./note-extension";
 import { NOTE_LINK_PROTOCOL, noteLinkTarget, type NoteMark } from "./note-links";
 import LineBreakControl from "./LineBreakControl";
 import { Fragment, Slice, type Node as PMNode } from "@tiptap/pm/model";
-import { TextSelection } from "@tiptap/pm/state";
+import { NodeSelection, TextSelection } from "@tiptap/pm/state";
 import type { EditorProps, EditorView } from "@tiptap/pm/view";
 import { createCachedMarkdown } from "./cached-markdown";
 import EditorFind, { FindHighlights } from "./EditorFind";
@@ -220,7 +220,9 @@ type EditorMenuOps = {
   pasteText: (text: string) => void;
   insertImage: (img: { src: string; alt: string }) => void;
 };
-type SaveImage = (file?: { name: string; data: string }) => Promise<{ src: string; alt: string } | null>;
+// 이미지를 눌렀을 때 고르는 크기. 너비(px)로 저장하고 본문 폭보다 넓으면 본문 폭에 맞춘다.
+const IMAGE_SIZES: [string, number | null][] = [["작게", 240], ["보통", 400], ["크게", 640], ["원본", null]];
+type SaveImage =(file?: { name: string; data: string }) => Promise<{ src: string; alt: string } | null>;
 
 const imageFiles = (data: DataTransfer | null) =>
   [...(data?.files || [])].filter((file) => file.type.startsWith("image/"));
@@ -259,6 +261,12 @@ function placeImage(view: EditorView, img: { src: string; alt: string }, at?: nu
     const pos = $pos.depth ? $pos.after(1) : $pos.pos;
     tr.insert(pos, state.schema.nodes.paragraph.create(null, node));
     end = pos + node.nodeSize + 1;
+  }
+  // 마지막 줄에 넣었으면 그 아래에 빈 줄을 하나 두어 바로 이어 쓸 수 있게 한다.
+  const $end = tr.doc.resolve(end);
+  if ($end.depth === 1 && $end.after(1) === tr.doc.content.size) {
+    tr.insert(tr.doc.content.size, state.schema.nodes.paragraph.create());
+    end = $end.after(1) + 1;
   }
   tr.setSelection(TextSelection.near(tr.doc.resolve(end)));
   view.dispatch(tr.scrollIntoView());
@@ -523,6 +531,12 @@ export default function Writer({
           });
           return true;
         },
+        // 이미지를 누르면 그 이미지를 골라 크기·삭제 도구를 띄운다.
+        handleClickOn: (view, _pos, node, nodePos) => {
+          if (node.type.name !== "image" || !view.editable) return false;
+          view.dispatch(view.state.tr.setSelection(NodeSelection.create(view.state.doc, nodePos)));
+          return true;
+        },
         attributes: {
           "aria-label": inactive ? "다른 그룹 원고 본문" : "원고 본문",
           "data-testid": visible ? (editable ? "manuscript" : "manuscript-readonly") : "",
@@ -604,6 +618,16 @@ export default function Writer({
   const inTable = useEditorState({
     editor,
     selector: ({ editor }) => !!editor?.isActive("table"),
+  });
+  // 고른 이미지의 너비. 이미지를 고르지 않았으면 undefined.
+  const imageWidth = useEditorState({
+    editor,
+    selector: ({ editor }) => {
+      const sel = editor?.state.selection;
+      return sel instanceof NodeSelection && sel.node.type.name === "image"
+        ? ((sel.node.attrs.width as number | null) ?? null)
+        : undefined;
+    },
   });
   useEffect(() => {
     if (editor && !editor.isDestroyed) {
@@ -1041,7 +1065,7 @@ export default function Writer({
         {images?.save && !readOnly && (
           <button
             aria-label="이미지 삽입"
-            title="이미지 삽입 (작품의 assets 폴더에 저장)"
+            title="이미지 삽입 (assets 폴더에 저장)"
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => void pickImage()}
           >
@@ -1112,6 +1136,56 @@ export default function Writer({
               ))}
             </div>
           ))}
+        </BubbleMenu>
+      )}
+      {images && editable && visible && (
+        <BubbleMenu
+          editor={editor}
+          pluginKey="imageToolbar"
+          className="table-tools image-tools"
+          role="toolbar"
+          aria-label="이미지 편집"
+          updateDelay={0}
+          shouldShow={({ editor }) => {
+            const sel = editor.state.selection;
+            return !inactive && editor.isEditable && sel instanceof NodeSelection && sel.node.type.name === "image";
+          }}
+          getReferencedVirtualElement={() => {
+            const dom = editor.view.nodeDOM(editor.state.selection.from);
+            return dom instanceof HTMLElement ? { getBoundingClientRect: () => dom.getBoundingClientRect() } : null;
+          }}
+          options={{ placement: "top", offset: 8, flip: true, shift: { padding: 8 } }}
+        >
+          <div className="table-tools-group">
+            {IMAGE_SIZES.map(([label, width]) => (
+              <button
+                key={label}
+                aria-label={`이미지 크기: ${label}`}
+                title={width ? `너비 ${width}px` : "원래 크기"}
+                className={imageWidth === width ? "active" : ""}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => {
+                  const { state } = editor, sel = state.selection;
+                  if (!(sel instanceof NodeSelection) || sel.node.type.name !== "image") return;
+                  const tr = state.tr.setNodeMarkup(sel.from, undefined, { ...sel.node.attrs, width });
+                  editor.view.dispatch(tr.setSelection(NodeSelection.create(tr.doc, sel.from)));
+                }}
+              >
+                <span>{label}</span>
+              </button>
+            ))}
+          </div>
+          <div className="table-tools-group danger">
+            <button
+              aria-label="이미지 삭제"
+              title="이미지 삭제"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => editor.chain().focus().deleteSelection().run()}
+            >
+              <Trash2 size={14} />
+              <span>삭제</span>
+            </button>
+          </div>
         </BubbleMenu>
       )}
       <EditorContent

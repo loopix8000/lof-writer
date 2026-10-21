@@ -22,6 +22,7 @@
     "smoke:edge": "node scripts/edge-smoke.mjs",
     "smoke:features": "node scripts/features-smoke.mjs",
     "mcp": "node scripts/mcp.mjs",
+    "diagnose:iroh": "node scripts/iroh-diagnostics-api.mjs",
     "snapshot": "node scripts/snapshot.mjs",
     "package:dir": "node scripts/package-tauri.mjs dir",
     "licenses": "node scripts/generate-licenses.mjs",

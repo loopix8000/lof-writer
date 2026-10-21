@@ -488,6 +488,7 @@ export default function MobileShell({
                 bindDocument={bindDocument}
                 openNoteLink={openNoteLink}
                 showHistory={showHistory}
+                switchProject={switchProject}
                 onUpdateProjectWriting={onUpdateProjectWriting}
                 setDialog={setDialog}
                 message={message}

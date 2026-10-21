@@ -1720,6 +1720,18 @@ body.sidebar-resizing * {
 .table-tools-group.danger button:hover {
   color: var(--danger-text);
 }
+/* 이미지를 눌렀을 때의 크기·삭제 도구. 손가락으로도 누르기 쉽게 조금 크게 둔다. */
+.image-tools button {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 9px;
+  font-size: 13px;
+}
+.image-tools button.active {
+  color: var(--accent);
+  background: var(--soft);
+  font-weight: 600;
+}
 .tiptap .tableWrapper {
   overflow-x: auto;
   margin: 1em 0;

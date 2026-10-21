@@ -477,6 +477,19 @@ fn dispatch_method(
         let c_root = common_memo_root_of(&st_root, &s_guard);
         Ok((st_root, c_root))
     };
+    // 원고 이미지를 둘 폴더. 공용 메모(space가 common)는 공용 메모 폴더, 그 밖에는 작품 폴더다.
+    let image_root = |args: &Value| -> Result<PathBuf, LofError> {
+        if args.get("space").and_then(|v| v.as_str()) == Some(memo::COMMON) {
+            let (_, common_root) = get_store_and_common()?;
+            return Ok(common_root);
+        }
+        let project_id = args.get("projectId").and_then(|v| v.as_str()).unwrap_or("");
+        let mut guard = state.store.lock().unwrap();
+        let st = guard
+            .as_mut()
+            .ok_or_else(|| fail_invalid("Store not initialized"))?;
+        Ok(st.get_project(project_id)?.dir)
+    };
 
     match method {
         "realtimeStatus" | "realtimeInvite" | "realtimePair" | "realtimeRemove" | "realtimeSync" |
@@ -703,9 +716,8 @@ fn dispatch_method(
             schedule_notify(app, &state.notify_seq);
             Ok(res)
         }
-        // 원고 이미지 저장: data(base64)가 있으면 그 내용을, 없으면 파일 선택 창에서 고른 파일을 작품의 assets/에 둔다.
+        // 원고 이미지 저장: data(base64)가 있으면 그 내용을, 없으면 파일 선택 창에서 고른 파일을 작품(공용 메모는 공용 메모 폴더)의 assets/에 둔다.
         "saveImage" => {
-            let project_id = args.get("projectId").and_then(|v| v.as_str()).unwrap_or("");
             let (name, bytes) = if let Some(data) = args.get("data").and_then(|v| v.as_str()) {
                 let bytes = base64::engine::general_purpose::STANDARD
                     .decode(data)
@@ -733,27 +745,14 @@ fn dispatch_method(
                     return Ok(Value::Null);
                 }
             };
-            let dir = {
-                let mut guard = state.store.lock().unwrap();
-                let st = guard
-                    .as_mut()
-                    .ok_or_else(|| fail_invalid("Store not initialized"))?;
-                st.get_project(project_id)?.dir
-            };
+            let dir = image_root(&args)?;
             let path = assets::save_image(&dir, &name, &bytes)?;
             Ok(json!({ "path": path, "name": name }))
         }
         "readImage" => {
-            let project_id = args.get("projectId").and_then(|v| v.as_str()).unwrap_or("");
             let doc_path = args.get("docPath").and_then(|v| v.as_str()).unwrap_or("");
             let src = args.get("src").and_then(|v| v.as_str()).unwrap_or("");
-            let dir = {
-                let mut guard = state.store.lock().unwrap();
-                let st = guard
-                    .as_mut()
-                    .ok_or_else(|| fail_invalid("Store not initialized"))?;
-                st.get_project(project_id)?.dir
-            };
+            let dir = image_root(&args)?;
             assets::image_data_url(&dir, doc_path, src)
         }
         // 집필 화면 우클릭 메뉴의 붙여넣기. 글이 있으면 글을, 없고 그림이 있으면 PNG(base64)를 돌려준다.

@@ -1635,6 +1635,19 @@
   text-overflow: ellipsis;
 }
 
+.m-drawer-title-btn {
+  max-width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--ink);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  text-align: left;
+}
+
 .m-drawer-title-group small {
   font-size: 11.5px;
   color: var(--muted);

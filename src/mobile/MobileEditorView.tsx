@@ -122,6 +122,7 @@ export default function MobileEditorView({
   bindDocument,
   openNoteLink,
   showHistory,
+  switchProject,
   onUpdateProjectWriting,
   setDialog,
   message,
@@ -185,6 +186,7 @@ export default function MobileEditorView({
   bindDocument: (id: string, episodeId: string | null) => Promise<void>;
   openNoteLink: (href: string, quote: string) => Promise<void>;
   showHistory: () => Promise<void>;
+  switchProject: (id: string) => Promise<void>;
   onUpdateProjectWriting: (rules: WritingRules) => void;
   setDialog: React.Dispatch<React.SetStateAction<Dialog | null>>;
   message: (text: string) => void;
@@ -206,6 +208,7 @@ export default function MobileEditorView({
   const [collapsedPaths, setCollapsedPaths] = useState<Record<string, boolean>>({});
   const [createMenuFolder, setCreateMenuFolder] = useState<string | null>(null);
   const [newFolderParent, setNewFolderParent] = useState<string | null>(null);
+  const [projectSwitcherOpen, setProjectSwitcherOpen] = useState(false);
 
   // 하단 플로팅 필 툴바 우측 더보기 플로팅 팝업 & 상단 속성 작은 플로팅 팝업 상태
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
@@ -468,6 +471,28 @@ export default function MobileEditorView({
           },
         ]
       : [];
+
+  const projectSwitcherItems: MobileActionItem[] = [
+    ...lib.projects.map((p) => ({
+      label: p.title || "제목 없는 작품",
+      sublabel: `${lib.documents.filter((d) => d.projectId === p.id && d.kind === "episode" && !d.archived).length}편`,
+      icon: <BookOpen size={18} />,
+      checked: p.id === active.projectId,
+      action: attempt(async () => {
+        setLeftDrawerOpen(false);
+        await switchProject(p.id);
+      }),
+    })),
+    "separator",
+    {
+      label: "새 작품 만들기",
+      icon: <Plus size={18} />,
+      action: () => {
+        setLeftDrawerOpen(false);
+        setDialog({ type: "newProject", value: "" });
+      },
+    },
+  ];
 
   // 왼쪽 드로어 내부 문서 트리 재귀 렌더링
   const renderDrawerDocTree = (
@@ -886,112 +911,6 @@ export default function MobileEditorView({
             <button
               type="button"
               className="m-pill-tool-btn"
-              aria-label="말줄임표 입력"
-              title="말줄임표"
-              disabled={isProtected}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() =>
-                window.dispatchEvent(
-                  new CustomEvent("lof:insert-text", { detail: "…" }),
-                )
-              }
-            >
-              …
-            </button>
-
-            <button
-              type="button"
-              className="m-pill-tool-btn"
-              aria-label="작은따옴표 쌍 입력"
-              title="작은따옴표"
-              disabled={isProtected}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() =>
-                window.dispatchEvent(
-                  new CustomEvent("lof:insert-pair", {
-                    detail: { open: "‘", close: "’" },
-                  }),
-                )
-              }
-            >
-              ‘…’
-            </button>
-
-            <button
-              type="button"
-              className="m-pill-tool-btn"
-              aria-label="큰따옴표 쌍 입력"
-              title="큰따옴표"
-              disabled={isProtected}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() =>
-                window.dispatchEvent(
-                  new CustomEvent("lof:insert-pair", {
-                    detail: { open: "“", close: "”" },
-                  }),
-                )
-              }
-            >
-              “…”
-            </button>
-
-            <button
-              type="button"
-              className="m-pill-tool-btn"
-              aria-label="줄표 입력"
-              title="줄표"
-              disabled={isProtected}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() =>
-                window.dispatchEvent(
-                  new CustomEvent("lof:insert-text", { detail: "—" }),
-                )
-              }
-            >
-              —
-            </button>
-
-            <button
-              type="button"
-              className="m-pill-tool-btn"
-              aria-label="홑낫표 쌍 입력"
-              title="홑낫표"
-              disabled={isProtected}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() =>
-                window.dispatchEvent(
-                  new CustomEvent("lof:insert-pair", {
-                    detail: { open: "「", close: "」" },
-                  }),
-                )
-              }
-            >
-              「…」
-            </button>
-
-            <button
-              type="button"
-              className="m-pill-tool-btn"
-              aria-label="겹낫표 쌍 입력"
-              title="겹낫표"
-              disabled={isProtected}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() =>
-                window.dispatchEvent(
-                  new CustomEvent("lof:insert-pair", {
-                    detail: { open: "『", close: "』" },
-                  }),
-                )
-              }
-            >
-              『…』
-            </button>
-
-            <span className="m-pill-sub-divider" aria-hidden="true" />
-
-            <button
-              type="button"
-              className="m-pill-tool-btn"
               aria-label="굵게"
               title="굵게"
               disabled={isProtected}
@@ -1352,7 +1271,15 @@ export default function MobileEditorView({
           >
             <div className="m-drawer-header">
               <div className="m-drawer-title-group">
-                <strong>{project?.title || "파일 트리"}</strong>
+                <button
+                  type="button"
+                  className="m-drawer-title-btn"
+                  aria-label="작품 전환"
+                  onClick={() => setProjectSwitcherOpen(true)}
+                >
+                  <strong>{project?.title || "제목 없는 작품"}</strong>
+                  <ChevronDown size={17} className="m-modern-title-chevron" />
+                </button>
                 <small>
                   에피소드 {episodes.length} · 문서 {docItems.length}
                 </small>
@@ -1849,6 +1776,14 @@ export default function MobileEditorView({
           </div>
         </div>
       )}
+
+      <MobileActionSheet
+        open={projectSwitcherOpen}
+        title="작품 전환"
+        subtitle="작업할 작품을 선택하세요"
+        items={projectSwitcherItems}
+        onClose={() => setProjectSwitcherOpen(false)}
+      />
 
       {/* 7. 왼쪽 파일트리 드로어 내 문서/폴더 생성 메뉴 */}
       <MobileActionSheet

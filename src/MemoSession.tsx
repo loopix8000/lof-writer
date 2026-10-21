@@ -15,6 +15,7 @@ import {
   X,
 } from "lucide-react";
 import Writer from "./Writer";
+import { memoImageScope, useImages } from "./app/useDocumentImages";
 import EditorScroll, { type EditorScrollPositions } from "./EditorScroll";
 import RetainedTab from "./RetainedTab";
 import { groupIds, groupShortcutIndex, isGroupId, legacyPairedGroup, type GroupId, type SplitDirection } from "./split/layout";
@@ -150,6 +151,7 @@ export default function MemoSession({
   // 메모의 문서 링크(퀵 노트 출처)를 누르면 집필 창에서 그 문서를 열고 인용한 문장으로 간다.
   onOpenLink: (href: string, quote: string) => void;
 }) {
+  const images = useImages(report);
   const [spaces, setSpaces] = useState<Space[]>([]),
     [space, setSpace] = useState(COMMON),
     [entries, setEntries] = useState<Entry[]>([]),
@@ -991,6 +993,11 @@ export default function MemoSession({
     }
     return "memo";
   };
+  // 에피소드·플롯은 문서 경로, 메모는 스페이스 기준으로 이미지를 읽고 저장한다.
+  const memoImages = (m: Memo) => {
+    const d = docOf(m);
+    return images(d ? { projectId: d.projectId, docPath: d.relPath || "" } : memoImageScope(m.space, m.path), true);
+  };
   const manuscriptBoxOf = (kind: Kind) => {
     const kindPrefs = resolveKindPrefs(prefs, kind);
     const norm = normalizeEditorStyle(kindPrefs);
@@ -1142,6 +1149,7 @@ export default function MemoSession({
                   editorStyle={mainBox.kindPrefs}
                   links={kindOf(memo) !== "episode"}
                   onOpenLink={onOpenLink}
+                  images={memoImages(memo)}
                 />
               </article>
             );

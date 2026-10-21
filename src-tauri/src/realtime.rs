@@ -710,10 +710,13 @@ impl WriterHost {
                 .ok_or_else(|| fail_invalid("서재가 닫혔습니다."))?;
             store.poll_disk()?;
             let list = store.list()?;
-            if list["warnings"].as_array().is_some_and(|w| !w.is_empty())
-                || store.has_pending_disk_changes()?
-            {
-                return Err(fail_invalid("상대 서재의 파일 경고를 먼저 확인해 주세요."));
+            let warnings = list["warnings"].as_array().cloned().unwrap_or_default();
+            let pending_missing = store.has_pending_disk_changes()?;
+            if !warnings.is_empty() || pending_missing {
+                return Err(fail_invalid(format!(
+                    "상대 서재 진단: warnings={}, pending_missing={pending_missing}",
+                    serde_json::to_string(&warnings).unwrap_or_default()
+                )));
             }
             // 덮어쓰기 전에 이전 원고를 로컬 이력에 기록한다.
             for doc in list["documents"].as_array().into_iter().flatten() {

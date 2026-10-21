@@ -171,6 +171,10 @@ impl Memos {
             }
             let r = join_rel(rel, &name);
             let Ok(ft) = e.file_type() else { continue };
+            // 공용 메모의 이미지 폴더(assets/)는 메모 목록에 보이지 않는다.
+            if ft.is_dir() && space.id == COMMON && rel.is_empty() && name.eq_ignore_ascii_case("assets") {
+                continue;
+            }
             if ft.is_dir() {
                 out.push(json!({
                     "path": r,

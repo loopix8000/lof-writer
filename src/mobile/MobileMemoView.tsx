@@ -12,6 +12,7 @@ import {
   FolderOpen,
   FolderPlus,
   Heading2,
+  ImagePlus,
   Italic,
   MessageSquareCode,
   Minus,
@@ -33,6 +34,7 @@ import { useConfirm } from "../ConfirmDialog";
 import EditorScroll, { type EditorScrollPositions } from "../EditorScroll";
 import SyncStatus from "../SyncStatus";
 import { call, type AutoSyncStatus } from "../types";
+import { memoImageScope, useImages } from "../app/useDocumentImages";
 import Writer from "../Writer";
 import {
   MobileActionSheet,
@@ -94,6 +96,7 @@ export default function MobileMemoView({
   report: (e: any) => void;
   onDetailStateChange?: (inEditor: boolean, closeEditor: () => void) => void;
 }) {
+  const images = useImages(report);
   const [spaces, setSpaces] = useState<Space[]>([]);
   const [space, setSpace] = useState<string>(COMMON);
   const [entries, setEntries] = useState<Entry[]>([]);
@@ -599,6 +602,7 @@ export default function MobileMemoView({
                 },
               }}
               contextMenu={false}
+              images={images(memoImageScope(memo.space, memo.path), true)}
             />
           </article>
         </EditorScroll>
@@ -870,6 +874,22 @@ export default function MobileMemoView({
                 >
                   <Table2 size={16} />
                   <span>표 삽입</span>
+                </button>
+
+                <button
+                  type="button"
+                  className="m-floating-popup-item"
+                  role="menuitem"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => {
+                    setEditorMenuOpen(false);
+                    window.dispatchEvent(
+                      new CustomEvent("lof:editor-action", { detail: "image" }),
+                    );
+                  }}
+                >
+                  <ImagePlus size={16} />
+                  <span>이미지 삽입</span>
                 </button>
 
                 <button
