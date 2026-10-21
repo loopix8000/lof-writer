@@ -488,7 +488,7 @@ export default function MobileShell({
                 bindDocument={bindDocument}
                 openNoteLink={openNoteLink}
                 showHistory={showHistory}
-                switchProject={switchProject}
+                goProject={() => goView("project", active.projectId)}
                 onUpdateProjectWriting={onUpdateProjectWriting}
                 setDialog={setDialog}
                 message={message}
@@ -727,19 +727,19 @@ export default function MobileShell({
           </button>
           <button
             type="button"
-            className={mobileTab === "bookmarks" ? "selected" : ""}
-            onClick={attempt(() => switchMainTab("bookmarks"))}
-          >
-            <BookmarkIcon size={20} />
-            <span>북마크</span>
-          </button>
-          <button
-            type="button"
             className={mobileTab === "memo" ? "selected" : ""}
             onClick={attempt(() => switchMainTab("memo"))}
           >
             <StickyNote size={20} />
             <span>메모</span>
+          </button>
+          <button
+            type="button"
+            className={mobileTab === "bookmarks" ? "selected" : ""}
+            onClick={attempt(() => switchMainTab("bookmarks"))}
+          >
+            <BookmarkIcon size={20} />
+            <span>북마크</span>
           </button>
           <button
             type="button"

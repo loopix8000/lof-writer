@@ -368,6 +368,14 @@
   color: var(--ink);
 }
 
+/* 작품 카드의 더보기 버튼은 오른쪽 가장자리에서 띄워 표지 쪽 여백과 균형을 맞춘다 */
+.m-project-card .m-row-more-btn {
+  align-self: center;
+  height: 38px;
+  margin-right: 8px;
+  border-radius: 10px;
+}
+
 .m-library-tools {
   margin-top: 20px;
   padding: 14px;
@@ -3153,4 +3161,11 @@
 .m-editor-screen .episode-info-toggle:active {
   background: var(--panel);
   color: var(--ink);
+}
+
+/* 드로어 회차 목록은 꾹 눌러 집필 상태를 바꾸므로 글자 선택과 시스템 길게 누르기 메뉴를 막는다 */
+.m-slide-drawer .m-episode-row .m-tree-row-main {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
 }

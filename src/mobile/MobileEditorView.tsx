@@ -115,7 +115,7 @@ export default function MobileEditorView({
   bindDocument,
   openNoteLink,
   showHistory,
-  switchProject,
+  goProject,
   onUpdateProjectWriting,
   setDialog,
   message,
@@ -179,7 +179,7 @@ export default function MobileEditorView({
   bindDocument: (id: string, episodeId: string | null) => Promise<void>;
   openNoteLink: (href: string, quote: string) => Promise<void>;
   showHistory: () => Promise<void>;
-  switchProject: (id: string) => Promise<void>;
+  goProject: () => Promise<void>;
   onUpdateProjectWriting: (rules: WritingRules) => void;
   setDialog: React.Dispatch<React.SetStateAction<Dialog | null>>;
   message: (text: string) => void;
@@ -201,7 +201,6 @@ export default function MobileEditorView({
   const [collapsedPaths, setCollapsedPaths] = useState<Record<string, boolean>>({});
   const [createMenuFolder, setCreateMenuFolder] = useState<string | null>(null);
   const [newFolderParent, setNewFolderParent] = useState<string | null>(null);
-  const [projectSwitcherOpen, setProjectSwitcherOpen] = useState(false);
 
   // 하단 플로팅 필 툴바 우측 더보기 플로팅 팝업 & 상단 속성 작은 플로팅 팝업 상태
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
@@ -254,19 +253,28 @@ export default function MobileEditorView({
     return () => window.clearTimeout(timer);
   }, [syncBusy]);
 
-  // 회차 제목을 누르면 집필 상태를 고르는 플로팅 메뉴를 제목 아래에 띄운다
-  const openStatusMenu = (e: React.MouseEvent<HTMLElement>) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const current = normalizeStatus(active.status);
+  // 회차의 집필 상태를 고르는 플로팅 메뉴. 열려 있는 회차는 편집 중인 원고와 함께 저장한다.
+  const showStatusMenu = (doc: Doc, x: number, y: number) => {
+    const current = normalizeStatus(doc.status);
     const pick = (status: string) => () => {
       if (status === current) return;
-      edit({ status });
-      if (status === "completed")
-        message("원고 보호 모드로 전환되었습니다. 집필 완료된 에피소드는 편집이 제한됩니다.");
+      const done = () => {
+        if (status === "completed")
+          message("원고 보호 모드로 전환되었습니다. 집필 완료된 에피소드는 편집이 제한됩니다.");
+      };
+      if (doc.id === active.id) {
+        edit({ status });
+        done();
+      } else {
+        attempt(async () => {
+          await patchDoc(doc.id, { status });
+          done();
+        })();
+      }
     };
     setPropPopup({
-      x: rect.left + rect.width / 2,
-      y: rect.bottom + 6,
+      x,
+      y,
       align: "center",
       items: [
         {
@@ -290,6 +298,57 @@ export default function MobileEditorView({
         },
       ],
     });
+  };
+
+  // 회차 제목을 누르면 제목 아래에 집필 상태 메뉴를 띄운다
+  const openStatusMenu = (e: React.MouseEvent<HTMLElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    showStatusMenu(active, rect.left + rect.width / 2, rect.bottom + 6);
+  };
+
+  // 드로어 회차 목록은 꾹 누르면 누른 자리 아래에 집필 상태 메뉴를 띄운다
+  const longPressRef = useRef<{
+    timer: number;
+    x: number;
+    y: number;
+    fired: boolean;
+  } | null>(null);
+  const cancelLongPress = () => {
+    if (longPressRef.current) window.clearTimeout(longPressRef.current.timer);
+  };
+  const statusLongPress = (doc: Doc) => ({
+    onTouchStart: (e: React.TouchEvent) => {
+      cancelLongPress();
+      if (e.touches.length !== 1) {
+        longPressRef.current = null;
+        return;
+      }
+      const t = e.touches[0];
+      const press = { timer: 0, x: t.clientX, y: t.clientY, fired: false };
+      press.timer = window.setTimeout(() => {
+        press.fired = true;
+        navigator.vibrate?.(12);
+        showStatusMenu(doc, press.x, press.y + 12);
+      }, 450);
+      longPressRef.current = press;
+    },
+    onTouchMove: (e: React.TouchEvent) => {
+      const press = longPressRef.current;
+      const t = e.touches[0];
+      if (press && !press.fired && Math.hypot(t.clientX - press.x, t.clientY - press.y) > 10) {
+        cancelLongPress();
+        longPressRef.current = null;
+      }
+    },
+    onTouchEnd: cancelLongPress,
+    onTouchCancel: cancelLongPress,
+    onContextMenu: (e: React.MouseEvent) => e.preventDefault(),
+  });
+  // 꾹 눌러 메뉴를 띄운 뒤 따라오는 클릭으로 회차가 열리지 않게 한다
+  const consumeLongPress = () => {
+    const fired = !!longPressRef.current?.fired;
+    longPressRef.current = null;
+    return fired;
   };
   const norm = normalizeEditorStyle(prefs, active.kind);
   const num = numberOf(active);
@@ -518,28 +577,6 @@ export default function MobileEditorView({
           },
         ]
       : [];
-
-  const projectSwitcherItems: MobileActionItem[] = [
-    ...lib.projects.map((p) => ({
-      label: p.title || "제목 없는 작품",
-      sublabel: `${lib.documents.filter((d) => d.projectId === p.id && d.kind === "episode" && !d.archived).length}편`,
-      icon: <BookOpen size={18} />,
-      checked: p.id === active.projectId,
-      action: attempt(async () => {
-        setLeftDrawerOpen(false);
-        await switchProject(p.id);
-      }),
-    })),
-    "separator",
-    {
-      label: "새 작품 만들기",
-      icon: <Plus size={18} />,
-      action: () => {
-        setLeftDrawerOpen(false);
-        setDialog({ type: "newProject", value: "" });
-      },
-    },
-  ];
 
   // 왼쪽 드로어 내부 문서 트리 재귀 렌더링
   const renderDrawerDocTree = (
@@ -1123,11 +1160,13 @@ export default function MobileEditorView({
                 <button
                   type="button"
                   className="m-drawer-title-btn"
-                  aria-label="작품 전환"
-                  onClick={() => setProjectSwitcherOpen(true)}
+                  aria-label="작품 페이지로 이동"
+                  onClick={() => {
+                    setLeftDrawerOpen(false);
+                    attempt(goProject)();
+                  }}
                 >
                   <strong>{project?.title || "제목 없는 작품"}</strong>
-                  <ChevronDown size={17} className="m-modern-title-chevron" />
                 </button>
                 <small>
                   에피소드 {episodes.length} · 문서 {docItems.length}
@@ -1219,7 +1258,9 @@ export default function MobileEditorView({
                           <button
                             type="button"
                             className="m-tree-row-main"
+                            {...statusLongPress(ep)}
                             onClick={() => {
+                              if (consumeLongPress()) return;
                               setLeftDrawerOpen(false);
                               if (!isCur) attempt(() => openDoc(ep.id, false))();
                             }}
@@ -1625,14 +1666,6 @@ export default function MobileEditorView({
           </div>
         </div>
       )}
-
-      <MobileActionSheet
-        open={projectSwitcherOpen}
-        title="작품 전환"
-        subtitle="작업할 작품을 선택하세요"
-        items={projectSwitcherItems}
-        onClose={() => setProjectSwitcherOpen(false)}
-      />
 
       {/* 7. 왼쪽 파일트리 드로어 내 문서/폴더 생성 메뉴 */}
       <MobileActionSheet
