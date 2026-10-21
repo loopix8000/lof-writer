@@ -13,6 +13,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { normalizeWriting } from "../../core/platforms.mjs";
 import BookmarksPage from "../app/BookmarksPage";
@@ -38,6 +39,7 @@ import {
   type Project,
   type WritingRules,
 } from "../types";
+import { isAndroidApp } from "../tauri-bridge";
 import { UpdateLock, UpdateNotice } from "../Updater";
 import MobileEditorView from "./MobileEditorView";
 import MobileLibraryView from "./MobileLibraryView";
@@ -422,8 +424,19 @@ export default function MobileShell({
   const isProtected =
     active?.kind === "episode" && active?.status === "completed";
 
+  // 상태 표시줄·내비게이션 바도 상단 앱바·하단 탭과 같은 색과 아이콘 밝기로 맞춘다.
+  const shellRef = useRef<HTMLDivElement>(null);
+  const dark = prefs.theme === "dark";
+  useEffect(() => {
+    if (!isAndroidApp() || !shellRef.current) return;
+    const color = getComputedStyle(shellRef.current).getPropertyValue("--surface").trim();
+    if (!/^#[0-9a-f]{6}$/i.test(color)) return;
+    void invoke("android_set_system_bars", { color, dark }).catch(() => {});
+  }, [dark, prefs.colorTheme]);
+
   return (
     <div
+      ref={shellRef}
       className={`app mobile-app ${prefs.theme === "dark" ? "dark" : ""} ${prefs.colorTheme === "bakery" ? "bakery" : ""}`}
       inert={updater.locked}
     >

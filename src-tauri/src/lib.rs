@@ -4,6 +4,7 @@ mod auto_sync;
 mod android_library;
 mod android_scanner;
 mod android_storage;
+mod android_system_bars;
 mod android_updater;
 pub mod database;
 mod document_patch;
@@ -2244,7 +2245,8 @@ pub fn run() {
     let builder = builder
         .plugin(android_updater::init())
         .plugin(android_storage::init())
-        .plugin(android_scanner::init());
+        .plugin(android_scanner::init())
+        .plugin(android_system_bars::init());
     #[cfg(not(target_os = "android"))]
     let builder = builder
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -2272,6 +2274,7 @@ pub fn run() {
             android_storage::android_storage_access,
             android_storage::android_pick_image,
             android_scanner::android_scan_qr,
+            android_system_bars::android_set_system_bars,
         ])
         .setup(move |app| {
             #[cfg(not(target_os = "android"))]
