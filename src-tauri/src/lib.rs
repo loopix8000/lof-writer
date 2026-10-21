@@ -493,7 +493,7 @@ fn dispatch_method(
 
     match method {
         "realtimeStatus" | "realtimeInvite" | "realtimePair" | "realtimeRemove" | "realtimeSync" |
-        "realtimeCancelPair" | "realtimeValidateCode" | "realtimeClipboard" | "realtimeRename" | "realtimeLeave" |
+        "realtimeCancelPair" | "realtimeValidateCode" | "realtimeClipboard" | "realtimeRename" | "realtimeRenameDevice" | "realtimeLeave" |
         "realtimeResetNotice" | "realtimeDismissReset" => realtime::command(app, method, &args),
         "countManuscript" => Ok(crate::text::display_counts(
             args.get("text").and_then(Value::as_str).unwrap_or(""),

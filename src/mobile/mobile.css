@@ -2879,6 +2879,28 @@
   gap: 6px;
 }
 
+.m-settings-host .realtime-name-form input {
+  flex-basis: 100%;
+  min-height: 42px;
+  font-size: 15px;
+}
+
+.m-settings-host .realtime-name-actions {
+  width: 100%;
+}
+
+.m-settings-host .realtime-name-form button {
+  flex: 1 1 0;
+  min-height: 40px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.m-settings-host .realtime-device.is-renaming .realtime-device-actions {
+  display: none;
+}
+
 .m-settings-host .realtime-invite-grid {
   display: flex !important;
   flex-direction: column !important;

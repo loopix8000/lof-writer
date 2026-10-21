@@ -179,6 +179,7 @@ fn begin_pair(
         result: json!({"id":id,"phase":"connecting"}),
     });
     drop(pairing);
+    let name = device_name(app);
     let app = app.clone();
     let attempt = id.clone();
     std::thread::spawn(move || {
@@ -187,7 +188,7 @@ fn begin_pair(
                 result=node.connect(ticket.addr.clone())=>result.map_err(|error|{eprintln!("그룹 가입 연결 실패: {error}");fail("초대한 장치에 연결하지 못했습니다. 상대 앱과 인터넷 연결을 확인한 뒤 다시 시도해 주세요.","PAIR_NETWORK")})?,
                 _=cancelled.changed()=>return Err(fail("연결을 취소했습니다.","PAIR_CANCELLED")),
             };
-            let request=json!({"op":"join","group":ticket.group,"vault":local_vault,"token":ticket.token,"name":device_name(),"storage":false});
+            let request=json!({"op":"join","group":ticket.group,"vault":local_vault,"token":ticket.token,"name":name,"storage":false});
             let response=tokio::select!{
                 result=lof_realtime::request(&connection,Message::json(request))=>result.map_err(|error|{
                     let code=if error.starts_with("페어링 코드가 만료되었습니다."){"PAIR_CODE_EXPIRED"}
@@ -217,7 +218,15 @@ fn begin_pair(
 fn net(error: impl ToString) -> LofError {
     fail(error.to_string(), "REALTIME")
 }
-fn device_name() -> String {
+/// 사용자가 정한 이 장치 이름. 없으면 시스템 이름을 쓴다.
+fn device_name(app: &AppHandle) -> String {
+    let custom = app.state::<AppState>().settings.lock().unwrap()["realtimeDeviceName"]
+        .as_str()
+        .map(|name| name.trim().chars().take(100).collect::<String>())
+        .unwrap_or_default();
+    if !custom.is_empty() {
+        return custom;
+    }
     std::env::var("COMPUTERNAME")
         .or_else(|_| std::env::var("HOSTNAME"))
         .unwrap_or_else(|_| {
@@ -337,6 +346,31 @@ fn with_group<T>(
         *group = next;
     }
     Ok(result)
+}
+/// 현재 그룹에 기록된 이 장치 이름이 설정과 다르면 새 버전으로 서명해 교체한다.
+fn sync_own_name(app: &AppHandle, notify: bool) -> Result<(), LofError> {
+    let Some(key) = app.state::<Realtime>().key.lock().unwrap().clone() else {
+        return Ok(());
+    };
+    let own = key.public().to_string();
+    let name = device_name(app);
+    let list = with_group(app, |group| {
+        let Some(current) = group.as_mut() else {
+            return Ok(None);
+        };
+        let Some(me) = current.member(&own).cloned() else {
+            return Ok(None);
+        };
+        if me.name == name {
+            return Ok(None);
+        }
+        current.update(&key, &own, &me.vault, &name, me.storage, false);
+        Ok(Some(current.members.clone()))
+    })?;
+    if let Some(members) = list.filter(|_| notify) {
+        announce(app, Announcement::Members { members });
+    }
+    Ok(())
 }
 fn aliases(app: &AppHandle, root: &Path) -> Value {
     app.state::<AppState>().settings.lock().unwrap()["realtimeGroups"]
@@ -594,7 +628,7 @@ fn join(app: &AppHandle, peer: &str, message: &Message) -> Result<Message, LofEr
     changed(app);
     wake(app);
     Ok(Message::json(json!({"group":group.id(),"secret":group.secret,"members":group.members,
-        "vault":local_vault,"name":device_name(),"storage":false})))
+        "vault":local_vault,"name":device_name(app),"storage":false})))
 }
 impl WriterHost {
     fn handle_inner(
@@ -995,6 +1029,8 @@ pub fn start(app: &AppHandle) {
                     connected.clear();
                     retry.clear();
                     previous_root = current.clone();
+                    // 다른 서재에 있을 때 바꾼 장치 이름은 연결 확인 요청으로 전한다.
+                    let _ = sync_own_name(&app, false);
                 }
                 // 그룹 주제에 참여해 구성원 목록과 변경 알림을 받는다.
                 let group = with_group(&app, |group| Ok(group.clone())).unwrap_or(None);
@@ -1312,9 +1348,29 @@ pub fn command(app: &AppHandle, method: &str, args: &Value) -> Result<Value, Lof
             .filter(|p| p.root == current)
             .map(|p| p.result.clone());
         let ready = rt.runtime.lock().unwrap().is_some();
+        let device = json!({"name":device_name(app)});
         return Ok(
-            json!({"uxVersion":2,"scope":current,"endpoint":identity.filter(|_|ready),"group":group,"peers":list,"invite":invite,"pairing":pairing,"error":*rt.error.lock().unwrap()}),
+            json!({"uxVersion":2,"scope":current,"endpoint":identity.filter(|_|ready),"device":device,"group":group,"peers":list,"invite":invite,"pairing":pairing,"error":*rt.error.lock().unwrap()}),
         );
+    }
+    if method == "realtimeRenameDevice" {
+        let name = args["name"].as_str().unwrap_or("").trim().to_string();
+        if name.is_empty() || name.chars().count() > 100 {
+            return Err(fail_invalid("장치 이름은 1~100자로 입력해 주세요."));
+        }
+        // 이 장치 이름은 모든 서재에 공통으로 쓰고, 현재 그룹에는 바로 알린다.
+        let state = app.state::<AppState>();
+        {
+            let mut settings = state.settings.lock().unwrap();
+            let mut next = settings.clone();
+            next["realtimeDeviceName"] = json!(name);
+            crate::persist_settings(&state.config_file, &next)?;
+            *settings = next;
+        }
+        if root(app).is_ok() {
+            sync_own_name(app, true)?;
+        }
+        return Ok(json!({"name":name}));
     }
     if method == "realtimeCancelPair" {
         let mut pairing = rt.pairing.lock().unwrap();
@@ -1499,12 +1555,13 @@ pub fn command(app: &AppHandle, method: &str, args: &Value) -> Result<Value, Lof
             .ok_or_else(|| fail_invalid("실시간 연결을 준비 중입니다."))?;
         let own = key.public().to_string();
         let local_vault = vault(app)?;
+        let name = device_name(app);
         // 아직 그룹이 없으면 이 서재를 첫 구성원으로 새 그룹을 만든다.
         let group = with_group(app, |group| {
-            let current = group
-                .get_or_insert_with(|| Group::create(&key, &local_vault, &device_name(), false));
+            let current =
+                group.get_or_insert_with(|| Group::create(&key, &local_vault, &name, false));
             if current.member(&own).is_none_or(|me| me.vault != local_vault) {
-                current.update(&key, &own, &local_vault, &device_name(), false, false);
+                current.update(&key, &own, &local_vault, &name, false, false);
             }
             if current.full() {
                 return Err(fail(group::FULL_MESSAGE, "GROUP_FULL"));

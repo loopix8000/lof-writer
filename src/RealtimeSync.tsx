@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { AlertCircle, ArrowLeft, ArrowRight, Check, CheckCircle2, ChevronDown, ChevronRight, Clock3, Cloud, Copy, Link, Loader2, LogOut, Monitor, Pencil, QrCode, RefreshCw, ScanLine, Server, Users, X } from "lucide-react";
+import { AlertCircle, ArrowLeft, ArrowRight, Check, CheckCircle2, ChevronDown, ChevronRight, Clock3, Cloud, Copy, Link, Loader2, LogOut, Monitor, Pencil, QrCode, RefreshCw, ScanLine, Server, Smartphone, Users, X } from "lucide-react";
 import SettingsToggle from "./app/SettingsToggle";
 import { isAndroidApp } from "./tauri-bridge";
 import { call } from "./types";
@@ -12,7 +12,7 @@ type InviteInfo = { id: string; remainingMs: number; durationMs: number; phase: 
 type InviteData = InviteInfo & { code: string; qr: string };
 type Pairing = { id: string; phase: "connecting" | "connected" | "cancelled" | "error"; peer?: Peer; error?: string; code?: string };
 type Group = { id: string; members: number };
-type Status = { uxVersion?: number; scope?: string; endpoint?: string; group?: Group | null; peers: Peer[]; error: string; invite?: InviteInfo | null; pairing?: Pairing | null };
+type Status = { uxVersion?: number; scope?: string; endpoint?: string; device?: { name: string }; group?: Group | null; peers: Peer[]; error: string; invite?: InviteInfo | null; pairing?: Pairing | null };
 type Problem = { message: string; code?: string };
 const tabs = [
   { id: "devices", label: "동기화 그룹", desc: "연결된 장치 상태 확인 및 그룹 관리", icon: Users },
@@ -20,6 +20,7 @@ const tabs = [
   { id: "connect", label: "그룹 가입", desc: "다른 기기에서 만든 페어링 코드로 연결", icon: Link },
 ] as const;
 const copied = "페어링 코드를 복사했습니다.";
+const OWN_DEVICE = "own-device";
 const groupLabel = (id: string) => id.slice(0, 8).toUpperCase().replace(/(.{4})/, "$1-");
 type Tab = typeof tabs[number]["id"];
 const labels: Record<string, string> = { connecting: "연결 중", connected: "연결됨", pending: "동기화 대기", syncing: "동기화 중", offline: "오프라인", error: "재연결 대기" };
@@ -249,24 +250,44 @@ export default function RealtimeSync({
   });
   const showDevices = () => { dismissPair(); selectTab("devices"); };
   const resolvePeer = (peer: Peer) => status.peers.find(value => value.id === peer.id) ?? peer;
-  const device = (snapshot: Peer, controls = false) => {
-    const peer = resolvePeer(snapshot); const Icon = peer.storage ? Server : Monitor;
-    return <div className="realtime-device" key={peer.id}>
+  // 장치 이름 입력란과 저장·취소 버튼을 한 줄로 묶어 좁은 화면에서도 버튼이 흩어지지 않게 한다.
+  const nameField = (id: string, name: string, save: (name: string) => Promise<void>, enabled: boolean) => renaming === id
+    ? <form className="realtime-name-form" onSubmit={event => {
+      event.preventDefault(); void run("rename", async () => { await save(alias); setRenaming(null); });
+    }}>
+      <label className="realtime-sr-only" htmlFor="realtime-device-name">장치 이름</label>
+      <input id="realtime-device-name" value={alias} onChange={event => setAlias(event.target.value)} maxLength={100} autoFocus disabled={!!action} />
+      <div className="realtime-name-actions">
+        <button type="submit" className="primary" disabled={!!action || !enabled || !alias.trim()}>저장</button>
+        <button type="button" disabled={!!action} onClick={() => setRenaming(null)}>취소</button>
+      </div>
+    </form>
+    : <div className="realtime-device-title"><strong>{name}</strong>
+      {id === OWN_DEVICE && <span className="realtime-device-tag">이 장치</span>}
+      <button className="realtime-text-button" disabled={!!action || !enabled} onClick={() => { setAlias(name); setRenaming(id); setActionProblem(null); }}><Pencil size={12} />이름 변경</button>
+    </div>;
+  const ownDevice = (name: string) => {
+    const Icon = isAndroidApp() ? Smartphone : Monitor;
+    return <div className={`realtime-device is-own ${renaming === OWN_DEVICE ? "is-renaming" : ""}`}>
       <div className="realtime-device-icon"><Icon size={22} aria-hidden="true" /></div>
       <div className="realtime-device-info">
-        {renaming === peer.id ? <form className="realtime-name-form" onSubmit={event => {
-          event.preventDefault(); void run("rename", async () => {
-            const updated = await call<Peer>("realtimeRename", { id: peer.id, name: alias });
-            setStatus(current => ({ ...current, peers: current.peers.map(value => value.id === peer.id ? { ...value, name: updated.name } : value) })); setRenaming(null);
-          });
-        }}>
-          <label className="realtime-sr-only" htmlFor="realtime-device-name">장치 이름</label>
-          <input id="realtime-device-name" value={alias} onChange={event => setAlias(event.target.value)} maxLength={100} autoFocus disabled={!!action} />
-          <button type="submit" disabled={!!action || !ready || !alias.trim()}>저장</button>
-          <button type="button" disabled={!!action} onClick={() => setRenaming(null)}>취소</button>
-        </form> : <div className="realtime-device-title"><strong>{peer.name}</strong>
-          <button className="realtime-text-button" disabled={!!action || !ready} onClick={() => { setAlias(peer.name); setRenaming(peer.id); setActionProblem(null); }}><Pencil size={12} />이름 변경</button>
-        </div>}
+        {nameField(OWN_DEVICE, name, async value => {
+          const updated = await call<{ name: string }>("realtimeRenameDevice", { name: value });
+          setStatus(current => ({ ...current, device: { name: updated.name } }));
+        }, true)}
+        <span className="realtime-device-status">그룹의 다른 장치에 이 이름으로 표시됩니다.</span>
+      </div>
+    </div>;
+  };
+  const device = (snapshot: Peer, controls = false) => {
+    const peer = resolvePeer(snapshot); const Icon = peer.storage ? Server : Monitor;
+    return <div className={`realtime-device ${renaming === peer.id ? "is-renaming" : ""}`} key={peer.id}>
+      <div className="realtime-device-icon"><Icon size={22} aria-hidden="true" /></div>
+      <div className="realtime-device-info">
+        {nameField(peer.id, peer.name, async value => {
+          const updated = await call<Peer>("realtimeRename", { id: peer.id, name: value });
+          setStatus(current => ({ ...current, peers: current.peers.map(item => item.id === peer.id ? { ...item, name: updated.name } : item) }));
+        }, ready)}
         {controls && <span className={`realtime-device-status ${peer.status?.phase === "error" ? "is-warning" : ""}`}>
           <span className="realtime-dot" />{labels[peer.status?.phase ?? ""] ?? "연결 대기"}
           {peer.status?.lastSync && ` · ${new Date(peer.status.lastSync).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`}
@@ -356,6 +377,7 @@ export default function RealtimeSync({
                 : <button type="button" disabled={!!action || !ready} onClick={() => { setLeaving(true); setActionProblem(null); }}><LogOut size={13} />그룹 나가기</button>}
             </div>
           </div>}
+          {status.device && <div className="realtime-device-list realtime-own-device">{ownDevice(status.device.name)}</div>}
           {status.peers.length ? <div className="realtime-device-list">{status.peers.map(peer => device(peer, true))}</div>
             : <div className="realtime-empty"><Cloud size={38} /><strong>아직 그룹에 다른 장치가 없습니다</strong><p>초대 코드를 만들어 다른 장치를 그룹에 추가하거나, 다른 장치의 코드로 그룹에 가입해 보세요.</p></div>}
           {savePrefs && (
