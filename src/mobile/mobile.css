@@ -1907,11 +1907,6 @@
   text-align: left;
 }
 
-.m-drawer-title-group small {
-  font-size: 11.5px;
-  color: var(--muted);
-}
-
 .m-drawer-header-actions {
   display: flex;
   align-items: center;

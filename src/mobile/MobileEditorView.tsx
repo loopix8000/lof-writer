@@ -1196,9 +1196,6 @@ export default function MobileEditorView({
                 >
                   <strong>{project?.title || "제목 없는 작품"}</strong>
                 </button>
-                <small>
-                  에피소드 {episodes.length} · 문서 {docItems.length}
-                </small>
               </div>
               <button
                 type="button"
