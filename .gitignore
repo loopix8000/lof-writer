@@ -15,3 +15,7 @@ temp/
 src-tauri/tauri.updater.generated.json
 /AGENTS.md
 /.claude/
+
+# Android Gradle 빌드 캐시
+src-tauri/android/**/.gradle/
+src-tauri/android/buildSrc/build/
