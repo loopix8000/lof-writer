@@ -411,6 +411,7 @@ fn snapshot_files(
     format: &Value,
 ) -> Result<BTreeMap<String, Oid>, LofError> {
     let mut files = BTreeMap::new();
+    let previous = tip(repo, MAIN)?.map(|commit| commit.tree()).transpose()?;
     put(repo, &mut files, "format.json", &json_bytes(format)?)?;
     put(
         repo,
@@ -435,33 +436,49 @@ fn snapshot_files(
             .as_str()
             .filter(|id| valid_id(id))
             .ok_or_else(|| fail("문서 ID가 올바르지 않습니다.", "LOCAL_GIT"))?;
-        let body = document["body"]
-            .as_str()
-            .ok_or_else(|| fail("원고 본문을 읽지 못했습니다.", "LOCAL_GIT"))?;
-        let mut metadata = document.clone();
-        let fields = metadata
-            .as_object_mut()
-            .ok_or_else(|| fail("원고 속성을 읽지 못했습니다.", "LOCAL_GIT"))?;
-        for key in ["body", "revision", "fingerprint", "path"] {
-            fields.remove(key);
-        }
-        put(
-            repo,
-            &mut files,
-            &format!("documents/{id}/body.md"),
-            body.as_bytes(),
-        )?;
-        put(
-            repo,
-            &mut files,
-            &format!("documents/{id}/metadata.json"),
-            &json_bytes(&metadata)?,
-        )?;
+        put_document(repo, &mut files, previous.as_ref(), id, document)?;
     }
     for (path, source) in &snapshot.assets {
         files.insert(path.clone(), repo.blob_path(source)?);
     }
     Ok(files)
+}
+
+pub(crate) fn put_document(
+    repo: &Repository,
+    files: &mut BTreeMap<String, Oid>,
+    previous: Option<&git2::Tree<'_>>,
+    id: &str,
+    document: &Value,
+) -> Result<bool, LofError> {
+    let body_path = format!("documents/{id}/body.md");
+    let metadata_path = format!("documents/{id}/metadata.json");
+    if let Some(previous) = previous {
+        match previous.get_path(Path::new(&metadata_path)) {
+            Ok(_) => {
+                let old = read_document(repo, previous, id)?;
+                if crate::database::same_history_content(&old, document) {
+                    for path in [&body_path, &metadata_path] {
+                        files.insert(path.clone(), previous.get_path(Path::new(path))?.id());
+                    }
+                    return Ok(false);
+                }
+            }
+            Err(error) if error.code() == ErrorCode::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    let body = document["body"].as_str()
+        .ok_or_else(|| fail("원고 본문을 읽지 못했습니다.", "LOCAL_GIT"))?;
+    let mut metadata = document.clone();
+    let fields = metadata.as_object_mut()
+        .ok_or_else(|| fail("원고 속성을 읽지 못했습니다.", "LOCAL_GIT"))?;
+    for key in ["body", "revision", "fingerprint", "path"] {
+        fields.remove(key);
+    }
+    put(repo, files, &body_path, body.as_bytes())?;
+    put(repo, files, &metadata_path, &json_bytes(&metadata)?)?;
+    Ok(true)
 }
 
 pub(crate) fn read_json(

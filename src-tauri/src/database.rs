@@ -65,6 +65,33 @@ pub fn history_value(doc: &Value, at: &str) -> Value {
         "body": doc.get("body"), "savedAt": at, "attributes": attributes})
 }
 
+// 저장 버전·시각·파일 위치와 파생 값은 제외하고, 실제 문서 속성만 비교한다.
+pub fn history_metadata(doc: &Value) -> Value {
+    let mut source = doc.get("attributes").cloned().unwrap_or_else(|| doc.clone());
+    if doc.get("attributes").is_some() {
+        for key in ["id", "title", "status"] {
+            if source.get(key).is_none() {
+                if let Some(value) = doc.get(key) {
+                    source[key] = value.clone();
+                }
+            }
+        }
+    }
+    let properties = source.as_object_mut().and_then(|fields| fields.remove("properties"))
+        .unwrap_or_else(|| json!({}));
+    let mut metadata = document_properties(&source);
+    for key in ["lof", "id", "createdAt", "updatedAt", "conflictOf"] {
+        metadata.remove(key);
+    }
+    // 사용자 속성은 별도로 유지해 객체 키 순서와 빈 속성의 유무에 영향받지 않는다.
+    metadata.insert("properties".into(), properties);
+    Value::Object(metadata)
+}
+
+pub fn same_history_content(left: &Value, right: &Value) -> bool {
+    left.get("body") == right.get("body") && history_metadata(left) == history_metadata(right)
+}
+
 fn legacy_history(id: &str, name: &str, raw: &str) -> Result<Value, LofError> {
     let millis = name
         .split('-')
@@ -622,7 +649,7 @@ impl LibraryDb {
         Ok(removed)
     }
 
-    pub fn latest_history(&self, id: &str) -> Result<Option<(u64, String)>, LofError> {
+    pub fn latest_history(&self, id: &str) -> Result<Option<(u64, Value)>, LofError> {
         let name: Option<String> = self
             .connection
             .query_row(
@@ -638,7 +665,7 @@ impl LibraryDb {
                         .next()
                         .and_then(|s| s.parse().ok())
                         .unwrap_or(0),
-                    v["body"].as_str().unwrap_or("").to_string(),
+                    v,
                 )
             })),
             None => Ok(None),

@@ -1,5 +1,5 @@
 use crate::error::{fail, fail_invalid, valid_id, LofError};
-use crate::local_git::{flatten, json_bytes, put, read_document, read_json, tree, LocalHistory};
+use crate::local_git::{flatten, put_document, read_document, read_json, tree, LocalHistory};
 use git2::{Commit, Oid, Repository, Signature, Sort};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashSet};
@@ -241,36 +241,18 @@ impl LocalHistory {
         id: &str,
         document: &Value,
         message: &str,
-    ) -> Result<(), LofError> {
+    ) -> Result<bool, LofError> {
         if !valid_id(id) {
             return Err(fail_invalid("잘못된 문서 ID입니다."));
         }
         let repo = self.repository()?;
         let previous = latest(&repo)?;
         let mut files = BTreeMap::new();
-        flatten(&repo, &previous.tree()?, "", &mut files)?;
-        let mut metadata = document.clone();
-        let fields = metadata
-            .as_object_mut()
-            .ok_or_else(|| fail_invalid("원고 속성이 없습니다."))?;
-        for key in ["body", "revision", "fingerprint", "path"] {
-            fields.remove(key);
+        let previous_tree = previous.tree()?;
+        flatten(&repo, &previous_tree, "", &mut files)?;
+        if !put_document(&repo, &mut files, Some(&previous_tree), id, document)? {
+            return Ok(false);
         }
-        let body = document["body"]
-            .as_str()
-            .ok_or_else(|| fail_invalid("원고 본문이 없습니다."))?;
-        put(
-            &repo,
-            &mut files,
-            &format!("documents/{id}/body.md"),
-            body.as_bytes(),
-        )?;
-        put(
-            &repo,
-            &mut files,
-            &format!("documents/{id}/metadata.json"),
-            &json_bytes(&metadata)?,
-        )?;
         let next = tree(&repo, &files)?;
         if previous.tree_id() != next {
             let sig = Signature::now("Lof Writer", "local@lof-writer.invalid")?;
@@ -285,7 +267,7 @@ impl LocalHistory {
                 )?
                 .to_string();
         }
-        Ok(())
+        Ok(true)
     }
 
     pub fn backup(&self, destination: &Path) -> Result<(), LofError> {
@@ -340,10 +322,30 @@ impl LocalHistory {
     }
 }
 
-pub fn comparison(old: &str, current: &str) -> Result<Value, LofError> {
+pub fn comparison(previous: &Value, document: &Value) -> Result<Value, LofError> {
+    let old_metadata = crate::database::history_metadata(previous);
+    let current_metadata = crate::database::history_metadata(document);
+    let mut metadata_changes = Vec::new();
+    for (property, old, current) in [
+        (false, &old_metadata, &current_metadata),
+        (true, &old_metadata["properties"], &current_metadata["properties"]),
+    ] {
+        let keys: std::collections::BTreeSet<_> = old.as_object().into_iter().chain(current.as_object())
+            .flat_map(|fields| fields.keys()).collect();
+        for key in keys {
+            if (!property && key == "properties") || old.get(key) == current.get(key) {
+                continue;
+            }
+            metadata_changes.push(json!({"key":key,"property":property,
+                "previous":old.get(key),"current":current.get(key),
+                "previousExists":old.get(key).is_some(),"currentExists":current.get(key).is_some()}));
+        }
+    }
+    let old = previous["body"].as_str().unwrap_or("");
+    let current = document["body"].as_str().unwrap_or("");
     if old.len() + current.len() > 4_000_000 {
         return Ok(
-            json!({"available":false,"message":"원고가 커서 변경 비교를 생략했습니다. 원고 보기에서 내용을 확인해 주세요."}),
+            json!({"available":false,"metadataChanges":metadata_changes,"message":"원고가 커서 본문 비교를 생략했습니다. 원고 보기에서 내용을 확인해 주세요."}),
         );
     }
     let mut patch = git2::Patch::from_buffers(
@@ -361,6 +363,6 @@ pub fn comparison(old: &str, current: &str) -> Result<Value, LofError> {
     let lines: Vec<_> = visible().take(3000).map(|line| json!({"text":line,
         "kind":if line.starts_with('+'){"added"}else if line.starts_with('-'){"removed"}else{"context"}})).collect();
     Ok(
-        json!({"available":true,"added":added,"removed":removed,"lines":lines,"truncated":visible().count()>3000}),
+        json!({"available":true,"added":added,"removed":removed,"lines":lines,"truncated":visible().count()>3000,"metadataChanges":metadata_changes}),
     )
 }

@@ -2989,6 +2989,24 @@ body.sidebar-resizing * {
   display: inline;
   white-space: pre-wrap;
 }
+.history-metadata > div {
+  margin: 12px 0;
+}
+.history-metadata dt {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.history-metadata dd {
+  margin: 6px 0 0;
+}
+.history-metadata dd > span {
+  display: block;
+  padding: 6px 8px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 180px;
+  overflow: auto;
+}
 /* 이력 복원 및 백업 단추. */
 .history-actions {
   display: flex;

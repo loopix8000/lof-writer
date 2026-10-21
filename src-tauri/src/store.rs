@@ -3787,23 +3787,9 @@ impl Store {
         let restoring = input.get("restoring").and_then(Value::as_bool).unwrap_or(false);
         let current_body = current.get("body").and_then(Value::as_str).unwrap_or("");
         let saved_body = saved.get("body").and_then(Value::as_str).unwrap_or("");
-        let renamed = saved.get("title") != current.get("title");
-        if !restoring && (manual_history || ((saved_body != current_body || renamed) && (force_history || renamed || self.history_due(saved_id, saved_body)))) {
-            if self.local_git.ready {
-                self.local_git.capture_document(saved_id, &saved, if manual_history { "수동 저장한 원고 기록" } else { "원고 저장 기록" })?;
-                if manual_history {
-                    let _ = self.local_git.mark(saved_id, "manual");
-                }
-                self.last_snapshot.insert(saved_id.to_string(), Some(SnapshotEntry { at: Self::now_ms(), body: saved_body.to_string() }));
-            } else if manual_history {
-                let mut value = crate::database::history_value(&saved, &now_iso());
-                value["manual"] = json!(true);
-                let at = Self::now_ms();
-                self.database()?.insert_history(saved_id, &format!("{at}-{}.md", Uuid::new_v4()), &value)?;
-                self.last_snapshot.insert(saved_id.to_string(), Some(SnapshotEntry { at, body: saved_body.to_string() }));
-            } else {
-                self.write_history(saved_id, &saved, "")?;
-            }
+        let metadata_changed = crate::database::history_metadata(&saved) != crate::database::history_metadata(&current);
+        if !restoring && (manual_history || ((saved_body != current_body || metadata_changed) && (force_history || metadata_changed || self.history_due(saved_id, saved_body)))) {
+            self.checkpoint(saved_id, manual_history)?;
             let _ = self.retain_history(false);
         }
         Ok(saved)
@@ -3947,13 +3933,13 @@ impl Store {
         for (k, v) in &patch {
             let is_diff = if k == "tags" {
                 let cur_tags = current.get("tags").cloned().unwrap_or_else(|| json!([]));
-                serde_json::to_string(&cur_tags).ok() != serde_json::to_string(v).ok()
+                &cur_tags != v
             } else if k == "properties" {
                 let cur_props = current
                     .get("properties")
                     .cloned()
                     .unwrap_or_else(|| json!({}));
-                serde_json::to_string(&cur_props).ok() != serde_json::to_string(v).ok()
+                &cur_props != v
             } else if k == "episodeId" {
                 let cur_ep = f_entry.get("episodeId").cloned().unwrap_or(Value::Null);
                 &cur_ep != v
@@ -3989,13 +3975,10 @@ impl Store {
             .get("forceHistory")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        // 이력은 본문과 제목을 기준으로 남긴다. 상태·태그·북마크 같은 속성만 바뀐 저장은 남기지 않는다.
-        // 북마크는 본문을 고치면 문단 번호가 따라 바뀌어 자동 저장마다 함께 실리므로, 속성 변경으로 남기면
-        // 최소 간격·글자 수 조건을 건너뛰고 저장할 때마다 이력이 쌓인다.
-        let renamed = changed.iter().any(|k| k == "title");
+        let metadata_changed = !changed.is_empty();
         let restoring = input.get("restoring").and_then(Value::as_bool).unwrap_or(false);
-        if (force_history || renamed || (body != current_body && self.history_due(id, &current_body)))
-            && (restoring || (self.latest_snapshot(id).is_none() && !current_body.is_empty()))
+        if (force_history || metadata_changed || (body != current_body && self.history_due(id, &current_body)))
+            && (restoring || (self.latest_snapshot(id).is_none() && (metadata_changed || !current_body.is_empty())))
         {
             self.write_history(id, &current, &raw)?;
         }
@@ -4196,13 +4179,17 @@ impl Store {
     fn write_history(&mut self, id: &str, doc: &Value, previous_raw: &str) -> Result<(), LofError> {
         if self.local_git.ready {
             let body = doc.get("body").and_then(|v| v.as_str()).unwrap_or("");
-            self.local_git.capture_document(id, doc, "변경 전 원고 보존")?;
-            self.last_snapshot.insert(id.to_string(), Some(SnapshotEntry { at: Self::now_ms(), body: body.to_string() }));
+            if self.local_git.capture_document(id, doc, "변경 전 원고 보존")? {
+                self.last_snapshot.insert(id.to_string(), Some(SnapshotEntry { at: Self::now_ms(), body: body.to_string() }));
+            }
             return Ok(());
         }
         let at = Self::now_ms();
         let body = doc.get("body").and_then(|v| v.as_str()).unwrap_or("");
         if let Some(db) = &self.index.database {
+            if db.latest_history(id)?.is_some_and(|(_, previous)| crate::database::same_history_content(&previous, doc)) {
+                return Ok(());
+            }
             let name=format!("{}-{}.md",at,Uuid::new_v4());
             db.insert_history(id,&name,&crate::database::history_value(doc,&now_iso()))?;
             self.last_snapshot.insert(id.to_string(),Some(SnapshotEntry{at,body:body.to_string()}));
@@ -4234,7 +4221,7 @@ impl Store {
             let latest = if self.local_git.ready {
                 self.local_git.latest_document(id).ok().flatten().map(|(at, body)| SnapshotEntry { at, body })
             } else {
-                db.latest_history(id).ok().flatten().map(|(at,body)|SnapshotEntry{at,body})
+                db.latest_history(id).ok().flatten().map(|(at,doc)|SnapshotEntry{at,body:doc["body"].as_str().unwrap_or("").to_string()})
             };
             self.last_snapshot.insert(id.to_string(),latest.clone());
             return latest;
@@ -4301,8 +4288,7 @@ impl Store {
     }
 
     // 작업의 끝(입력이 멈춤, 문서를 떠남, Ctrl+S)에 지금 저장된 원고를 이력으로 남긴다.
-    // 마지막 이력과 같거나 바뀐 글자가 min_chars보다 적으면 남기지 않는다. force(직접 저장)면 글자 수와 상관없이
-    // 남기되, 마지막 이력과 본문이 똑같으면 남길 것이 없으므로 남기지 않는다.
+    // 본문과 실제 속성이 마지막 이력과 같으면 새 기록을 만들지 않는다.
     pub fn checkpoint(&mut self, id: &str, force: bool) -> Result<bool, LofError> {
         if !valid_id(id) {
             return Err(fail_invalid("잘못된 ID"));
@@ -4318,25 +4304,21 @@ impl Store {
         let current = doc_of(&f_proj.dir, &proj_id, &f_entry, &raw)?;
         if self.local_git.ready {
             let body = current.get("body").and_then(|v| v.as_str()).unwrap_or("");
-            self.local_git.capture_document(id, &current, if force { "수동 저장한 원고 기록" } else { "원고 이력 기록" })?;
-            self.last_snapshot.insert(id.to_string(), Some(SnapshotEntry { at: Self::now_ms(), body: body.to_string() }));
+            let recorded = self.local_git.capture_document(id, &current, if force { "수동 저장한 원고 기록" } else { "원고 이력 기록" })?;
+            if recorded {
+                self.last_snapshot.insert(id.to_string(), Some(SnapshotEntry { at: Self::now_ms(), body: body.to_string() }));
+            }
             if force {
                 let _ = self.local_git.mark(id, "manual")?;
             }
-            return Ok(true);
-
-
+            return Ok(recorded);
         }
         let body = current.get("body").and_then(|v| v.as_str()).unwrap_or("");
-        let latest = self.latest_snapshot(id);
-        let prev_body = latest.as_ref().map(|l| l.body.as_str()).unwrap_or("");
-        if body == prev_body {
+        let latest = self.database()?.latest_history(id)?;
+        if latest.as_ref().is_some_and(|(_, previous)| crate::database::same_history_content(previous, &current)) {
             if force {
                 return self.database()?.mark_latest_history_manual(id);
             }
-            return Ok(false);
-        }
-        if false {
             return Ok(false);
         }
         if force {

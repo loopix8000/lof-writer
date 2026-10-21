@@ -6,6 +6,23 @@ import { call } from "./types";
 type Entry = { name: string; savedAt: string; title: string; kind: string; commit?: string };
 type Page = { entries: Entry[]; anchor: string | null; nextOffset: number | null; migrating: boolean };
 const labels: Record<string, string> = { manual: "수동 저장", restore: "복원", beforeRestore: "복원 전", legacy: "기존 기록", auto: "자동 기록" };
+type MetadataChange = { key: string; property: boolean; previous: unknown; current: unknown; previousExists: boolean; currentExists: boolean };
+const fieldLabels: Record<string, string> = {
+  title: "제목", status: "상태", kind: "문서 유형", order: "순서", archived: "보관",
+  episodeType: "회차 유형", description: "설명", authorComment: "작가의 말", tags: "태그",
+  manualLineBreak: "줄바꿈 수동 관리", bookmarks: "북마크", episodeId: "연결 회차",
+};
+function metadataValue(change: MetadataChange, value: unknown, exists: boolean): string {
+  if (!exists) return "없음";
+  if (value === null) return "null";
+  if (!change.property) {
+    if (change.key === "status") return ({ in_progress: "집필 중", revision: "퇴고 중", completed: "집필 완료" } as Record<string, string>)[String(value)] ?? String(value);
+    if (change.key === "kind") return ({ episode: "회차", plot: "플롯", memo: "메모" } as Record<string, string>)[String(value)] ?? String(value);
+    if (change.key === "episodeType") return ({ 0: "일반", 2: "프롤로그", 3: "에필로그", 4: "특별편", 6: "단편" } as Record<string, string>)[String(value)] ?? String(value);
+  }
+  if (typeof value === "string") return change.property || value === "" ? JSON.stringify(value) : value;
+  return JSON.stringify(value, null, 2);
+}
 
 export default function HistoryDialog({ documentId, onRestore, report }: {
   documentId: string;
@@ -97,10 +114,17 @@ export default function HistoryDialog({ documentId, onRestore, report }: {
         </div>
         {mode === "body" ? <pre>{preview.body}</pre> : comparison?.available ? <>
           <p className="muted">이전 원고 → 현재 원고 · 추가 {comparison.added}줄 · 삭제 {comparison.removed}줄</p>
-          {!comparison.added && !comparison.removed ? <p>본문은 같습니다. 제목이나 속성이 달라졌을 수 있습니다.</p>
+          {!comparison.added && !comparison.removed ? <p>{comparison.metadataChanges?.length ? "본문은 같습니다." : "본문과 제목·속성이 모두 같습니다."}</p>
             : <pre className="history-diff" aria-label="이전 원고와 현재 원고의 변경 비교">{comparison.lines.map((line: any, index: number) => <span key={index} className={`history-diff-${line.kind}`}>{line.text}{"\n"}</span>)}</pre>}
           {comparison.truncated && <p className="muted">변경량이 많아 앞부분만 표시합니다. 원고 보기에서 전체 내용을 확인할 수 있습니다.</p>}
         </> : <p>{comparison?.message ?? "원고 보기에서 내용을 확인해 주세요."}</p>}
+        {mode === "compare" && !!comparison?.metadataChanges?.length && <dl className="history-metadata" aria-label="제목과 속성 변경">
+          {comparison.metadataChanges.map((change: MetadataChange) => <div key={`${change.property}:${change.key}`}>
+            <dt>{change.property ? `속성 · ${change.key === "_lofPropertyIcons" ? "아이콘" : change.key}` : fieldLabels[change.key] ?? change.key}</dt>
+            <dd><span className="history-diff-removed"><span className="muted">이전: </span>{metadataValue(change, change.previous, change.previousExists)}</span>
+              <span className="history-diff-added"><span className="muted">현재: </span>{metadataValue(change, change.current, change.currentExists)}</span></dd>
+          </div>)}
+        </dl>}
         <div className="history-actions">
           <button className="primary" disabled={busy} onClick={async () => {
             setRestoring(true);

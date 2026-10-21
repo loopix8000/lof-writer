@@ -1170,7 +1170,7 @@ fn dispatch_method(
             let mut previous = st.history_read(id, name)?;
             if args["compare"].as_bool() == Some(true) {
                 let current = st.read(id)?;
-                previous["comparison"] = git_history::comparison(previous["body"].as_str().unwrap_or(""), current["body"].as_str().unwrap_or(""))?;
+                previous["comparison"] = git_history::comparison(&previous, &current)?;
             }
             Ok(previous)
         }
