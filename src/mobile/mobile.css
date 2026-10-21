@@ -1509,7 +1509,7 @@
   left: 0;
   right: 0;
   bottom: 0;
-  padding: 4px 14px 5px;
+  padding: 4px 14px 10px;
   background: transparent;
   z-index: 30;
   pointer-events: none;
@@ -1677,7 +1677,7 @@
 .m-floating-popup-menu {
   position: fixed;
   right: 14px;
-  bottom: 61px;
+  bottom: 66px;
   width: min(264px, calc(100vw - 28px));
   max-height: min(68vh, 480px);
   overflow-y: auto;
