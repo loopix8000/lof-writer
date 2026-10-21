@@ -49,6 +49,19 @@ fn checked_commit<'a>(repo: &'a Repository, name: &str) -> Result<Commit<'a>, Lo
     Ok(repo.find_commit(oid)?)
 }
 
+// 지운 이력 표시. Git 기록은 다시 쓰지 않고, 문서별로 지운 커밋을 표시해 목록과 열람에서 뺀다.
+fn deleted_ref(id: &str, oid: Oid) -> String {
+    format!("refs/lof/deleted/{id}/{oid}")
+}
+
+fn is_deleted(repo: &Repository, id: &str, oid: Oid) -> Result<bool, LofError> {
+    match repo.find_reference(&deleted_ref(id, oid)) {
+        Ok(_) => Ok(true),
+        Err(error) if error.code() == git2::ErrorCode::NotFound => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
+
 fn time(commit: &Commit<'_>) -> String {
     chrono::DateTime::from_timestamp(commit.author().when().seconds(), 0)
         .map(|time| time.to_rfc3339())
@@ -75,10 +88,12 @@ impl LocalHistory {
         let mut manual = HashSet::new();
         let mut restored = HashSet::new();
         let mut before_restore = HashSet::new();
+        let mut deleted = HashSet::new();
         for (kind, marks) in [
             ("manual", &mut manual),
             ("restore", &mut restored),
             ("before-restore", &mut before_restore),
+            ("deleted", &mut deleted),
         ] {
             for reference in repo.references_glob(&format!("refs/lof/{kind}/{id}/*"))? {
                 let reference = reference?;
@@ -94,7 +109,7 @@ impl LocalHistory {
         let mut total_for_doc = 0;
         for oid in walk(&repo, head)? {
             let commit = repo.find_commit(oid?)?;
-            if !changed(&commit, id)? {
+            if deleted.contains(&commit.id()) || !changed(&commit, id)? {
                 continue;
             }
             let value = read_json(
@@ -174,6 +189,9 @@ impl LocalHistory {
         }
         let repo = self.repository()?;
         let commit = checked_commit(&repo, name)?;
+        if is_deleted(&repo, id, commit.id())? {
+            return Err(fail("지운 이력입니다.", "NOT_FOUND"));
+        }
         let value = read_document(&repo, &commit.tree()?, id)?;
         // 이관한 기록의 원래 속성과 새 Git 기록의 문서 속성을 같은 복원 형식으로 돌려준다.
         if value["attributes"].is_object() {
@@ -202,6 +220,20 @@ impl LocalHistory {
             return Ok(true);
         }
         Ok(false)
+    }
+
+    // 문서의 이력 하나를 지운다. 이미 지운 이력이거나 그 문서가 바뀌지 않은 커밋이면 false.
+    pub fn delete(&self, id: &str, name: &str) -> Result<bool, LofError> {
+        if !valid_id(id) {
+            return Err(fail_invalid("잘못된 문서 ID입니다."));
+        }
+        let repo = self.repository()?;
+        let commit = checked_commit(&repo, name)?;
+        if !changed(&commit, id)? || is_deleted(&repo, id, commit.id())? {
+            return Ok(false);
+        }
+        repo.reference(&deleted_ref(id, commit.id()), commit.id(), false, "원고 기록 지움 표시")?;
+        Ok(true)
     }
 
     pub fn capture_document(

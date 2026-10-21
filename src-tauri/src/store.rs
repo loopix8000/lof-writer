@@ -4379,9 +4379,13 @@ impl Store {
 
     // 이력을 지운다. id가 있으면 그 문서의 이력만(name이 있으면 그 하나만), 없으면 모든 문서의 이력을 지운다.
     // 지운 뒤에는 마지막 이력 기억을 버려 다음 이력 판단을 남은 이력으로 다시 한다. 지운 개수를 돌려준다.
+    // Git 기록은 이력 하나씩만 지울 수 있고, 지운 이력은 목록과 열람에서 빠진다.
     pub fn history_delete(&mut self, id: Option<&str>, name: Option<&str>) -> Result<usize, LofError> {
         if self.local_git.ready {
-            return Err(fail("Git 기록은 개별 삭제하거나 초기화하지 않고 그대로 보관합니다.", "HISTORY_READ_ONLY"));
+            return match (id, name) {
+                (Some(id), Some(name)) if name.starts_with("git-") => Ok(self.local_git.delete(id, name)? as usize),
+                _ => Err(fail("Git 기록은 이력 하나씩만 지울 수 있습니다.", "HISTORY_READ_ONLY")),
+            };
         }
         static HIST_RE: OnceLock<Regex> = OnceLock::new();
         let re = HIST_RE.get_or_init(|| Regex::new(r"^\d+-[a-f0-9-]+\.(json|md)$").unwrap());

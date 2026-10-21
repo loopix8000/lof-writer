@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { Trash2 } from "lucide-react";
+import { useConfirm } from "./ConfirmDialog";
 import { call } from "./types";
 
 type Entry = { name: string; savedAt: string; title: string; kind: string; commit?: string };
@@ -17,6 +19,8 @@ export default function HistoryDialog({ documentId, onRestore, report }: {
   const [loading, setLoading] = useState(true);
   const [reading, setReading] = useState(false);
   const [restoring, setRestoring] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [confirm, confirmDialog] = useConfirm();
   const sequence = useRef(0);
   const alive = useRef(true);
   const currentId = useRef(documentId); currentId.current = documentId;
@@ -50,18 +54,39 @@ export default function HistoryDialog({ documentId, onRestore, report }: {
     } catch (error) { if (alive.current && request === sequence.current) report(error); }
     finally { if (alive.current && request === sequence.current) setReading(false); }
   }
+  // 고른 이력 하나를 지운다. 지운 이력은 목록에서 빠지므로 다음 쪽을 읽을 자리도 하나 당긴다.
+  async function remove(entry: Entry) {
+    const ok = await confirm({
+      title: "이력 삭제",
+      message: <><b>{new Date(entry.savedAt).toLocaleString("ko-KR")}</b> 이력을 삭제할까요?</>,
+      detail: "삭제한 이력은 목록에서 사라지며 다시 복원할 수 없습니다.",
+      confirmLabel: "삭제",
+      danger: true,
+    });
+    if (!ok || !alive.current || currentId.current !== documentId) return;
+    setDeleting(true);
+    try {
+      await call("deleteHistory", { id: documentId, name: entry.name });
+      if (!alive.current || currentId.current !== documentId) return;
+      setEntries((existing) => existing.filter((old) => old.name !== entry.name));
+      setPage((current) => current && current.nextOffset != null ? { ...current, nextOffset: Math.max(0, current.nextOffset - 1) } : current);
+      setPreview((current: any) => current?.name === entry.name ? null : current);
+    } catch (error) { if (alive.current) report(error); }
+    finally { if (alive.current) setDeleting(false); }
+  }
   const comparison = preview?.comparison;
+  const busy = restoring || deleting;
   return <div className="history-layout">
     <div className="history-list" aria-label="문서 변경 이력">
       {page?.migrating && <p className="muted" role="status">기존 이력을 Git으로 옮기는 중입니다. 먼저 기존 기록을 표시합니다.</p>}
-      {entries.map((entry) => <button key={entry.name} disabled={restoring}
+      {entries.map((entry) => <button key={entry.name} disabled={busy}
         className={preview?.name === entry.name ? "selected" : ""} onClick={() => void select(entry)}>
         <span>{new Date(entry.savedAt).toLocaleString("ko-KR")}</span>
         <small>{labels[entry.kind] ?? "기록"}</small>
       </button>)}
       {!loading && !entries.length && <p>아직 기록된 변경이 없습니다.</p>}
       {loading && <p role="status">기록을 불러오는 중…</p>}
-      {page?.nextOffset != null && <button disabled={loading || restoring} onClick={() => void more()}>이전 기록 더 보기</button>}
+      {page?.nextOffset != null && <button disabled={loading || busy} onClick={() => void more()}>이전 기록 더 보기</button>}
     </div>
     <div className="history-preview">
       {reading ? <p role="status">원고를 불러오는 중…</p> : preview ? <>
@@ -77,14 +102,19 @@ export default function HistoryDialog({ documentId, onRestore, report }: {
           {comparison.truncated && <p className="muted">변경량이 많아 앞부분만 표시합니다. 원고 보기에서 전체 내용을 확인할 수 있습니다.</p>}
         </> : <p>{comparison?.message ?? "원고 보기에서 내용을 확인해 주세요."}</p>}
         <div className="history-actions">
-          <button className="primary" disabled={restoring} onClick={async () => {
+          <button className="primary" disabled={busy} onClick={async () => {
             setRestoring(true);
             try { await onRestore(documentId, preview.name); }
             catch (error) { if (alive.current) report(error); }
             finally { if (alive.current) setRestoring(false); }
           }}>{restoring ? "복원 중…" : "이 버전으로 복원"}</button>
+          <button className="danger-outline" disabled={busy} onClick={() => void remove(preview)}>
+            <Trash2 size={16} />
+            {deleting ? "삭제 중…" : "이 이력 삭제"}
+          </button>
         </div>
       </> : <p>왼쪽에서 변경 이력을 선택하세요.</p>}
     </div>
+    {confirmDialog}
   </div>;
 }
