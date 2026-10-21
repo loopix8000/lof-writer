@@ -32,7 +32,7 @@ import {
   Upload,
   X,
 } from "lucide-react";
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { STATUS_SHORT, normalizeStatus } from "../../core/episode.mjs";
 import { normalizeWriting, writingName } from "../../core/platforms.mjs";
 import CoverImage from "../CoverImage";
@@ -119,6 +119,28 @@ export default function MobileProjectView({
     episodeId?: string;
   } | null>(null);
   const [moveFolderDoc, setMoveFolderDoc] = useState<Doc | null>(null);
+  const [heroCollapsed, setHeroCollapsed] = useState(false);
+  const heroRef = useRef<HTMLDivElement>(null);
+  const listScrollRef = useRef<HTMLDivElement>(null);
+
+  // 탭·작품·보관함을 바꾸면 목록을 맨 위로 돌리고 작품 정보를 다시 펼친다
+  useEffect(() => {
+    setHeroCollapsed(false);
+    if (listScrollRef.current) listScrollRef.current.scrollTop = 0;
+  }, [activeTab, archive, project.id]);
+
+  const onListScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    if (heroCollapsed) {
+      if (el.scrollTop <= 0) setHeroCollapsed(false);
+      return;
+    }
+    // 접은 뒤에도 목록이 스크롤될 만큼 길 때만 접어서 접힘·펼침이 반복되지 않게 한다
+    const heroHeight = heroRef.current?.offsetHeight ?? 0;
+    if (el.scrollTop > 24 && el.scrollHeight - el.clientHeight > heroHeight + 24) {
+      setHeroCollapsed(true);
+    }
+  };
 
   const episodes = useMemo(
     () => docs.filter((d) => d.kind === "episode"),
@@ -762,7 +784,9 @@ export default function MobileProjectView({
   return (
     <div className="m-screen m-modern-workspace">
       {/* 상단 내 서재 이동 및 작품 영웅(Hero) 헤더 */}
-      <header className="m-modern-header m-project-page-header">
+      <header
+        className={`m-modern-header m-project-page-header ${heroCollapsed ? "hero-collapsed" : ""}`}
+      >
         <div className="m-modern-header-top">
           <button
             type="button"
@@ -771,6 +795,15 @@ export default function MobileProjectView({
           >
             <ArrowLeft size={16} />
             <span>내 서재</span>
+          </button>
+          <button
+            type="button"
+            className="m-project-compact-title"
+            aria-hidden={!heroCollapsed}
+            tabIndex={heroCollapsed ? 0 : -1}
+            onClick={() => setProjectSwitcherOpen(true)}
+          >
+            {project.title || "제목 없는 작품"}
           </button>
           <div className="m-topbar-actions">
             <button
@@ -795,82 +828,84 @@ export default function MobileProjectView({
         </div>
 
         {/* 작품 표지(좌측) + 작품 정보·태그·관리 버튼(우측) */}
-        <div className="m-project-hero">
-          <div
-            className={`m-project-hero-cover ${
-              project.coverData && !prefs.hideCovers ? "has-image" : ""
-            }`}
-            onClick={openEditProjectDialog}
-          >
-            {project.coverData && !prefs.hideCovers ? (
-              <CoverImage src={project.coverData} alt={`${project.title} 표지`} />
-            ) : (
-              <>
-                <Feather size={26} />
-                <span>YOUR STORY</span>
-              </>
-            )}
-          </div>
-
-          <div className="m-project-hero-info">
-            <div className="m-project-hero-meta">
-              {archive ? "보관함 · " : ""}
-              {episodes.length}편 · 총 {totalProjectChars.toLocaleString()}자
-            </div>
-
-            <button
-              type="button"
-              className="m-project-hero-title-btn"
-              onClick={() => setProjectSwitcherOpen(true)}
+        <div className="m-project-hero-wrap" aria-hidden={heroCollapsed}>
+          <div className="m-project-hero" ref={heroRef}>
+            <div
+              className={`m-project-hero-cover ${
+                project.coverData && !prefs.hideCovers ? "has-image" : ""
+              }`}
+              onClick={openEditProjectDialog}
             >
-              <span className="m-project-hero-title">
-                {project.title || "제목 없는 작품"}
-              </span>
-              <ChevronDown size={17} className="m-modern-title-chevron" />
-            </button>
-
-            {project.description ? (
-              <p className="m-project-hero-desc">{project.description}</p>
-            ) : null}
-
-            <div className="m-project-hero-tags">
-              {(project.tags || []).map((t) => (
-                <span key={t} className="m-project-tag-chip">
-                  #{t}
-                </span>
-              ))}
-              <button
-                type="button"
-                className="m-project-tag-chip add"
-                onClick={openEditProjectDialog}
-              >
-                + 태그 추가
-              </button>
+              {project.coverData && !prefs.hideCovers ? (
+                <CoverImage src={project.coverData} alt={`${project.title} 표지`} />
+              ) : (
+                <>
+                  <Feather size={26} />
+                  <span>YOUR STORY</span>
+                </>
+              )}
             </div>
 
-            <div className="m-project-hero-actions">
+            <div className="m-project-hero-info">
+              <div className="m-project-hero-meta">
+                {archive ? "보관함 · " : ""}
+                {episodes.length}편 · 총 {totalProjectChars.toLocaleString()}자
+              </div>
+
               <button
                 type="button"
-                className="m-project-action-btn"
-                onClick={openEditProjectDialog}
+                className="m-project-hero-title-btn"
+                onClick={() => setProjectSwitcherOpen(true)}
               >
-                <Settings size={14} />
-                <span>소설 관리하기</span>
+                <span className="m-project-hero-title">
+                  {project.title || "제목 없는 작품"}
+                </span>
+                <ChevronDown size={17} className="m-modern-title-chevron" />
               </button>
-              <button
-                type="button"
-                className="m-project-action-btn"
-                onClick={attempt(async () => {
-                  const result = await call("importFiles", { projectId: project.id });
-                  if (result) {
-                    await refresh();
-                    message(`${result.count}편 가져옴`);
-                  }
-                })}
-              >
-                <Upload size={14} />
-                <span>원고 가져오기</span>
-              </button>
+
+              {project.description ? (
+                <p className="m-project-hero-desc">{project.description}</p>
+              ) : null}
+
+              <div className="m-project-hero-tags">
+                {(project.tags || []).map((t) => (
+                  <span key={t} className="m-project-tag-chip">
+                    #{t}
+                  </span>
+                ))}
+                <button
+                  type="button"
+                  className="m-project-tag-chip add"
+                  onClick={openEditProjectDialog}
+                >
+                  + 태그 추가
+                </button>
+              </div>
+
+              <div className="m-project-hero-actions">
+                <button
+                  type="button"
+                  className="m-project-action-btn"
+                  onClick={openEditProjectDialog}
+                >
+                  <Settings size={14} />
+                  <span>소설 관리하기</span>
+                </button>
+                <button
+                  type="button"
+                  className="m-project-action-btn"
+                  onClick={attempt(async () => {
+                    const result = await call("importFiles", { projectId: project.id });
+                    if (result) {
+                      await refresh();
+                      message(`${result.count}편 가져옴`);
+                    }
+                  })}
+                >
+                  <Upload size={14} />
+                  <span>원고 가져오기</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -1024,7 +1059,11 @@ export default function MobileProjectView({
       </header>
 
       {/* 옵시디언 / 노션 스타일 트리 & 리스트 본문 (구분선 없음) */}
-      <div className="m-scroll-body m-tree-scroll">
+      <div
+        className="m-scroll-body m-tree-scroll"
+        ref={listScrollRef}
+        onScroll={onListScroll}
+      >
         {activeTab === "episode" ? (
           <div className="m-tree-container">
             {!filterQuery.trim() && filteredEpisodes.length > EPISODE_GROUP

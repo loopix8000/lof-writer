@@ -1,48 +1,40 @@
 import {
   Archive,
-  Bold,
   Bookmark as BookmarkIcon,
   BookOpen,
   Check,
+  CheckCircle2,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
   Code2,
   Copy,
-  CornerDownLeft,
   Download,
   FileText,
   Folder,
   FolderOpen,
   FolderPlus,
-  Heading2,
   History,
-  ImagePlus,
-  Italic,
   LayoutGrid,
   Link2,
   Lock,
-  MessageSquareCode,
-  Minus,
   MoreVertical,
   PanelLeft,
+  Pencil,
+  PenLine,
   Pilcrow,
   Plus,
-  Redo2,
   Search,
   SlidersHorizontal,
-  Sparkles,
   StickyNote,
-  Strikethrough,
-  Table2,
   Trash2,
-  Undo2,
   X,
 } from "lucide-react";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   lineBreakDefault,
   normalizeStatus,
+  STATUS_LABELS,
   STATUS_SHORT,
 } from "../../core/episode.mjs";
 import { requiresSource } from "../../core/text.mjs";
@@ -71,6 +63,7 @@ import {
 } from "../types";
 import { workspaceKey } from "../workspace-state";
 import Writer from "../Writer";
+import MobileEditorToolbar, { MobileEditorMenuActions } from "./MobileEditorToolbar";
 import {
   MobileActionSheet,
   MobilePromptSheet,
@@ -244,6 +237,60 @@ export default function MobileEditorView({
   const isProtected =
     active.kind === "episode" && normalizeStatus(active.status) === "completed";
   const kindPrefs = resolveKindPrefs(prefs, active.kind);
+
+  // 동기화 아이콘은 실시간·폴더 동기화가 진행 중일 때 보이고, 끝나면 완료 상태를 잠깐 보여 준 뒤 숨긴다
+  const syncBusy =
+    syncChecking ||
+    autoSync.phase === "syncing" ||
+    autoSync.channels?.realtime?.phase === "syncing" ||
+    autoSync.channels?.files?.phase === "syncing";
+  const [syncShown, setSyncShown] = useState(syncBusy);
+  useEffect(() => {
+    if (syncBusy) {
+      setSyncShown(true);
+      return;
+    }
+    const timer = window.setTimeout(() => setSyncShown(false), 1800);
+    return () => window.clearTimeout(timer);
+  }, [syncBusy]);
+
+  // 회차 제목을 누르면 집필 상태를 고르는 플로팅 메뉴를 제목 아래에 띄운다
+  const openStatusMenu = (e: React.MouseEvent<HTMLElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const current = normalizeStatus(active.status);
+    const pick = (status: string) => () => {
+      if (status === current) return;
+      edit({ status });
+      if (status === "completed")
+        message("원고 보호 모드로 전환되었습니다. 집필 완료된 에피소드는 편집이 제한됩니다.");
+    };
+    setPropPopup({
+      x: rect.left + rect.width / 2,
+      y: rect.bottom + 6,
+      align: "center",
+      items: [
+        {
+          label: STATUS_LABELS.in_progress,
+          icon: <PenLine size={16} />,
+          checked: current === "in_progress",
+          action: pick("in_progress"),
+        },
+        {
+          label: STATUS_LABELS.revision,
+          icon: <Pencil size={16} />,
+          checked: current === "revision",
+          action: pick("revision"),
+        },
+        {
+          label: STATUS_LABELS.completed,
+          icon: <CheckCircle2 size={16} />,
+          badge: "원고 보호",
+          checked: current === "completed",
+          action: pick("completed"),
+        },
+      ],
+    });
+  };
   const norm = normalizeEditorStyle(prefs, active.kind);
   const num = numberOf(active);
 
@@ -640,15 +687,35 @@ export default function MobileEditorView({
               <ChevronLeft size={18} />
             </button>
           )}
-          <span className="m-editor-title-label">
-            <span
-              className={`m-save-dot ${saveStatus === "저장됨" ? "saved" : "pending"}`}
-              title={saveStatus}
-            />
-            <span className="m-editor-doc-title">
-              {active.title || "제목 없음"}
+          {active.kind === "episode" ? (
+            <button
+              type="button"
+              className="m-editor-title-label m-editor-title-status-btn"
+              aria-label={`집필 상태 변경 (현재 ${STATUS_LABELS[normalizeStatus(active.status)]})`}
+              onClick={openStatusMenu}
+            >
+              <span
+                className={`m-save-dot ${saveStatus === "저장됨" ? "saved" : "pending"}`}
+                title={saveStatus}
+              />
+              <span className="m-editor-doc-title">
+                {active.title || "제목 없음"}
+              </span>
+              {isProtected && (
+                <Lock size={13} className="m-editor-title-lock" aria-hidden />
+              )}
+            </button>
+          ) : (
+            <span className="m-editor-title-label">
+              <span
+                className={`m-save-dot ${saveStatus === "저장됨" ? "saved" : "pending"}`}
+                title={saveStatus}
+              />
+              <span className="m-editor-doc-title">
+                {active.title || "제목 없음"}
+              </span>
             </span>
-          </span>
+          )}
           {active.kind === "episode" && (
             <button
               type="button"
@@ -707,20 +774,19 @@ export default function MobileEditorView({
         </div>
       )}
 
-      {/* 원고 보호 상태 안내 바 */}
-      {isProtected && (
-        <div className="m-protected-banner">
-          <span>
-            <Lock size={14} /> 집필 완료 (원고 보호 모드)
-          </span>
-          <button
-            type="button"
-            onClick={attempt(() => patchDoc(active.id, { status: "revision" }))}
-          >
-            퇴고 중으로 잠금 해제
-          </button>
+      <div className="m-editor-sync-anchor">
+        <div
+          className={`m-editor-sync-status ${syncShown ? "" : "quiet"}`}
+          aria-hidden={!syncShown}
+        >
+          <SyncStatus
+            status={autoSync}
+            checking={syncChecking}
+            available={syncAvailable}
+            editing={saveStatus !== "저장됨"}
+          />
         </div>
-      )}
+      </div>
 
       {/* 본문 에디터 스크롤 영역 */}
       <EditorScroll
@@ -741,12 +807,6 @@ export default function MobileEditorView({
             <span className="m-doc-kind-label">
               {labels[active.kind]} · {num}
             </span>
-            <SyncStatus
-              status={autoSync}
-              checking={syncChecking}
-              available={syncAvailable}
-              editing={saveStatus !== "저장됨"}
-            />
           </div>
 
           <input
@@ -866,155 +926,12 @@ export default function MobileEditorView({
         </article>
       </EditorScroll>
 
-      {/* Obsidian 모바일 스타일 좌우 슬라이드 플로팅 필(Pill) 하단 툴바 */}
-      <div className="m-floating-pill-wrap">
-        <div
-          className="m-floating-pill-bar"
-          role="toolbar"
-          aria-label="모바일 집필 툴바"
-        >
-          <div className="m-pill-scroll-track">
-            <button
-              type="button"
-              className="m-pill-tool-btn"
-              aria-label="실행 취소"
-              title="실행 취소"
-              disabled={isProtected}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() =>
-                window.dispatchEvent(
-                  new CustomEvent("lof:editor-action", { detail: "undo" }),
-                )
-              }
-            >
-              <Undo2 size={18} strokeWidth={2} />
-            </button>
-
-            <button
-              type="button"
-              className="m-pill-tool-btn"
-              aria-label="다시 실행"
-              title="다시 실행"
-              disabled={isProtected}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() =>
-                window.dispatchEvent(
-                  new CustomEvent("lof:editor-action", { detail: "redo" }),
-                )
-              }
-            >
-              <Redo2 size={18} strokeWidth={2} />
-            </button>
-
-            <span className="m-pill-sub-divider" aria-hidden="true" />
-
-            <button
-              type="button"
-              className="m-pill-tool-btn"
-              aria-label="굵게"
-              title="굵게"
-              disabled={isProtected}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() =>
-                window.dispatchEvent(
-                  new CustomEvent("lof:editor-action", { detail: "bold" }),
-                )
-              }
-            >
-              <Bold size={17} strokeWidth={2.2} />
-            </button>
-
-            <button
-              type="button"
-              className="m-pill-tool-btn"
-              aria-label="기울임"
-              title="기울임"
-              disabled={isProtected}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() =>
-                window.dispatchEvent(
-                  new CustomEvent("lof:editor-action", { detail: "italic" }),
-                )
-              }
-            >
-              <Italic size={17} strokeWidth={2.1} />
-            </button>
-
-            <button
-              type="button"
-              className="m-pill-tool-btn"
-              aria-label="취소선"
-              title="취소선"
-              disabled={isProtected}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() =>
-                window.dispatchEvent(
-                  new CustomEvent("lof:editor-action", { detail: "strike" }),
-                )
-              }
-            >
-              <Strikethrough size={17} strokeWidth={2.1} />
-            </button>
-
-            <button
-              type="button"
-              className="m-pill-tool-btn"
-              aria-label="소제목"
-              title="소제목"
-              disabled={isProtected}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() =>
-                window.dispatchEvent(
-                  new CustomEvent("lof:editor-action", { detail: "heading" }),
-                )
-              }
-            >
-              <Heading2 size={18} strokeWidth={2.1} />
-            </button>
-
-            <button
-              type="button"
-              className="m-pill-tool-btn"
-              aria-label="장면 구분선"
-              title="장면 구분선"
-              disabled={isProtected}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() =>
-                window.dispatchEvent(
-                  new CustomEvent("lof:editor-action", { detail: "divider" }),
-                )
-              }
-            >
-              <Minus size={18} strokeWidth={2.1} />
-            </button>
-
-            <button
-              type="button"
-              className="m-pill-tool-btn"
-              aria-label="기호 일괄 대치"
-              title="기호 일괄 대치"
-              disabled={isProtected}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={replaceActiveSymbols}
-            >
-              <Sparkles size={17} strokeWidth={2} />
-            </button>
-          </div>
-
-          <span className="m-pill-divider" aria-hidden="true" />
-
-          <button
-            type="button"
-            className={`m-pill-more-btn ${moreMenuOpen ? "active" : ""}`}
-            aria-label="더보기 팝업 메뉴"
-            aria-expanded={moreMenuOpen}
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => setMoreMenuOpen((v) => !v)}
-          >
-            <MoreVertical size={19} strokeWidth={2} />
-          </button>
-        </div>
-      </div>
+      <MobileEditorToolbar
+        disabled={isProtected}
+        moreOpen={moreMenuOpen}
+        onToggleMore={() => setMoreMenuOpen((open) => !open)}
+        onReplaceSymbols={replaceActiveSymbols}
+      />
 
       {/* 하단 툴바 우측 더보기(⋮) 플로팅 팝업 메뉴 */}
       {moreMenuOpen && (
@@ -1072,81 +989,13 @@ export default function MobileEditorView({
 
             <div className="m-floating-popup-divider" />
 
-            <div className="m-floating-popup-section">
-              <button
-                type="button"
-                className="m-floating-popup-item"
-                role="menuitem"
-                disabled={isProtected}
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => {
-                  setMoreMenuOpen(false);
-                  window.dispatchEvent(
-                    new CustomEvent("lof:editor-action", { detail: "image" }),
-                  );
-                }}
-              >
-                <ImagePlus size={16} />
-                <span>이미지 삽입</span>
-              </button>
-
-              {(active.kind === "memo" || active.kind === "plot") && (
-                <button
-                  type="button"
-                  className="m-floating-popup-item"
-                  role="menuitem"
-                  disabled={isProtected}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => {
-                    setMoreMenuOpen(false);
-                    window.dispatchEvent(
-                      new CustomEvent("lof:editor-action", { detail: "table" }),
-                    );
-                  }}
-                >
-                  <Table2 size={16} />
-                  <span>표 삽입</span>
-                </button>
-              )}
-
-              <button
-                type="button"
-                className="m-floating-popup-item"
-                role="menuitem"
-                disabled={isProtected}
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => {
-                  setMoreMenuOpen(false);
-                  window.dispatchEvent(
-                    new CustomEvent("lof:editor-action", { detail: "comment" }),
-                  );
-                }}
-              >
-                <MessageSquareCode size={16} />
-                <span>주석 추가</span>
-              </button>
-
-              <button
-                type="button"
-                className="m-floating-popup-item"
-                role="menuitem"
-                disabled={isProtected}
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => {
-                  window.dispatchEvent(
-                    new CustomEvent("lof:editor-action", {
-                      detail: "toggleLineBreak",
-                    }),
-                  );
-                }}
-              >
-                <CornerDownLeft size={16} />
-                <span>줄바꿈 관리</span>
-                <small className="m-floating-popup-badge accent">
-                  {active.manualLineBreak ? "수동 줄바꿈" : "자동 줄바꿈"}
-                </small>
-              </button>
-            </div>
+            <MobileEditorMenuActions
+              disabled={isProtected}
+              tables={active.kind === "memo" || active.kind === "plot"}
+              manualLineBreak={!!active.manualLineBreak}
+              onClose={() => setMoreMenuOpen(false)}
+              onSave={() => void manualSave().catch(report)}
+            />
 
             <div className="m-floating-popup-divider" />
 

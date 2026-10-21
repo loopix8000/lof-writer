@@ -521,6 +521,67 @@
   color: var(--ink);
 }
 
+/* 목록을 내리면 작품 정보 영역을 높이·투명도 전환으로 접는다 */
+.m-project-hero-wrap {
+  display: grid;
+  grid-template-rows: 1fr;
+  opacity: 1;
+  transform: translateY(0);
+  transition:
+    grid-template-rows 0.28s ease,
+    opacity 0.2s ease,
+    transform 0.28s ease,
+    margin-top 0.28s ease;
+}
+
+.m-project-hero-wrap > .m-project-hero {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.m-project-page-header.hero-collapsed .m-project-hero-wrap {
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transform: translateY(-8px);
+  margin-top: -10px;
+  pointer-events: none;
+}
+
+.m-project-compact-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0 4px;
+  border: none;
+  background: transparent;
+  color: var(--ink);
+  font-size: 14.5px;
+  font-weight: 750;
+  letter-spacing: -0.01em;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0;
+  transform: translateY(4px);
+  pointer-events: none;
+  transition:
+    opacity 0.2s ease,
+    transform 0.28s ease;
+}
+
+.m-project-page-header.hero-collapsed .m-project-compact-title {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .m-project-hero-wrap,
+  .m-project-compact-title {
+    transition: none;
+  }
+}
+
 .m-project-hero {
   display: flex;
   align-items: flex-start;
@@ -1079,10 +1140,14 @@
 }
 
 /* ---------- 3. 전체 화면 집필 에디터 (MobileEditorView) ---------- */
+.m-editor-screen,
+.m-memo-editor-screen {
+  position: relative;
+}
+
 .m-editor-screen {
   background: var(--surface);
   user-select: text;
-  position: relative;
 }
 
 .m-editor-topbar {
@@ -1126,6 +1191,24 @@
   justify-content: center;
   gap: 6px;
   padding: 0 4px;
+}
+
+.m-editor-title-status-btn {
+  height: 100%;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
+
+.m-editor-title-status-btn:active {
+  background: var(--panel);
+}
+
+.m-editor-title-lock {
+  flex: 0 0 auto;
+  color: var(--muted);
 }
 
 .m-title-nav-btn {
@@ -1182,34 +1265,12 @@
 }
 
 .m-conflict-banner,
-.m-protected-banner {
-  flex: 0 0 auto;
-  padding: 8px 14px;
-  background: var(--accent-soft);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  font-size: 12.5px;
-  font-weight: 600;
-}
-
 .m-conflict-actions {
   display: flex;
   gap: 6px;
 }
 
 .m-conflict-actions button,
-.m-protected-banner button {
-  padding: 4px 10px;
-  border-radius: 6px;
-  border: 1px solid var(--line);
-  background: var(--surface);
-  color: var(--ink);
-  font-size: 12px;
-  font-weight: 600;
-}
-
 .m-manuscript-sheet {
   padding: 14px 20px 100px;
   min-height: 100%;
@@ -1225,6 +1286,31 @@
   margin-bottom: 6px;
   font-size: 12px;
   color: var(--muted);
+  padding-right: 56px;
+}
+
+.m-editor-sync-anchor {
+  position: relative;
+  flex: 0 0 0;
+  height: 0;
+  z-index: 5;
+}
+
+.m-editor-sync-status {
+  position: absolute;
+  top: 14px;
+  right: 20px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  opacity: 1;
+  transition: opacity 0.35s ease;
+}
+
+/* 대기 중에는 본문을 가리지 않도록 투명하게 둔다 */
+.m-editor-sync-status.quiet {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .m-doc-kind-label {
@@ -1232,17 +1318,38 @@
   color: var(--muted);
 }
 
+/* 제목은 상자 없이 본문처럼 보이게 하고, 입력 중에는 아래 밑줄만 강조한다 */
 .m-document-title-input {
+  display: block;
   width: 100%;
   border: none;
+  border-bottom: 1.5px solid transparent;
+  border-radius: 0;
   background: transparent;
   color: var(--ink);
   font-size: 21px;
   font-weight: 760;
   line-height: 1.35;
-  padding: 2px 0 12px;
-  margin-bottom: 10px;
+  letter-spacing: -0.02em;
+  padding: 2px 0 8px;
+  margin-bottom: 14px;
   outline: none;
+  box-shadow: none;
+  transition: border-color 0.15s ease;
+}
+
+.m-document-title-input:focus {
+  border-bottom-color: var(--accent);
+  box-shadow: none;
+}
+
+.m-document-title-input[readonly]:focus {
+  border-bottom-color: transparent;
+}
+
+.m-document-title-input::placeholder {
+  color: var(--placeholder);
+  font-weight: 600;
 }
 
 /* 모바일에서는 상단 포맷바를 숨기고 하단 좌우 슬라이드 플로팅 필 툴바로 통합 */
@@ -1260,7 +1367,10 @@
 
 /* ---------- 2026 플로팅 필(Pill) 하단 집필 툴바 ---------- */
 .m-floating-pill-wrap {
-  flex: 0 0 auto;
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
   padding: 6px 14px 12px;
   background: transparent;
   z-index: 30;
@@ -2946,6 +3056,11 @@
   padding: 0 !important;
 }
 
+.m-editor-screen > .editor-scroll,
+.m-memo-editor-screen > .editor-scroll {
+  scroll-padding-bottom: 84px;
+}
+
 .mobile-app .property-remove,
 .mobile-app .bookmark-remove {
   opacity: 1 !important;
@@ -3025,4 +3140,17 @@
   font-size: 12px;
   color: var(--muted);
   margin-bottom: 6px;
+}
+
+/* 상세 정보 펼치기/접기: 누를 때 배경이 글자에 붙지 않도록 여백을 두고, 음수 여백으로 글자 위치는 유지한다 */
+.m-editor-screen .episode-info-toggle {
+  gap: 6px;
+  padding: 6px 12px 6px 9px;
+  margin: 4px 0 -4px -9px;
+  border-radius: 999px;
+}
+
+.m-editor-screen .episode-info-toggle:active {
+  background: var(--panel);
+  color: var(--ink);
 }

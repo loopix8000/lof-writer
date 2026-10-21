@@ -1,34 +1,24 @@
 import {
   ArrowLeft,
-  Bold,
   ChevronDown,
   ChevronRight,
   Copy,
-  CornerDownLeft,
   Edit3,
   FilePlus,
   Folder,
   FolderInput,
   FolderOpen,
   FolderPlus,
-  Heading2,
-  ImagePlus,
-  Italic,
-  MessageSquareCode,
-  Minus,
   MoreVertical,
   Plus,
-  Redo2,
   Search,
   StickyNote,
-  Strikethrough,
-  Table2,
   Trash2,
-  Undo2,
   X,
 } from "lucide-react";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { normalizeEditorStyle, resolveKindPrefs } from "../../core/typesetting.mjs";
+import { normalizeEditorStyle, replaceManuscriptSymbols, resolveKindPrefs } from "../../core/typesetting.mjs";
+import { normalizeTextReplacements } from "../../core/typing.mjs";
 import { plainText } from "../../core/text.mjs";
 import { useConfirm } from "../ConfirmDialog";
 import EditorScroll, { type EditorScrollPositions } from "../EditorScroll";
@@ -36,6 +26,7 @@ import SyncStatus from "../SyncStatus";
 import { call, type AutoSyncStatus } from "../types";
 import { memoImageScope, useImages } from "../app/useDocumentImages";
 import Writer from "../Writer";
+import MobileEditorToolbar, { MobileEditorMenuActions } from "./MobileEditorToolbar";
 import {
   MobileActionSheet,
   MobileFolderPickerSheet,
@@ -66,8 +57,6 @@ type Memo = {
 const COMMON = "common";
 const parentOf = (p: string) => p.slice(0, Math.max(0, p.lastIndexOf("/")));
 const tabName = (path: string) => path.slice(path.lastIndexOf("/") + 1).replace(/\.md$/i, "");
-
-const NOVEL_SYMBOLS = ["“", "”", "‘", "’", "…", "—", "「", "」", "『", "』", "!", "?"];
 
 export default function MobileMemoView({
   active,
@@ -255,6 +244,28 @@ export default function MobileMemoView({
     timer.current = window.setTimeout(() => save(true).catch(report), 1200);
   };
 
+  const replaceMemoSymbols = () => {
+    const current = memoRef.current;
+    if (!current) return;
+    const ellipsisRule = prefs.autoSymbolReplacement !== false
+      ? normalizeTextReplacements(prefs.textReplacements).find(
+          (rule) => rule.enabled && rule.from === "..." && rule.from !== rule.to,
+        )
+      : undefined;
+    const { body, count } = replaceManuscriptSymbols(current.body, {
+      doubleQuotes: prefs.quoteStyle === "curly",
+      singleQuotes: prefs.quoteStyle === "curly",
+      ellipsis: !!ellipsisRule,
+      ellipsisChar: ellipsisRule?.to,
+    });
+    if (!count || body === current.body) {
+      message("교정할 직선 따옴표나 마침표 말줄임표가 없습니다.");
+      return;
+    }
+    editBody(body);
+    message(`기호 일괄 교정 완료 (${count}건 변환)`);
+  };
+
   const commitTitleRename = async (newName: string) => {
     const m = memoRef.current;
     const trimmed = newName.trim();
@@ -271,6 +282,12 @@ export default function MobileMemoView({
     const nextMemo = { ...m, path: r.path, title: tabName(r.path) };
     setCurrentMemo(nextMemo);
     await loadTree(m.space);
+  };
+
+  const manualSaveMemo = async () => {
+    await commitTitleRename(titleInput);
+    await flush();
+    message("메모를 저장했습니다.");
   };
 
   const createNewMemo = async (folder: string, name: string) => {
@@ -601,229 +618,18 @@ export default function MobileMemoView({
                   setMemo(updated);
                 },
               }}
+              onReplaceSymbols={replaceMemoSymbols}
               contextMenu={false}
               images={images(memoImageScope(memo.space, memo.path), true)}
             />
           </article>
         </EditorScroll>
 
-        {/* 모바일 메모 하단 플로팅 필(Pill) 슬라이드 툴바 */}
-        <div className="m-floating-pill-wrap">
-          <div
-            className="m-floating-pill-bar"
-            role="toolbar"
-            aria-label="모바일 메모 집필 툴바"
-          >
-            <div className="m-pill-scroll-track">
-              <button
-                type="button"
-                className="m-pill-tool-btn"
-                aria-label="실행 취소"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() =>
-                  window.dispatchEvent(
-                    new CustomEvent("lof:editor-action", { detail: "undo" }),
-                  )
-                }
-              >
-                <Undo2 size={18} strokeWidth={2} />
-              </button>
-
-              <button
-                type="button"
-                className="m-pill-tool-btn"
-                aria-label="다시 실행"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() =>
-                  window.dispatchEvent(
-                    new CustomEvent("lof:editor-action", { detail: "redo" }),
-                  )
-                }
-              >
-                <Redo2 size={18} strokeWidth={2} />
-              </button>
-
-              <span className="m-pill-sub-divider" aria-hidden="true" />
-
-              <button
-                type="button"
-                className="m-pill-tool-btn"
-                aria-label="말줄임표 입력"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() =>
-                  window.dispatchEvent(
-                    new CustomEvent("lof:insert-text", { detail: "…" }),
-                  )
-                }
-              >
-                …
-              </button>
-
-              <button
-                type="button"
-                className="m-pill-tool-btn"
-                aria-label="작은따옴표 쌍 입력"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() =>
-                  window.dispatchEvent(
-                    new CustomEvent("lof:insert-pair", {
-                      detail: { open: "‘", close: "’" },
-                    }),
-                  )
-                }
-              >
-                ‘…’
-              </button>
-
-              <button
-                type="button"
-                className="m-pill-tool-btn"
-                aria-label="큰따옴표 쌍 입력"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() =>
-                  window.dispatchEvent(
-                    new CustomEvent("lof:insert-pair", {
-                      detail: { open: "“", close: "”" },
-                    }),
-                  )
-                }
-              >
-                “…”
-              </button>
-
-              <button
-                type="button"
-                className="m-pill-tool-btn"
-                aria-label="줄표 입력"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() =>
-                  window.dispatchEvent(
-                    new CustomEvent("lof:insert-text", { detail: "—" }),
-                  )
-                }
-              >
-                —
-              </button>
-
-              <button
-                type="button"
-                className="m-pill-tool-btn"
-                aria-label="홑낫표 쌍 입력"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() =>
-                  window.dispatchEvent(
-                    new CustomEvent("lof:insert-pair", {
-                      detail: { open: "「", close: "」" },
-                    }),
-                  )
-                }
-              >
-                「…」
-              </button>
-
-              <button
-                type="button"
-                className="m-pill-tool-btn"
-                aria-label="겹낫표 쌍 입력"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() =>
-                  window.dispatchEvent(
-                    new CustomEvent("lof:insert-pair", {
-                      detail: { open: "『", close: "』" },
-                    }),
-                  )
-                }
-              >
-                『…』
-              </button>
-
-              <span className="m-pill-sub-divider" aria-hidden="true" />
-
-              <button
-                type="button"
-                className="m-pill-tool-btn"
-                aria-label="굵게"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() =>
-                  window.dispatchEvent(
-                    new CustomEvent("lof:editor-action", { detail: "bold" }),
-                  )
-                }
-              >
-                <Bold size={17} strokeWidth={2.2} />
-              </button>
-
-              <button
-                type="button"
-                className="m-pill-tool-btn"
-                aria-label="기울임"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() =>
-                  window.dispatchEvent(
-                    new CustomEvent("lof:editor-action", { detail: "italic" }),
-                  )
-                }
-              >
-                <Italic size={17} strokeWidth={2.1} />
-              </button>
-
-              <button
-                type="button"
-                className="m-pill-tool-btn"
-                aria-label="취소선"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() =>
-                  window.dispatchEvent(
-                    new CustomEvent("lof:editor-action", { detail: "strike" }),
-                  )
-                }
-              >
-                <Strikethrough size={17} strokeWidth={2.1} />
-              </button>
-
-              <button
-                type="button"
-                className="m-pill-tool-btn"
-                aria-label="소제목"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() =>
-                  window.dispatchEvent(
-                    new CustomEvent("lof:editor-action", { detail: "heading" }),
-                  )
-                }
-              >
-                <Heading2 size={18} strokeWidth={2.1} />
-              </button>
-
-              <button
-                type="button"
-                className="m-pill-tool-btn"
-                aria-label="장면 구분선"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() =>
-                  window.dispatchEvent(
-                    new CustomEvent("lof:editor-action", { detail: "divider" }),
-                  )
-                }
-              >
-                <Minus size={18} strokeWidth={2.1} />
-              </button>
-            </div>
-
-            <span className="m-pill-divider" aria-hidden="true" />
-
-            <button
-              type="button"
-              className={`m-pill-more-btn ${editorMenuOpen ? "active" : ""}`}
-              aria-label="메모 더보기 팝업 메뉴"
-              aria-expanded={editorMenuOpen}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => setEditorMenuOpen((v) => !v)}
-            >
-              <MoreVertical size={19} strokeWidth={2} />
-            </button>
-          </div>
-        </div>
+        <MobileEditorToolbar
+          moreOpen={editorMenuOpen}
+          onToggleMore={() => setEditorMenuOpen((open) => !open)}
+          onReplaceSymbols={replaceMemoSymbols}
+        />
 
         {/* 메모 하단 툴바 우측 더보기(⋮) 플로팅 팝업 메뉴 */}
         {editorMenuOpen && (
@@ -859,77 +665,12 @@ export default function MobileMemoView({
 
               <div className="m-floating-popup-divider" />
 
-              <div className="m-floating-popup-section">
-                <button
-                  type="button"
-                  className="m-floating-popup-item"
-                  role="menuitem"
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => {
-                    setEditorMenuOpen(false);
-                    window.dispatchEvent(
-                      new CustomEvent("lof:editor-action", { detail: "table" }),
-                    );
-                  }}
-                >
-                  <Table2 size={16} />
-                  <span>표 삽입</span>
-                </button>
-
-                <button
-                  type="button"
-                  className="m-floating-popup-item"
-                  role="menuitem"
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => {
-                    setEditorMenuOpen(false);
-                    window.dispatchEvent(
-                      new CustomEvent("lof:editor-action", { detail: "image" }),
-                    );
-                  }}
-                >
-                  <ImagePlus size={16} />
-                  <span>이미지 삽입</span>
-                </button>
-
-                <button
-                  type="button"
-                  className="m-floating-popup-item"
-                  role="menuitem"
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => {
-                    setEditorMenuOpen(false);
-                    window.dispatchEvent(
-                      new CustomEvent("lof:editor-action", {
-                        detail: "comment",
-                      }),
-                    );
-                  }}
-                >
-                  <MessageSquareCode size={16} />
-                  <span>주석 추가</span>
-                </button>
-
-                <button
-                  type="button"
-                  className="m-floating-popup-item"
-                  role="menuitem"
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => {
-                    window.dispatchEvent(
-                      new CustomEvent("lof:editor-action", {
-                        detail: "toggleLineBreak",
-                      }),
-                    );
-                  }}
-                >
-                  <CornerDownLeft size={16} />
-                  <span>줄바꿈 관리</span>
-                  <small className="m-floating-popup-badge accent">
-                    {memo.manualLineBreak ? "수동 줄바꿈" : "자동 줄바꿈"}
-                  </small>
-                </button>
-              </div>
+              <MobileEditorMenuActions
+                tables={true}
+                manualLineBreak={!!memo.manualLineBreak}
+                onClose={() => setEditorMenuOpen(false)}
+                onSave={() => void manualSaveMemo().catch(report)}
+              />
 
               <div className="m-floating-popup-divider" />
 

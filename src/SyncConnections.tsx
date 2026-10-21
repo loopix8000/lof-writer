@@ -111,7 +111,6 @@ export default function SyncConnections({
       </div>
     )}
     <p className="settings-note">원고를 수동 저장하거나 ‘동기화’를 누르면 주기를 기다리지 않고 바로 실행합니다.</p>
-    <aside className="sync-notice"><strong>동기화는 아직 불안정할 수 있으니 중요한 원고는 따로 백업해 주세요.</strong><p>모든 기기를 최신 버전으로 업데이트해야 하며, 수정 이력은 기기마다 따로 보관합니다. 파일 충돌 사본은 서재의 .lof/file-conflicts 폴더에 보관합니다. 모바일에서는 앱 전환 시 변경분을 즉시 저장하며, 백그라운드 동기화는 1분~1시간 주기(기본 5분)로 동작하거나 끌 수 있습니다.</p></aside>
     {connections.length > 0 && <p role="status" aria-live="off" className={status.phase === "error" ? "pin-error" : "muted"}>{labels[status.phase]}{status.message && ` · ${status.message}`}</p>}
     {connections.length === 0 && <p className="sync-empty">연결된 파일 저장소가 없습니다.</p>}
     {connections.map(connection => <div className="connection" key={connection.id}>

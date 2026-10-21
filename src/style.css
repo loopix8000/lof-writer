@@ -3013,23 +3013,6 @@ body.sidebar-resizing * {
   border-radius: 7px;
   padding: 15px;
 }
-.sync-notice {
-  margin: 14px 0 16px;
-  padding: 10px 14px;
-  border: 1px solid var(--warning-border);
-  border-radius: 8px;
-  background: var(--warning-bg);
-  color: var(--warning-text);
-  font-size: 12px;
-  line-height: 1.6;
-}
-.sync-notice strong {
-  font-weight: 600;
-}
-.sync-notice p {
-  margin: 2px 0 0;
-}
-
 .warning-strip {
   padding: 7px 20px;
   font-size: 13px;
@@ -6329,37 +6312,3 @@ input.property-text {
   flex: 1;
   min-width: 0;
 }
-
-.mobile-sync-rules-card {
-  margin-top: 18px;
-  padding: 14px 16px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--sidebar);
-  font-size: 12px;
-  line-height: 1.65;
-  color: var(--text);
-}
-
-.mobile-sync-rules-card > strong {
-  display: block;
-  margin-bottom: 8px;
-  font-size: 13px;
-  font-weight: 650;
-  color: var(--text);
-}
-
-.mobile-sync-rules-card ul {
-  margin: 0;
-  padding-left: 18px;
-  display: grid;
-  gap: 5px;
-  color: var(--muted);
-}
-
-.mobile-sync-rules-card li b {
-  color: var(--text);
-  font-weight: 600;
-}
-
-
