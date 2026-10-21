@@ -783,25 +783,15 @@ export default function MobileEditorView({
           <button
             type="button"
             className="m-char-badge-btn"
-            aria-label="글자 수 및 원고 정보 보기"
-            onClick={() => {
-              setRightTab("widgets");
-              setRightDrawerOpen(true);
-            }}
-          >
-            <span className="m-char-badge-label">{charCountLabel}</span>
-          </button>
-          <button
-            type="button"
-            className="m-icon-btn"
-            aria-label="위젯 보드 열기 (오른쪽에서 슬라이드)"
+            aria-label="글자 수 및 위젯 보드 열기 (오른쪽에서 슬라이드)"
             title="위젯 보드"
             onClick={() => {
               setRightTab("widgets");
               setRightDrawerOpen(true);
             }}
           >
-            <LayoutGrid size={19} />
+            <span className="m-char-badge-label">{charCountLabel}</span>
+            <LayoutGrid size={17} />
           </button>
         </div>
       </header>

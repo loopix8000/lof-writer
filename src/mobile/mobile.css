@@ -1369,12 +1369,6 @@
   padding-block: 0.3em;
 }
 
-.m-char-badge-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-
 .m-save-dot {
   width: 7px;
   height: 7px;
@@ -1388,8 +1382,12 @@
 }
 
 .m-char-badge-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   min-height: 30px;
-  padding: 0 10px;
+  padding: 0 11px 0 12px;
   border-radius: 999px;
   border: none;
   background: var(--panel);
@@ -1397,6 +1395,10 @@
   font-size: 12.5px;
   font-weight: 700;
   white-space: nowrap;
+}
+
+.m-char-badge-btn svg {
+  flex-shrink: 0;
 }
 
 .m-conflict-banner,
