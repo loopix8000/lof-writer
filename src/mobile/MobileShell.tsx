@@ -339,6 +339,15 @@ export default function MobileShell({
     [],
   );
 
+  const projectFormCloseRef = useRef<(() => void) | null>(null);
+  const requestCloseDialog = useCallback(() => {
+    if (dialog?.type === "editProject" && projectFormCloseRef.current) {
+      projectFormCloseRef.current();
+    } else {
+      setDialog(null);
+    }
+  }, [dialog?.type, setDialog]);
+
   // 안드로이드 시스템 뒤로가기 버튼/제스처 연결
   useEffect(() => {
     (window as any).__lofMobileBack = () => {
@@ -347,7 +356,7 @@ export default function MobileShell({
         return true;
       }
       if (dialog && dialog.type !== "setup") {
-        setDialog(null);
+        requestCloseDialog();
         return true;
       }
       if ((window as any).__lofEditorSubBack?.()) {
@@ -384,6 +393,7 @@ export default function MobileShell({
     closeViewer,
     dialog,
     setDialog,
+    requestCloseDialog,
     mobileTab,
     settingsDetailOpen,
     inMemoEditor,
@@ -531,6 +541,11 @@ export default function MobileShell({
                 goLibrary={async () => {
                   await goView("library");
                 }}
+                onSelectProject={async (id) => {
+                  await goView("project", id);
+                }}
+                onOpenLastDoc={openLibraryProject}
+                askDeleteProject={askDeleteProject}
                 setDialog={setDialog}
                 refresh={refresh}
                 message={message}
@@ -546,14 +561,8 @@ export default function MobileShell({
                 onSelectProject={async (id) => {
                   await goView("project", id);
                 }}
-                onOpenLastDoc={async (id) => {
-                  await openLibraryProject(id);
-                }}
                 setDialog={setDialog}
-                askDeleteProject={askDeleteProject}
                 chooseVault={chooseVault}
-                refresh={refresh}
-                message={message}
               />
             )}
           </>
@@ -813,12 +822,12 @@ export default function MobileShell({
       {/* 모바일 전용 전체 화면 서브 다이얼로그 (새 작품, 소설 관리, 변경 이력, 내보내기 등) */}
       {dialog && !["settings", "serverSync"].includes(dialog.type) && (
         <div className="m-dialog-page" role="dialog" aria-modal="true">
-          <header className="m-topbar">
+          <header className={`m-topbar ${dialog.type === "editProject" ? "m-dialog-centered-header" : ""}`}>
             {dialog.type !== "setup" ? (
               <button
                 type="button"
                 className="m-back-btn"
-                onClick={() => setDialog(null)}
+                onClick={requestCloseDialog}
               >
                 <ArrowLeft size={18} />
                 <span>닫기</span>
@@ -901,6 +910,8 @@ export default function MobileShell({
 
             {["newProject", "editProject"].includes(dialog.type) && (
               <ProjectForm
+                mobile
+                closeRef={projectFormCloseRef}
                 dialog={dialog}
                 prefs={prefs}
                 refresh={refresh}

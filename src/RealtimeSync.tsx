@@ -392,7 +392,7 @@ export default function RealtimeSync({
                   onChange={checked => handlePrefPatch({ backgroundSyncEnabled: checked })}
                 />
               </div>
-              <div className="settings-grid">
+              {bgEnabled && <div className="settings-grid">
                 <label>
                   백그라운드 동기화 주기
                   <select
@@ -423,28 +423,26 @@ export default function RealtimeSync({
                     )}
                   </select>
                 </label>
-                {bgEnabled && (
-                  <label>
-                    주기 직접 설정 (1~60분)
-                    <input
-                      type="number"
-                      aria-label="백그라운드 동기화 주기 직접 설정 (분)"
-                      min={1}
-                      max={60}
-                      value={bgMinutes}
-                      onChange={event => {
-                        const mins = Number(event.target.value);
-                        if (Number.isFinite(mins) && mins >= 1 && mins <= 60) {
-                          handlePrefPatch({
-                            backgroundSyncEnabled: true,
-                            backgroundSyncIntervalSeconds: Math.round(mins) * 60,
-                          });
-                        }
-                      }}
-                    />
-                  </label>
-                )}
-              </div>
+                <label>
+                  주기 직접 설정 (1~60분)
+                  <input
+                    type="number"
+                    aria-label="백그라운드 동기화 주기 직접 설정 (분)"
+                    min={1}
+                    max={60}
+                    value={bgMinutes}
+                    onChange={event => {
+                      const mins = Number(event.target.value);
+                      if (Number.isFinite(mins) && mins >= 1 && mins <= 60) {
+                        handlePrefPatch({
+                          backgroundSyncEnabled: true,
+                          backgroundSyncIntervalSeconds: Math.round(mins) * 60,
+                        });
+                      }
+                    }}
+                  />
+                </label>
+              </div>}
             </div>
           )}
         </>}

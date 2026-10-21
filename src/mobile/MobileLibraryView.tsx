@@ -1,23 +1,14 @@
 import {
-  ArrowDown,
-  ArrowUp,
   BookOpen,
-  Download,
   Feather,
   File,
   FolderOpen,
-  MoreVertical,
   Plus,
-  Settings,
-  Trash2,
-  Upload,
 } from "lucide-react";
-import React, { useState } from "react";
-import { normalizeWriting } from "../../core/platforms.mjs";
+import React from "react";
 import { type Dialog } from "../app/model";
 import CoverImage from "../CoverImage";
-import { call, type Library, type Project } from "../types";
-import { MobileActionSheet, type MobileActionItem } from "./MobileActionSheet";
+import { type Library } from "../types";
 
 export default function MobileLibraryView({
   lib,
@@ -26,12 +17,8 @@ export default function MobileLibraryView({
   busy,
   attempt,
   onSelectProject,
-  onOpenLastDoc,
   setDialog,
-  askDeleteProject,
   chooseVault,
-  refresh,
-  message,
 }: {
   lib: Library;
   loaded: boolean;
@@ -39,107 +26,9 @@ export default function MobileLibraryView({
   busy: boolean;
   attempt: (fn: () => Promise<any>) => () => Promise<any>;
   onSelectProject: (id: string) => Promise<void>;
-  onOpenLastDoc: (id: string) => Promise<void>;
   setDialog: React.Dispatch<React.SetStateAction<Dialog | null>>;
-  askDeleteProject: (id: string) => void;
   chooseVault: () => Promise<void>;
-  refresh: () => Promise<Library | undefined>;
-  message: (text: string) => void;
 }) {
-  const [sheetProject, setSheetProject] = useState<Project | null>(null);
-
-  const moveProjectOrder = async (projectId: string, delta: -1 | 1) => {
-    const ids = lib.projects.map((p) => p.id);
-    const index = ids.indexOf(projectId);
-    const nextIndex = index + delta;
-    if (index < 0 || nextIndex < 0 || nextIndex >= ids.length) return;
-    const nextIds = [...ids];
-    const [moved] = nextIds.splice(index, 1);
-    nextIds.splice(nextIndex, 0, moved);
-    await call("reorderProjects", { ids: nextIds });
-    await refresh();
-  };
-
-  const getProjectActions = (p: Project): MobileActionItem[] => {
-    const idx = lib.projects.findIndex((x) => x.id === p.id);
-    const epCount = lib.documents.filter(
-      (d) => d.projectId === p.id && d.kind === "episode" && !d.archived,
-    ).length;
-
-    return [
-      {
-        label: "작품 회차·문서 목록 열기",
-        sublabel: `총 ${epCount}편의 에피소드`,
-        icon: <BookOpen size={18} />,
-        action: attempt(() => onSelectProject(p.id)),
-      },
-      {
-        label: "최근 집필 원고 바로 이어쓰기",
-        icon: <Feather size={18} />,
-        action: attempt(() => onOpenLastDoc(p.id)),
-      },
-      "separator",
-      {
-        label: "소설 정보 및 플랫폼 설정",
-        sublabel: "제목, 소개, 표지, 글자 수 계산 기준",
-        icon: <Settings size={18} />,
-        action: () =>
-          setDialog({
-            type: "editProject",
-            value: p.title,
-            description: p.description,
-            tags: p.tags || [],
-            manualLineBreak: p.manualLineBreak ?? null,
-            writing: normalizeWriting(p.writing || prefs.defaultWriting),
-          }),
-      },
-      {
-        label: "원고 파일 가져오기",
-        sublabel: "TXT, MD 파일 일괄 등록",
-        icon: <Upload size={18} />,
-        action: attempt(async () => {
-          const result = await call("importFiles", { projectId: p.id });
-          if (result) {
-            await refresh();
-            message(
-              `${result.count}편 가져옴${result.warnings.length ? " · " + result.warnings.join(" / ") : ""}`,
-            );
-          }
-        }),
-      },
-      {
-        label: "작품 내보내기",
-        sublabel: "TXT, Markdown 파일로 내보내기",
-        icon: <Download size={18} />,
-        action: () => setDialog({ type: "export", value: p.id }),
-      },
-      ...(lib.projects.length > 1
-        ? ([
-            "separator",
-            {
-              label: "위로 순서 이동",
-              icon: <ArrowUp size={18} />,
-              disabled: idx <= 0,
-              action: attempt(() => moveProjectOrder(p.id, -1)),
-            },
-            {
-              label: "아래로 순서 이동",
-              icon: <ArrowDown size={18} />,
-              disabled: idx >= lib.projects.length - 1,
-              action: attempt(() => moveProjectOrder(p.id, 1)),
-            },
-          ] as MobileActionItem[])
-        : []),
-      "separator",
-      {
-        label: "작품 삭제",
-        icon: <Trash2 size={18} />,
-        danger: true,
-        action: () => askDeleteProject(p.id),
-      },
-    ];
-  };
-
   return (
     <div className="m-screen">
       <header className="m-topbar">
@@ -253,17 +142,6 @@ export default function MobileLibraryView({
                       )}
                     </div>
                   </button>
-                  <button
-                    type="button"
-                    className="m-row-more-btn"
-                    aria-label={`${p.title} 더보기 메뉴`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setSheetProject(p);
-                    }}
-                  >
-                    <MoreVertical size={20} />
-                  </button>
                 </div>
               );
             })}
@@ -271,13 +149,6 @@ export default function MobileLibraryView({
         )}
       </div>
 
-      <MobileActionSheet
-        open={!!sheetProject}
-        title={sheetProject?.title || "작품 메뉴"}
-        subtitle="작품 관리 및 원고 작업"
-        items={sheetProject ? getProjectActions(sheetProject) : []}
-        onClose={() => setSheetProject(null)}
-      />
     </div>
   );
 }

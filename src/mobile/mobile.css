@@ -282,7 +282,7 @@
   display: flex;
   align-items: stretch;
   background: var(--surface);
-  border: 1px solid var(--line);
+  border: none;
   border-radius: 16px;
   overflow: hidden;
 }
@@ -292,24 +292,24 @@
   min-width: 0;
   display: flex;
   align-items: stretch;
-  gap: 14px;
-  padding: 16px;
+  gap: 12px;
+  padding: 8px;
   border: none;
   background: transparent;
   color: var(--ink);
   text-align: left;
 }
 
-/* 작품을 누를 때는 오른쪽 더보기 버튼 자리까지 카드 전체의 배경을 바꾼다 */
+/* 작품 카드를 누르면 카드 전체의 배경을 바꾼다 */
 .m-project-card:has(> .m-project-card-main:active) {
   background: var(--panel);
 }
 
 .m-project-cover {
   position: relative;
-  flex: 0 0 86px;
-  width: 86px;
-  min-height: 128px;
+  flex: 0 0 104px;
+  width: 104px;
+  min-height: 156px;
   border-radius: 10px;
   background: var(--panel);
   border: 1px solid var(--line);
@@ -343,14 +343,16 @@
 
 .m-project-meta h3 {
   margin: -0.15em 0;
-  padding: 0.15em 26px 0.15em 0;
+  padding: 0.15em 0;
   font-size: 16.5px;
   font-weight: 700;
   line-height: 1.25;
   color: var(--ink);
-  white-space: nowrap;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow-wrap: anywhere;
   overflow: hidden;
-  text-overflow: ellipsis;
   text-box: trim-both cap alphabetic;
 }
 
@@ -423,17 +425,6 @@
 .m-row-more-btn:active {
   background: var(--panel);
   color: var(--ink);
-}
-
-/* 작품 카드의 더보기 버튼은 오른쪽 위 제목 옆에 둔다 */
-.m-project-card .m-row-more-btn {
-  position: absolute;
-  top: 7px;
-  right: 6px;
-  width: 34px;
-  height: 34px;
-  min-height: 34px;
-  border-radius: 10px;
 }
 
 .m-library-tools {
@@ -2590,7 +2581,7 @@
   flex-direction: column !important;
   flex: 1 1 auto;
   width: 100%;
-  padding: 14px 16px 24px !important;
+  padding: 14px 8px 24px !important;
   gap: 10px !important;
   border: none !important;
   overflow-y: auto !important;
@@ -2611,7 +2602,7 @@
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  padding: 16px 16px 36px !important;
+  padding: 16px 8px 36px !important;
   background: var(--bg);
 }
 
@@ -2732,7 +2723,7 @@
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 14px;
-  padding: 16px !important;
+  padding: 16px 8px !important;
   margin-bottom: 14px;
 }
 
@@ -3060,6 +3051,19 @@
   min-height: 0;
   overflow-y: auto;
   padding: 16px 16px 32px;
+}
+
+.m-dialog-centered-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+}
+
+.m-dialog-centered-header > .m-back-btn {
+  justify-self: start;
+}
+
+.m-project-save-confirm {
+  z-index: 300;
 }
 
 .m-dialog-body form {

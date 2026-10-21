@@ -29,6 +29,7 @@ import {
   SquarePen,
   StickyNote,
   Trash2,
+  Upload,
   X,
 } from "lucide-react";
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -67,6 +68,9 @@ export default function MobileProjectView({
   openBinding,
   bindDocument,
   goLibrary,
+  onSelectProject,
+  onOpenLastDoc,
+  askDeleteProject,
   setDialog,
   refresh,
   message,
@@ -91,6 +95,9 @@ export default function MobileProjectView({
   openBinding: (id: string) => Promise<void>;
   bindDocument: (id: string, episodeId: string | null) => Promise<void>;
   goLibrary: () => Promise<void>;
+  onSelectProject: (id: string) => Promise<void>;
+  onOpenLastDoc: (id: string) => Promise<void>;
+  askDeleteProject: (id: string) => void;
   setDialog: React.Dispatch<React.SetStateAction<Dialog | null>>;
   refresh: () => Promise<Library | undefined>;
   message: (text: string) => void;
@@ -99,6 +106,7 @@ export default function MobileProjectView({
   // 작품 화면은 에피소드 / 플롯 / 메모 3탭으로 구분
   const activeTab: Kind = tab === "plot" ? "plot" : tab === "memo" ? "memo" : "episode";
   const [filterQuery, setFilterQuery] = useState("");
+  const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const [docScope, setDocScope] = useState<"all" | "byEpisode">("all");
   const [openFolders, setOpenFolders] = useState<Set<string>>(() => new Set());
   const [openEpGroups, setOpenEpGroups] = useState<Set<number>>(() => new Set([0]));
@@ -745,6 +753,98 @@ export default function MobileProjectView({
     );
   };
 
+  const moveProjectOrder = async (projectId: string, delta: -1 | 1) => {
+    const ids = lib.projects.map((p) => p.id);
+    const index = ids.indexOf(projectId);
+    const nextIndex = index + delta;
+    if (index < 0 || nextIndex < 0 || nextIndex >= ids.length) return;
+    const nextIds = [...ids];
+    const [moved] = nextIds.splice(index, 1);
+    nextIds.splice(nextIndex, 0, moved);
+    await call("reorderProjects", { ids: nextIds });
+    await refresh();
+  };
+
+  const getProjectActions = (p: Project): MobileActionItem[] => {
+    const idx = lib.projects.findIndex((x) => x.id === p.id);
+    const epCount = lib.documents.filter(
+      (d) => d.projectId === p.id && d.kind === "episode" && !d.archived,
+    ).length;
+
+    return [
+      {
+        label: "작품 회차·문서 목록 열기",
+        sublabel: `총 ${epCount}편의 에피소드`,
+        icon: <BookOpen size={18} />,
+        action: attempt(() => onSelectProject(p.id)),
+      },
+      {
+        label: "최근 집필 원고 바로 이어쓰기",
+        icon: <Feather size={18} />,
+        action: attempt(() => onOpenLastDoc(p.id)),
+      },
+      "separator",
+      {
+        label: "소설 정보 및 플랫폼 설정",
+        sublabel: "제목, 소개, 표지, 글자 수 계산 기준",
+        icon: <Settings size={18} />,
+        action: () =>
+          setDialog({
+            type: "editProject",
+            value: p.title,
+            description: p.description,
+            tags: p.tags || [],
+            manualLineBreak: p.manualLineBreak ?? null,
+            writing: normalizeWriting(p.writing || prefs.defaultWriting),
+          }),
+      },
+      {
+        label: "원고 파일 가져오기",
+        sublabel: "TXT, MD 파일 일괄 등록",
+        icon: <Upload size={18} />,
+        action: attempt(async () => {
+          const result = await call("importFiles", { projectId: p.id });
+          if (result) {
+            await refresh();
+            message(
+              `${result.count}편 가져옴${result.warnings.length ? " · " + result.warnings.join(" / ") : ""}`,
+            );
+          }
+        }),
+      },
+      {
+        label: "작품 내보내기",
+        sublabel: "TXT, Markdown 파일로 내보내기",
+        icon: <Download size={18} />,
+        action: () => setDialog({ type: "export", value: p.id }),
+      },
+      ...(lib.projects.length > 1
+        ? ([
+            "separator",
+            {
+              label: "위로 순서 이동",
+              icon: <ArrowUp size={18} />,
+              disabled: idx <= 0,
+              action: attempt(() => moveProjectOrder(p.id, -1)),
+            },
+            {
+              label: "아래로 순서 이동",
+              icon: <ArrowDown size={18} />,
+              disabled: idx >= lib.projects.length - 1,
+              action: attempt(() => moveProjectOrder(p.id, 1)),
+            },
+          ] as MobileActionItem[])
+        : []),
+      "separator",
+      {
+        label: "작품 삭제",
+        icon: <Trash2 size={18} />,
+        danger: true,
+        action: () => askDeleteProject(p.id),
+      },
+    ];
+  };
+
   const openEditProjectDialog = () =>
     setDialog({
       type: "editProject",
@@ -791,7 +891,7 @@ export default function MobileProjectView({
               className="m-icon-btn"
               aria-label="소설 관리"
               title="소설 관리"
-              onClick={openEditProjectDialog}
+              onClick={() => setProjectMenuOpen(true)}
             >
               <Settings size={18} />
             </button>
@@ -1149,6 +1249,14 @@ export default function MobileProjectView({
           </div>
         )}
       </div>
+
+      <MobileActionSheet
+        open={projectMenuOpen}
+        title={project.title || "작품 메뉴"}
+        subtitle="작품 관리 및 원고 작업"
+        items={getProjectActions(project)}
+        onClose={() => setProjectMenuOpen(false)}
+      />
 
       {/* 문서 탭 추가 메뉴 시트 (플롯 / 메모 / 폴더) */}
       <MobileActionSheet

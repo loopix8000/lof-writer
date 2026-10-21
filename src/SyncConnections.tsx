@@ -46,7 +46,7 @@ export default function SyncConnections({
       <label className="connection-conflict-policy">자동 동기화 주기<select aria-label="파일 자동 동기화 주기" value={intervalSeconds} onChange={event => onIntervalChange(Number(event.target.value)).catch(report)}>
         <option value={60}>1분</option><option value={180}>3분</option><option value={300}>5분 (기본)</option><option value={600}>10분</option><option value={900}>15분</option><option value={1800}>30분</option><option value={3600}>1시간</option>
       </select></label>
-      {onBackgroundSyncChange && (
+      {onBackgroundSyncChange && backgroundEnabled && (
         <label className="connection-conflict-policy">
           백그라운드 동기화 주기
           <select
