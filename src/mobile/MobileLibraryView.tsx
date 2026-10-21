@@ -4,6 +4,7 @@ import {
   BookOpen,
   Download,
   Feather,
+  File,
   FolderOpen,
   MoreVertical,
   Plus,
@@ -220,7 +221,7 @@ export default function MobileLibraryView({
                           <CoverImage src={p.coverData} alt={`${p.title} 표지`} />
                         ) : (
                           <>
-                            <Feather size={24} />
+                            <Feather size={28} />
                             <span>{String(i + 1).padStart(2, "0")}</span>
                           </>
                         )}
@@ -231,8 +232,13 @@ export default function MobileLibraryView({
                       <div className="m-project-stats">
                         <span>회차 {epCount}편</span>
                         {docCount > 0 && <span>· 설정/메모 {docCount}개</span>}
-                        {totalChars > 0 && <span>· 총 {totalChars.toLocaleString()}자</span>}
                       </div>
+                      {totalChars > 0 && (
+                        <div className="m-project-chars">
+                          <File size={13.5} />
+                          <span>총 {totalChars.toLocaleString()}자</span>
+                        </div>
+                      )}
                       {p.description && (
                         <p className="m-project-desc">{p.description}</p>
                       )}

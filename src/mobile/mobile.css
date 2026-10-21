@@ -63,6 +63,7 @@
 
 .m-topbar-title h1 {
   margin: 0;
+  padding-block: 0.25em;
   font-size: 18px;
   font-weight: 700;
   letter-spacing: -0.02em;
@@ -70,15 +71,18 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  text-box: trim-both cap alphabetic;
 }
 
 .m-badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px 8px;
+  display: block;
+  flex-shrink: 0;
+  padding: 6px 9px;
   border-radius: 999px;
   font-size: 12px;
   font-weight: 600;
+  line-height: 1;
+  text-box: trim-both cap alphabetic;
   background: var(--panel);
   color: var(--muted);
 }
@@ -179,6 +183,13 @@
   font-weight: 600;
 }
 
+.m-btn-primary > span,
+.m-btn-secondary > span,
+.m-btn-danger > span {
+  display: block;
+  text-box: trim-both cap alphabetic;
+}
+
 .m-btn-sm {
   min-height: 34px;
   padding: 0 11px;
@@ -249,15 +260,16 @@
 .m-project-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
 }
 
 .m-project-card {
+  position: relative;
   display: flex;
   align-items: stretch;
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 14px;
+  border-radius: 16px;
   overflow: hidden;
 }
 
@@ -265,9 +277,9 @@
   flex: 1 1 auto;
   min-width: 0;
   display: flex;
-  align-items: center;
+  align-items: stretch;
   gap: 14px;
-  padding: 14px;
+  padding: 16px;
   border: none;
   background: transparent;
   color: var(--ink);
@@ -280,26 +292,31 @@
 }
 
 .m-project-cover {
-  flex: 0 0 56px;
-  height: 76px;
-  border-radius: 8px;
+  position: relative;
+  flex: 0 0 86px;
+  width: 86px;
+  min-height: 128px;
+  border-radius: 10px;
   background: var(--panel);
   border: 1px solid var(--line);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 4px;
+  gap: 7px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 700;
   overflow: hidden;
 }
 
 .m-project-cover img {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   object-fit: cover;
+  display: block;
 }
 
 .m-project-meta {
@@ -307,30 +324,49 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 7px;
 }
 
 .m-project-meta h3 {
-  margin: 0;
-  font-size: 16px;
+  margin: -0.15em 0;
+  padding: 0.15em 26px 0.15em 0;
+  font-size: 16.5px;
   font-weight: 700;
+  line-height: 1.25;
   color: var(--ink);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  text-box: trim-both cap alphabetic;
 }
 
 .m-project-stats {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 5px;
-  font-size: 12.5px;
+  font-size: 13px;
+  line-height: 1.35;
   color: var(--muted);
 }
 
-.m-project-desc {
-  margin: 2px 0 0;
+.m-project-chars {
+  display: flex;
+  align-items: center;
+  gap: 5px;
   font-size: 13px;
+  line-height: 1.35;
+  color: var(--muted);
+}
+
+.m-project-chars svg {
+  flex-shrink: 0;
+}
+
+.m-project-desc {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.35;
   color: var(--muted);
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -341,21 +377,27 @@
 .m-tag-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
-  margin-top: 3px;
+  gap: 5px;
+  margin-top: auto;
+  padding-top: 2px;
 }
 
 .m-tag-chip {
-  padding: 2px 7px;
-  border-radius: 6px;
+  display: block;
+  padding: 6px 9px;
+  border-radius: 7px;
   background: var(--panel);
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  text-box: trim-both cap alphabetic;
 }
 
 .m-row-more-btn {
   flex: 0 0 38px;
   min-height: 38px;
+  padding: 0;
   border: none;
   background: transparent;
   color: var(--muted);
@@ -369,11 +411,14 @@
   color: var(--ink);
 }
 
-/* 작품 카드의 더보기 버튼은 오른쪽 가장자리에서 띄워 표지 쪽 여백과 균형을 맞춘다 */
+/* 작품 카드의 더보기 버튼은 오른쪽 위 제목 옆에 둔다 */
 .m-project-card .m-row-more-btn {
-  align-self: center;
-  height: 38px;
-  margin-right: 8px;
+  position: absolute;
+  top: 7px;
+  right: 6px;
+  width: 34px;
+  height: 34px;
+  min-height: 34px;
   border-radius: 10px;
 }
 
