@@ -1507,7 +1507,9 @@ export default function MobileEditorView({
                     : renderDrawerDocTree("", 0)}
                 </div>
               )}
+            </div>
 
+            <div className="m-drawer-footer">
               {treeTab === "episode" ? (
                 <button
                   type="button"

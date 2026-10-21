@@ -2271,6 +2271,7 @@ pub fn run() {
             android_updater::android_update_install,
             android_storage::android_pick_folder,
             android_storage::android_storage_access,
+            android_storage::android_pick_image,
             android_scanner::android_scan_qr,
         ])
         .setup(move |app| {

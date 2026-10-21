@@ -35,6 +35,23 @@ pub async fn android_pick_folder(app: AppHandle) -> Result<Value, String> {
 }
 
 #[tauri::command]
+pub async fn android_pick_image(app: AppHandle, mime_types: Vec<String>) -> Result<Value, String> {
+    #[cfg(target_os = "android")]
+    {
+        app.state::<AndroidStorage>()
+            .0
+            .run_mobile_plugin_async("pickImage", serde_json::json!({ "mimeTypes": mime_types }))
+            .await
+            .map_err(|error| error.to_string())
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (app, mime_types);
+        Err("Android 앱에서만 사용할 수 있습니다.".into())
+    }
+}
+
+#[tauri::command]
 pub async fn android_storage_access(app: AppHandle, request: bool) -> Result<Value, String> {
     #[cfg(target_os = "android")]
     {

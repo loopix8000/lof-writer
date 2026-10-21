@@ -1,3 +1,5 @@
+import { isAndroidApp } from "./tauri-bridge";
+
 const RELEASES_API = "https://api.github.com/repos/loopix8000/lof-writer/releases";
 
 type GitHubRelease = {
@@ -8,6 +10,7 @@ type GitHubRelease = {
   created_at: string;
   draft: boolean;
   prerelease: boolean;
+  assets?: Array<{ name: string }>;
 };
 
 export type Release = { version: string; name: string; body: string; date: string; prerelease: boolean };
@@ -53,7 +56,14 @@ export async function fetchRelease(version: string, signal?: AbortSignal): Promi
   return toRelease(release);
 }
 
+// Android 릴리즈는 APK를, PC 릴리즈는 MSI를 올리므로 첨부 파일로 현재 플랫폼의 릴리즈만 고른다.
+const isAndroidRelease = (release: GitHubRelease) =>
+  (release.assets ?? []).some(asset => asset.name.toLowerCase().endsWith(".apk"));
+
 export async function fetchReleases(signal?: AbortSignal): Promise<Release[]> {
-  const releases = await request<GitHubRelease[]>("?per_page=30", signal);
-  return releases.filter(release => !release.draft && /^v\d/.test(release.tag_name)).map(toRelease);
+  const releases = await request<GitHubRelease[]>("?per_page=100", signal);
+  const android = isAndroidApp();
+  return releases
+    .filter(release => !release.draft && /^v\d/.test(release.tag_name) && isAndroidRelease(release) === android)
+    .map(toRelease);
 }

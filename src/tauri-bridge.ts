@@ -91,6 +91,11 @@ export function isAndroidApp(): boolean {
   return typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent);
 }
 
+async function pickAndroidImage(mimeTypes: string[]): Promise<{ name: string; data: string } | null> {
+  const picked = await invoke<{ name?: string; data?: string | null }>("android_pick_image", { mimeTypes });
+  return picked?.data ? { name: picked.name || "image", data: picked.data } : null;
+}
+
 async function pickAndroidFolder(): Promise<string | null> {
   const picked = await invoke<{ path?: string | null }>("android_pick_folder");
   return picked?.path || null;
@@ -172,25 +177,19 @@ export function installTauriBridge() {
             });
           }
           if (name === "chooseCover" && !payload.data) {
-            const picked = await pickBrowserFiles({
-              accept: "image/png,image/jpeg,image/webp",
-              multiple: false,
-            });
-            if (!picked || picked.length === 0) return { ok: true, data: null };
+            const picked = await pickAndroidImage(["image/png", "image/jpeg", "image/webp"]);
+            if (!picked) return { ok: true, data: null };
             return invoke("lof_invoke", {
               method: name,
-              args: { ...payload, data: picked[0].data },
+              args: { ...payload, data: picked.data },
             });
           }
           if (name === "saveImage" && !payload.data) {
-            const picked = await pickBrowserFiles({
-              accept: "image/png,image/jpeg,image/gif,image/webp",
-              multiple: false,
-            });
-            if (!picked || picked.length === 0) return { ok: true, data: null };
+            const picked = await pickAndroidImage(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+            if (!picked) return { ok: true, data: null };
             return invoke("lof_invoke", {
               method: name,
-              args: { ...payload, name: picked[0].name, data: picked[0].data },
+              args: { ...payload, name: picked.name, data: picked.data },
             });
           }
           if (name === "importFiles" && !payload.items) {

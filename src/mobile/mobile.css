@@ -1043,12 +1043,18 @@
   height: 22px;
 }
 
-/* 파일 트리 목록 하단의 새 에피소드 / 추가 버튼 */
+/* 파일 트리 드로어 맨 아래에 고정된 새 에피소드 / 추가 버튼 */
+.m-drawer-footer {
+  flex: 0 0 auto;
+  padding: 10px 12px 12px;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+
 .m-tree-add-btn {
   display: flex;
   width: 100%;
   min-height: 48px;
-  margin-top: 12px;
   border-radius: 12px;
   font-size: 15px;
 }
