@@ -147,7 +147,6 @@ export default function MobileShell({
   renderSyncConnections,
   onUpdateProjectWriting,
   edit,
-  composition,
   counterUpdate,
   manualSave,
   flush,
@@ -285,7 +284,6 @@ export default function MobileShell({
   renderSyncConnections: () => React.JSX.Element;
   onUpdateProjectWriting: (rules: WritingRules) => void;
   edit: (patch: Partial<Doc>, markdownCopy?: boolean) => void;
-  composition: (composing: boolean) => void;
   counterUpdate: (body: string, delta: any) => void;
   manualSave: () => Promise<void>;
   flush: () => Promise<void>;
@@ -474,7 +472,6 @@ export default function MobileShell({
                 docImages={docImages}
                 attempt={attempt}
                 edit={edit}
-                composition={composition}
                 counterUpdate={counterUpdate}
                 manualSave={manualSave}
                 flush={flush}
@@ -492,6 +489,8 @@ export default function MobileShell({
                 openNoteLink={openNoteLink}
                 showHistory={showHistory}
                 goBackToProject={() => goView("project", active.projectId)}
+                goLibrary={() => goView("library")}
+                switchProject={switchProject}
                 onUpdateProjectWriting={onUpdateProjectWriting}
                 setDialog={setDialog}
                 message={message}

@@ -368,18 +368,18 @@ try {
     await expect(status()).toHaveText("저장됨");
     await expect.poll(async () => (await library()).drafts.some(draft => draft.id === docs[0].id)).toBe(false);
   });
-  await check("3. WebView2 IME 조합 중 저장·전환 차단 및 종료 후 저장", async () => {
-    await writer().fill("조합 보호 "); await save();
+  await check("3. WebView2 IME 조합 중 수동 저장 및 종료 후 저장", async () => {
+    await writer().fill("조합 중 저장 "); await save();
     await writer().click(); await page.keyboard.press("Control+End");
     const cdp = await page.context().newCDPSession(page);
     await cdp.send("Input.imeSetComposition", { text: "하", selectionStart: 1, selectionEnd: 1 });
-    await tree(docs[1].id).dispatchEvent("click");
-    await expect(page.locator(".error-banner")).toContainText("한글 입력 조합");
+    await save();
+    await expect(page.locator(".error-banner")).toHaveCount(0);
     await expect(title()).toHaveValue(docs[0].title);
-    expect((await read(docs[0].id)).body).not.toContain("하");
+    expect((await read(docs[0].id)).body).toContain("하");
     await cdp.send("Input.insertText", { text: "한" });
     await expect.poll(async () => (await read(docs[0].id)).body).toContain("한");
-    await clearError(); await open(docs[1]);
+    await open(docs[1]);
     await cdp.detach();
   });
   await check("3. 빠른 연속 편집·수동 저장 후 파일과 최종 본문 일치", async () => {

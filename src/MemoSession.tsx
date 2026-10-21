@@ -185,7 +185,6 @@ export default function MemoSession({
   const memoRef = useRef<Memo | null>(null),
     spaceRef = useRef(space),
     dirty = useRef({ seq: 0, saved: 0 }),
-    composing = useRef(false),
     conflictRef = useRef(false),
     timer = useRef<number | undefined>(undefined),
     chain = useRef<Promise<void>>(Promise.resolve()),
@@ -244,16 +243,15 @@ export default function MemoSession({
         .catch(report);
     };
 
-  // 저장은 하나씩 순서대로 한다. auto면 한글 조합 중에는 미뤘다가 조합이 끝나면 저장한다.
+  // 저장은 하나씩 순서대로 한다.
   const save = useCallback((auto = false, closing = false) => {
     const run = async () => {
       const m = memoRef.current;
       if (!m) return;
       const loadExternalOnClose = async (onlyIfChanged = false) => {
-        if (composing.current) throw Error("입력 중인 글자를 확정한 뒤 다시 닫아 주세요.");
         const seq = dirty.current.seq;
         const fresh = await readFileForClose(() => readItem(m.space, m.path));
-        if (memoRef.current !== m || dirty.current.seq !== seq || composing.current)
+        if (memoRef.current !== m || dirty.current.seq !== seq)
           throw Error("닫는 동안 메모가 변경되었습니다. 다시 닫아 주세요.");
         if (onlyIfChanged && !conflictRef.current && fresh.revision === m.revision) return false;
         dirty.current = { seq: 0, saved: 0 };
@@ -267,7 +265,7 @@ export default function MemoSession({
       };
       if (closing && await loadExternalOnClose(true)) return;
       if (dirty.current.seq === dirty.current.saved) return;
-      if (auto && (composing.current || conflictRef.current)) return;
+      if (auto && conflictRef.current) return;
       const seq = dirty.current.seq;
       setStatus("저장 중");
       try {
@@ -309,10 +307,7 @@ export default function MemoSession({
       throw Error("메모 변경 충돌을 해결해 주세요.");
     await save(false, closing);
   }, [save]);
-  const gitActivity = useGitActivity(async () => { if (!composing.current) return true;
-    await flush();
-    return !composing.current && !conflictRef.current && dirty.current.seq === dirty.current.saved;
-  }, report);
+  const gitActivity = useGitActivity(async () => true, report);
   useEffect(() => {
     flushRef.current = async (options) => {
       await flush(options);
@@ -367,7 +362,7 @@ export default function MemoSession({
   const checkOpenMemo = useSyncFileUpdates({
     fileKey: memo ? `${memo.space}\n${memo.path}` : "",
     enabled: !!memo,
-    canCheck: () => active && !composing.current,
+    canCheck: () => active,
     current: () => {
       const m = memoRef.current;
       return m ? { doc: m, version: `${dirty.current.seq}:${m.revision}:${titleRef.current}` } : null;
@@ -1135,12 +1130,6 @@ export default function MemoSession({
                   fontSize={mainBox.norm.fontSize}
                   lineHeight={mainBox.norm.lineHeight}
                   source={false}
-                  onComposition={(value) => {
-                    if (!focused) return;
-                    if (memo.space !== COMMON) gitActivity();
-                    composing.current = value;
-                    if (!value && dirty.current.seq !== dirty.current.saved) schedule();
-                  }}
                   typingOptions={{
                     autoCloseQuotes: prefs.autoCloseQuotes,
                     autoCloseBrackets: prefs.autoCloseBrackets,

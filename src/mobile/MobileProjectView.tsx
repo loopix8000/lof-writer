@@ -2,6 +2,7 @@ import {
   Archive,
   ArrowDown,
   ArrowDownToLine,
+  ArrowLeft,
   ArrowUp,
   ArrowUpToLine,
   BookOpen,
@@ -11,6 +12,7 @@ import {
   Copy,
   Download,
   Edit3,
+  Feather,
   FilePlus,
   FileText,
   Folder,
@@ -33,6 +35,7 @@ import {
 import React, { useMemo, useState } from "react";
 import { STATUS_SHORT, normalizeStatus } from "../../core/episode.mjs";
 import { normalizeWriting, writingName } from "../../core/platforms.mjs";
+import CoverImage from "../CoverImage";
 import { labels } from "../app/document-ui";
 import { EPISODE_GROUP, parentOfRel, type FolderEntry } from "../app/file-tree-model";
 import { type Dialog } from "../app/model";
@@ -96,8 +99,8 @@ export default function MobileProjectView({
   message: (text: string) => void;
   numberOf: (d: Doc) => any;
 }) {
-  // 데스크톱과 동일하게 '에피소드(episode)'와 '문서(doc: 플롯·메모 통합 트리)' 2탭으로 구분
-  const viewMode: "episode" | "doc" = tab === "episode" ? "episode" : "doc";
+  // 작품 화면은 에피소드 / 플롯 / 메모 3탭으로 구분
+  const activeTab: Kind = tab === "plot" ? "plot" : tab === "memo" ? "memo" : "episode";
   const [filterQuery, setFilterQuery] = useState("");
   const [docScope, setDocScope] = useState<"all" | "byEpisode">("all");
   const [openFolders, setOpenFolders] = useState<Set<string>>(() => new Set());
@@ -122,10 +125,19 @@ export default function MobileProjectView({
     [docs],
   );
 
-  // 문서 탭에는 플롯(plot)과 메모(memo)가 모두 포함됨
-  const docFiles = useMemo(
-    () => docs.filter((d) => d.kind !== "episode"),
+  const plots = useMemo(
+    () => docs.filter((d) => d.kind === "plot"),
     [docs],
+  );
+
+  const memos = useMemo(
+    () => docs.filter((d) => d.kind === "memo"),
+    [docs],
+  );
+
+  const currentKindDocs = useMemo(
+    () => (activeTab === "plot" ? plots : memos),
+    [activeTab, plots, memos],
   );
 
   const filteredEpisodes = useMemo(() => {
@@ -139,16 +151,16 @@ export default function MobileProjectView({
     });
   }, [episodes, filterQuery, numberOf]);
 
-  const filteredDocFiles = useMemo(() => {
+  const filteredKindDocs = useMemo(() => {
     const q = filterQuery.trim().toLowerCase();
-    if (!q) return docFiles;
-    return docFiles.filter((d) => {
+    if (!q) return currentKindDocs;
+    return currentKindDocs.filter((d) => {
       const title = (d.title || "").toLowerCase();
       const rel = (d.relPath || "").toLowerCase();
       const tags = (d.tags || []).join(" ").toLowerCase();
       return title.includes(q) || rel.includes(q) || tags.includes(q);
     });
-  }, [docFiles, filterQuery]);
+  }, [currentKindDocs, filterQuery]);
 
   const allFolderEntries = useMemo(
     () =>
@@ -659,7 +671,7 @@ export default function MobileProjectView({
       const prefix = "doc/" + f.path + "/";
       return (
         f.name.toLowerCase().includes(q.toLowerCase()) ||
-        filteredDocFiles.some((d) => d.relPath?.startsWith(prefix)) ||
+        filteredKindDocs.some((d) => d.relPath?.startsWith(prefix)) ||
         allFolderEntries.some(
           (sub) =>
             sub.path.startsWith(f.path + "/") &&
@@ -668,7 +680,7 @@ export default function MobileProjectView({
       );
     });
 
-    const filesHere = filteredDocFiles.filter((d) => {
+    const filesHere = filteredKindDocs.filter((d) => {
       const rel = d.relPath?.startsWith("doc/") ? d.relPath.slice(4) : "";
       return parentOfRel(rel) === parentPath;
     });
@@ -678,7 +690,7 @@ export default function MobileProjectView({
         {subFolders.map((folder) => {
           const isOpen = !!q || openFolders.has(folder.path);
           const prefix = "doc/" + folder.path + "/";
-          const insideCount = docFiles.filter((d) =>
+          const insideCount = currentKindDocs.filter((d) =>
             d.relPath?.startsWith(prefix),
           ).length;
 
@@ -737,18 +749,28 @@ export default function MobileProjectView({
     );
   };
 
+  const openEditProjectDialog = () =>
+    setDialog({
+      type: "editProject",
+      value: project.title,
+      description: project.description,
+      tags: project.tags || [],
+      manualLineBreak: project.manualLineBreak ?? null,
+      writing: rules,
+    });
+
   return (
     <div className="m-screen m-modern-workspace">
-      {/* 2026 모던 상단 헤더: 불필요한 가로선과 박스 테두리 제거 */}
-      <header className="m-modern-header">
+      {/* 상단 내 서재 이동 및 작품 영웅(Hero) 헤더 */}
+      <header className="m-modern-header m-project-page-header">
         <div className="m-modern-header-top">
           <button
             type="button"
-            className="m-modern-title-btn"
-            onClick={() => setProjectSwitcherOpen(true)}
+            className="m-project-back-link"
+            onClick={attempt(goLibrary)}
           >
-            <span className="m-modern-title">{project.title || "제목 없는 작품"}</span>
-            <ChevronDown size={18} className="m-modern-title-chevron" />
+            <ArrowLeft size={16} />
+            <span>내 서재</span>
           </button>
           <div className="m-topbar-actions">
             <button
@@ -772,23 +794,98 @@ export default function MobileProjectView({
           </div>
         </div>
 
-        <div className="m-modern-subtitle">
-          <span>{archive ? "보관함" : `${writingName(rules)} 기준`}</span>
-          <i>·</i>
-          <span>회차 {episodes.length}편</span>
-          <i>·</i>
-          <span>문서 {docFiles.length}개</span>
-          <i>·</i>
-          <span>총 {totalProjectChars.toLocaleString()}자</span>
+        {/* 작품 표지(좌측) + 작품 정보·태그·관리 버튼(우측) */}
+        <div className="m-project-hero">
+          <div
+            className={`m-project-hero-cover ${
+              project.coverData && !prefs.hideCovers ? "has-image" : ""
+            }`}
+            onClick={openEditProjectDialog}
+          >
+            {project.coverData && !prefs.hideCovers ? (
+              <CoverImage src={project.coverData} alt={`${project.title} 표지`} />
+            ) : (
+              <>
+                <Feather size={26} />
+                <span>YOUR STORY</span>
+              </>
+            )}
+          </div>
+
+          <div className="m-project-hero-info">
+            <div className="m-project-hero-meta">
+              {archive ? "보관함 · " : ""}
+              {episodes.length}편 · 총 {totalProjectChars.toLocaleString()}자
+            </div>
+
+            <button
+              type="button"
+              className="m-project-hero-title-btn"
+              onClick={() => setProjectSwitcherOpen(true)}
+            >
+              <span className="m-project-hero-title">
+                {project.title || "제목 없는 작품"}
+              </span>
+              <ChevronDown size={17} className="m-modern-title-chevron" />
+            </button>
+
+            {project.description ? (
+              <p className="m-project-hero-desc">{project.description}</p>
+            ) : null}
+
+            <div className="m-project-hero-tags">
+              {(project.tags || []).map((t) => (
+                <span key={t} className="m-project-tag-chip">
+                  #{t}
+                </span>
+              ))}
+              <button
+                type="button"
+                className="m-project-tag-chip add"
+                onClick={openEditProjectDialog}
+              >
+                + 태그 추가
+              </button>
+            </div>
+
+            <div className="m-project-hero-actions">
+              <button
+                type="button"
+                className="m-project-action-btn"
+                onClick={openEditProjectDialog}
+              >
+                <Settings size={14} />
+                <span>소설 관리하기</span>
+              </button>
+              <button
+                type="button"
+                className="m-project-action-btn"
+                onClick={attempt(async () => {
+                  const result = await call("importFiles", { projectId: project.id });
+                  if (result) {
+                    await refresh();
+                    message(`${result.count}편 가져옴`);
+                  }
+                })}
+              >
+                <Upload size={14} />
+                <span>원고 가져오기</span>
+              </button>
+            </div>
+          </div>
         </div>
 
-        {/* 데스크톱과 동일한 2탭 구조: 에피소드 / 문서 */}
-        <div className="m-pill-tabs" role="tablist" aria-label="파일 트리 보기">
+        {/* 작품 화면 3탭 구조: 에피소드 / 플롯 / 메모 */}
+        <div
+          className="m-pill-tabs three-cols"
+          role="tablist"
+          aria-label="작품 문서 분류"
+        >
           <button
             type="button"
             role="tab"
-            aria-selected={viewMode === "episode"}
-            className={`m-pill-tab ${viewMode === "episode" ? "active" : ""}`}
+            aria-selected={activeTab === "episode"}
+            className={`m-pill-tab ${activeTab === "episode" ? "active" : ""}`}
             onClick={() => {
               setTab("episode");
               setFilterQuery("");
@@ -801,16 +898,30 @@ export default function MobileProjectView({
           <button
             type="button"
             role="tab"
-            aria-selected={viewMode === "doc"}
-            className={`m-pill-tab ${viewMode === "doc" ? "active" : ""}`}
+            aria-selected={activeTab === "plot"}
+            className={`m-pill-tab ${activeTab === "plot" ? "active" : ""}`}
             onClick={() => {
-              if (tab === "episode") setTab("memo");
+              setTab("plot");
               setFilterQuery("");
             }}
           >
             <FileText size={15} />
-            <span>문서</span>
-            <small>{docFiles.length}</small>
+            <span>플롯</span>
+            <small>{plots.length}</small>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === "memo"}
+            className={`m-pill-tab ${activeTab === "memo" ? "active" : ""}`}
+            onClick={() => {
+              setTab("memo");
+              setFilterQuery("");
+            }}
+          >
+            <StickyNote size={15} />
+            <span>메모</span>
+            <small>{memos.length}</small>
           </button>
         </div>
 
@@ -822,9 +933,11 @@ export default function MobileProjectView({
               type="text"
               className="m-filter-input"
               placeholder={
-                viewMode === "episode"
+                activeTab === "episode"
                   ? "에피소드 제목·번호·#태그 검색..."
-                  : "문서(플롯·메모)·폴더 검색..."
+                  : activeTab === "plot"
+                    ? "플롯 제목·폴더·#태그 검색..."
+                    : "메모 제목·폴더·#태그 검색..."
               }
               value={filterQuery}
               onChange={(e) => setFilterQuery(e.target.value)}
@@ -843,7 +956,7 @@ export default function MobileProjectView({
 
           {!archive && (
             <div className="m-toolbar-create-btns">
-              {viewMode === "episode" ? (
+              {activeTab === "episode" ? (
                 <button
                   type="button"
                   className="m-btn-primary m-btn-sm"
@@ -871,10 +984,17 @@ export default function MobileProjectView({
                   <button
                     type="button"
                     className="m-btn-primary m-btn-sm"
-                    onClick={() => setAddMenuFolder("")}
+                    onClick={() =>
+                      setRenameTarget({
+                        type: "newDoc",
+                        idOrPath: "",
+                        initialValue: activeTab === "plot" ? "새 플롯" : "새 메모",
+                        kind: activeTab,
+                      })
+                    }
                   >
                     <Plus size={15} />
-                    <span>추가</span>
+                    <span>{activeTab === "plot" ? "새 플롯" : "새 메모"}</span>
                   </button>
                 </>
               )}
@@ -882,8 +1002,8 @@ export default function MobileProjectView({
           )}
         </div>
 
-        {/* 문서 탭 보기 방식 전환 (전체 트리 / 회차별 연결 문서) */}
-        {viewMode === "doc" && docFiles.some((d) => !!d.episodeId) && (
+        {/* 플롯/메모 탭 보기 방식 전환 (전체 트리 / 회차별 연결 문서) */}
+        {activeTab !== "episode" && currentKindDocs.some((d) => !!d.episodeId) && (
           <div className="m-doc-scope-bar">
             <button
               type="button"
@@ -897,7 +1017,7 @@ export default function MobileProjectView({
               className={`m-scope-chip ${docScope === "byEpisode" ? "active" : ""}`}
               onClick={() => setDocScope("byEpisode")}
             >
-              회차별 연결 문서
+              회차별 연결 {labels[activeTab]}
             </button>
           </div>
         )}
@@ -905,7 +1025,7 @@ export default function MobileProjectView({
 
       {/* 옵시디언 / 노션 스타일 트리 & 리스트 본문 (구분선 없음) */}
       <div className="m-scroll-body m-tree-scroll">
-        {viewMode === "episode" ? (
+        {activeTab === "episode" ? (
           <div className="m-tree-container">
             {!filterQuery.trim() && filteredEpisodes.length > EPISODE_GROUP
               ? Array.from(
@@ -977,7 +1097,7 @@ export default function MobileProjectView({
         ) : docScope === "byEpisode" ? (
           <div className="m-tree-container">
             {episodes.map((ep) => {
-              const bound = filteredDocFiles.filter((d) => d.episodeId === ep.id);
+              const bound = filteredKindDocs.filter((d) => d.episodeId === ep.id);
               if (bound.length === 0) return null;
               return (
                 <div key={ep.id} className="m-tree-node">
@@ -994,14 +1114,14 @@ export default function MobileProjectView({
                 </div>
               );
             })}
-            {filteredDocFiles.filter((d) => !d.episodeId).length > 0 && (
+            {filteredKindDocs.filter((d) => !d.episodeId).length > 0 && (
               <div className="m-tree-node">
                 <div className="m-tree-group-header">
                   <Folder size={14} />
-                  <span>독립 문서 (회차 미연결)</span>
+                  <span>독립 {labels[activeTab]} (회차 미연결)</span>
                 </div>
                 <div className="m-tree-children">
-                  {filteredDocFiles
+                  {filteredKindDocs
                     .filter((d) => !d.episodeId)
                     .map((d) => renderDocRow(d))}
                 </div>
@@ -1012,29 +1132,38 @@ export default function MobileProjectView({
           <div className="m-tree-container">
             {renderDocTreeLevel("", 0)}
 
-            {allFolderEntries.length === 0 && filteredDocFiles.length === 0 && (
+            {allFolderEntries.length === 0 && filteredKindDocs.length === 0 && (
               <div className="m-empty-state">
-                <FileText size={30} />
+                {activeTab === "plot" ? <FileText size={30} /> : <StickyNote size={30} />}
                 <h3>
                   {filterQuery.trim()
-                    ? "일치하는 문서가 없습니다"
+                    ? `일치하는 ${labels[activeTab]}가 없습니다`
                     : archive
-                      ? "보관된 문서가 없습니다"
-                      : "아직 문서가 없습니다"}
+                      ? `보관된 ${labels[activeTab]}가 없습니다`
+                      : `아직 ${labels[activeTab]}가 없습니다`}
                 </h3>
                 <p>
                   {archive
-                    ? "보관함으로 옮긴 플롯·메모 문서가 여기에 표시됩니다."
-                    : "플롯과 캐릭터·세계관 메모를 폴더 트리로 자유롭게 구성해 보세요."}
+                    ? `보관함으로 옮긴 ${labels[activeTab]} 문서가 여기에 표시됩니다.`
+                    : activeTab === "plot"
+                      ? "회차별 플롯이나 전체 스토리 구성안을 작성해 보세요."
+                      : "캐릭터 설정, 세계관, 아이디어 메모를 자유롭게 정리해 보세요."}
                 </p>
                 {!archive && !filterQuery.trim() && (
                   <button
                     type="button"
                     className="m-btn-primary"
-                    onClick={() => setAddMenuFolder("")}
+                    onClick={() =>
+                      setRenameTarget({
+                        type: "newDoc",
+                        idOrPath: "",
+                        initialValue: activeTab === "plot" ? "새 플롯" : "새 메모",
+                        kind: activeTab,
+                      })
+                    }
                   >
                     <Plus size={17} />
-                    <span>첫 문서 만들기</span>
+                    <span>첫 {labels[activeTab]} 만들기</span>
                   </button>
                 )}
               </div>

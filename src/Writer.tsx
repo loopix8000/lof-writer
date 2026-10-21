@@ -326,7 +326,6 @@ export default function Writer({
   fontSize,
   lineHeight,
   source,
-  onComposition,
   typingOptions,
   revision,
   readOnly = false,
@@ -358,7 +357,6 @@ export default function Writer({
   fontSize: number;
   lineHeight: number;
   source: boolean;
-  onComposition: (value: boolean) => void;
   typingOptions: Record<string, any>;
   revision: string;
   // 원고 보호 여부와 그룹 포커스를 분리해 도구 막대 구성을 그대로 유지한다.
@@ -453,8 +451,6 @@ export default function Writer({
   const editable = !readOnly && !inactive;
   const editableRef = useRef(editable);
   editableRef.current = editable;
-  const compositionRef = useRef(onComposition);
-  compositionRef.current = onComposition;
   const cursorLineRef = useRef(onCursorLine);
   cursorLineRef.current = onCursorLine;
   const reportsCursor = !inactive && visible;
@@ -533,14 +529,6 @@ export default function Writer({
           spellcheck: "false",
         },
         handleDOMEvents: {
-          compositionstart: () => {
-            if (editableRef.current) compositionRef.current(true);
-            return false;
-          },
-          compositionend: () => {
-            if (editableRef.current) compositionRef.current(false);
-            return false;
-          },
           // 본문 안의 링크를 눌러도 앱 화면이 그 주소로 넘어가지 않게 막고, 문서 링크면 그 문서로 간다.
           click: (view, event) => {
             const anchor = (event.target as HTMLElement).closest?.("a[href]");
@@ -696,9 +684,6 @@ export default function Writer({
       editor.off("transaction", report);
     };
   }, [editor, reportsCursor, source, protectedSource]);
-  useEffect(() => () => {
-    if (editableRef.current) compositionRef.current(false);
-  }, []);
   useEffect(() => {
     if (!visible || inactive || !editable) return;
     const onInsert = (e: Event) => {
@@ -773,6 +758,10 @@ export default function Writer({
       else if (cmd === "table" && tables) editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run();
       else if (cmd === "image") void pickImage();
       else if (cmd === "comment") toggleJsdocComment(editor.view);
+      else if (cmd === "toggleLineBreak" && lineBreak) {
+        convertBlankLines(editor, !manualLineBreak);
+        lineBreak.onChange(!manualLineBreak);
+      }
     };
     window.addEventListener("lof:insert-text", onInsert);
     window.addEventListener("lof:insert-pair", onInsertPair);
@@ -782,7 +771,7 @@ export default function Writer({
       window.removeEventListener("lof:insert-pair", onInsertPair);
       window.removeEventListener("lof:editor-action", onAction);
     };
-  }, [editor, visible, inactive, editable, source, protectedSource]);
+  }, [editor, visible, inactive, editable, source, protectedSource, tables, lineBreak, manualLineBreak]);
   useEffect(() => {
     if (!reveal?.query) return;
     const norm = (t: string) => (reveal.caseSensitive ? t : t.toLocaleLowerCase()),
@@ -928,7 +917,7 @@ export default function Writer({
             manualLineBreak={manualLineBreak} typingOptions={typingOptions} countingRules={countingRules}
             fontSize={style.fontSize} lineHeight={style.lineHeight} normalizePaste={normalizePastedText}
             reveal={reveal}
-            onChange={notifyChange} onComposition={value => compositionRef.current(value)}
+            onChange={notifyChange}
             onCursorLine={reportsCursor ? line => cursorLineRef.current?.(line) : undefined}
             onPasteImage={(event, insert) => {
               const files = imageFiles(event.clipboardData), save = imagesRef.current?.save;

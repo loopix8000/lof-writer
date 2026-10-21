@@ -501,7 +501,180 @@
   font-weight: 650;
 }
 
-/* 2026 스타일 소프트 필 탭 (에피소드 / 문서 2탭) */
+/* 작품 화면 상단 영웅(Hero) 섹션: 좌측 표지 + 우측 작품 정보 */
+.m-project-back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 30px;
+  padding: 2px 6px 2px 2px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.m-project-back-link:active {
+  background: var(--panel);
+  color: var(--ink);
+}
+
+.m-project-hero {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 2px 2px 6px;
+}
+
+.m-project-hero-cover {
+  flex: 0 0 88px;
+  width: 88px;
+  height: 124px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  overflow: hidden;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
+  cursor: pointer;
+}
+
+.m-project-hero-cover span {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  opacity: 0.65;
+}
+
+.m-project-hero-cover.has-image {
+  padding: 0;
+  border-color: rgba(128, 128, 128, 0.2);
+}
+
+.m-project-hero-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.m-project-hero-info {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+}
+
+.m-project-hero-meta {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted);
+  line-height: 1.25;
+}
+
+.m-project-hero-title-btn {
+  max-width: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--ink);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  text-align: left;
+}
+
+.m-project-hero-title {
+  font-size: 19px;
+  font-weight: 800;
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: keep-all;
+}
+
+.m-project-hero-desc {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.m-project-hero-tags {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 1px;
+}
+
+.m-project-tag-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.m-project-tag-chip.add {
+  border-style: dashed;
+  background: transparent;
+}
+
+.m-project-tag-chip.add:active {
+  background: var(--panel);
+  color: var(--ink);
+}
+
+.m-project-hero-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 3px;
+}
+
+.m-project-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.m-project-action-btn:active {
+  background: var(--panel);
+}
+
+/* 2026 스타일 소프트 필 탭 (2탭 / 3탭) */
 .m-pill-tabs {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -509,6 +682,10 @@
   padding: 3px;
   border-radius: 12px;
   background: var(--panel);
+}
+
+.m-pill-tabs.three-cols {
+  grid-template-columns: 1fr 1fr 1fr;
 }
 
 .m-pill-tab {
@@ -520,29 +697,32 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  font-size: 13.5px;
+  gap: 5px;
+  font-size: 13px;
   font-weight: 650;
-  padding: 0 10px;
+  padding: 0 6px;
   transition: background 0.15s ease, color 0.15s ease;
+  white-space: nowrap;
 }
 
 .m-pill-tab small {
-  font-size: 11.5px;
+  font-size: 11px;
   font-weight: 700;
-  padding: 1px 6px;
+  padding: 1px 5px;
   border-radius: 999px;
   background: rgba(128, 128, 128, 0.12);
   color: inherit;
 }
 
-.m-pill-tab.selected {
+.m-pill-tab.selected,
+.m-pill-tab.active {
   background: var(--surface);
   color: var(--ink);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
 }
 
-.m-pill-tab.selected small {
+.m-pill-tab.selected small,
+.m-pill-tab.active small {
   background: var(--accent-soft);
   color: var(--accent);
 }
@@ -987,8 +1167,8 @@
   outline: none;
 }
 
-/* 에디터 본문 내 데스크톱 포맷바 숨김 (하단 플로팅 필 바의 + 메뉴로 통합) */
-.m-manuscript-sheet .format-bar {
+/* 모바일에서는 상단 포맷바를 숨기고 하단 좌우 슬라이드 플로팅 필 툴바로 통합 */
+.mobile-app .format-bar {
   display: none !important;
 }
 
@@ -1049,13 +1229,37 @@
   opacity: 0.65;
 }
 
+.m-pill-scroll-track,
 .m-pill-center-tools {
   flex: 1 1 auto;
   min-width: 0;
   display: flex;
   align-items: center;
-  justify-content: space-around;
-  gap: 2px;
+  gap: 4px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+  padding: 4px 2px;
+}
+
+.m-pill-scroll-track::-webkit-scrollbar,
+.m-pill-center-tools::-webkit-scrollbar {
+  display: none;
+}
+
+.m-pill-sub-divider {
+  width: 1px;
+  height: 18px;
+  background: var(--line);
+  margin: 0 3px;
+  flex-shrink: 0;
+}
+
+.m-pill-text-chip {
+  font-size: 12.5px !important;
+  font-weight: 650 !important;
+  padding: 0 10px !important;
+  background: var(--panel) !important;
 }
 
 .m-pill-tool-btn {
@@ -1108,8 +1312,173 @@
   justify-content: center;
 }
 
-.m-pill-more-btn:active {
+.m-pill-more-btn:active,
+.m-pill-more-btn.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* ---------- 하단 툴바 우측 더보기(⋮) 플로팅 팝업 메뉴 ---------- */
+@keyframes mFloatingPopupIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.m-floating-popup-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 260;
+  background: rgba(0, 0, 0, 0.14);
+}
+
+.m-floating-popup-menu {
+  position: fixed;
+  right: 14px;
+  bottom: 74px;
+  width: min(264px, calc(100vw - 28px));
+  max-height: min(68vh, 480px);
+  overflow-y: auto;
+  padding: 6px;
+  border-radius: 16px;
+  background: var(--surface);
+  border: 1px solid rgba(128, 128, 128, 0.16);
+  box-shadow:
+    0 12px 34px rgba(0, 0, 0, 0.18),
+    0 2px 8px rgba(0, 0, 0, 0.08);
+  transform-origin: bottom right;
+  animation: mFloatingPopupIn 0.15s cubic-bezier(0.2, 0.9, 0.3, 1);
+  box-sizing: border-box;
+}
+
+.mobile-app.dark .m-floating-popup-menu {
+  border-color: rgba(255, 255, 255, 0.12);
+  box-shadow:
+    0 14px 38px rgba(0, 0, 0, 0.52),
+    0 2px 10px rgba(0, 0, 0, 0.32);
+}
+
+.m-floating-popup-section {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.m-floating-popup-divider {
+  height: 1px;
+  background: var(--line);
+  margin: 5px 6px;
+}
+
+.m-floating-popup-item {
+  width: 100%;
+  min-height: 40px;
+  padding: 7px 10px;
+  border-radius: 10px;
+  border: none;
+  background: transparent;
+  color: var(--ink);
+  font-size: 13.5px;
+  font-weight: 560;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: flex-start !important;
+  gap: 10px;
+  text-align: left !important;
+  box-sizing: border-box;
+}
+
+.m-floating-popup-item svg {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+
+.m-floating-popup-item span {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.m-floating-popup-item:active {
   background: var(--panel);
+}
+
+.m-floating-popup-item:disabled {
+  opacity: 0.4;
+}
+
+.m-floating-popup-item.danger {
+  color: var(--danger, #ef4444);
+}
+
+.m-floating-popup-item.danger svg {
+  color: var(--danger, #ef4444);
+}
+
+.m-floating-popup-badge {
+  flex: 0 0 auto;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.m-floating-popup-badge.accent {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* 상단 상태바 · 문서 속성 작은 플로팅 팝업 */
+.m-floating-anchor-popup {
+  position: fixed;
+  width: 220px;
+  max-height: min(60vh, 380px);
+  overflow-y: auto;
+  padding: 5px;
+  border-radius: 14px;
+  background: var(--surface);
+  border: 1px solid rgba(128, 128, 128, 0.16);
+  box-shadow:
+    0 10px 28px rgba(0, 0, 0, 0.18),
+    0 2px 6px rgba(0, 0, 0, 0.08);
+  transform-origin: top center;
+  animation: mFloatingPopupIn 0.14s cubic-bezier(0.2, 0.9, 0.3, 1);
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.mobile-app.dark .m-floating-anchor-popup {
+  border-color: rgba(255, 255, 255, 0.12);
+  box-shadow:
+    0 12px 32px rgba(0, 0, 0, 0.52),
+    0 2px 8px rgba(0, 0, 0, 0.32);
+}
+
+.m-floating-popup-item.checked {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 660;
+}
+
+.m-floating-popup-item.checked svg {
+  color: var(--accent);
+}
+
+.m-floating-popup-check {
+  flex-shrink: 0;
+  color: var(--accent) !important;
 }
 
 /* ---------- 왼쪽 파일트리 / 오른쪽 위젯 슬라이드 드로어 ---------- */
@@ -1150,14 +1519,16 @@
 
 .m-slide-drawer.left {
   width: min(86vw, 340px);
-  border-radius: 0 20px 20px 0;
+  border-radius: 0 !important;
+  border-right: 1px solid var(--line);
   animation: mSlideInLeft 0.2s cubic-bezier(0.2, 0.9, 0.3, 1);
 }
 
 .m-slide-drawer.right {
   margin-left: auto;
   width: min(88vw, 360px);
-  border-radius: 20px 0 0 20px;
+  border-radius: 0 !important;
+  border-left: 1px solid var(--line);
   animation: mSlideInRight 0.2s cubic-bezier(0.2, 0.9, 0.3, 1);
 }
 

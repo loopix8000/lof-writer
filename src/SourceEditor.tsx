@@ -182,7 +182,6 @@ type Props = {
   reveal?: { query: string; index: number; caseSensitive?: boolean; seq?: number } | null;
   normalizePaste: (text: string, manual: boolean) => string;
   onChange: (body: string, delta?: ManuscriptCounts | null) => void;
-  onComposition: (value: boolean) => void;
   onCursorLine?: (line: number) => void;
   onPasteImage: (event: ClipboardEvent, insert: (image: Image) => void) => boolean;
 };
@@ -298,15 +297,10 @@ const SourceEditor = forwardRef<SourceEditorHandle, Props>(function SourceEditor
             return true;
           },
         })),
-        EditorView.domEventObservers({
-          compositionstart() { if (latest.current.editable) latest.current.onComposition(true); },
-          compositionend() { if (latest.current.editable) latest.current.onComposition(false); },
-        }),
       ] }),
     });
     viewRef.current = view; lastBody.current = latest.current.body;
     return () => {
-      if (view.composing) latest.current.onComposition(false);
       viewRef.current = null; view.destroy();
     };
   }, [props.id]);

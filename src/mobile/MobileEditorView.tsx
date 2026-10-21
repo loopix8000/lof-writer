@@ -1,18 +1,15 @@
 import {
   Archive,
-  ArrowLeft,
   Bold,
   Bookmark as BookmarkIcon,
   BookOpen,
   Check,
-  CheckCircle2,
   ChevronDown,
   ChevronRight,
   Code2,
   Copy,
   CornerDownLeft,
   Download,
-  FilePlus,
   FileText,
   Folder,
   FolderOpen,
@@ -21,18 +18,15 @@ import {
   History,
   ImagePlus,
   Italic,
+  LayoutGrid,
   Link2,
-  List,
-  ListOrdered,
   Lock,
   MessageSquareCode,
   Minus,
   MoreVertical,
   PanelLeft,
-  PanelRight,
   Pilcrow,
   Plus,
-  Quote,
   Redo2,
   Search,
   SlidersHorizontal,
@@ -84,21 +78,6 @@ import {
   type MobileActionItem,
 } from "./MobileActionSheet";
 
-const EXTRA_SYMBOLS: Array<{
-  label: string;
-  insert?: string;
-  pair?: { open: string; close: string };
-}> = [
-  { label: "—", insert: "—" },
-  { label: "「…」", pair: { open: "「", close: "」" } },
-  { label: "『…』", pair: { open: "『", close: "』" } },
-  { label: "〈…〉", pair: { open: "〈", close: "〉" } },
-  { label: "《…》", pair: { open: "《", close: "》" } },
-  { label: "!", insert: "!" },
-  { label: "?", insert: "?" },
-  { label: "?!", insert: "?!" },
-];
-
 type TreeTab = "episode" | "document";
 type RightWidgetTab = "widgets" | "typesetting" | "bookmarks";
 
@@ -128,7 +107,6 @@ export default function MobileEditorView({
   docImages,
   attempt,
   edit,
-  composition,
   counterUpdate,
   manualSave,
   flush,
@@ -146,6 +124,8 @@ export default function MobileEditorView({
   openNoteLink,
   showHistory,
   goBackToProject,
+  goLibrary,
+  switchProject,
   onUpdateProjectWriting,
   setDialog,
   message,
@@ -190,7 +170,6 @@ export default function MobileEditorView({
   };
   attempt: (fn: () => Promise<any>) => () => Promise<any>;
   edit: (patch: Partial<Doc>, markdownCopy?: boolean) => void;
-  composition: (composing: boolean) => void;
   counterUpdate: (body: string, delta: any) => void;
   manualSave: () => Promise<void>;
   flush: () => Promise<void>;
@@ -211,6 +190,8 @@ export default function MobileEditorView({
   openNoteLink: (href: string, quote: string) => Promise<void>;
   showHistory: () => Promise<void>;
   goBackToProject: () => Promise<void>;
+  goLibrary: () => Promise<void>;
+  switchProject: (id: string) => Promise<void>;
   onUpdateProjectWriting: (rules: WritingRules) => void;
   setDialog: React.Dispatch<React.SetStateAction<Dialog | null>>;
   message: (text: string) => void;
@@ -233,13 +214,26 @@ export default function MobileEditorView({
   const [createMenuFolder, setCreateMenuFolder] = useState<string | null>(null);
   const [newFolderParent, setNewFolderParent] = useState<string | null>(null);
 
-  // 하단 플로팅 필 툴바 시트 상태
-  const [plusSheetOpen, setPlusSheetOpen] = useState(false);
+  // 하단 플로팅 필 툴바 우측 더보기 플로팅 팝업 & 상단 속성 작은 플로팅 팝업 상태
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
-  const [propMenuItems, setPropMenuItems] = useState<MobileActionItem[] | null>(
-    null,
-  );
+  const [propPopup, setPropPopup] = useState<{
+    x: number;
+    y: number;
+    align?: "left" | "center";
+    items: Array<
+      | "separator"
+      | {
+          label: string;
+          icon?: React.ReactNode;
+          badge?: string;
+          checked?: boolean;
+          danger?: boolean;
+          disabled?: boolean;
+          action: () => void;
+        }
+    >;
+  } | null>(null);
   const [, setTypesettingKind] = useState<"episode" | "document">(
     active.kind === "episode" ? "episode" : "document",
   );
@@ -256,14 +250,13 @@ export default function MobileEditorView({
     active.kind === "episode" && normalizeStatus(active.status) === "completed";
   const kindPrefs = resolveKindPrefs(prefs, active.kind);
   const norm = normalizeEditorStyle(prefs, active.kind);
-  const status = normalizeStatus(active.status);
   const num = numberOf(active);
 
-  // 안드로이드 뒤로가기 시 열려 있는 드로어나 시트를 먼저 닫음
+  // 안드로이드 뒤로가기 시 열려 있는 드로어나 팝업/시트를 먼저 닫음
   useEffect(() => {
     (window as any).__lofEditorSubBack = () => {
-      if (propMenuItems) {
-        setPropMenuItems(null);
+      if (propPopup) {
+        setPropPopup(null);
         return true;
       }
       if (newFolderParent !== null) {
@@ -272,10 +265,6 @@ export default function MobileEditorView({
       }
       if (createMenuFolder !== null) {
         setCreateMenuFolder(null);
-        return true;
-      }
-      if (plusSheetOpen) {
-        setPlusSheetOpen(false);
         return true;
       }
       if (moreMenuOpen) {
@@ -300,10 +289,9 @@ export default function MobileEditorView({
       delete (window as any).__lofEditorSubBack;
     };
   }, [
-    propMenuItems,
+    propPopup,
     newFolderParent,
     createMenuFolder,
-    plusSheetOpen,
     moreMenuOpen,
     previewOpen,
     leftDrawerOpen,
@@ -313,10 +301,10 @@ export default function MobileEditorView({
   const handleTouchStart = (e: React.TouchEvent) => {
     if (e.touches.length !== 1) return;
     const target = e.target as HTMLElement | null;
-    // 가로 스크롤 요소나 슬라이더(input[type=range]) 터치 시에는 제스처 제외
+    // 하단 툴바 슬라이드나 팝업 메뉴 터치 시에는 사이드바 제스처 제외
     const ignore = Boolean(
       target?.closest(
-        'input[type="range"], .tableWrapper, .m-doc-scope-bar, .m-pill-tabs',
+        'input[type="range"], .tableWrapper, .m-doc-scope-bar, .m-pill-tabs, .m-floating-pill-bar, .m-floating-popup-menu, .m-floating-anchor-popup',
       ),
     );
     const t = e.touches[0];
@@ -431,125 +419,6 @@ export default function MobileEditorView({
         : [],
     [active, docItems],
   );
-
-  const moreMenuItems: MobileActionItem[] = [
-    {
-      label: "실행 취소 (Undo)",
-      icon: <Undo2 size={18} />,
-      disabled: isProtected,
-      action: () =>
-        window.dispatchEvent(
-          new CustomEvent("lof:editor-action", { detail: "undo" }),
-        ),
-    },
-    {
-      label: "다시 실행 (Redo)",
-      icon: <Redo2 size={18} />,
-      disabled: isProtected,
-      action: () =>
-        window.dispatchEvent(
-          new CustomEvent("lof:editor-action", { detail: "redo" }),
-        ),
-    },
-    {
-      label: "지금 저장하기",
-      sublabel: `현재 상태: ${saveStatus}`,
-      icon: <Check size={18} />,
-      action: attempt(async () => {
-        await manualSave();
-        message("저장했습니다.");
-      }),
-    },
-    "separator",
-    {
-      label: "파일 트리 열기",
-      sublabel: "왼쪽에서 오른쪽으로 밀어서 열 수도 있습니다",
-      icon: <PanelLeft size={18} />,
-      action: () => {
-        setTreeTab(active.kind === "episode" ? "episode" : "document");
-        setLeftDrawerOpen(true);
-      },
-    },
-    {
-      label: "위젯 보드 열기",
-      sublabel: "오른쪽에서 왼쪽으로 밀어서 열 수도 있습니다",
-      icon: <PanelRight size={18} />,
-      action: () => {
-        setRightTab("widgets");
-        setRightDrawerOpen(true);
-      },
-    },
-    {
-      label: "조판 설정 (글꼴·크기·줄간격)",
-      icon: <Pilcrow size={18} />,
-      action: () => {
-        setRightTab("typesetting");
-        setRightDrawerOpen(true);
-      },
-    },
-    {
-      label: "모바일 독자 미리보기",
-      icon: <Smartphone size={18} />,
-      checked: previewOpen,
-      action: () => setPreviewOpen(true),
-    },
-    {
-      label: "기호 일괄 교정",
-      sublabel: "직선 따옴표와 마침표 말줄임표를 자동 변환",
-      icon: <Sparkles size={18} />,
-      disabled: isProtected,
-      action: replaceActiveSymbols,
-    },
-    {
-      label: source ? "일반 편집 모드로 전환" : "Markdown 원문 편집 모드",
-      icon: <Code2 size={18} />,
-      checked: source,
-      action: () => setSource((s) => !s),
-    },
-    {
-      label: "변경 이력 및 복원",
-      icon: <History size={18} />,
-      action: attempt(showHistory),
-    },
-    "separator",
-    {
-      label:
-        source || requiresSource(active.body)
-          ? "Markdown 원문 복사"
-          : "본문 텍스트 복사",
-      icon: <Copy size={18} />,
-      action: attempt(() =>
-        copyDocManuscript(active, source || requiresSource(active.body)),
-      ),
-    },
-    {
-      label: "사본 복제",
-      icon: <FilePlus size={18} />,
-      action: attempt(() => duplicateDoc(active)),
-    },
-    {
-      label: "Markdown 파일 내보내기",
-      icon: <Download size={18} />,
-      action: attempt(async () => {
-        await flush();
-        if (await call("exportDocument", { id: active.id })) {
-          message("원고를 내보냈습니다.");
-        }
-      }),
-    },
-    "separator",
-    {
-      label: active.archived ? "보관함에서 꺼내기" : "보관함으로 이동",
-      icon: <Archive size={18} />,
-      action: attempt(() => archiveDoc(active)),
-    },
-    {
-      label: "영구 삭제",
-      icon: <Trash2 size={18} />,
-      danger: true,
-      action: () => setDialog({ type: "deleteDoc", value: active.id }),
-    },
-  ];
 
   const createMenuItems: MobileActionItem[] =
     createMenuFolder !== null
@@ -706,15 +575,6 @@ export default function MobileEditorView({
           <button
             type="button"
             className="m-icon-btn"
-            aria-label="문서 목록으로 돌아가기"
-            title="문서 목록"
-            onClick={attempt(goBackToProject)}
-          >
-            <ArrowLeft size={19} />
-          </button>
-          <button
-            type="button"
-            className="m-icon-btn"
             aria-label="파일 트리 열기 (왼쪽에서 슬라이드)"
             title="파일 트리"
             onClick={() => {
@@ -729,9 +589,34 @@ export default function MobileEditorView({
         <button
           type="button"
           className="m-editor-doc-Switch"
-          onClick={() => {
-            setTreeTab(active.kind === "episode" ? "episode" : "document");
-            setLeftDrawerOpen(true);
+          aria-haspopup="menu"
+          aria-expanded={Boolean(propPopup)}
+          onClick={(e) => {
+            const rect = e.currentTarget.getBoundingClientRect();
+            const projects = [...lib.projects].sort((a, b) =>
+              a.title.localeCompare(b.title, "ko"),
+            );
+            setPropPopup({
+              x: rect.left + rect.width / 2,
+              y: rect.bottom + 6,
+              align: "center",
+              items: [
+                ...projects.map((p) => ({
+                  label: p.title || "제목 없는 작품",
+                  checked: p.id === active.projectId,
+                  action: attempt(() => switchProject(p.id)),
+                })),
+                "separator",
+                {
+                  label: "작품 페이지로 이동",
+                  action: attempt(goBackToProject),
+                },
+                {
+                  label: "내 서재로 이동",
+                  action: attempt(goLibrary),
+                },
+              ],
+            });
           }}
         >
           <span
@@ -766,7 +651,7 @@ export default function MobileEditorView({
               setRightDrawerOpen(true);
             }}
           >
-            <PanelRight size={19} />
+            <LayoutGrid size={19} />
           </button>
         </div>
       </header>
@@ -844,6 +729,51 @@ export default function MobileEditorView({
             }}
           />
 
+          <EpisodeProperties
+            propertyPresets={prefs.propertyPresets}
+            onSavePresets={(propertyPresets) => savePrefs({ propertyPresets })}
+            favoriteTags={prefs.favoriteTags}
+            key={active.id}
+            doc={active}
+            readOnly={isProtected}
+            open={!!prefs.episodeInfoOpen}
+            onToggle={() =>
+              savePrefs({ episodeInfoOpen: !prefs.episodeInfoOpen }).catch(
+                report,
+              )
+            }
+            onEdit={(patch) => edit(patch)}
+            onMenu={(rect, items) => {
+              setPropPopup({
+                x: rect.left,
+                y: rect.bottom + 6,
+                align: "left",
+                items: items.map((item: any) =>
+                  item === "separator"
+                    ? "separator"
+                    : {
+                        label: item.label,
+                        icon: item.icon,
+                        badge: item.badge,
+                        checked: item.checked,
+                        danger: item.danger,
+                        disabled: item.disabled,
+                        action: item.action || (() => {}),
+                      },
+                ),
+              });
+            }}
+            onNotice={message}
+            boundEpisode={boundEpisode}
+            onBind={attempt(() => openBinding(active.id))}
+            onUnbind={attempt(() => bindDocument(active.id, null))}
+            onOpenBound={
+              active.episodeId
+                ? attempt(() => openDoc(active.episodeId!))
+                : undefined
+            }
+          />
+
           <Writer
             key="mobile-writer"
             readOnly={isProtected}
@@ -864,7 +794,6 @@ export default function MobileEditorView({
             fontSize={norm.fontSize}
             lineHeight={norm.lineHeight}
             source={source}
-            onComposition={(value) => composition(value)}
             typingOptions={{
               autoCloseQuotes: prefs.autoCloseQuotes,
               autoCloseBrackets: prefs.autoCloseBrackets,
@@ -904,18 +833,19 @@ export default function MobileEditorView({
         </article>
       </EditorScroll>
 
-      {/* 2026 플로팅 필(Pill) 스타일 하단 툴바: [ ↶   ↷   …   ‘…’   “…”   +  |  ⋮ ] */}
+      {/* Obsidian 모바일 스타일 좌우 슬라이드 플로팅 필(Pill) 하단 툴바 */}
       <div className="m-floating-pill-wrap">
         <div
           className="m-floating-pill-bar"
           role="toolbar"
           aria-label="모바일 집필 툴바"
         >
-          <div className="m-pill-center-tools">
+          <div className="m-pill-scroll-track">
             <button
               type="button"
               className="m-pill-tool-btn"
               aria-label="실행 취소"
+              title="실행 취소"
               disabled={isProtected}
               onMouseDown={(e) => e.preventDefault()}
               onClick={() =>
@@ -931,6 +861,7 @@ export default function MobileEditorView({
               type="button"
               className="m-pill-tool-btn"
               aria-label="다시 실행"
+              title="다시 실행"
               disabled={isProtected}
               onMouseDown={(e) => e.preventDefault()}
               onClick={() =>
@@ -942,10 +873,13 @@ export default function MobileEditorView({
               <Redo2 size={18} strokeWidth={2} />
             </button>
 
+            <span className="m-pill-sub-divider" aria-hidden="true" />
+
             <button
               type="button"
               className="m-pill-tool-btn"
               aria-label="말줄임표 입력"
+              title="말줄임표"
               disabled={isProtected}
               onMouseDown={(e) => e.preventDefault()}
               onClick={() =>
@@ -961,6 +895,7 @@ export default function MobileEditorView({
               type="button"
               className="m-pill-tool-btn"
               aria-label="작은따옴표 쌍 입력"
+              title="작은따옴표"
               disabled={isProtected}
               onMouseDown={(e) => e.preventDefault()}
               onClick={() =>
@@ -978,6 +913,7 @@ export default function MobileEditorView({
               type="button"
               className="m-pill-tool-btn"
               aria-label="큰따옴표 쌍 입력"
+              title="큰따옴표"
               disabled={isProtected}
               onMouseDown={(e) => e.preventDefault()}
               onClick={() =>
@@ -993,13 +929,148 @@ export default function MobileEditorView({
 
             <button
               type="button"
-              className={`m-pill-tool-btn ${plusSheetOpen ? "active" : ""}`}
-              aria-label="추가 기호 및 문단 서식"
+              className="m-pill-tool-btn"
+              aria-label="줄표 입력"
+              title="줄표"
               disabled={isProtected}
               onMouseDown={(e) => e.preventDefault()}
-              onClick={() => setPlusSheetOpen((v) => !v)}
+              onClick={() =>
+                window.dispatchEvent(
+                  new CustomEvent("lof:insert-text", { detail: "—" }),
+                )
+              }
             >
-              <Plus size={20} strokeWidth={2} />
+              —
+            </button>
+
+            <button
+              type="button"
+              className="m-pill-tool-btn"
+              aria-label="홑낫표 쌍 입력"
+              title="홑낫표"
+              disabled={isProtected}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() =>
+                window.dispatchEvent(
+                  new CustomEvent("lof:insert-pair", {
+                    detail: { open: "「", close: "」" },
+                  }),
+                )
+              }
+            >
+              「…」
+            </button>
+
+            <button
+              type="button"
+              className="m-pill-tool-btn"
+              aria-label="겹낫표 쌍 입력"
+              title="겹낫표"
+              disabled={isProtected}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() =>
+                window.dispatchEvent(
+                  new CustomEvent("lof:insert-pair", {
+                    detail: { open: "『", close: "』" },
+                  }),
+                )
+              }
+            >
+              『…』
+            </button>
+
+            <span className="m-pill-sub-divider" aria-hidden="true" />
+
+            <button
+              type="button"
+              className="m-pill-tool-btn"
+              aria-label="굵게"
+              title="굵게"
+              disabled={isProtected}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() =>
+                window.dispatchEvent(
+                  new CustomEvent("lof:editor-action", { detail: "bold" }),
+                )
+              }
+            >
+              <Bold size={17} strokeWidth={2.2} />
+            </button>
+
+            <button
+              type="button"
+              className="m-pill-tool-btn"
+              aria-label="기울임"
+              title="기울임"
+              disabled={isProtected}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() =>
+                window.dispatchEvent(
+                  new CustomEvent("lof:editor-action", { detail: "italic" }),
+                )
+              }
+            >
+              <Italic size={17} strokeWidth={2.1} />
+            </button>
+
+            <button
+              type="button"
+              className="m-pill-tool-btn"
+              aria-label="취소선"
+              title="취소선"
+              disabled={isProtected}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() =>
+                window.dispatchEvent(
+                  new CustomEvent("lof:editor-action", { detail: "strike" }),
+                )
+              }
+            >
+              <Strikethrough size={17} strokeWidth={2.1} />
+            </button>
+
+            <button
+              type="button"
+              className="m-pill-tool-btn"
+              aria-label="소제목"
+              title="소제목"
+              disabled={isProtected}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() =>
+                window.dispatchEvent(
+                  new CustomEvent("lof:editor-action", { detail: "heading" }),
+                )
+              }
+            >
+              <Heading2 size={18} strokeWidth={2.1} />
+            </button>
+
+            <button
+              type="button"
+              className="m-pill-tool-btn"
+              aria-label="장면 구분선"
+              title="장면 구분선"
+              disabled={isProtected}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() =>
+                window.dispatchEvent(
+                  new CustomEvent("lof:editor-action", { detail: "divider" }),
+                )
+              }
+            >
+              <Minus size={18} strokeWidth={2.1} />
+            </button>
+
+            <button
+              type="button"
+              className="m-pill-tool-btn"
+              aria-label="기호 일괄 대치"
+              title="기호 일괄 대치"
+              disabled={isProtected}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={replaceActiveSymbols}
+            >
+              <Sparkles size={17} strokeWidth={2} />
             </button>
           </div>
 
@@ -1007,15 +1078,268 @@ export default function MobileEditorView({
 
           <button
             type="button"
-            className="m-pill-more-btn"
-            aria-label="원고 더보기 메뉴"
+            className={`m-pill-more-btn ${moreMenuOpen ? "active" : ""}`}
+            aria-label="더보기 팝업 메뉴"
+            aria-expanded={moreMenuOpen}
             onMouseDown={(e) => e.preventDefault()}
-            onClick={() => setMoreMenuOpen(true)}
+            onClick={() => setMoreMenuOpen((v) => !v)}
           >
             <MoreVertical size={19} strokeWidth={2} />
           </button>
         </div>
       </div>
+
+      {/* 하단 툴바 우측 더보기(⋮) 플로팅 팝업 메뉴 */}
+      {moreMenuOpen && (
+        <div
+          className="m-floating-popup-backdrop"
+          onClick={() => setMoreMenuOpen(false)}
+          role="presentation"
+        >
+          <div
+            className="m-floating-popup-menu"
+            role="menu"
+            aria-label="편집 및 원고 더보기 메뉴"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="m-floating-popup-section">
+              <button
+                type="button"
+                className="m-floating-popup-item"
+                role="menuitem"
+                onClick={() => {
+                  setMoreMenuOpen(false);
+                  const epId =
+                    active.kind === "episode" ? active.id : active.episodeId;
+                  attempt(() =>
+                    createDoc("plot", epId ? { episodeId: epId } : undefined),
+                  )();
+                }}
+              >
+                <FileText size={16} />
+                <span>플롯 추가</span>
+                {active.kind === "episode" && (
+                  <small className="m-floating-popup-badge">현재 회차 연결</small>
+                )}
+              </button>
+              <button
+                type="button"
+                className="m-floating-popup-item"
+                role="menuitem"
+                onClick={() => {
+                  setMoreMenuOpen(false);
+                  const epId =
+                    active.kind === "episode" ? active.id : active.episodeId;
+                  attempt(() =>
+                    createDoc("memo", epId ? { episodeId: epId } : undefined),
+                  )();
+                }}
+              >
+                <StickyNote size={16} />
+                <span>메모 추가</span>
+                {active.kind === "episode" && (
+                  <small className="m-floating-popup-badge">현재 회차 연결</small>
+                )}
+              </button>
+            </div>
+
+            <div className="m-floating-popup-divider" />
+
+            <div className="m-floating-popup-section">
+              <button
+                type="button"
+                className="m-floating-popup-item"
+                role="menuitem"
+                disabled={isProtected}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => {
+                  setMoreMenuOpen(false);
+                  window.dispatchEvent(
+                    new CustomEvent("lof:editor-action", { detail: "image" }),
+                  );
+                }}
+              >
+                <ImagePlus size={16} />
+                <span>이미지 삽입</span>
+              </button>
+
+              {(active.kind === "memo" || active.kind === "plot") && (
+                <button
+                  type="button"
+                  className="m-floating-popup-item"
+                  role="menuitem"
+                  disabled={isProtected}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => {
+                    setMoreMenuOpen(false);
+                    window.dispatchEvent(
+                      new CustomEvent("lof:editor-action", { detail: "table" }),
+                    );
+                  }}
+                >
+                  <Table2 size={16} />
+                  <span>표 삽입</span>
+                </button>
+              )}
+
+              <button
+                type="button"
+                className="m-floating-popup-item"
+                role="menuitem"
+                disabled={isProtected}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => {
+                  setMoreMenuOpen(false);
+                  window.dispatchEvent(
+                    new CustomEvent("lof:editor-action", { detail: "comment" }),
+                  );
+                }}
+              >
+                <MessageSquareCode size={16} />
+                <span>주석 추가</span>
+              </button>
+
+              <button
+                type="button"
+                className="m-floating-popup-item"
+                role="menuitem"
+                disabled={isProtected}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => {
+                  window.dispatchEvent(
+                    new CustomEvent("lof:editor-action", {
+                      detail: "toggleLineBreak",
+                    }),
+                  );
+                }}
+              >
+                <CornerDownLeft size={16} />
+                <span>줄바꿈 관리</span>
+                <small className="m-floating-popup-badge accent">
+                  {active.manualLineBreak ? "수동 줄바꿈" : "자동 줄바꿈"}
+                </small>
+              </button>
+            </div>
+
+            <div className="m-floating-popup-divider" />
+
+            <div className="m-floating-popup-section">
+              <button
+                type="button"
+                className="m-floating-popup-item"
+                role="menuitem"
+                onClick={() => {
+                  setMoreMenuOpen(false);
+                  setPreviewOpen(true);
+                }}
+              >
+                <Smartphone size={16} />
+                <span>모바일 독자 미리보기</span>
+              </button>
+
+              <button
+                type="button"
+                className="m-floating-popup-item"
+                role="menuitem"
+                onClick={() => {
+                  setMoreMenuOpen(false);
+                  setSource((s) => !s);
+                }}
+              >
+                <Code2 size={16} />
+                <span>
+                  {source ? "일반 편집 모드로 전환" : "Markdown 원문 편집"}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                className="m-floating-popup-item"
+                role="menuitem"
+                onClick={() => {
+                  setMoreMenuOpen(false);
+                  attempt(showHistory)();
+                }}
+              >
+                <History size={16} />
+                <span>변경 이력 및 복원</span>
+              </button>
+
+              <button
+                type="button"
+                className="m-floating-popup-item"
+                role="menuitem"
+                onClick={() => {
+                  setMoreMenuOpen(false);
+                  attempt(() =>
+                    copyDocManuscript(
+                      active,
+                      source || requiresSource(active.body),
+                    ),
+                  )();
+                }}
+              >
+                <Copy size={16} />
+                <span>
+                  {source || requiresSource(active.body)
+                    ? "Markdown 원문 복사"
+                    : "본문 텍스트 복사"}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                className="m-floating-popup-item"
+                role="menuitem"
+                onClick={() => {
+                  setMoreMenuOpen(false);
+                  attempt(async () => {
+                    await flush();
+                    if (await call("exportDocument", { id: active.id })) {
+                      message("원고를 내보냈습니다.");
+                    }
+                  })();
+                }}
+              >
+                <Download size={16} />
+                <span>Markdown 내보내기</span>
+              </button>
+            </div>
+
+            <div className="m-floating-popup-divider" />
+
+            <div className="m-floating-popup-section">
+              <button
+                type="button"
+                className="m-floating-popup-item"
+                role="menuitem"
+                onClick={() => {
+                  setMoreMenuOpen(false);
+                  attempt(() => archiveDoc(active))();
+                }}
+              >
+                <Archive size={16} />
+                <span>
+                  {active.archived ? "보관함에서 꺼내기" : "보관함으로 이동"}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                className="m-floating-popup-item danger"
+                role="menuitem"
+                onClick={() => {
+                  setMoreMenuOpen(false);
+                  setDialog({ type: "deleteDoc", value: active.id });
+                }}
+              >
+                <Trash2 size={16} />
+                <span>영구 삭제</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 1. 왼쪽 슬라이드 드로어: 파일트리 (에피소드 / 문서 2탭 + Obsidian/Notion 트리) */}
       {leftDrawerOpen && (
@@ -1448,53 +1772,6 @@ export default function MobileEditorView({
                       )}
                     </section>
                   )}
-
-                  {/* 문서 속성 및 태그 위젯 */}
-                  <section className="widget m-props-widget">
-                    <div className="widget-title">
-                      <span>속성 · 태그</span>
-                    </div>
-                    <EpisodeProperties
-                      propertyPresets={prefs.propertyPresets}
-                      onSavePresets={(propertyPresets) =>
-                        savePrefs({ propertyPresets })
-                      }
-                      favoriteTags={prefs.favoriteTags}
-                      key={active.id}
-                      doc={active}
-                      open={true}
-                      onToggle={() => {}}
-                      onEdit={(patch) => edit(patch)}
-                      onMenu={(_rect, items) => {
-                        setPropMenuItems(
-                          items.map((item: any): MobileActionItem =>
-                            item === "separator"
-                              ? "separator"
-                              : {
-                                  label: item.label,
-                                  icon: item.icon,
-                                  checked: item.checked,
-                                  danger: item.danger,
-                                  disabled: item.disabled,
-                                  action: item.action || (() => {}),
-                                },
-                          ),
-                        );
-                      }}
-                      onNotice={message}
-                      boundEpisode={boundEpisode}
-                      onBind={attempt(() => openBinding(active.id))}
-                      onUnbind={attempt(() => bindDocument(active.id, null))}
-                      onOpenBound={
-                        active.episodeId
-                          ? attempt(async () => {
-                              setRightDrawerOpen(false);
-                              await openDoc(active.episodeId!);
-                            })
-                          : undefined
-                      }
-                    />
-                  </section>
                 </div>
               )}
 
@@ -1532,234 +1809,7 @@ export default function MobileEditorView({
         </div>
       )}
 
-      {/* 3. 하단 플로팅 바의 [+] 기호·서식 삽입 시트 */}
-      {plusSheetOpen && (
-        <div
-          className="m-sheet-backdrop"
-          onClick={() => setPlusSheetOpen(false)}
-          role="presentation"
-        >
-          <div
-            className="m-action-sheet"
-            role="dialog"
-            aria-modal="true"
-            aria-label="기호 및 서식 삽입"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="m-sheet-handle" />
-            <div className="m-sheet-header">
-              <div className="m-sheet-title-group">
-                <h3>기호 및 문단 서식</h3>
-              </div>
-              <button
-                type="button"
-                className="m-icon-btn"
-                onClick={() => setPlusSheetOpen(false)}
-              >
-                <X size={19} />
-              </button>
-            </div>
-            <div className="m-sheet-scroll-content m-plus-sheet-body">
-              <div className="m-plus-group-label">문장 부호 · 괄호</div>
-              <div className="m-plus-symbol-grid">
-                {EXTRA_SYMBOLS.map((item) => (
-                  <button
-                    key={item.label}
-                    type="button"
-                    className="m-plus-sym-btn"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => {
-                      setPlusSheetOpen(false);
-                      if (item.pair) {
-                        window.dispatchEvent(
-                          new CustomEvent("lof:insert-pair", {
-                            detail: item.pair,
-                          }),
-                        );
-                      } else if (item.insert) {
-                        window.dispatchEvent(
-                          new CustomEvent("lof:insert-text", {
-                            detail: item.insert,
-                          }),
-                        );
-                      }
-                    }}
-                  >
-                    {item.label}
-                  </button>
-                ))}
-              </div>
-
-              <div className="m-plus-group-label">문단 · 서식 도구</div>
-              <div className="m-plus-format-grid">
-                <button
-                  type="button"
-                  className="m-plus-format-btn"
-                  onClick={() => {
-                    setPlusSheetOpen(false);
-                    window.dispatchEvent(
-                      new CustomEvent("lof:editor-action", {
-                        detail: "divider",
-                      }),
-                    );
-                  }}
-                >
-                  <Minus size={17} />
-                  <span>장면 구분선</span>
-                </button>
-                <button
-                  type="button"
-                  className="m-plus-format-btn"
-                  onClick={() => {
-                    setPlusSheetOpen(false);
-                    window.dispatchEvent(
-                      new CustomEvent("lof:editor-action", {
-                        detail: "heading",
-                      }),
-                    );
-                  }}
-                >
-                  <Heading2 size={17} />
-                  <span>소제목</span>
-                </button>
-                <button
-                  type="button"
-                  className="m-plus-format-btn"
-                  onClick={() => {
-                    setPlusSheetOpen(false);
-                    window.dispatchEvent(
-                      new CustomEvent("lof:editor-action", { detail: "bold" }),
-                    );
-                  }}
-                >
-                  <Bold size={17} />
-                  <span>굵게</span>
-                </button>
-                <button
-                  type="button"
-                  className="m-plus-format-btn"
-                  onClick={() => {
-                    setPlusSheetOpen(false);
-                    window.dispatchEvent(
-                      new CustomEvent("lof:editor-action", {
-                        detail: "italic",
-                      }),
-                    );
-                  }}
-                >
-                  <Italic size={17} />
-                  <span>기울임</span>
-                </button>
-                <button
-                  type="button"
-                  className="m-plus-format-btn"
-                  onClick={() => {
-                    setPlusSheetOpen(false);
-                    window.dispatchEvent(
-                      new CustomEvent("lof:editor-action", {
-                        detail: "strike",
-                      }),
-                    );
-                  }}
-                >
-                  <Strikethrough size={17} />
-                  <span>취소선</span>
-                </button>
-                <button
-                  type="button"
-                  className="m-plus-format-btn"
-                  onClick={() => {
-                    setPlusSheetOpen(false);
-                    window.dispatchEvent(
-                      new CustomEvent("lof:editor-action", { detail: "quote" }),
-                    );
-                  }}
-                >
-                  <Quote size={17} />
-                  <span>인용구</span>
-                </button>
-                <button
-                  type="button"
-                  className="m-plus-format-btn"
-                  onClick={() => {
-                    setPlusSheetOpen(false);
-                    window.dispatchEvent(
-                      new CustomEvent("lof:editor-action", {
-                        detail: "bulletList",
-                      }),
-                    );
-                  }}
-                >
-                  <List size={17} />
-                  <span>글머리 목록</span>
-                </button>
-                <button
-                  type="button"
-                  className="m-plus-format-btn"
-                  onClick={() => {
-                    setPlusSheetOpen(false);
-                    window.dispatchEvent(
-                      new CustomEvent("lof:editor-action", {
-                        detail: "orderedList",
-                      }),
-                    );
-                  }}
-                >
-                  <ListOrdered size={17} />
-                  <span>번호 목록</span>
-                </button>
-                <button
-                  type="button"
-                  className="m-plus-format-btn"
-                  onClick={() => {
-                    setPlusSheetOpen(false);
-                    window.dispatchEvent(
-                      new CustomEvent("lof:editor-action", {
-                        detail: "comment",
-                      }),
-                    );
-                  }}
-                >
-                  <MessageSquareCode size={17} />
-                  <span>주석</span>
-                </button>
-                {(active.kind === "memo" || active.kind === "plot") && (
-                  <button
-                    type="button"
-                    className="m-plus-format-btn"
-                    onClick={() => {
-                      setPlusSheetOpen(false);
-                      window.dispatchEvent(
-                        new CustomEvent("lof:editor-action", {
-                          detail: "table",
-                        }),
-                      );
-                    }}
-                  >
-                    <Table2 size={17} />
-                    <span>표 삽입</span>
-                  </button>
-                )}
-                <button
-                  type="button"
-                  className="m-plus-format-btn"
-                  onClick={() => {
-                    setPlusSheetOpen(false);
-                    window.dispatchEvent(
-                      new CustomEvent("lof:editor-action", { detail: "image" }),
-                    );
-                  }}
-                >
-                  <ImagePlus size={17} />
-                  <span>이미지 삽입</span>
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 4. 모바일 독자 미리보기 전체 화면 모달 */}
+      {/* 3. 모바일 독자 미리보기 전체 화면 모달 */}
       {previewOpen && (
         <div className="m-fullscreen-overlay">
           <MobilePreview
@@ -1781,22 +1831,61 @@ export default function MobileEditorView({
         </div>
       )}
 
-      {/* 5. 더보기 메뉴 액션 시트 */}
-      <MobileActionSheet
-        open={moreMenuOpen}
-        title={active.title || "원고 메뉴"}
-        subtitle={`${labels[active.kind]} · ${num} (${saveStatus})`}
-        items={moreMenuItems}
-        onClose={() => setMoreMenuOpen(false)}
-      />
-
-      {/* 6. 속성 선택 액션 시트 */}
-      <MobileActionSheet
-        open={Boolean(propMenuItems)}
-        title="속성 선택"
-        items={propMenuItems || []}
-        onClose={() => setPropMenuItems(null)}
-      />
+      {/* 4. 상단 상태바 · 문서 속성 작은 플로팅 팝업 메뉴 */}
+      {propPopup && (
+        <div
+          className="m-floating-popup-backdrop"
+          onClick={() => setPropPopup(null)}
+          role="presentation"
+        >
+          <div
+            className="m-floating-anchor-popup"
+            role="menu"
+            aria-label="속성 선택 팝업"
+            style={{
+              top: `${Math.max(52, Math.min(propPopup.y, window.innerHeight - 280))}px`,
+              left:
+                propPopup.align === "center"
+                  ? `${Math.max(12, Math.min(propPopup.x - 110, window.innerWidth - 232))}px`
+                  : `${Math.max(12, Math.min(propPopup.x, window.innerWidth - 232))}px`,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {propPopup.items.map((item, idx) =>
+              item === "separator" ? (
+                <div
+                  key={`sep:${idx}`}
+                  className="m-floating-popup-divider"
+                  role="separator"
+                />
+              ) : (
+                <button
+                  key={`${item.label}:${idx}`}
+                  type="button"
+                  role="menuitem"
+                  disabled={item.disabled}
+                  className={`m-floating-popup-item ${item.danger ? "danger" : ""} ${item.checked ? "checked" : ""}`}
+                  onClick={() => {
+                    setPropPopup(null);
+                    item.action();
+                  }}
+                >
+                  {item.icon}
+                  <span>{item.label}</span>
+                  {item.badge && (
+                    <small className="m-floating-popup-badge">
+                      {item.badge}
+                    </small>
+                  )}
+                  {item.checked && (
+                    <Check size={15} className="m-floating-popup-check" />
+                  )}
+                </button>
+              ),
+            )}
+          </div>
+        </div>
+      )}
 
       {/* 7. 왼쪽 파일트리 드로어 내 문서/폴더 생성 메뉴 */}
       <MobileActionSheet

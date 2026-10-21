@@ -5,7 +5,6 @@ import { useGitActivity } from "../useGitActivity";
 import { readFileForClose, useSyncFileUpdates } from "../useSyncFileUpdates";
 import { cloneDocument, editDocument, relocateDocument, sameDocumentContent, updateDocumentLocation } from "./model";
 
-export const composingError = "한글 입력 조합이 끝난 뒤 다시 저장해 주세요.";
 type FlushOptions = { auto?: boolean; closing?: boolean; skipMemo?: boolean; manual?: boolean };
 type Options = {
   loaded: boolean;
@@ -21,7 +20,6 @@ type Options = {
   clearSideDocument: () => void;
   pinTab: (id: string) => void;
   onDocumentIdChanged: (oldId: string, newId: string, location?: Doc) => void;
-  onSaved: () => void;
   refresh: () => Promise<unknown>;
   openDoc: (id: string, pinned: boolean) => Promise<void>;
   message: (text: string) => void;
@@ -84,7 +82,6 @@ export function useDocumentSession(options: Options) {
   const saveChain = useRef(Promise.resolve());
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const composing = useRef(false);
   const conflictRef = useRef(false);
   const activeId = useRef("");
   // 앱에서 문서를 처음 열었을 때의 글자 수를 문서별로 유지한다.
@@ -173,7 +170,7 @@ export function useDocumentSession(options: Options) {
       timer.current = null;
     }
     const d = draft.current;
-    if (!d || d.seq === d.saved || composing.current || conflictRef.current) return;
+    if (!d || d.seq === d.saved || conflictRef.current) return;
     const mobile = isMobileEnv();
     const { intervalMs, elapsed, chars, minChars } = autoSaveCondition(d);
     if (!mobile && chars < minChars) return;
@@ -201,14 +198,13 @@ export function useDocumentSession(options: Options) {
       const d = draft.current;
       if (!d) return;
       const loadExternalOnClose = async (onlyIfChanged = false) => {
-        if (composing.current) throw Error(composingError);
         const seq = d.seq;
         const fresh = await readFileForClose(() => call<Doc>("readDocument", { id: d.doc.id }));
-        if (draft.current !== d || d.seq !== seq || composing.current)
+        if (draft.current !== d || d.seq !== seq)
           throw Error("닫는 동안 원고가 변경되었습니다. 다시 닫아 주세요.");
         if (onlyIfChanged && !conflictRef.current && fresh.revision === d.doc.revision) return false;
         await call("clearDraft", { id: d.doc.id });
-        if (draft.current !== d || d.seq !== seq || composing.current)
+        if (draft.current !== d || d.seq !== seq)
           throw Error("닫는 동안 원고가 변경되었습니다. 다시 닫아 주세요.");
         d.doc = fresh;
         d.base = fresh;
@@ -255,11 +251,6 @@ export function useDocumentSession(options: Options) {
           "변경 충돌을 해결해 주세요. 입력한 원고는 임시 저장되어 있습니다.",
         );
       }
-      if (composing.current) {
-        // 조합이 끝나면 composition에서 다음 자동 저장을 예약한다.
-        if (auto) return;
-        throw Error(composingError);
-      }
       setSaveStatus("저장 중");
       try {
         let saved: Doc;
@@ -274,11 +265,6 @@ export function useDocumentSession(options: Options) {
           d.doc = updateDocumentLocation(d.doc, fresh);
           conflictRef.current = false;
           setConflict(false);
-          if (composing.current) {
-            setSaveStatus("편집 중");
-            if (auto) return;
-            throw Error(composingError);
-          }
           saved = await call<Doc>("saveDocument", {
             ...updateDocumentLocation(payload, fresh),
             expectedRevision: fresh.revision,
@@ -303,7 +289,6 @@ export function useDocumentSession(options: Options) {
             updatedAt: saved.updatedAt,
           });
           setActive(cloneDocument(d.doc));
-          latest.current.onSaved();
           setSaveStatus(d.seq === seq ? "저장됨" : "편집 중");
           if (d.seq === seq) await call("clearDraft", { id: d.doc.id });
           else {
@@ -342,13 +327,11 @@ export function useDocumentSession(options: Options) {
     prevVisible.current = options.visible;
   }, [options.visible, flush, report]);
 
-  const gitActivity = useGitActivity(async () => {
-    return !composing.current;
-  }, report);
+  const gitActivity = useGitActivity(async () => true, report);
   const checkOpenDocument = useSyncFileUpdates({
     fileKey: shownActive?.id ?? "",
     enabled: options.loaded && !!shownActive,
-    canCheck: () => latest.current.visible && !composing.current && !latest.current.pendingDocumentMove(),
+    canCheck: () => latest.current.visible && !latest.current.pendingDocumentMove(),
     current: () => {
       const d = draft.current;
       return d ? { doc: d.doc, version: `${d.seq}:${d.doc.revision}` } : null;
@@ -365,7 +348,7 @@ export function useDocumentSession(options: Options) {
       setConflict(false);
       setActive(cloneDocument(d.doc));
       setSaveStatus(d.seq === d.saved ? "저장됨" : "편집 중");
-      if (d.seq !== d.saved && !composing.current) {
+      if (d.seq !== d.saved) {
         scheduleDraftSave();
         scheduleAutoSave();
       }
@@ -425,15 +408,6 @@ export function useDocumentSession(options: Options) {
     setSaveStatus("편집 중");
     scheduleDraftSave();
     scheduleAutoSave();
-  }
-  function composition(value: boolean) {
-    gitActivity();
-    composing.current = value;
-    if (!value) {
-      // 한글은 글자마다 조합이 끝나므로, 바로 저장하지 않고 일반 입력처럼 입력이 멈춘 뒤 임시 저장한다.
-      scheduleDraftSave();
-      scheduleAutoSave();
-    }
   }
   const reconcileDocuments = useCallback((documents: Doc[]) => {
     const d = draft.current;
@@ -577,10 +551,9 @@ export function useDocumentSession(options: Options) {
   }, [flush, setActive]);
 
   async function prepareForInstall() {
-    if (composing.current) throw Error(composingError);
     await flush();
     const pending = draft.current;
-    if (composing.current || (pending && pending.seq !== pending.saved))
+    if (pending && pending.seq !== pending.saved)
       throw Error("원고 저장을 완료한 뒤 다시 시도해 주세요.");
   }
 
@@ -617,7 +590,7 @@ export function useDocumentSession(options: Options) {
   return {
     active: shownActive, saveStatus, conflict, scrollPositions: scrollPositions.current,
     currentId, currentDocument, waitForSave, flush, flushForClose, manualSave, prepareForInstall,
-    edit, composition, checkOpenDocument, reconcileDocuments, commitDocument,
+    edit, checkOpenDocument, reconcileDocuments, commitDocument,
     discardDraft, detachDocument, closeDocument, resetVault, replaceDocId, writeMeta,
     remapDocuments, resolveConflict, restoreHistory, recordBaseline, sessionDelta,
   };

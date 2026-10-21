@@ -256,7 +256,7 @@ try {
           "quote pair and closer skip",
           "paired backspace",
           "line-end backspace stays on its line",
-          "autosave waits for Hangul composition",
+          "Hangul composition without save errors",
           "ellipsis and undo",
           "paste unchanged",
           "curly quotes",

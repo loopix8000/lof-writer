@@ -139,16 +139,11 @@ try {
 
   await writer().fill("조합 중인 원고 보존");
   await writer().dispatchEvent("compositionstart");
-  await tree(docs[0].title).click();
-  await expect(page.locator(".error-banner")).toContainText("한글 입력 조합");
-  await expect(title()).toHaveValue(docs[2].title);
-  await expect(tabs()).toHaveCount(1);
-  await writer().dispatchEvent("compositionend");
-  await page.getByRole("button", { name: "오류 닫기" }).click();
   await tree(docs[0].title).dblclick();
   await expect(title()).toHaveValue(docs[0].title);
+  await expect(page.locator(".error-banner")).toHaveCount(0);
   await expect.poll(async () => (await store.read(docs[2].id)).body).toContain("조합 중인 원고 보존");
-  check("한글 조합 중 전환 차단 및 조합 종료 후 저장·전환");
+  check("입력 조합 상태와 무관하게 저장·전환");
 
   await tabs().filter({ hasText: docs[0].title }).dragTo(tabs().filter({ hasText: docs[2].title }));
   await expect(tabs().first()).toContainText(docs[0].title);

@@ -14,7 +14,7 @@ import TitleBar from "./app/TitleBar";
 import TypesettingSettings from "./app/TypesettingSettings";
 import { useDocumentImages } from "./app/useDocumentImages";
 import { useDocumentNotes } from "./app/useDocumentNotes";
-import { composingError, useDocumentSession } from "./app/useDocumentSession";
+import { useDocumentSession } from "./app/useDocumentSession";
 import { useEditorGroups } from "./app/useEditorGroups";
 import { useFileTree } from "./app/useFileTree";
 import { usePreferences } from "./app/usePreferences";
@@ -267,12 +267,11 @@ export default function App() {
     clearSideDocument: () => clearSideDocument(),
     pinTab: (id) => pinTab(id),
     onDocumentIdChanged: handleDocumentIdChange,
-    onSaved: () => setError((e) => e === composingError ? "" : e),
     refresh: () => refresh(), openDoc: (id, pinned) => openDoc(id, pinned),
     message, report,
   });
   const { active, saveStatus, conflict, flush, flushForClose, waitForSave, reconcileDocuments,
-    manualSave, edit, composition, checkOpenDocument, writeMeta, resolveConflict } = session;
+    manualSave, edit, checkOpenDocument, writeMeta, resolveConflict } = session;
   const {
     area, tabs: editorTabs, split, groups, sides, focusedSide, pending: sideSyncKeys, checks: sideChecks,
     retainDocument, getRetainedDocument, clearRetainedDocuments, clearSideDocument,
@@ -1415,7 +1414,6 @@ export default function App() {
               fontSize={activeBox.norm.fontSize}
               lineHeight={activeBox.norm.lineHeight}
               source={source}
-              onComposition={(value) => { if (focused) composition(value); }}
               typingOptions={{
                 autoCloseQuotes: prefs.autoCloseQuotes,
                 autoCloseBrackets: prefs.autoCloseBrackets,
@@ -1765,7 +1763,6 @@ export default function App() {
         renderSyncConnections={renderSyncConnections}
         onUpdateProjectWriting={updateProjectWriting}
         edit={edit}
-        composition={composition}
         counterUpdate={(body, delta) => counter.update(body, delta)}
         manualSave={manualSave}
         flush={flush}

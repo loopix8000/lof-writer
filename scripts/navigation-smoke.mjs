@@ -24,10 +24,9 @@ try{
  await editor.fill('이동 직전에 쓴 한글 원고');await back.click();await page.locator('.project-tabs').waitFor();
  assert.equal((await store.read(a.id)).body,'이동 직전에 쓴 한글 원고');
  await forward.click();await expect(title).toHaveValue('첫 원고');await expect(editor).toContainText('이동 직전에 쓴 한글 원고');
- // Composition/save rejection must leave both the editor and history cursor intact.
+ // Composition events must not block saving or history navigation.
  await editor.fill('조합 중 원고');await editor.dispatchEvent('compositionstart');await back.click();
- await expect(page.getByRole('alert')).toContainText('한글 입력 조합');await expect(title).toHaveValue('첫 원고');await expect(forward).toBeDisabled();
- await editor.dispatchEvent('compositionend');await page.getByRole('button',{name:'오류 닫기'}).click();await back.click();await page.locator('.project-tabs').waitFor();
+ await page.locator('.project-tabs').waitFor();await expect(page.getByRole('alert')).toHaveCount(0);await expect(forward).toBeEnabled();
  assert.equal((await store.read(a.id)).body,'조합 중 원고');
  // A new destination after Back replaces the forward branch.
  await page.locator('.episode-row').filter({hasText:'둘째 원고'}).click();await expect(title).toHaveValue('둘째 원고');await expect(forward).toBeDisabled();
