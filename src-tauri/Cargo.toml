@@ -15,8 +15,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon"] }
-tauri-plugin-updater = { version = "2.14", default-features = false, features = ["rustls-tls", "system-proxy"] }
+tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 serde_yaml = "0.9"
@@ -27,9 +26,6 @@ hex = "0.4"
 base64 = "0.22"
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
-trash = "5"
-rfd = "0.15"
-arboard = "3"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "json"] }
 suppaftp = { version = "6", default-features = false, features = ["rustls"] }
@@ -49,6 +45,13 @@ iroh = { version = "=1.3.0", default-features = false, features = ["tls-ring", "
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 git2 = { version = "0.21", default-features = false, features = ["vendored-libgit2"] }
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-updater = { version = "2.14", default-features = false, features = ["rustls-tls", "system-proxy"] }
+trash = "5"
+rfd = "0.15"
+arboard = "3"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [

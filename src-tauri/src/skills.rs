@@ -1,14 +1,22 @@
-use crate::error::{fail, LofError};
+use crate::error::LofError;
+#[cfg(not(target_os = "android"))]
+use crate::error::fail;
+#[cfg(not(target_os = "android"))]
 use crate::store::atomic_write_bytes;
+#[cfg(not(target_os = "android"))]
 use rfd::FileDialog;
+#[cfg(not(target_os = "android"))]
 use std::io::{Cursor, Write};
 use tauri::WebviewWindow;
+#[cfg(not(target_os = "android"))]
 use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
 
+#[cfg(not(target_os = "android"))]
 fn archive_error(error: zip::result::ZipError) -> LofError {
     fail(format!("스킬 패키지를 만들지 못했습니다: {error}"), "SKILL_EXPORT")
 }
 
+#[cfg(not(target_os = "android"))]
 fn archive() -> Result<Vec<u8>, LofError> {
     let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
     let options = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
@@ -28,13 +36,21 @@ fn archive() -> Result<Vec<u8>, LofError> {
 }
 
 pub fn download(window: &WebviewWindow) -> Result<Option<String>, LofError> {
-    let picked = FileDialog::new()
-        .set_parent(window)
-        .set_title("Lof Writer 스킬 다운로드")
-        .set_file_name("lof-writer-skill.zip")
-        .add_filter("ZIP 스킬 패키지", &["zip"])
-        .save_file();
-    let Some(path) = picked else { return Ok(None); };
-    atomic_write_bytes(&path, &archive()?)?;
-    Ok(Some(path.to_string_lossy().into_owned()))
+    #[cfg(not(target_os = "android"))]
+    {
+        let picked = FileDialog::new()
+            .set_parent(window)
+            .set_title("Lof Writer 스킬 다운로드")
+            .set_file_name("lof-writer-skill.zip")
+            .add_filter("ZIP 스킬 패키지", &["zip"])
+            .save_file();
+        let Some(path) = picked else { return Ok(None); };
+        atomic_write_bytes(&path, &archive()?)?;
+        Ok(Some(path.to_string_lossy().into_owned()))
+    }
+    #[cfg(target_os = "android")]
+    {
+        let _ = window;
+        Ok(None)
+    }
 }

@@ -31,6 +31,8 @@ struct Queue {
     watch_restart: bool,
     local_error: Option<String>,
     interval: Duration,
+    bg_enabled: bool,
+    bg_interval: Duration,
     status: Value,
     realtime: Value,
 }
@@ -39,6 +41,8 @@ pub struct AutoSyncState {
     queue: Mutex<Queue>,
     wake: Condvar,
     periodic_started: AtomicBool,
+    backgrounded: AtomicBool,
+    clear_retries: AtomicBool,
     stopped: AtomicBool,
 }
 
@@ -55,11 +59,15 @@ impl Default for AutoSyncState {
                 watch_restart: false,
                 local_error: None,
                 interval: DEFAULT_INTERVAL,
+                bg_enabled: true,
+                bg_interval: DEFAULT_INTERVAL,
                 status: json!({ "phase": "idle", "message": "", "hasConnections": false }),
                 realtime: json!({ "phase": "idle", "message": "", "hasConnections": false }),
             }),
             wake: Condvar::new(),
             periodic_started: AtomicBool::new(false),
+            backgrounded: AtomicBool::new(false),
+            clear_retries: AtomicBool::new(false),
             stopped: AtomicBool::new(false),
         }
     }
@@ -203,11 +211,42 @@ pub fn interval_seconds(settings: &Value) -> u64 {
         .unwrap_or(DEFAULT_INTERVAL.as_secs())
 }
 
+pub fn background_enabled(settings: &Value) -> bool {
+    settings
+        .get("preferences")
+        .and_then(|prefs| prefs.get("backgroundSyncEnabled"))
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
+}
+
+pub fn background_interval_seconds(settings: &Value) -> u64 {
+    settings
+        .get("preferences")
+        .and_then(|prefs| prefs.get("backgroundSyncIntervalSeconds"))
+        .and_then(Value::as_u64)
+        .filter(|seconds| (60..=3600).contains(seconds))
+        .unwrap_or(DEFAULT_INTERVAL.as_secs())
+}
+
 pub fn configure(app: &AppHandle) {
-    let seconds = interval_seconds(&app.state::<AppState>().settings.lock().unwrap());
+    let (seconds, bg_enabled, bg_seconds) = {
+        let state = app.state::<AppState>();
+        let settings = state.settings.lock().unwrap();
+        (
+            interval_seconds(&settings),
+            background_enabled(&settings),
+            background_interval_seconds(&settings),
+        )
+    };
     let auto = app.state::<AutoSyncState>();
-    auto.queue.lock().unwrap().interval = Duration::from_secs(seconds);
+    {
+        let mut queue = auto.queue.lock().unwrap();
+        queue.interval = Duration::from_secs(seconds);
+        queue.bg_enabled = bg_enabled;
+        queue.bg_interval = Duration::from_secs(bg_seconds);
+    }
     auto.wake.notify_all();
+    crate::realtime::configure(app);
 }
 
 // 수동 저장·최초 연결처럼 명시적인 요청은 주기를 기다리지 않는다.
@@ -226,6 +265,23 @@ pub fn resume(app: &AppHandle) {
     let (_, connections) = destinations(app);
     for connection in connections.iter() {
         request_connection(app, &connection.id);
+    }
+}
+
+pub fn set_background(app: &AppHandle, background: bool) {
+    let auto = app.state::<AutoSyncState>();
+    let was_bg = auto.backgrounded.swap(background, Ordering::SeqCst);
+    if background && !was_bg {
+        let mut queue = auto.queue.lock().unwrap();
+        if !queue.pending.is_empty() || queue.local_dirty {
+            let pending: Vec<String> = queue.pending.iter().cloned().collect();
+            queue.urgent.extend(pending);
+            auto.wake.notify_all();
+        }
+    } else if !background && was_bg {
+        auto.clear_retries.store(true, Ordering::SeqCst);
+        resume(app);
+        auto.wake.notify_all();
     }
 }
 
@@ -416,27 +472,39 @@ fn worker(app: AppHandle) {
         {
             let mut queue = auto.queue.lock().unwrap();
             while !auto.stopped.load(Ordering::SeqCst) {
-                if queue.interval != interval {
-                    interval = queue.interval;
+                let bg = auto.backgrounded.load(Ordering::SeqCst);
+                let target_interval = if bg { queue.bg_interval } else { queue.interval };
+                if target_interval != interval {
+                    interval = target_interval;
                     next_files = Instant::now() + interval;
                 }
-                if !queue.urgent.is_empty() || Instant::now() >= next_files.min(next_local_check) {
+                let due = if bg {
+                    queue.bg_enabled && Instant::now() >= next_files
+                } else {
+                    Instant::now() >= next_files.min(next_local_check)
+                };
+                if !queue.urgent.is_empty() || due {
                     break;
                 }
-                queue = auto
-                    .wake
-                    .wait_timeout(
-                        queue,
-                        next_files
-                            .min(next_local_check)
-                            .saturating_duration_since(Instant::now()),
-                    )
-                    .unwrap()
-                    .0;
+                let wait_dur = if bg {
+                    if queue.bg_enabled {
+                        next_files.saturating_duration_since(Instant::now())
+                    } else {
+                        Duration::from_secs(60)
+                    }
+                } else {
+                    next_files
+                        .min(next_local_check)
+                        .saturating_duration_since(Instant::now())
+                };
+                queue = auto.wake.wait_timeout(queue, wait_dur).unwrap().0;
             }
         }
         if stopped(&app) {
             return;
+        }
+        if auto.clear_retries.swap(false, Ordering::SeqCst) {
+            retries.clear();
         }
         let (root, connections) = destinations(&app);
         if root.as_os_str().is_empty() {

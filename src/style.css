@@ -6301,3 +6301,52 @@ input.property-text {
   .realtime-spinner, .realtime-indeterminate > span { animation: none; }
   .realtime-time-bar > span { transition: none; }
 }
+
+/* ---- 모바일 동기화 안내 카드 및 모바일 전용 요소 기본값 ---- */
+.mobile-only-btn,
+.mobile-memo-topbar,
+.mobile-bottom-nav,
+.mobile-menu-desc,
+.mobile-menu-chevron,
+.mobile-settings-subhead {
+  display: none;
+}
+
+.settings-nav-item-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.mobile-sync-rules-card {
+  margin-top: 18px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--sidebar);
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--text);
+}
+
+.mobile-sync-rules-card > strong {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--text);
+}
+
+.mobile-sync-rules-card ul {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+}
+
+.mobile-sync-rules-card li b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+

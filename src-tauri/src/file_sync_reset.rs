@@ -2,6 +2,7 @@
 
 use crate::error::LofError;
 use crate::AppState;
+#[cfg(not(target_os = "android"))]
 use rfd::{MessageDialog, MessageLevel};
 use serde_json::{json, Value};
 use std::path::Path;
@@ -43,6 +44,7 @@ pub fn show_notice(app: &AppHandle) {
     }
     let app = app.clone();
     std::thread::spawn(move || {
+        #[cfg(not(target_os = "android"))]
         MessageDialog::new()
             .set_title("파일 동기화 연결 초기화 안내")
             .set_level(MessageLevel::Info)

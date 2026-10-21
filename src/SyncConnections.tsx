@@ -1,23 +1,117 @@
 import { useState, type Dispatch, type SetStateAction } from "react";
 import { Link, RefreshCw, X } from "lucide-react";
+import SettingsToggle from "./app/SettingsToggle";
 import { call, type AutoSyncStatus, type SyncConnection } from "./types";
 const labels = { idle: "동기화 완료", pending: "동기화 대기", syncing: "동기화 중", error: "동기화 재시도 대기" };
-export default function SyncConnections({ connections, setConnections, autoSync, intervalSeconds, onIntervalChange, busy, setBusy, onSync, message, report }: {
-  connections: SyncConnection[]; setConnections: Dispatch<SetStateAction<SyncConnection[]>>; autoSync: AutoSyncStatus;
-  intervalSeconds: number; onIntervalChange: (seconds: number) => Promise<unknown>; busy: boolean; setBusy: (busy: boolean) => void;
-  onSync: (id: string) => Promise<void>; message: (message: string) => void; report: (error: any) => void;
+const PRESET_SECONDS = [60, 180, 300, 600, 900, 1800, 3600];
+export default function SyncConnections({
+  connections,
+  setConnections,
+  autoSync,
+  intervalSeconds,
+  onIntervalChange,
+  backgroundEnabled = true,
+  backgroundIntervalSeconds = 300,
+  onBackgroundSyncChange,
+  busy,
+  setBusy,
+  onSync,
+  message,
+  report,
+}: {
+  connections: SyncConnection[];
+  setConnections: Dispatch<SetStateAction<SyncConnection[]>>;
+  autoSync: AutoSyncStatus;
+  intervalSeconds: number;
+  onIntervalChange: (seconds: number) => Promise<unknown>;
+  backgroundEnabled?: boolean;
+  backgroundIntervalSeconds?: number;
+  onBackgroundSyncChange?: (patch: { backgroundSyncEnabled?: boolean; backgroundSyncIntervalSeconds?: number }) => Promise<unknown>;
+  busy: boolean;
+  setBusy: (busy: boolean) => void;
+  onSync: (id: string) => Promise<void>;
+  message: (message: string) => void;
+  report: (error: any) => void;
 }) {
-  const [connectionType, setConnectionType] = useState("folder");
+  const isAndroid = typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent);
+  const [connectionType, setConnectionType] = useState(isAndroid ? "webdav" : "folder");
   const status = autoSync.channels?.files ?? { phase: "idle", message: "" };
   const attempt = (action: () => Promise<unknown>) => () => { void action().catch(report); };
   const reload = async () => { setConnections((await call("settings")).connections); };
+  const bgMinutes = Math.max(1, Math.min(60, Math.round(backgroundIntervalSeconds / 60)));
+  const hasCustomBgInterval = backgroundEnabled && !PRESET_SECONDS.includes(backgroundIntervalSeconds);
   return <fieldset className="sync-connections" disabled={busy}>
     <p className="settings-description">로컬 폴더·WebDAV·FTP 저장소와 서재의 Markdown 원본, 작품 정보, 이미지·첨부 파일을 폴더 구조 그대로 동기화합니다. 앱 실행 시와 트레이에서 열 때, 설정한 주기마다 변경을 확인합니다.</p>
-    <label className="connection-conflict-policy">자동 동기화 주기<select aria-label="파일 자동 동기화 주기" value={intervalSeconds} onChange={event => onIntervalChange(Number(event.target.value)).catch(report)}>
-      <option value={60}>1분</option><option value={300}>5분 (기본)</option><option value={600}>10분</option><option value={900}>15분</option><option value={1800}>30분</option><option value={3600}>1시간</option>
-    </select></label>
-    <p className="settings-note">파일 저장소에만 적용됩니다. 원고를 수동 저장하거나 ‘동기화’를 누르면 바로 실행합니다.</p>
-    <aside className="sync-notice"><strong>동기화는 아직 불안정할 수 있으니 중요한 원고는 따로 백업해 주세요.</strong><p>모든 기기를 최신 버전으로 업데이트해야 하며, 수정 이력은 기기마다 따로 보관합니다. 파일 충돌 사본은 서재의 .lof/file-conflicts 폴더에 보관합니다.</p></aside>
+    <div className="settings-grid">
+      <label className="connection-conflict-policy">자동 동기화 주기<select aria-label="파일 자동 동기화 주기" value={intervalSeconds} onChange={event => onIntervalChange(Number(event.target.value)).catch(report)}>
+        <option value={60}>1분</option><option value={180}>3분</option><option value={300}>5분 (기본)</option><option value={600}>10분</option><option value={900}>15분</option><option value={1800}>30분</option><option value={3600}>1시간</option>
+      </select></label>
+      {onBackgroundSyncChange && (
+        <label className="connection-conflict-policy">
+          백그라운드 동기화 주기
+          <select
+            aria-label="백그라운드 동기화 주기"
+            value={backgroundEnabled ? String(backgroundIntervalSeconds) : "off"}
+            onChange={event => {
+              const val = event.target.value;
+              if (val === "off") {
+                onBackgroundSyncChange({ backgroundSyncEnabled: false }).catch(report);
+              } else {
+                onBackgroundSyncChange({
+                  backgroundSyncEnabled: true,
+                  backgroundSyncIntervalSeconds: Number(val),
+                }).catch(report);
+              }
+            }}
+          >
+            <option value="off">끄기 (사용 안 함)</option>
+            <option value="60">1분</option>
+            <option value="180">3분</option>
+            <option value="300">5분 (기본)</option>
+            <option value="600">10분</option>
+            <option value="900">15분</option>
+            <option value="1800">30분</option>
+            <option value="3600">1시간 (60분)</option>
+            {hasCustomBgInterval && (
+              <option value={String(backgroundIntervalSeconds)}>{bgMinutes}분 (직접 설정)</option>
+            )}
+          </select>
+        </label>
+      )}
+      {onBackgroundSyncChange && backgroundEnabled && (
+        <label className="connection-conflict-policy">
+          백그라운드 주기 직접 입력 (1~60분)
+          <input
+            type="number"
+            aria-label="백그라운드 동기화 주기 (분)"
+            min={1}
+            max={60}
+            value={bgMinutes}
+            onChange={event => {
+              const mins = Number(event.target.value);
+              if (Number.isFinite(mins) && mins >= 1 && mins <= 60) {
+                onBackgroundSyncChange({
+                  backgroundSyncEnabled: true,
+                  backgroundSyncIntervalSeconds: Math.round(mins) * 60,
+                }).catch(report);
+              }
+            }}
+          />
+        </label>
+      )}
+    </div>
+    {onBackgroundSyncChange && (
+      <div className="settings-toggles" style={{ marginTop: 10, marginBottom: 10 }}>
+        <SettingsToggle
+          label="백그라운드 동기화 사용"
+          description="앱이 백그라운드 상태일 때도 설정한 주기(1분~1시간, 기본값 5분)마다 동기화합니다. 끄면 백그라운드에서 주기적 동기화를 수행하지 않습니다."
+          checked={backgroundEnabled}
+          onChange={checked => onBackgroundSyncChange({ backgroundSyncEnabled: checked }).catch(report)}
+        />
+      </div>
+    )}
+    <p className="settings-note">원고를 수동 저장하거나 ‘동기화’를 누르면 주기를 기다리지 않고 바로 실행합니다.</p>
+    <aside className="sync-notice"><strong>동기화는 아직 불안정할 수 있으니 중요한 원고는 따로 백업해 주세요.</strong><p>모든 기기를 최신 버전으로 업데이트해야 하며, 수정 이력은 기기마다 따로 보관합니다. 파일 충돌 사본은 서재의 .lof/file-conflicts 폴더에 보관합니다. 모바일에서는 앱 전환 시 변경분을 즉시 저장하며, 백그라운드 동기화는 1분~1시간 주기(기본 5분)로 동작하거나 끌 수 있습니다.</p></aside>
     {connections.length > 0 && <p role="status" aria-live="off" className={status.phase === "error" ? "pin-error" : "muted"}>{labels[status.phase]}{status.message && ` · ${status.message}`}</p>}
     {connections.length === 0 && <p className="sync-empty">연결된 파일 저장소가 없습니다.</p>}
     {connections.map(connection => <div className="connection" key={connection.id}>

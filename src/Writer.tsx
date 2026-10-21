@@ -566,6 +566,7 @@ export default function Writer({
       },
       // 북마크를 넣고 빼거나, 본문이 바뀌어 북마크 문단의 순서·글이 달라지면 알린다.
       onTransaction: ({ editor, transaction: tr }) => {
+        if (!onBookmarksRef.current) return;
         if (tr.getMeta(BOOKMARK_LOAD) || tr.getMeta("preventUpdate")) return;
         if (!tr.docChanged && !tr.getMeta(bookmarkPluginKey)) return;
         const list = readBookmarks(editor.state),
@@ -587,10 +588,12 @@ export default function Writer({
   // 문서를 열 때, 그리고 목록에서 북마크를 지우는 등 밖에서 목록이 바뀌었을 때 다시 깐다.
   useEffect(() => {
     if (!editor || editor.isDestroyed) return;
-    if (bookmarkKey.current.editor === editor && bookmarkKey.current.key === bookmarksJson) return;
-    bookmarkKey.current = { editor, key: bookmarksJson };
-    loadBookmarks(editor, bookmarksRef.current);
-  }, [editor, bookmarksJson]);
+    const effective = onBookmarksChange || bookmarks ? bookmarksRef.current : [];
+    const effectiveKey = JSON.stringify(effective || []);
+    if (bookmarkKey.current.editor === editor && bookmarkKey.current.key === effectiveKey) return;
+    bookmarkKey.current = { editor, key: effectiveKey };
+    loadBookmarks(editor, effective);
+  }, [editor, bookmarksJson, Boolean(onBookmarksChange)]);
   useEffect(() => {
     if (!jumpToBookmark || !editor || editor.isDestroyed) return;
     let target = -1;
@@ -696,6 +699,90 @@ export default function Writer({
   useEffect(() => () => {
     if (editableRef.current) compositionRef.current(false);
   }, []);
+  useEffect(() => {
+    if (!visible || inactive || !editable) return;
+    const onInsert = (e: Event) => {
+      const text = (e as CustomEvent<string>).detail;
+      if (!text) return;
+      if (source || protectedSource) {
+        const view = sourceRef.current?.view;
+        if (view) {
+          const { from, to } = view.state.selection.main;
+          sourceRef.current?.replace(from, to, text);
+          view.focus();
+        }
+      } else if (editor && !editor.isDestroyed) {
+        editor.chain().focus().insertContent(text).run();
+      }
+    };
+    const onInsertPair = (e: Event) => {
+      const detail = (e as CustomEvent<{ open: string; close: string }>).detail;
+      if (!detail?.open || !detail?.close) return;
+      const { open, close } = detail;
+      if (source || protectedSource) {
+        const view = sourceRef.current?.view;
+        if (view) {
+          const { from, to } = view.state.selection.main;
+          const selected = view.state.sliceDoc(from, to);
+          sourceRef.current?.replace(from, to, `${open}${selected}${close}`);
+          const nextPos = selected.length
+            ? from + open.length + selected.length + close.length
+            : from + open.length;
+          view.dispatch({ selection: { anchor: nextPos, head: nextPos } });
+          view.focus();
+        }
+      } else if (editor && !editor.isDestroyed) {
+        const { from, to } = editor.state.selection;
+        if (from === to) {
+          editor
+            .chain()
+            .focus()
+            .insertContent(`${open}${close}`)
+            .setTextSelection(from + open.length)
+            .run();
+        } else {
+          const selected = editor.state.doc.textBetween(from, to, "");
+          editor.chain().focus().insertContent(`${open}${selected}${close}`).run();
+        }
+      }
+    };
+    const onAction = (e: Event) => {
+      const cmd = (e as CustomEvent<string>).detail;
+      if (source || protectedSource) {
+        const view = sourceRef.current?.view;
+        if (view && cmd === "enter") {
+          const { from, to } = view.state.selection.main;
+          sourceRef.current?.replace(from, to, "\n");
+          view.dispatch({ selection: { anchor: from + 1, head: from + 1 } });
+        }
+        view?.focus();
+        return;
+      }
+      if (!editor || editor.isDestroyed) return;
+      if (cmd === "undo") editor.chain().focus().undo().run();
+      else if (cmd === "redo") editor.chain().focus().redo().run();
+      else if (cmd === "enter") editor.chain().focus().splitBlock().scrollIntoView().run();
+      else if (cmd === "divider") editor.chain().focus().setHorizontalRule().run();
+      else if (cmd === "heading") editor.chain().focus().toggleHeading({ level: 2 }).run();
+      else if (cmd === "bold") editor.chain().focus().toggleBold().run();
+      else if (cmd === "italic") editor.chain().focus().toggleItalic().run();
+      else if (cmd === "strike") editor.chain().focus().toggleStrike().run();
+      else if (cmd === "quote") editor.chain().focus().toggleBlockquote().run();
+      else if (cmd === "bulletList") editor.chain().focus().toggleBulletList().run();
+      else if (cmd === "orderedList") editor.chain().focus().toggleOrderedList().run();
+      else if (cmd === "table" && tables) editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run();
+      else if (cmd === "image") void pickImage();
+      else if (cmd === "comment") toggleJsdocComment(editor.view);
+    };
+    window.addEventListener("lof:insert-text", onInsert);
+    window.addEventListener("lof:insert-pair", onInsertPair);
+    window.addEventListener("lof:editor-action", onAction);
+    return () => {
+      window.removeEventListener("lof:insert-text", onInsert);
+      window.removeEventListener("lof:insert-pair", onInsertPair);
+      window.removeEventListener("lof:editor-action", onAction);
+    };
+  }, [editor, visible, inactive, editable, source, protectedSource]);
   useEffect(() => {
     if (!reveal?.query) return;
     const norm = (t: string) => (reveal.caseSensitive ? t : t.toLocaleLowerCase()),

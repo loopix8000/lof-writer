@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AlertCircle, ArrowRight, Check, CheckCircle2, ChevronDown, Clock3, Cloud, Copy, Link, Loader2, LogOut, Monitor, Pencil, QrCode, RefreshCw, Server, Users, X } from "lucide-react";
+import { AlertCircle, ArrowLeft, ArrowRight, Check, CheckCircle2, ChevronDown, ChevronRight, Clock3, Cloud, Copy, Link, Loader2, LogOut, Monitor, Pencil, QrCode, RefreshCw, Server, Users, X } from "lucide-react";
+import SettingsToggle from "./app/SettingsToggle";
 import { call } from "./types";
+
+const PRESET_BG_SECONDS = [60, 180, 300, 600, 900, 1800, 3600];
 
 type Peer = { id: string; name: string; endpoint: string; storage: boolean; status?: { phase: string; message?: string; conflicts?: number; lastSync?: string } };
 type InviteInfo = { id: string; remainingMs: number; durationMs: number; phase: "waiting" | "expired" | "connected"; peer?: Peer };
@@ -10,9 +13,9 @@ type Group = { id: string; members: number };
 type Status = { uxVersion?: number; scope?: string; endpoint?: string; group?: Group | null; peers: Peer[]; error: string; invite?: InviteInfo | null; pairing?: Pairing | null };
 type Problem = { message: string; code?: string };
 const tabs = [
-  { id: "devices", label: "동기화 그룹", icon: Users },
-  { id: "invite", label: "초대 코드 만들기", icon: QrCode },
-  { id: "connect", label: "그룹 가입", icon: Link },
+  { id: "devices", label: "동기화 그룹", desc: "연결된 장치 상태 확인 및 그룹 관리", icon: Users },
+  { id: "invite", label: "초대 코드", desc: "QR 코드·페어링 코드로 다른 기기 초대", icon: QrCode },
+  { id: "connect", label: "그룹 가입", desc: "다른 기기에서 만든 페어링 코드로 연결", icon: Link },
 ] as const;
 const copied = "페어링 코드를 복사했습니다.";
 const groupLabel = (id: string) => id.slice(0, 8).toUpperCase().replace(/(.{4})/, "$1-");
@@ -21,9 +24,33 @@ const labels: Record<string, string> = { connecting: "연결 중", connected: "�
 const problem = (error: unknown): Problem => ({ message: error instanceof Error ? error.message : String(error), code: (error as { code?: string })?.code });
 const time = (seconds: number) => `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
 
-export default function RealtimeSync({ onClose }: { onClose: () => void }) {
+export default function RealtimeSync({
+  onClose,
+  embedded = false,
+  prefs,
+  savePrefs,
+  report,
+  mobileDetailOpen: controlledDetailOpen,
+  onMobileDetailChange,
+  onTabChange,
+}: {
+  onClose: () => void;
+  embedded?: boolean;
+  prefs?: Record<string, any>;
+  savePrefs?: (patch: Record<string, any>) => Promise<void>;
+  report?: (error: any) => void;
+  mobileDetailOpen?: boolean;
+  onMobileDetailChange?: (open: boolean) => void;
+  onTabChange?: (tab: "devices" | "invite" | "connect", label: string) => void;
+}) {
   const [status, setStatus] = useState<Status>({ peers: [], error: "" });
   const [tab, setTab] = useState<Tab>("devices");
+  const [internalDetailOpen, setInternalDetailOpen] = useState(false);
+  const mobileDetailOpen = controlledDetailOpen ?? internalDetailOpen;
+  const setMobileDetailOpen = (open: boolean) => {
+    setInternalDetailOpen(open);
+    onMobileDetailChange?.(open);
+  };
   const [invite, setInvite] = useState<InviteData | null>(null);
   const [deadline, setDeadline] = useState(0);
   const [now, setNow] = useState(performance.now());
@@ -148,7 +175,10 @@ export default function RealtimeSync({ onClose }: { onClose: () => void }) {
   }, [connecting, paired?.id, !!failure, tab]);
 
   const selectTab = (next: Tab) => {
-    setTab(next); setNotice(""); setActionProblem(null); setRenaming(null); setLeaving(false);
+    setTab(next);
+    setMobileDetailOpen(true);
+    onTabChange?.(next, tabs.find(item => item.id === next)?.label ?? "실시간 동기화");
+    setNotice(""); setActionProblem(null); setRenaming(null); setLeaving(false);
     if (content.current) content.current.scrollTop = 0;
   };
   const run = async (name: string, operation: () => Promise<void>) => {
@@ -257,18 +287,47 @@ export default function RealtimeSync({ onClose }: { onClose: () => void }) {
     </div>;
   };
 
-  return <div className="settings-layout realtime-layout realtime-sync" aria-label="실시간 장치 동기화">
-    <nav className="settings-nav realtime-nav" role="tablist" aria-label="실시간 동기화 분류" aria-orientation="vertical" onKeyDown={event => {
+  const currentTab = tabs.find(item => item.id === tab);
+  const bgEnabled = prefs?.backgroundSyncEnabled !== false;
+  const bgIntervalSeconds = prefs?.backgroundSyncIntervalSeconds ?? 300;
+  const bgMinutes = Math.max(1, Math.min(60, Math.round(bgIntervalSeconds / 60)));
+  const hasCustomBgInterval = bgEnabled && !PRESET_BG_SECONDS.includes(bgIntervalSeconds);
+  const handlePrefPatch = (patch: Record<string, any>) => {
+    if (!savePrefs) return;
+    savePrefs(patch).catch(err => report?.(err));
+  };
+
+  return <div className={`settings-layout realtime-layout realtime-sync ${embedded ? "is-embedded mobile-detail-open" : mobileDetailOpen ? "mobile-detail-open" : "mobile-menu-list"}`} aria-label="실시간 장치 동기화">
+    <nav className={`settings-nav realtime-nav ${embedded ? "realtime-embedded-tabs" : ""}`} role="tablist" aria-label="실시간 동기화 분류" aria-orientation={embedded ? "horizontal" : "vertical"} onKeyDown={event => {
       const index = tabs.findIndex(item => item.id === tab);
-      const next = event.key === "ArrowDown" ? (index + 1) % tabs.length : event.key === "ArrowUp" ? (index + tabs.length - 1) % tabs.length : event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : -1;
+      const next = (event.key === "ArrowDown" || event.key === "ArrowRight") ? (index + 1) % tabs.length : (event.key === "ArrowUp" || event.key === "ArrowLeft") ? (index + tabs.length - 1) % tabs.length : event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : -1;
       if (next < 0) return;
       event.preventDefault(); selectTab(tabs[next].id); event.currentTarget.querySelector<HTMLButtonElement>(`#realtime-tab-${tabs[next].id}`)?.focus();
     }}>
-      {tabs.map(({ id, label, icon: Icon }) => <button key={id} type="button" role="tab" id={`realtime-tab-${id}`} aria-controls={`realtime-panel-${id}`} aria-selected={tab === id} tabIndex={tab === id ? 0 : -1} onClick={() => selectTab(id)}>
-        <Icon size={16} /><span>{label}</span>{id === "connect" && connecting && <Loader2 className="realtime-spinner" size={13} aria-label="연결 중" />}
+      {tabs.map(({ id, label, desc, icon: Icon }) => <button key={id} type="button" role="tab" id={`realtime-tab-${id}`} aria-controls={`realtime-panel-${id}`} aria-selected={tab === id} tabIndex={tab === id ? 0 : -1} onClick={() => selectTab(id)}>
+        <Icon size={17} />
+        <span className="settings-nav-item-text">
+          <span>{label}</span>
+          {!embedded && <small className="mobile-menu-desc">{desc}</small>}
+        </span>
+        {id === "connect" && connecting && <Loader2 className="realtime-spinner" size={13} aria-label="연결 중" />}
+        {!embedded && <ChevronRight className="mobile-menu-chevron" size={17} aria-hidden="true" />}
       </button>)}
     </nav>
     <div className="settings-content realtime-content" ref={content}>
+      {!embedded && (
+        <div className="mobile-settings-subhead">
+          <button
+            type="button"
+            className="mobile-back-to-menu"
+            onClick={() => setMobileDetailOpen(false)}
+          >
+            <ArrowLeft size={16} />
+            <span>동기화 메뉴</span>
+          </button>
+          <strong>{currentTab?.label}</strong>
+        </div>
+      )}
       {(status.error || statusProblem) && <div className="realtime-alert" role="alert"><AlertCircle size={17} /><span>{status.error || statusProblem}</span></div>}
       {!status.endpoint && !status.error && !statusProblem && <p className="realtime-preparing" role="status"><Loader2 className="realtime-spinner" size={16} />연결을 준비 중입니다…</p>}
       <section className="settings-section realtime-panel" role="tabpanel" id={`realtime-panel-${tab}`} aria-labelledby={`realtime-tab-${tab}`} tabIndex={0}>
@@ -286,6 +345,83 @@ export default function RealtimeSync({ onClose }: { onClose: () => void }) {
           </div>}
           {status.peers.length ? <div className="realtime-device-list">{status.peers.map(peer => device(peer, true))}</div>
             : <div className="realtime-empty"><Cloud size={38} /><strong>아직 그룹에 다른 장치가 없습니다</strong><p>초대 코드를 만들어 다른 장치를 그룹에 추가하거나, 다른 장치의 코드로 그룹에 가입해 보세요.</p></div>}
+          {savePrefs && (
+            <div className="realtime-bg-sync-box">
+              <h4>백그라운드 동기화 설정</h4>
+              <p className="settings-description">앱이 백그라운드에 있을 때 그룹 기기 및 저장소와 변경 내용을 동기화할 주기를 설정합니다 (1분~1시간, 기본값 5분).</p>
+              <div className="settings-toggles" style={{ marginBottom: 10 }}>
+                <SettingsToggle
+                  label="백그라운드 동기화 사용"
+                  description="끄면 앱이 백그라운드에 있는 동안 주기적 동기화를 수행하지 않습니다."
+                  checked={bgEnabled}
+                  onChange={checked => handlePrefPatch({ backgroundSyncEnabled: checked })}
+                />
+              </div>
+              <div className="settings-grid">
+                <label>
+                  백그라운드 동기화 주기
+                  <select
+                    aria-label="백그라운드 동기화 주기"
+                    value={bgEnabled ? String(bgIntervalSeconds) : "off"}
+                    onChange={event => {
+                      const val = event.target.value;
+                      if (val === "off") {
+                        handlePrefPatch({ backgroundSyncEnabled: false });
+                      } else {
+                        handlePrefPatch({
+                          backgroundSyncEnabled: true,
+                          backgroundSyncIntervalSeconds: Number(val),
+                        });
+                      }
+                    }}
+                  >
+                    <option value="off">끄기 (사용 안 함)</option>
+                    <option value="60">1분</option>
+                    <option value="180">3분</option>
+                    <option value="300">5분 (기본)</option>
+                    <option value="600">10분</option>
+                    <option value="900">15분</option>
+                    <option value="1800">30분</option>
+                    <option value="3600">1시간 (60분)</option>
+                    {hasCustomBgInterval && (
+                      <option value={String(bgIntervalSeconds)}>{bgMinutes}분 (직접 설정)</option>
+                    )}
+                  </select>
+                </label>
+                {bgEnabled && (
+                  <label>
+                    주기 직접 설정 (1~60분)
+                    <input
+                      type="number"
+                      aria-label="백그라운드 동기화 주기 직접 설정 (분)"
+                      min={1}
+                      max={60}
+                      value={bgMinutes}
+                      onChange={event => {
+                        const mins = Number(event.target.value);
+                        if (Number.isFinite(mins) && mins >= 1 && mins <= 60) {
+                          handlePrefPatch({
+                            backgroundSyncEnabled: true,
+                            backgroundSyncIntervalSeconds: Math.round(mins) * 60,
+                          });
+                        }
+                      }}
+                    />
+                  </label>
+                )}
+              </div>
+            </div>
+          )}
+          <aside className="mobile-sync-rules-card" aria-label="모바일 실시간·백그라운드 동기화 규칙">
+            <strong>모바일 실시간·백그라운드 동기화 운영 규칙</strong>
+            <ul>
+              <li><b>포그라운드 실시간 동기화</b>: 앱이 열려 있는 동안 그룹 장치와 P2P 연결을 유지하며, 모바일에서는 타이핑이 2.5초간 멈추면 자동 저장 후 즉시 변경 알림을 전송합니다.</li>
+              <li><b>백그라운드 전환 시 즉시 보존·전송</b>: 다른 앱으로 전환하거나 화면이 꺼질 때 편집 중인 원고·메모를 즉시 저장하고 대기 중인 동기화를 한 번 밀어 넣습니다.</li>
+              <li><b>백그라운드 동기화 주기 (1분~1시간, 기본 5분) 및 끄기</b>: 백그라운드 상태에서는 설정한 주기(1분~1시간, 기본값 5분)마다 동기화를 수행하며, 백그라운드 동기화를 끄면 백그라운드 대기 중 동기화를 완전히 멈춥니다.</li>
+              <li><b>앱 복귀 시 즉시 재연결</b>: 앱이 다시 화면에 나타나면 재시도 대기 시간을 초기화하고 모든 그룹 장치·저장소와 즉시 동기화합니다.</li>
+              <li><b>집필 중 충돌 안전 보류</b>: 한글 조합 중이거나 편집 중인 문서는 입력 흐름을 끊지 않고 보존 사본 또는 외부 변경 안내로 안전하게 병합합니다.</li>
+            </ul>
+          </aside>
         </>}
         {tab === "invite" && (invitedPeer ? success(invitedPeer, "장치가 그룹에 가입했습니다") : <>
           <h3 ref={heading} tabIndex={-1}>{expired ? "페어링 코드가 만료되었어요" : "다른 장치를 그룹에 초대하세요"}</h3>
@@ -336,7 +472,7 @@ export default function RealtimeSync({ onClose }: { onClose: () => void }) {
     </div>
     <footer className="realtime-footer">
       {tab === "connect" && connecting ? <button disabled={cancelling} onClick={() => void cancelPair()}>취소</button>
-        : <button onClick={onClose}>{tab === "connect" && !paired ? "취소" : "닫기"}</button>}
+        : !embedded ? <button onClick={onClose}>{tab === "connect" && !paired ? "취소" : "닫기"}</button> : <span />}
       <div className="realtime-footer-actions">
         {tab === "devices" && <button className="primary" disabled={!!action || !ready} onClick={() => { selectTab("invite"); createInvite(); }}><Link size={16} />장치 초대</button>}
         {tab === "invite" && (invitedPeer ? <><button disabled={!!action || !ready} onClick={createInvite}>새 코드 만들기</button><button className="primary" onClick={showDevices}>그룹 보기</button></>

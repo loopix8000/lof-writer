@@ -1,4 +1,7 @@
 import {
+  ArrowLeft,
+  ChevronRight,
+  Cloud,
   Code2,
   Copy,
   Download,
@@ -9,6 +12,7 @@ import {
   Sparkles,
   StickyNote
 } from "lucide-react";
+import { useState } from "react";
 import type * as React from "react";
 import {
   lineBreakLabel
@@ -18,6 +22,7 @@ import OpenSourceLicenses from "../OpenSourceLicenses";
 import PinSettings from "../PinSettings";
 import PlatformPicker from "../PlatformPicker";
 import PropertyPresetSettings from "../PropertyPresetSettings";
+import RealtimeSync from "../RealtimeSync";
 import {
   call,
   type Doc,
@@ -64,7 +69,19 @@ type Props = {
   skillDownloading: boolean;
   setSkillDownloading: React.Dispatch<React.SetStateAction<boolean>>;
   onOpenExport: () => void;
+  chooseVault?: () => Promise<void>;
+  mobileDetailOpen?: boolean;
+  onMobileDetailChange?: (open: boolean) => void;
 };
+
+function formatStoragePath(rawPath: string | undefined, fallbackLabel: string): string {
+  if (!rawPath) return fallbackLabel;
+  if (/^\/data\/(?:data|user\/\d+)\/local\.lof\.writer\//i.test(rawPath)) {
+    const leaf = rawPath.split("/").filter(Boolean).pop();
+    return leaf ? `${fallbackLabel} (${leaf})` : fallbackLabel;
+  }
+  return rawPath;
+}
 
 export default function SettingsContent({
   settingsPage,
@@ -97,21 +114,55 @@ export default function SettingsContent({
   skillDownloading,
   setSkillDownloading,
   onOpenExport,
+  chooseVault,
+  mobileDetailOpen: controlledDetailOpen,
+  onMobileDetailChange,
 }: Props) {
+  const [internalDetailOpen, setInternalDetailOpen] = useState(false);
+  const mobileDetailOpen = controlledDetailOpen ?? internalDetailOpen;
+  const setMobileDetailOpen = (open: boolean) => {
+    setInternalDetailOpen(open);
+    onMobileDetailChange?.(open);
+  };
+  const currentSetting = settingPages.find((item) => item.id === settingsPage);
 
   return (
     <>
-      <div className="settings-layout">
+      <div className={`settings-layout ${mobileDetailOpen ? "mobile-detail-open" : "mobile-menu-list"}`}>
         <nav className="settings-nav" aria-label="설정 분류">
-          {settingPages.map(({ id, label, icon: Icon }) => (
-            <button key={id} type="button" aria-pressed={settingsPage === id}
-              aria-controls={`settings-${id}`} onClick={() => setSettingsPage(id)}>
-              <Icon size={16} /><span>{label}</span>
+          {settingPages.map(({ id, label, desc, icon: Icon }) => (
+            <button
+              key={id}
+              type="button"
+              aria-pressed={settingsPage === id}
+              aria-controls={`settings-${id}`}
+              onClick={() => {
+                setSettingsPage(id);
+                setMobileDetailOpen(true);
+              }}
+            >
+              <Icon size={17} />
+              <span className="settings-nav-item-text">
+                <span>{label}</span>
+                <small className="mobile-menu-desc">{desc}</small>
+              </span>
+              <ChevronRight className="mobile-menu-chevron" size={17} aria-hidden="true" />
             </button>
           ))}
           <p>변경한 설정은<br />바로 저장됩니다.</p>
         </nav>
         <div className="settings-content" key={settingsPage}>
+          <div className="mobile-settings-subhead">
+            <button
+              type="button"
+              className="mobile-back-to-menu"
+              onClick={() => setMobileDetailOpen(false)}
+            >
+              <ArrowLeft size={16} />
+              <span>설정 메뉴</span>
+            </button>
+            <strong>{currentSetting?.label}</strong>
+          </div>
           <section id="settings-updates" className="settings-section" hidden={settingsPage !== "updates"}>
             <UpdateSettings updater={updater} version={lib.version}
               autoCheck={prefs.checkUpdatesOnStartup !== false}
@@ -224,14 +275,35 @@ export default function SettingsContent({
             />
           </section>
           <section id="settings-storage" className="settings-section" hidden={settingsPage !== "storage"}>
+            {chooseVault && (
+              <div className="vault-location-block" style={{ marginBottom: 22 }}>
+                <h3>
+                  <FolderOpen size={17} />
+                  서재 위치
+                </h3>
+                <div className="connection vault-location-connection">
+                  <div>
+                    <b>현재 서재 폴더</b>
+                    <small>{formatStoragePath(lib.root, "앱 기본 서재 폴더")}</small>
+                  </div>
+                  <button disabled={busy} onClick={attempt(chooseVault)}>
+                    <FolderOpen size={15} />
+                    서재 변경
+                  </button>
+                </div>
+                <p className="muted">
+                  작품 원고, 플롯, 작품별 메모를 보관할 서재 폴더 위치를 변경합니다.
+                </p>
+              </div>
+            )}
             <h3>
               <StickyNote size={17} />
               공용 메모
             </h3>
-            <div className="connection">
+            <div className="connection common-memo-connection">
               <div>
                 <b>공용 메모 폴더</b>
-                <small>{commonMemoPath}</small>
+                <small>{formatStoragePath(commonMemoPath, "앱 기본 공용 메모 폴더")}</small>
               </div>
               <button
                 onClick={attempt(async () => {
@@ -247,8 +319,7 @@ export default function SettingsContent({
               </button>
             </div>
             <p className="muted">
-              여러 작품에서 함께 쓰는 메모를 이 폴더에 Markdown 파일로 보관합니다.
-              기존 폴더를 고르면 안의 파일을 그대로 메모로 보여줍니다.
+              여러 작품에서 함께 쓰는 메모를 공용 메모 공간에 Markdown 파일로 보관합니다.
             </p>
           </section>
           <section className="settings-section" hidden={settingsPage !== "storage"}>
@@ -405,6 +476,18 @@ export default function SettingsContent({
               <p className="settings-note">본문 전체 복사, 우클릭 복사와 Ctrl+C에 적용됩니다.</p>
             </fieldset>
           </section>
+          <section id="settings-realtime" className="settings-section m-realtime-section" hidden={settingsPage !== "realtime"}>
+            <h3><Cloud size={18} />실시간 동기화</h3>
+            {settingsPage === "realtime" && (
+              <RealtimeSync
+                embedded
+                onClose={() => setMobileDetailOpen(false)}
+                prefs={prefs}
+                savePrefs={savePrefs}
+                report={report}
+              />
+            )}
+          </section>
           <section id="settings-connections" className="settings-section" hidden={settingsPage !== "connections"}>
             <h3><FolderSync size={18} />파일 동기화</h3>
             {settingsPage === "connections" && renderSyncConnections()}
@@ -464,7 +547,7 @@ export default function SettingsContent({
       </div>
       <footer className="settings-footer">
         <span>Lof Writer {lib.version}</span>
-        <span title={lib.root}>내 서재 · {lib.root}</span>
+        <span className="settings-footer-root" title={lib.root}>내 서재 · {lib.root}</span>
       </footer>
     </>
   );

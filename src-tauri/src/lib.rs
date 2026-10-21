@@ -19,6 +19,7 @@ pub mod markdown;
 pub mod memo;
 pub mod platforms;
 mod pin;
+#[cfg(not(target_os = "android"))]
 mod single_instance;
 mod skills;
 pub mod store;
@@ -33,6 +34,7 @@ use crate::store::{atomic_write_str, strip_verbatim_prefix, HistoryPolicy, Store
 use crate::sync::sync_once;
 use crate::text::plain_text;
 use base64::Engine;
+#[cfg(not(target_os = "android"))]
 use rfd::{FileDialog, MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
 use serde_json::{json, Value};
 use std::fs;
@@ -43,7 +45,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
+#[cfg(not(target_os = "android"))]
 use tauri::menu::{Menu, MenuItem};
+#[cfg(not(target_os = "android"))]
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 use uuid::Uuid;
@@ -72,16 +76,27 @@ pub fn get_user_dir() -> PathBuf {
             return PathBuf::from(custom);
         }
     }
-    if let Ok(appdata) = std::env::var("APPDATA") {
-        return PathBuf::from(appdata).join("Lof Writer");
+    #[cfg(target_os = "android")]
+    {
+        return PathBuf::from("/data/data/local.lof.writer/files");
     }
-    let home = std::env::var("USERPROFILE")
-        .or_else(|_| std::env::var("HOME"))
-        .unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(home).join(".config").join("Lof Writer")
+    #[cfg(not(target_os = "android"))]
+    {
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            return PathBuf::from(appdata).join("Lof Writer");
+        }
+        let home = std::env::var("USERPROFILE")
+            .or_else(|_| std::env::var("HOME"))
+            .unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(home).join(".config").join("Lof Writer")
+    }
 }
 
 pub fn get_documents_dir() -> PathBuf {
+    #[cfg(target_os = "android")]
+    {
+        return get_user_dir().join("Documents");
+    }
     #[cfg(windows)]
     {
         use windows_sys::Win32::UI::Shell::{FOLDERID_Documents, SHGetKnownFolderPath};
@@ -101,10 +116,13 @@ pub fn get_documents_dir() -> PathBuf {
             }
         }
     }
-    let home = std::env::var("USERPROFILE")
-        .or_else(|_| std::env::var("HOME"))
-        .unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(home).join("Documents")
+    #[cfg(not(target_os = "android"))]
+    {
+        let home = std::env::var("USERPROFILE")
+            .or_else(|_| std::env::var("HOME"))
+            .unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(home).join("Documents")
+    }
 }
 
 #[cfg(windows)]
@@ -357,9 +375,17 @@ fn open_folder_path(path: &Path) {
 }
 
 fn set_clipboard_text(text: &str) -> Result<(), LofError> {
-    let mut cb = arboard::Clipboard::new().map_err(|e| fail_invalid(e.to_string()))?;
-    cb.set_text(text.to_string())
-        .map_err(|e| fail_invalid(e.to_string()))
+    #[cfg(not(target_os = "android"))]
+    {
+        let mut cb = arboard::Clipboard::new().map_err(|e| fail_invalid(e.to_string()))?;
+        cb.set_text(text.to_string())
+            .map_err(|e| fail_invalid(e.to_string()))
+    }
+    #[cfg(target_os = "android")]
+    {
+        let _ = text;
+        Ok(())
+    }
 }
 
 struct SyncGuard<'a>(&'a AtomicBool);
@@ -451,6 +477,15 @@ fn dispatch_method(
             &args.get("rules").cloned().unwrap_or_else(|| json!({})),
         )),
         "autoSyncStatus" => Ok(app.state::<auto_sync::AutoSyncState>().status()),
+        "appLifecycle" => {
+            let foreground = args
+                .get("foreground")
+                .and_then(Value::as_bool)
+                .unwrap_or(true);
+            realtime::set_background(app, !foreground);
+            auto_sync::set_background(app, !foreground);
+            Ok(json!(true))
+        }
         "gitEditing" => git_worker::activity(app, &args),
         "backupStorage" => {
             let guard=state.store.lock().unwrap();
@@ -514,12 +549,38 @@ fn dispatch_method(
             Ok(Value::Object(out))
         }
         "chooseVault" => {
-            let picked = FileDialog::new().set_title("서재 폴더 선택").pick_folder();
-            let Some(folder) = picked else {
-                return Ok(json!(false));
-            };
-            bind_vault(state, app, &folder)?;
-            Ok(json!(true))
+            if let Some(custom_path) = args
+                .get("path")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                let folder = if Path::new(custom_path).is_absolute() {
+                    PathBuf::from(custom_path)
+                } else {
+                    let safe_name: String = custom_path
+                        .chars()
+                        .map(|c| if matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') { '_' } else { c })
+                        .collect();
+                    state.user_dir.join(if safe_name.is_empty() { "LofWriter" } else { &safe_name })
+                };
+                fs::create_dir_all(&folder)?;
+                bind_vault(state, app, &folder)?;
+                return Ok(json!(true));
+            }
+            #[cfg(not(target_os = "android"))]
+            {
+                let picked = FileDialog::new().set_title("서재 폴더 선택").pick_folder();
+                let Some(folder) = picked else {
+                    return Ok(json!(false));
+                };
+                bind_vault(state, app, &folder)?;
+                Ok(json!(true))
+            }
+            #[cfg(target_os = "android")]
+            {
+                Ok(json!(false))
+            }
         }
         "createProject" => {
             let res = {
@@ -545,18 +606,39 @@ fn dispatch_method(
         }
         "chooseCover" => {
             let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
-            let picked = FileDialog::new()
-                .set_title("작품 표지 선택")
-                .add_filter("표지 이미지", &["png", "jpg", "jpeg", "webp"])
-                .pick_file();
-            let Some(file) = picked else {
-                return Ok(Value::Null);
+            let bytes = if let Some(b64) = args.get("data").and_then(Value::as_str) {
+                let raw = b64
+                    .strip_prefix("data:")
+                    .and_then(|s| s.split_once(";base64,").map(|(_, d)| d))
+                    .unwrap_or(b64);
+                let decoded = base64::engine::general_purpose::STANDARD
+                    .decode(raw)
+                    .map_err(|_| fail_invalid("이미지를 읽을 수 없습니다."))?;
+                if decoded.len() > 20_000_000 {
+                    return Err(fail_invalid("표지 원본은 20MB 이하로 선택해 주세요."));
+                }
+                decoded
+            } else {
+                #[cfg(not(target_os = "android"))]
+                {
+                    let picked = FileDialog::new()
+                        .set_title("작품 표지 선택")
+                        .add_filter("표지 이미지", &["png", "jpg", "jpeg", "webp"])
+                        .pick_file();
+                    let Some(file) = picked else {
+                        return Ok(Value::Null);
+                    };
+                    let stat = fs::metadata(&file)?;
+                    if stat.len() > 20_000_000 {
+                        return Err(fail_invalid("표지 원본은 20MB 이하로 선택해 주세요."));
+                    }
+                    fs::read(&file)?
+                }
+                #[cfg(target_os = "android")]
+                {
+                    return Ok(Value::Null);
+                }
             };
-            let stat = fs::metadata(&file)?;
-            if stat.len() > 20_000_000 {
-                return Err(fail_invalid("표지 원본은 20MB 이하로 선택해 주세요."));
-            }
-            let bytes = fs::read(&file)?;
             let mut img = image::load_from_memory(&bytes).map_err(|_| {
                 fail_invalid("이미지를 읽을 수 없습니다. PNG, JPEG, WebP 파일을 선택해 주세요.")
             })?;
@@ -616,18 +698,25 @@ fn dispatch_method(
                 let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("image");
                 (name.to_string(), bytes)
             } else {
-                let picked = FileDialog::new()
-                    .set_title("이미지 삽입")
-                    .add_filter("이미지", &["png", "jpg", "jpeg", "gif", "webp"])
-                    .pick_file();
-                let Some(file) = picked else {
-                    return Ok(Value::Null);
-                };
-                if fs::metadata(&file)?.len() > assets::IMAGE_LIMIT {
-                    return Err(fail_invalid("이미지는 20MB 이하만 넣을 수 있습니다."));
+                #[cfg(not(target_os = "android"))]
+                {
+                    let picked = FileDialog::new()
+                        .set_title("이미지 삽입")
+                        .add_filter("이미지", &["png", "jpg", "jpeg", "gif", "webp"])
+                        .pick_file();
+                    let Some(file) = picked else {
+                        return Ok(Value::Null);
+                    };
+                    if fs::metadata(&file)?.len() > assets::IMAGE_LIMIT {
+                        return Err(fail_invalid("이미지는 20MB 이하만 넣을 수 있습니다."));
+                    }
+                    let name = file.file_name().and_then(|n| n.to_str()).unwrap_or("image").to_string();
+                    (name, fs::read(&file)?)
                 }
-                let name = file.file_name().and_then(|n| n.to_str()).unwrap_or("image").to_string();
-                (name, fs::read(&file)?)
+                #[cfg(target_os = "android")]
+                {
+                    return Ok(Value::Null);
+                }
             };
             let dir = {
                 let mut guard = state.store.lock().unwrap();
@@ -654,20 +743,23 @@ fn dispatch_method(
         }
         // 집필 화면 우클릭 메뉴의 붙여넣기. 글이 있으면 글을, 없고 그림이 있으면 PNG(base64)를 돌려준다.
         "readClipboard" => {
-            let mut cb = arboard::Clipboard::new().map_err(|e| fail_invalid(e.to_string()))?;
-            if let Ok(text) = cb.get_text() {
-                if !text.is_empty() {
-                    return Ok(json!({ "text": text }));
+            #[cfg(not(target_os = "android"))]
+            {
+                let mut cb = arboard::Clipboard::new().map_err(|e| fail_invalid(e.to_string()))?;
+                if let Ok(text) = cb.get_text() {
+                    if !text.is_empty() {
+                        return Ok(json!({ "text": text }));
+                    }
                 }
-            }
-            if let Ok(img) = cb.get_image() {
-                let rgba = image::RgbaImage::from_raw(img.width as u32, img.height as u32, img.bytes.into_owned())
-                    .ok_or_else(|| fail_invalid("클립보드 이미지를 읽을 수 없습니다."))?;
-                let mut png = Vec::new();
-                image::DynamicImage::ImageRgba8(rgba)
-                    .write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
-                    .map_err(|_| fail_invalid("클립보드 이미지를 읽을 수 없습니다."))?;
-                return Ok(json!({ "image": base64::engine::general_purpose::STANDARD.encode(png) }));
+                if let Ok(img) = cb.get_image() {
+                    let rgba = image::RgbaImage::from_raw(img.width as u32, img.height as u32, img.bytes.into_owned())
+                        .ok_or_else(|| fail_invalid("클립보드 이미지를 읽을 수 없습니다."))?;
+                    let mut png = Vec::new();
+                    image::DynamicImage::ImageRgba8(rgba)
+                        .write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
+                        .map_err(|_| fail_invalid("클립보드 이미지를 읽을 수 없습니다."))?;
+                    return Ok(json!({ "image": base64::engine::general_purpose::STANDARD.encode(png) }));
+                }
             }
             Ok(json!({}))
         }
@@ -921,12 +1013,40 @@ fn dispatch_method(
         }
         "chooseCommonMemo" => {
             let (store_root, current_common) = get_store_and_common()?;
-            let picked = FileDialog::new()
-                .set_title("공용 메모 폴더 선택")
-                .set_directory(&current_common)
-                .pick_folder();
-            let Some(folder) = picked else {
-                return Ok(Value::Null);
+            let folder = if let Some(custom_path) = args
+                .get("path")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                let p = if Path::new(custom_path).is_absolute() {
+                    PathBuf::from(custom_path)
+                } else {
+                    let safe_name: String = custom_path
+                        .chars()
+                        .map(|c| if matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') { '_' } else { c })
+                        .collect();
+                    state.user_dir.join(if safe_name.is_empty() { "CommonMemo" } else { &safe_name })
+                };
+                fs::create_dir_all(&p)?;
+                p
+            } else {
+                #[cfg(not(target_os = "android"))]
+                {
+                    let picked = FileDialog::new()
+                        .set_title("공용 메모 폴더 선택")
+                        .set_directory(&current_common)
+                        .pick_folder();
+                    let Some(folder) = picked else {
+                        return Ok(Value::Null);
+                    };
+                    folder
+                }
+                #[cfg(target_os = "android")]
+                {
+                    let _ = current_common;
+                    return Ok(Value::Null);
+                }
             };
             let clean_folder = strip_verbatim_prefix(&fs::canonicalize(&folder).unwrap_or(folder));
             let new_common = {
@@ -1076,31 +1196,90 @@ fn dispatch_method(
         }
         "importFiles" => {
             let project_id = args.get("projectId").and_then(|v| v.as_str()).unwrap_or("");
-            let picked = FileDialog::new()
-                .set_title("원고 가져오기 (원본 파일 보존)")
-                .add_filter("원고", &["md", "txt", "mvle"])
-                .pick_files();
-            let Some(files) = picked else {
-                return Ok(Value::Null);
-            };
-            let file_strs: Vec<String> = files
-                .into_iter()
-                .map(|p| p.to_string_lossy().to_string())
-                .collect();
+            let (file_strs, temp_dir_cleanup): (Vec<String>, Option<PathBuf>) =
+                if let Some(items) = args.get("items").and_then(Value::as_array) {
+                    let tmp_dir = state
+                        .user_dir
+                        .join(".tmp-imports")
+                        .join(Uuid::new_v4().to_string());
+                    fs::create_dir_all(&tmp_dir)?;
+                    let mut written = Vec::new();
+                    for (idx, item) in items.iter().enumerate() {
+                        let raw_name = item
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .unwrap_or("imported.md");
+                        let clean_name: String = raw_name
+                            .chars()
+                            .map(|c| {
+                                if matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') {
+                                    '_'
+                                } else {
+                                    c
+                                }
+                            })
+                            .collect();
+                        let b64 = item.get("data").and_then(Value::as_str).unwrap_or("");
+                        let raw = b64
+                            .strip_prefix("data:")
+                            .and_then(|s| s.split_once(";base64,").map(|(_, d)| d))
+                            .unwrap_or(b64);
+                        let bytes = base64::engine::general_purpose::STANDARD
+                            .decode(raw)
+                            .map_err(|_| fail_invalid("가져올 파일을 읽을 수 없습니다."))?;
+                        let sub_dir = tmp_dir.join(format!("{idx}"));
+                        fs::create_dir_all(&sub_dir)?;
+                        let file_path = sub_dir.join(if clean_name.is_empty() {
+                            "imported.md"
+                        } else {
+                            &clean_name
+                        });
+                        fs::write(&file_path, bytes)?;
+                        written.push(file_path.to_string_lossy().to_string());
+                    }
+                    (written, Some(tmp_dir))
+                } else {
+                    #[cfg(not(target_os = "android"))]
+                    {
+                        let picked = FileDialog::new()
+                            .set_title("원고 가져오기 (원본 파일 보존)")
+                            .add_filter("원고", &["md", "txt", "mvle"])
+                            .pick_files();
+                        let Some(files) = picked else {
+                            return Ok(Value::Null);
+                        };
+                        (
+                            files
+                                .into_iter()
+                                .map(|p| p.to_string_lossy().to_string())
+                                .collect(),
+                            None,
+                        )
+                    }
+                    #[cfg(target_os = "android")]
+                    {
+                        return Ok(Value::Null);
+                    }
+                };
             let res = {
                 let mut guard = state.store.lock().unwrap();
                 let st = guard
                     .as_mut()
                     .ok_or_else(|| fail_invalid("Store not initialized"))?;
-                import_files(st, &file_strs, project_id)?
+                import_files(st, &file_strs, project_id)
             };
+            if let Some(tmp_dir) = temp_dir_cleanup {
+                let _ = fs::remove_dir_all(tmp_dir);
+            }
+            let res = res?;
             schedule_notify(app, &state.notify_seq);
             Ok(res)
         }
         "copyManuscript" => {
             if let Some(custom_text) = args.get("text").and_then(|v| v.as_str()) {
-                set_clipboard_text(&text::strip_jsdoc_comments(custom_text))?;
-                return Ok(json!(true));
+                let out_text = text::strip_jsdoc_comments(custom_text);
+                set_clipboard_text(&out_text)?;
+                return Ok(json!({ "copied": true, "text": out_text }));
             }
             let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
             let body = {
@@ -1114,8 +1293,9 @@ fn dispatch_method(
                     .unwrap_or("")
                     .to_string()
             };
-            set_clipboard_text(&plain_text(&body))?;
-            Ok(json!(true))
+            let out_text = plain_text(&body);
+            set_clipboard_text(&out_text)?;
+            Ok(json!({ "copied": true, "text": out_text }))
         }
         "exportDocument" => {
             let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
@@ -1148,25 +1328,42 @@ fn dispatch_method(
                     }
                 })
                 .collect();
-            let picked = FileDialog::new()
-                .set_file_name(format!("{}.md", safe_title))
-                .add_filter("Markdown", &["md"])
-                .add_filter("텍스트", &["txt"])
-                .save_file();
-            let Some(file_path) = picked else {
-                return Ok(json!(false));
-            };
-            let is_txt = file_path
-                .extension()
-                .and_then(|e| e.to_str())
-                .is_some_and(|e| e.eq_ignore_ascii_case("txt"));
-            let out_str = if is_txt {
-                plain_text(&body)
-            } else {
-                md_content
-            };
-            atomic_write_str(&file_path, &out_str)?;
-            Ok(json!(file_path.to_string_lossy().to_string()))
+            #[cfg(not(target_os = "android"))]
+            {
+                let picked = FileDialog::new()
+                    .set_file_name(format!("{}.md", safe_title))
+                    .add_filter("Markdown", &["md"])
+                    .add_filter("텍스트", &["txt"])
+                    .save_file();
+                let Some(file_path) = picked else {
+                    return Ok(json!(false));
+                };
+                let is_txt = file_path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|e| e.eq_ignore_ascii_case("txt"));
+                let out_str = if is_txt {
+                    plain_text(&body)
+                } else {
+                    md_content
+                };
+                atomic_write_str(&file_path, &out_str)?;
+                Ok(json!(file_path.to_string_lossy().to_string()))
+            }
+            #[cfg(target_os = "android")]
+            {
+                let exports_dir = state.user_dir.join("Exports");
+                fs::create_dir_all(&exports_dir)?;
+                let file_name = format!("{}.md", safe_title);
+                let file_path = exports_dir.join(&file_name);
+                atomic_write_str(&file_path, &md_content)?;
+                Ok(json!({
+                    "path": file_path.to_string_lossy().to_string(),
+                    "fileName": file_name,
+                    "content": md_content,
+                    "txtContent": plain_text(&body),
+                }))
+            }
         }
         "reveal" => {
             let id = args
@@ -1239,17 +1436,26 @@ fn dispatch_method(
             conn.insert("conflictPolicy".to_string(), json!(policy));
 
             if ctype == "folder" {
-                let picked = FileDialog::new()
-                    .set_title("로컬 동기화 폴더 선택")
-                    .pick_folder();
-                let Some(folder) = picked else {
-                    return Ok(Value::Null);
-                };
-                let clean = strip_verbatim_prefix(&folder);
-                conn.insert(
-                    "folder".to_string(),
-                    json!(clean.to_string_lossy().to_string()),
-                );
+                #[cfg(not(target_os = "android"))]
+                {
+                    let picked = FileDialog::new()
+                        .set_title("로컬 동기화 폴더 선택")
+                        .pick_folder();
+                    let Some(folder) = picked else {
+                        return Ok(Value::Null);
+                    };
+                    let clean = strip_verbatim_prefix(&folder);
+                    conn.insert(
+                        "folder".to_string(),
+                        json!(clean.to_string_lossy().to_string()),
+                    );
+                }
+                #[cfg(target_os = "android")]
+                {
+                    return Err(fail_invalid(
+                        "모바일에서는 실시간 장치 연결(P2P)이나 WebDAV/FTP 서버 연결을 사용해 주세요.",
+                    ));
+                }
             } else {
                 for k in [
                     "host",
@@ -1361,6 +1567,11 @@ fn dispatch_method(
                     return Err(fail_invalid("자동 동기화 주기는 1분부터 1시간 사이로 지정해 주세요."));
                 }
             }
+            if let Some(value) = args.get("backgroundSyncIntervalSeconds") {
+                if !value.as_u64().is_some_and(|seconds| (60..=3600).contains(&seconds)) {
+                    return Err(fail_invalid("백그라운드 동기화 주기는 1분부터 1시간 사이로 지정해 주세요."));
+                }
+            }
             let new_prefs = {
                 let mut s_guard = state.settings.lock().unwrap();
                 let mut prefs = s_guard
@@ -1453,6 +1664,45 @@ fn dispatch_method(
         }
         "downloadSkill" => Ok(json!(skills::download(window)?)),
         "installFontFiles" => {
+            if let Some(items) = args.get("items").and_then(Value::as_array) {
+                let tmp_dir = state
+                    .user_dir
+                    .join(".tmp-fonts")
+                    .join(Uuid::new_v4().to_string());
+                fs::create_dir_all(&tmp_dir)?;
+                let mut temp_paths = Vec::new();
+                for (idx, item) in items.iter().enumerate() {
+                    let raw_name = item
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or("font.ttf");
+                    let clean_name: String = raw_name
+                        .chars()
+                        .map(|c| if matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') { '_' } else { c })
+                        .collect();
+                    let b64 = item.get("data").and_then(Value::as_str).unwrap_or("");
+                    let raw = b64
+                        .strip_prefix("data:")
+                        .and_then(|s| s.split_once(";base64,").map(|(_, d)| d))
+                        .unwrap_or(b64);
+                    let bytes = base64::engine::general_purpose::STANDARD
+                        .decode(raw)
+                        .map_err(|_| fail_invalid("글꼴 파일을 읽을 수 없습니다."))?;
+                    let sub_dir = tmp_dir.join(format!("{idx}"));
+                    fs::create_dir_all(&sub_dir)?;
+                    let file_path = sub_dir.join(if clean_name.is_empty() { "font.ttf" } else { &clean_name });
+                    fs::write(&file_path, bytes)?;
+                    temp_paths.push(file_path);
+                }
+                let res = fonts::install_font_files(
+                    &state.user_dir,
+                    &state.config_file,
+                    &state.settings,
+                    Some(temp_paths),
+                );
+                let _ = fs::remove_dir_all(tmp_dir);
+                return res;
+            }
             let paths = args.get("paths").and_then(Value::as_array).map(|arr| {
                 arr.iter()
                     .filter_map(|v| v.as_str().map(PathBuf::from))
@@ -1561,6 +1811,7 @@ fn lof_flushed(ok: bool, state: State<'_, AppState>, window: WebviewWindow) {
     if !ok {
         state.quit_requested.store(false, Ordering::SeqCst);
         restore_main_window(window.app_handle());
+        #[cfg(not(target_os = "android"))]
         thread::spawn(move || {
             MessageDialog::new()
                 .set_level(MessageLevel::Warning)
@@ -1575,7 +1826,10 @@ fn lof_flushed(ok: bool, state: State<'_, AppState>, window: WebviewWindow) {
     }
     if state.quit_requested.swap(false, Ordering::SeqCst) {
         state.closing.store(true, Ordering::SeqCst);
-        let _ = window.close();
+        #[cfg(not(target_os = "android"))]
+        {
+            let _ = window.close();
+        }
     } else {
         hide_to_tray(window.app_handle());
     }
@@ -1592,11 +1846,16 @@ fn pin_status(app: &AppHandle) -> Value {
 }
 
 fn hide_to_tray(app: &AppHandle) {
+    #[cfg(not(target_os = "android"))]
     if let Some(window) = app.get_webview_window("main") {
         if window.hide().is_ok() {
             app.state::<pin::PinState>().lock_for_tray();
             let _ = app.emit("lof:pin-state", pin_status(app));
         }
+    }
+    #[cfg(target_os = "android")]
+    {
+        let _ = app;
     }
 }
 
@@ -1611,6 +1870,7 @@ fn restore_main_window(app: &AppHandle) {
 }
 
 fn show_main_window(app: &AppHandle) {
+    #[cfg(not(target_os = "android"))]
     if let Some(window) = app.get_webview_window("main") {
         let was_hidden = !window.is_visible().unwrap_or(true);
         let _ = window.show();
@@ -1620,37 +1880,49 @@ fn show_main_window(app: &AppHandle) {
             auto_sync::resume(app);
         }
     }
+    #[cfg(target_os = "android")]
+    {
+        auto_sync::resume(app);
+    }
 }
 
 /// 집중 모드의 작은 창 허용 여부에 맞춰 창 최소 크기를 적용한다.
 /// 최소 크기를 바꾸면 창 크기를 다시 지정하게 되어 최대화·전체 화면이 풀리므로,
 /// 그 상태에서는 적용을 미뤘다가 창이 일반 상태로 돌아왔을 때(Resized) 적용한다.
 fn apply_window_min_size(window: &WebviewWindow, state: &AppState) {
-    if window.is_maximized().unwrap_or(false)
-        || window.is_fullscreen().unwrap_or(false)
-        || window.is_minimized().unwrap_or(false)
+    #[cfg(target_os = "android")]
     {
+        let _ = (window, state);
         return;
     }
-    let compact = state.compact_window.load(Ordering::SeqCst);
-    if state.compact_applied.swap(compact, Ordering::SeqCst) == compact {
-        return;
-    }
-    let (min_w, min_h) = if compact {
-        (320.0, 260.0)
-    } else {
-        (1000.0, 650.0)
-    };
-    let _ = window.set_min_size(Some(tauri::LogicalSize::new(min_w, min_h)));
-    if !compact {
-        if let (Ok(size), Ok(scale)) = (window.outer_size(), window.scale_factor()) {
-            let logical_w = size.width as f64 / scale;
-            let logical_h = size.height as f64 / scale;
-            if logical_w < min_w || logical_h < min_h {
-                let _ = window.set_size(tauri::LogicalSize::new(
-                    logical_w.max(min_w),
-                    logical_h.max(min_h),
-                ));
+    #[cfg(not(target_os = "android"))]
+    {
+        if window.is_maximized().unwrap_or(false)
+            || window.is_fullscreen().unwrap_or(false)
+            || window.is_minimized().unwrap_or(false)
+        {
+            return;
+        }
+        let compact = state.compact_window.load(Ordering::SeqCst);
+        if state.compact_applied.swap(compact, Ordering::SeqCst) == compact {
+            return;
+        }
+        let (min_w, min_h) = if compact {
+            (320.0, 260.0)
+        } else {
+            (1000.0, 650.0)
+        };
+        let _ = window.set_min_size(Some(tauri::LogicalSize::new(min_w, min_h)));
+        if !compact {
+            if let (Ok(size), Ok(scale)) = (window.outer_size(), window.scale_factor()) {
+                let logical_w = size.width as f64 / scale;
+                let logical_h = size.height as f64 / scale;
+                if logical_w < min_w || logical_h < min_h {
+                    let _ = window.set_size(tauri::LogicalSize::new(
+                        logical_w.max(min_w),
+                        logical_h.max(min_h),
+                    ));
+                }
             }
         }
     }
@@ -1658,7 +1930,14 @@ fn apply_window_min_size(window: &WebviewWindow, state: &AppState) {
 
 #[tauri::command]
 fn window_minimize(window: WebviewWindow) {
-    let _ = window.minimize();
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = window.minimize();
+    }
+    #[cfg(target_os = "android")]
+    {
+        let _ = window;
+    }
 }
 
 #[tauri::command]
@@ -1679,29 +1958,75 @@ fn updater_status(app: AppHandle) -> Value {
 
 #[tauri::command]
 fn window_toggle_maximize(window: WebviewWindow) -> bool {
-    let is_max = window.is_maximized().unwrap_or(false);
-    if is_max {
-        let _ = window.unmaximize();
+    #[cfg(not(target_os = "android"))]
+    {
+        let is_max = window.is_maximized().unwrap_or(false);
+        if is_max {
+            let _ = window.unmaximize();
+            false
+        } else {
+            let _ = window.maximize();
+            true
+        }
+    }
+    #[cfg(target_os = "android")]
+    {
+        let _ = window;
         false
-    } else {
-        let _ = window.maximize();
-        true
     }
 }
 
 #[tauri::command]
 fn window_is_maximized(window: WebviewWindow) -> bool {
-    window.is_maximized().unwrap_or(false)
+    #[cfg(not(target_os = "android"))]
+    {
+        window.is_maximized().unwrap_or(false)
+    }
+    #[cfg(target_os = "android")]
+    {
+        let _ = window;
+        false
+    }
 }
 
 #[tauri::command]
 fn window_close(window: WebviewWindow) {
-    let _ = window.close();
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = window.close();
+    }
+    #[cfg(target_os = "android")]
+    {
+        let _ = window;
+    }
 }
 
 #[tauri::command]
 fn window_start_dragging(window: WebviewWindow) {
-    let _ = window.start_dragging();
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = window.start_dragging();
+    }
+    #[cfg(target_os = "android")]
+    {
+        let _ = window;
+    }
+}
+
+fn show_startup_error(msg: impl Into<String>) {
+    let msg = msg.into();
+    #[cfg(not(target_os = "android"))]
+    {
+        MessageDialog::new()
+            .set_level(MessageLevel::Error)
+            .set_title("Lof Writer 시작 실패")
+            .set_description(msg)
+            .show();
+    }
+    #[cfg(target_os = "android")]
+    {
+        eprintln!("Lof Writer 시작 실패: {msg}");
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1715,12 +2040,12 @@ pub fn run() {
     }
 
     let user_dir = get_user_dir();
+    #[cfg(not(target_os = "android"))]
     let instance = match single_instance::SingleInstance::acquire(&user_dir) {
         Ok(Some(instance)) => instance,
         Ok(None) => return,
         Err(error) => {
-            MessageDialog::new().set_level(MessageLevel::Error)
-                .set_title("Lof Writer 시작 실패").set_description(error.to_string()).show();
+            show_startup_error(error.to_string());
             return;
         }
     };
@@ -1733,19 +2058,14 @@ pub fn run() {
     }
 
     if let Err(e) = fs::create_dir_all(&user_dir) {
-        MessageDialog::new()
-            .set_level(MessageLevel::Error)
-            .set_title("Lof Writer 시작 실패")
-            .set_description(e.to_string())
-            .show();
+        show_startup_error(e.to_string());
         return;
     }
 
     let pin_state = match pin::PinState::load(user_dir.join("pin.json")) {
         Ok(pin) => pin,
         Err(error) => {
-            MessageDialog::new().set_level(MessageLevel::Error)
-                .set_title("Lof Writer 시작 실패").set_description(error.to_string()).show();
+            show_startup_error(error.to_string());
             return;
         }
     };
@@ -1754,11 +2074,7 @@ pub fn run() {
         Ok(raw) => serde_json::from_str(&raw).unwrap_or_else(|_| json!({})),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => json!({}),
         Err(e) => {
-            MessageDialog::new()
-                .set_level(MessageLevel::Error)
-                .set_title("Lof Writer 시작 실패")
-                .set_description(e.to_string())
-                .show();
+            show_startup_error(e.to_string());
             return;
         }
     };
@@ -1766,27 +2082,23 @@ pub fn run() {
         settings = json!({});
     }
     if let Err(error) = library_sync_reset::migrate_settings(&config_file, &mut settings) {
-        MessageDialog::new()
-            .set_level(MessageLevel::Error)
-            .set_title("Lof Writer 시작 실패")
-            .set_description(format!("서버 연결 정보를 초기화하지 못했습니다: {}", error.message))
-            .show();
+        show_startup_error(format!("서버 연결 정보를 초기화하지 못했습니다: {}", error.message));
         return;
     }
     if let Err(error) = file_sync_reset::migrate(&config_file, &mut settings) {
-        MessageDialog::new()
-            .set_level(MessageLevel::Error)
-            .set_title("Lof Writer 시작 실패")
-            .set_description(format!("파일 동기화 연결을 초기화하지 못했습니다: {}", error.message))
-            .show();
+        show_startup_error(format!("파일 동기화 연결을 초기화하지 못했습니다: {}", error.message));
         return;
     }
     // 허용 범위 밖의 기존 주기는 기본 5분으로 바꾸고 범위 안의 설정은 유지한다.
     let sync_interval = auto_sync::interval_seconds(&settings);
+    let bg_sync_enabled = auto_sync::background_enabled(&settings);
+    let bg_sync_interval = auto_sync::background_interval_seconds(&settings);
     if !settings.get("preferences").is_some_and(Value::is_object) {
         settings["preferences"] = json!({});
     }
     settings["preferences"]["syncIntervalSeconds"] = json!(sync_interval);
+    settings["preferences"]["backgroundSyncEnabled"] = json!(bg_sync_enabled);
+    settings["preferences"]["backgroundSyncIntervalSeconds"] = json!(bg_sync_interval);
     if settings
         .get("deviceId")
         .and_then(|v| v.as_str())
@@ -1831,11 +2143,7 @@ pub fn run() {
     ) {
         Ok(st) => st,
         Err(e) => {
-            MessageDialog::new()
-                .set_level(MessageLevel::Error)
-                .set_title("Lof Writer 시작 실패")
-                .set_description(e.message)
-                .show();
+            show_startup_error(e.message);
             return;
         }
     };
@@ -1869,11 +2177,7 @@ pub fn run() {
     ) {
         Ok(srv) => srv,
         Err(e) => {
-            MessageDialog::new()
-                .set_level(MessageLevel::Error)
-                .set_title("Lof Writer 시작 실패")
-                .set_description(e.message)
-                .show();
+            show_startup_error(e.message);
             return;
         }
     };
@@ -1908,9 +2212,13 @@ pub fn run() {
 
     let user_dir_for_exit = user_dir.clone();
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(not(target_os = "android"))]
+    let builder = builder
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .manage(instance)
+        .manage(instance);
+
+    builder
         .manage(state)
         .manage(pin_state)
         .manage(auto_sync::AutoSyncState::default())
@@ -1927,41 +2235,44 @@ pub fn run() {
             updater_status,
         ])
         .setup(move |app| {
-            let open = MenuItem::with_id(app, "tray-open", "Lof Writer 열기", true, None::<&str>)?;
-            let quit = MenuItem::with_id(app, "tray-quit", "종료", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&open, &quit])?;
-            let icon = image::load_from_memory(include_bytes!("../icons/icon.png"))?.to_rgba8();
-            let (width, height) = icon.dimensions();
-            TrayIconBuilder::with_id("main-tray")
-                .icon(tauri::image::Image::new_owned(icon.into_raw(), width, height))
-                .tooltip("Lof Writer")
-                .menu(&menu)
-                .show_menu_on_left_click(false)
-                .on_menu_event(|app, event| match event.id.as_ref() {
-                    "tray-open" => restore_main_window(app),
-                    "tray-quit" => {
-                        if let Some(window) = app.get_webview_window("main") {
-                            let state: State<AppState> = app.state();
-                            state.quit_requested.store(true, Ordering::SeqCst);
-                            if window.close().is_err() {
-                                state.quit_requested.store(false, Ordering::SeqCst);
-                                restore_main_window(app);
+            #[cfg(not(target_os = "android"))]
+            {
+                let open = MenuItem::with_id(app, "tray-open", "Lof Writer 열기", true, None::<&str>)?;
+                let quit = MenuItem::with_id(app, "tray-quit", "종료", true, None::<&str>)?;
+                let menu = Menu::with_items(app, &[&open, &quit])?;
+                let icon = image::load_from_memory(include_bytes!("../icons/icon.png"))?.to_rgba8();
+                let (width, height) = icon.dimensions();
+                TrayIconBuilder::with_id("main-tray")
+                    .icon(tauri::image::Image::new_owned(icon.into_raw(), width, height))
+                    .tooltip("Lof Writer")
+                    .menu(&menu)
+                    .show_menu_on_left_click(false)
+                    .on_menu_event(|app, event| match event.id.as_ref() {
+                        "tray-open" => restore_main_window(app),
+                        "tray-quit" => {
+                            if let Some(window) = app.get_webview_window("main") {
+                                let state: State<AppState> = app.state();
+                                state.quit_requested.store(true, Ordering::SeqCst);
+                                if window.close().is_err() {
+                                    state.quit_requested.store(false, Ordering::SeqCst);
+                                    restore_main_window(app);
+                                }
                             }
                         }
-                    }
-                    _ => {}
-                })
-                .on_tray_icon_event(|tray, event| {
-                    if let TrayIconEvent::Click {
-                        button: MouseButton::Left,
-                        button_state: MouseButtonState::Up,
-                        ..
-                    } = event
-                    {
-                        restore_main_window(tray.app_handle());
-                    }
-                })
-                .build(app)?;
+                        _ => {}
+                    })
+                    .on_tray_icon_event(|tray, event| {
+                        if let TrayIconEvent::Click {
+                            button: MouseButton::Left,
+                            button_state: MouseButtonState::Up,
+                            ..
+                        } = event
+                        {
+                            restore_main_window(tray.app_handle());
+                        }
+                    })
+                    .build(app)?;
+            }
             let handle = app.handle().clone();
             {
                 let mut h_guard = app_handle_holder.lock().unwrap();
@@ -1993,12 +2304,15 @@ pub fn run() {
                 color
             };
             if let Some(win) = app.get_webview_window("main") {
-                if let Ok(img) = image::load_from_memory(include_bytes!("../icons/icon.png")) {
-                    let rgba = img.to_rgba8();
-                    let (w, h) = rgba.dimensions();
-                    let _ = win.set_icon(tauri::image::Image::new_owned(rgba.into_raw(), w, h));
-                } else if let Some(default_icon) = app.default_window_icon().cloned() {
-                    let _ = win.set_icon(default_icon);
+                #[cfg(not(target_os = "android"))]
+                {
+                    if let Ok(img) = image::load_from_memory(include_bytes!("../icons/icon.png")) {
+                        let rgba = img.to_rgba8();
+                        let (w, h) = rgba.dimensions();
+                        let _ = win.set_icon(tauri::image::Image::new_owned(rgba.into_raw(), w, h));
+                    } else if let Some(default_icon) = app.default_window_icon().cloned() {
+                        let _ = win.set_icon(default_icon);
+                    }
                 }
                 #[cfg(windows)]
                 {
@@ -2081,93 +2395,101 @@ pub fn run() {
             auto_sync::start(&handle);
             realtime::start(&handle);
             git_worker::start(&handle);
+            #[cfg(not(target_os = "android"))]
             app.state::<single_instance::SingleInstance>().listen(&handle);
             Ok(())
         })
         .on_window_event(move |window, event| {
-            if let tauri::WindowEvent::Resized(_) = event {
-                let app = window.app_handle().clone();
-                let st: State<AppState> = app.state();
-                if st.compact_window.load(Ordering::SeqCst)
-                    == st.compact_applied.load(Ordering::SeqCst)
-                {
-                    return;
-                }
-                let label = window.label().to_string();
-                let app_for_main = app.clone();
-                let _ = app.run_on_main_thread(move || {
-                    if let Some(w) = app_for_main.get_webview_window(&label) {
-                        let st: State<AppState> = app_for_main.state();
-                        apply_window_min_size(&w, &st);
-                    }
-                });
-                return;
+            #[cfg(target_os = "android")]
+            {
+                let _ = (window, event);
             }
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                if window.label() != "main" {
-                    return;
-                }
-                let app = window.app_handle();
-                let st: State<AppState> = app.state();
-                if st.closing.load(Ordering::SeqCst) {
-                    return;
-                }
-                api.prevent_close();
-                if st
-                    .close_pending
-                    .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-                    .is_err()
-                {
-                    return;
-                }
-                let my_seq = st.close_seq.fetch_add(1, Ordering::SeqCst) + 1;
-                let _ = window.emit("lof:flush", ());
-
-                let close_pending_clone = Arc::clone(&st.close_pending);
-                let closing_clone = Arc::clone(&st.closing);
-                let close_seq_clone = Arc::clone(&st.close_seq);
-                let win_clone = window.clone();
-
-                thread::spawn(move || {
-                    thread::sleep(Duration::from_secs(10));
-                    if !close_pending_clone.load(Ordering::SeqCst)
-                        || close_seq_clone.load(Ordering::SeqCst) != my_seq
+            #[cfg(not(target_os = "android"))]
+            {
+                if let tauri::WindowEvent::Resized(_) = event {
+                    let app = window.app_handle().clone();
+                    let st: State<AppState> = app.state();
+                    if st.compact_window.load(Ordering::SeqCst)
+                        == st.compact_applied.load(Ordering::SeqCst)
                     {
                         return;
                     }
-                    let state: State<AppState> = win_clone.state();
-                    if !state.quit_requested.load(Ordering::SeqCst) {
+                    let label = window.label().to_string();
+                    let app_for_main = app.clone();
+                    let _ = app.run_on_main_thread(move || {
+                        if let Some(w) = app_for_main.get_webview_window(&label) {
+                            let st: State<AppState> = app_for_main.state();
+                            apply_window_min_size(&w, &st);
+                        }
+                    });
+                    return;
+                }
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    if window.label() != "main" {
+                        return;
+                    }
+                    let app = window.app_handle();
+                    let st: State<AppState> = app.state();
+                    if st.closing.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    api.prevent_close();
+                    if st
+                        .close_pending
+                        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                        .is_err()
+                    {
+                        return;
+                    }
+                    let my_seq = st.close_seq.fetch_add(1, Ordering::SeqCst) + 1;
+                    let _ = window.emit("lof:flush", ());
+
+                    let close_pending_clone = Arc::clone(&st.close_pending);
+                    let closing_clone = Arc::clone(&st.closing);
+                    let close_seq_clone = Arc::clone(&st.close_seq);
+                    let win_clone = window.clone();
+
+                    thread::spawn(move || {
+                        thread::sleep(Duration::from_secs(10));
+                        if !close_pending_clone.load(Ordering::SeqCst)
+                            || close_seq_clone.load(Ordering::SeqCst) != my_seq
+                        {
+                            return;
+                        }
+                        let state: State<AppState> = win_clone.state();
+                        if !state.quit_requested.load(Ordering::SeqCst) {
+                            close_pending_clone.store(false, Ordering::SeqCst);
+                            close_seq_clone.fetch_add(1, Ordering::SeqCst);
+                            hide_to_tray(win_clone.app_handle());
+                            return;
+                        }
+                        restore_main_window(win_clone.app_handle());
+                        let res = MessageDialog::new()
+                            .set_level(MessageLevel::Warning)
+                            .set_title("Lof Writer")
+                            .set_description(
+                                "편집기 응답을 기다리고 있습니다.\n\n강제 종료하면 마지막 입력이 유실될 수 있습니다.",
+                            )
+                            .set_buttons(MessageButtons::OkCancelCustom(
+                                "종료".to_string(),
+                                "계속 편집".to_string(),
+                            ))
+                            .show();
+                        if close_seq_clone.load(Ordering::SeqCst) != my_seq {
+                            return;
+                        }
                         close_pending_clone.store(false, Ordering::SeqCst);
-                        close_seq_clone.fetch_add(1, Ordering::SeqCst);
-                        hide_to_tray(win_clone.app_handle());
-                        return;
-                    }
-                    restore_main_window(win_clone.app_handle());
-                    let res = MessageDialog::new()
-                        .set_level(MessageLevel::Warning)
-                        .set_title("Lof Writer")
-                        .set_description(
-                            "편집기 응답을 기다리고 있습니다.\n\n강제 종료하면 마지막 입력이 유실될 수 있습니다.",
-                        )
-                        .set_buttons(MessageButtons::OkCancelCustom(
-                            "종료".to_string(),
-                            "계속 편집".to_string(),
-                        ))
-                        .show();
-                    if close_seq_clone.load(Ordering::SeqCst) != my_seq {
-                        return;
-                    }
-                    close_pending_clone.store(false, Ordering::SeqCst);
-                    state.quit_requested.store(false, Ordering::SeqCst);
-                    if matches!(
-                        res,
-                        MessageDialogResult::Ok | MessageDialogResult::Custom(_)
-                    ) && res != MessageDialogResult::Custom("계속 편집".to_string())
-                    {
-                        closing_clone.store(true, Ordering::SeqCst);
-                        let _ = win_clone.close();
-                    }
-                });
+                        state.quit_requested.store(false, Ordering::SeqCst);
+                        if matches!(
+                            res,
+                            MessageDialogResult::Ok | MessageDialogResult::Custom(_)
+                        ) && res != MessageDialogResult::Custom("계속 편집".to_string())
+                        {
+                            closing_clone.store(true, Ordering::SeqCst);
+                            let _ = win_clone.close();
+                        }
+                    });
+                }
             }
         })
         .build(tauri::generate_context!())

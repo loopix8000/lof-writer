@@ -512,7 +512,7 @@ export function useFileTree(options: Options) {
   const boundEpisode = docs.find(doc => doc.id === treeEpisodeId && doc.kind === "episode");
   const boundDocuments = boundEpisode ? docs.filter(doc => doc.kind !== "episode" && doc.episodeId === boundEpisode.id) : [];
 
-  useEffect(() => { if (view === "workspace" && projectId) loadMemoFolders().catch(() => { }); }, [view, projectId, lib]);
+  useEffect(() => { if ((view === "workspace" || view === "project") && projectId) loadMemoFolders().catch(() => { }); }, [view, projectId, lib]);
   const clearSelection = useCallback(() => setTreeSelection([]), []);
   function changeRename(value: string) {
     if (!renamingRef.current) return;

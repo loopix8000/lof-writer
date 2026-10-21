@@ -115,18 +115,27 @@ export function useDocumentSession(options: Options) {
   useEffect(() => () => { if (renderTimer.current) clearTimeout(renderTimer.current); }, []);
   const shownActive = pendingActive.current ?? active;
 
+  const isMobileEnv = () =>
+    typeof window !== "undefined" &&
+    (window.innerWidth <= 768 || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent));
+
   const autoSaveCondition = useCallback((d: DraftState) => {
+    const mobile = isMobileEnv();
     const maxMinutes = Math.max(1, Number(latest.current.prefs?.historyMaxMinutes ?? 1));
-    const minChars = Math.max(0, Number(latest.current.prefs?.historyMinChars ?? 200));
-    const intervalMs = maxMinutes * 60_000;
+    const minChars = mobile ? 1 : Math.max(0, Number(latest.current.prefs?.historyMinChars ?? 200));
+    const intervalMs = mobile ? 2500 : maxMinutes * 60_000;
     const elapsed = Date.now() - d.lastSavedAt;
     const chars = changedChars(d.base.body, d.doc.body);
+    const metaChanged =
+      d.base.title !== d.doc.title ||
+      d.base.description !== d.doc.description ||
+      d.base.authorComment !== d.doc.authorComment;
     return {
       intervalMs,
       elapsed,
       chars,
       minChars,
-      met: chars >= minChars && elapsed >= intervalMs,
+      met: (chars >= minChars || (mobile && metaChanged)) && elapsed >= intervalMs,
     };
   }, []);
 
@@ -165,9 +174,10 @@ export function useDocumentSession(options: Options) {
     }
     const d = draft.current;
     if (!d || d.seq === d.saved || composing.current || conflictRef.current) return;
+    const mobile = isMobileEnv();
     const { intervalMs, elapsed, chars, minChars } = autoSaveCondition(d);
-    if (chars < minChars) return;
-    const delay = Math.max(650, intervalMs - elapsed);
+    if (!mobile && chars < minChars) return;
+    const delay = mobile ? 2500 : Math.max(650, intervalMs - elapsed);
     timer.current = setTimeout(() => {
       timer.current = null;
       void flushRef.current({ auto: true }).catch(report);

@@ -20,7 +20,7 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet},
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Condvar, Mutex,
     },
     time::{Duration, Instant},
@@ -45,6 +45,8 @@ pub struct Realtime {
     urgent: Mutex<bool>,
     // 상대가 먼저 접속했거나 gossip으로 다시 보인 장치는 재시도 대기를 건너뛰고 바로 연결한다.
     reconnect: Mutex<HashSet<String>>,
+    backgrounded: AtomicBool,
+    clear_retries: AtomicBool,
     wake: Condvar,
 }
 struct Invitation {
@@ -216,7 +218,13 @@ fn net(error: impl ToString) -> LofError {
 fn device_name() -> String {
     std::env::var("COMPUTERNAME")
         .or_else(|_| std::env::var("HOSTNAME"))
-        .unwrap_or_else(|_| "Lof Writer".into())
+        .unwrap_or_else(|_| {
+            if cfg!(target_os = "android") {
+                "Android 기기".into()
+            } else {
+                "Lof Writer".into()
+            }
+        })
         .chars()
         .take(100)
         .collect()
@@ -468,6 +476,9 @@ fn authorized(app: &AppHandle, peer: &str, remote_vault: &str) -> Result<Value, 
 pub fn changed(app: &AppHandle) {
     app.state::<Realtime>().dirty.fetch_add(1, Ordering::SeqCst);
 }
+pub fn configure(app: &AppHandle) {
+    app.state::<Realtime>().wake.notify_all();
+}
 fn wake(app: &AppHandle) {
     let rt = app.state::<Realtime>();
     *rt.urgent.lock().unwrap() = true;
@@ -477,6 +488,18 @@ fn wake(app: &AppHandle) {
 fn remote_changed(app: &AppHandle) {
     changed(app);
     wake(app);
+}
+pub fn set_background(app: &AppHandle, background: bool) {
+    let rt = app.state::<Realtime>();
+    let was_bg = rt.backgrounded.swap(background, Ordering::SeqCst);
+    if background && !was_bg {
+        // 백그라운드 전환 직전 대기 중인 변경분을 즉시 전송하도록 한 번 깨운다.
+        wake(app);
+    } else if !background && was_bg {
+        // 포그라운드 복귀 시 재시도 대기를 초기화하고 즉시 연결·동기화를 재개한다.
+        rt.clear_retries.store(true, Ordering::SeqCst);
+        remote_changed(app);
+    }
 }
 fn release(app: &AppHandle, session: &str) {
     let realtime = app.state::<Realtime>();
@@ -997,6 +1020,9 @@ pub fn start(app: &AppHandle) {
                     }
                     keep
                 });
+                if rt.clear_retries.swap(false, Ordering::SeqCst) {
+                    retry.clear();
+                }
                 for endpoint in rt.reconnect.lock().unwrap().drain() {
                     retry.retain(|id, _| id.split(':').next() != Some(endpoint.as_str()));
                 }
@@ -1115,12 +1141,42 @@ pub fn start(app: &AppHandle) {
                     announced = generation;
                 }
                 // 변경이 없으면 파일 목록이나 본문을 읽지 않고 대기한다.
-                let urgent = rt.urgent.lock().unwrap();
-                let (mut urgent, _) = rt
-                    .wake
-                    .wait_timeout_while(urgent, Duration::from_secs(5), |urgent| !*urgent)
-                    .unwrap();
-                *urgent = false;
+                loop {
+                    let bg = rt.backgrounded.load(Ordering::SeqCst);
+                    let (bg_enabled, bg_seconds) = {
+                        let state = app.state::<AppState>();
+                        let settings = state.settings.lock().unwrap();
+                        (
+                            crate::auto_sync::background_enabled(&settings),
+                            crate::auto_sync::background_interval_seconds(&settings),
+                        )
+                    };
+                    let wait_dur = if bg {
+                        Duration::from_secs(bg_seconds)
+                    } else {
+                        Duration::from_secs(5)
+                    };
+                    let urgent = rt.urgent.lock().unwrap();
+                    let (mut urgent, _) = rt
+                        .wake
+                        .wait_timeout_while(urgent, wait_dur, |urgent| {
+                            if crate::auto_sync::stopped(&app) {
+                                return false;
+                            }
+                            if rt.backgrounded.load(Ordering::SeqCst) && !bg_enabled {
+                                return true;
+                            }
+                            !*urgent
+                        })
+                        .unwrap();
+                    *urgent = false;
+                    if crate::auto_sync::stopped(&app)
+                        || !rt.backgrounded.load(Ordering::SeqCst)
+                        || crate::auto_sync::background_enabled(&app.state::<AppState>().settings.lock().unwrap())
+                    {
+                        break;
+                    }
+                }
             }
             drop(subscription);
             runtime.block_on(node.close());
@@ -1263,28 +1319,37 @@ pub fn command(app: &AppHandle, method: &str, args: &Value) -> Result<Value, Lof
         return Ok(json!(true));
     }
     if method == "realtimeClipboard" {
-        let mut clipboard = arboard::Clipboard::new().map_err(|_| {
-            fail_invalid("클립보드를 사용할 수 없습니다. 페어링 코드를 직접 붙여 넣어 주세요.")
-        })?;
-        if args["action"] == "write" {
-            let text = args["text"].as_str().unwrap_or("");
-            if text.len() > 16_384 {
-                return Err(fail_invalid("페어링 코드가 너무 깁니다."));
-            }
-            clipboard.set_text(text.to_owned()).map_err(|_| {
-                fail_invalid("코드를 복사하지 못했습니다. 내용을 펼쳐 직접 복사해 주세요.")
+        #[cfg(not(target_os = "android"))]
+        {
+            let mut clipboard = arboard::Clipboard::new().map_err(|_| {
+                fail_invalid("클립보드를 사용할 수 없습니다. 페어링 코드를 직접 붙여 넣어 주세요.")
             })?;
-            return Ok(json!(true));
+            if args["action"] == "write" {
+                let text = args["text"].as_str().unwrap_or("");
+                if text.len() > 16_384 {
+                    return Err(fail_invalid("페어링 코드가 너무 깁니다."));
+                }
+                clipboard.set_text(text.to_owned()).map_err(|_| {
+                    fail_invalid("코드를 복사하지 못했습니다. 내용을 펼쳐 직접 복사해 주세요.")
+                })?;
+                return Ok(json!(true));
+            }
+            let text = clipboard.get_text().map_err(|_| {
+                fail_invalid("클립보드에 텍스트가 없습니다. 다른 장치에서 페어링 코드를 복사해 주세요.")
+            })?;
+            if text.len() > 16_384 {
+                return Err(fail_invalid(
+                    "클립보드의 내용이 너무 깁니다. 페어링 코드만 복사해 주세요.",
+                ));
+            }
+            return Ok(json!(text));
         }
-        let text = clipboard.get_text().map_err(|_| {
-            fail_invalid("클립보드에 텍스트가 없습니다. 다른 장치에서 페어링 코드를 복사해 주세요.")
-        })?;
-        if text.len() > 16_384 {
+        #[cfg(target_os = "android")]
+        {
             return Err(fail_invalid(
-                "클립보드의 내용이 너무 깁니다. 페어링 코드만 복사해 주세요.",
+                "모바일에서는 클립보드 버튼을 통해 브라우저 클립보드를 사용합니다.",
             ));
         }
-        return Ok(json!(text));
     }
     if method == "realtimeRename" {
         let current = root(app)?;

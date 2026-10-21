@@ -8,6 +8,7 @@ use crate::store::{
 };
 use crate::text::{plain_text, strip_jsdoc_comments};
 use regex::Regex;
+#[cfg(not(target_os = "android"))]
 use rfd::FileDialog;
 use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
@@ -565,11 +566,18 @@ pub fn export_library_or_project(
             .unwrap_or("제목 없는 작품")
             .to_string();
 
+        #[cfg(not(target_os = "android"))]
         let Some(picked) = FileDialog::new()
             .set_title(format!("'{}' 내보낼 폴더 선택", proj_title))
             .pick_folder()
         else {
             return Ok(Value::Null);
+        };
+        #[cfg(target_os = "android")]
+        let picked = {
+            let dir = crate::get_user_dir().join("Exports");
+            fs::create_dir_all(&dir)?;
+            dir
         };
         let parent_dir = validate_export_destination(&picked, &store_root, common_root)?;
         let mut taken_dirs = HashSet::new();
@@ -623,11 +631,18 @@ pub fn export_library_or_project(
         (store.root.clone(), store.default_manual_line_break, projects)
     };
 
+    #[cfg(not(target_os = "android"))]
     let Some(picked) = FileDialog::new()
         .set_title("서재를 내보낼 폴더 선택")
         .pick_folder()
     else {
         return Ok(Value::Null);
+    };
+    #[cfg(target_os = "android")]
+    let picked = {
+        let dir = crate::get_user_dir().join("Exports");
+        fs::create_dir_all(&dir)?;
+        dir
     };
     let parent_dir = validate_export_destination(&picked, &store_root, common_root)?;
     let vault_name = store_root

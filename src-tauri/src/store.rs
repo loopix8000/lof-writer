@@ -1108,12 +1108,14 @@ impl Store {
         if !file.exists() {
             return Ok(());
         }
-        if trash::delete(file).is_err() {
-            if file.is_dir() {
-                fs::remove_dir_all(file)?;
-            } else {
-                fs::remove_file(file)?;
-            }
+        #[cfg(not(target_os = "android"))]
+        if trash::delete(file).is_ok() {
+            return Ok(());
+        }
+        if file.is_dir() {
+            fs::remove_dir_all(file)?;
+        } else {
+            fs::remove_file(file)?;
         }
         Ok(())
     }

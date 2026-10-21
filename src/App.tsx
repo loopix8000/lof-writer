@@ -22,7 +22,9 @@ import { prepareEditorFonts } from "./font-loader";
 
 import {
   Archive,
+  ArrowLeft,
   Bookmark as BookmarkIcon,
+  BookOpen,
   Check,
   Cloud,
   Code2,
@@ -37,6 +39,7 @@ import {
   Maximize,
   Moon,
   MoreHorizontal,
+  PanelLeft,
   Pilcrow,
   Search,
   Settings,
@@ -113,6 +116,7 @@ import { useManuscriptCounts } from "./useManuscriptCounts";
 import { useProjectReorder } from "./useProjectReorder";
 import { useProjectSyncUpdates } from "./useSyncFileUpdates";
 import Writer from "./Writer";
+import MobileShell from "./mobile/MobileShell";
 // 저장할 때마다 임시 원고를 먼저 쓰고 저장이 끝나면 지운다. 그 사이에 목록을 새로 읽으면
 // 편집 중인 원고의 임시본이 잡히므로, 앱을 연 뒤 지금 편집 중인 원고에 쓴 임시본은 복구 대상에서 뺀다.
 const appStartedAt = Date.now();
@@ -150,8 +154,25 @@ export default function App() {
     // 집중 모드의 파일 트리는 평소 상태와 따로 두고, 집중 모드에 들어갈 때마다 닫힌 채로 시작한다.
     [focusTree, setFocusTree] = useState(false),
     [viewer, setViewer] = useState<{ src: string; alt: string } | null>(null),
-    [sidebar, setSidebar] = useState(true),
-    [right, setRight] = useState(true),
+    [isMobile, setIsMobile] = useState(
+      () =>
+        typeof window !== "undefined" &&
+        (window.innerWidth <= 768 || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)),
+    ),
+    [sidebar, setSidebar] = useState(
+      () =>
+        !(
+          typeof window !== "undefined" &&
+          (window.innerWidth <= 768 || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent))
+        ),
+    ),
+    [right, setRight] = useState(
+      () =>
+        !(
+          typeof window !== "undefined" &&
+          (window.innerWidth <= 768 || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent))
+        ),
+    ),
     // 검색: 빠른 열기(Ctrl+P) 목록, 왼쪽 본문 검색 패널(Ctrl+Shift+F)과 검색 결과로 연 위치.
     [quickOpen, setQuickOpen] = useState(false),
     [quickItems, setQuickItems] = useState<QuickItem[]>([]),
@@ -376,12 +397,50 @@ export default function App() {
     };
     const offAutoSync = window.lof.onAutoSync?.(updateAutoSync);
     if (window.lof.onAutoSync) call<AutoSyncStatus>("autoSyncStatus").then(updateAutoSync).catch(() => {});
+
+    const onResize = () => {
+      const mobileNow =
+        window.innerWidth <= 768 || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+      setIsMobile((prev) => {
+        if (!prev && mobileNow) {
+          setSidebar(false);
+          setRight(false);
+        }
+        return mobileNow;
+      });
+    };
+    window.addEventListener("resize", onResize);
+
+    const handleVisibility = () => {
+      if (document.visibilityState === "hidden") {
+        void flush()
+          .catch(() => {})
+          .finally(() => {
+            void flushWorkspaceState().catch(() => {});
+            void call("appLifecycle", { foreground: false }).catch(() => {});
+          });
+      } else if (document.visibilityState === "visible") {
+        void call("appLifecycle", { foreground: true }).catch(() => {});
+        waitForSave().then(() => refresh()).catch(report);
+      }
+    };
+    const handlePageHide = () => {
+      void flush().catch(() => {});
+      void flushWorkspaceState().catch(() => {});
+      void call("appLifecycle", { foreground: false }).catch(() => {});
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    window.addEventListener("pagehide", handlePageHide);
+
     return () => {
       off();
       offFlush();
       offAutoSync?.();
+      window.removeEventListener("resize", onResize);
+      document.removeEventListener("visibilitychange", handleVisibility);
+      window.removeEventListener("pagehide", handlePageHide);
     };
-  }, [refresh, flushForClose, waitForSave, report]);
+  }, [refresh, flush, flushForClose, waitForSave, report]);
   // beforeCommit은 문서를 읽은 뒤 화면 상태를 바꾸기 직전에 부른다. 같은 렌더에 묶여 중간 상태가 그려지지 않는다.
   async function navigate(destination: Destination, historyIndex?: number, beforeCommit?: () => boolean | void) {
     const seq = ++navigationSeq.current;
@@ -420,6 +479,12 @@ export default function App() {
     navigationRef.current = updated;
     setNavigation(updated);
     setMemoOpen(false);
+    if (isMobile) {
+      setSidebar(false);
+      setFocusTree(false);
+      setSearchOpen(false);
+      setRight(false);
+    }
     if (doc) {
       commitOpenDocument(doc, {
         sameProject: doc.projectId === projectRef.current,
@@ -817,7 +882,7 @@ export default function App() {
     session.remapDocuments(before, from, to, libraryRef.current.documents, projectRef.current);
   }
 
-  async function openSettings(type: "settings" | "serverSync" = "settings") {
+  async function loadSettingsData() {
     await flush();
     const s = await call("settings");
     setConnections(s.connections);
@@ -827,12 +892,36 @@ export default function App() {
     }
     setCommonMemoPath(s.commonMemoPath || "");
     if (active?.kind) setTypesettingKind(active.kind === "episode" ? "episode" : "document");
+  }
+  async function openSettings(type: "settings" | "serverSync" = "settings") {
+    await loadSettingsData();
     setDialog({ type });
+  }
+  function updateProjectWriting(rules: WritingRules) {
+    const id = projectId;
+    pendingWriting.current.set(id, rules);
+    setLib(current => ({...current, projects: current.projects.map(p => p.id === id ? {...p, writing: rules} : p)}));
+    writingQueue.current = writingQueue.current.catch(() => {}).then(async () => {
+      await call("updateProject", {id, writing: rules});
+      if (pendingWriting.current.get(id) === rules) {
+        pendingWriting.current.delete(id);
+        await refresh();
+      }
+    }).catch(async e => {
+      if (pendingWriting.current.get(id) === rules) pendingWriting.current.delete(id);
+      report(e);
+      await refresh();
+      throw e;
+    });
+    writingQueue.current.catch(() => {});
   }
   function renderSyncConnections() {
     return <SyncConnections connections={connections} setConnections={setConnections}
       autoSync={autoSync} intervalSeconds={prefs.syncIntervalSeconds ?? 300}
       onIntervalChange={(seconds) => savePrefs({ syncIntervalSeconds: seconds })}
+      backgroundEnabled={prefs.backgroundSyncEnabled !== false}
+      backgroundIntervalSeconds={prefs.backgroundSyncIntervalSeconds ?? 300}
+      onBackgroundSyncChange={(patch) => savePrefs(patch)}
       busy={busy} setBusy={setBusy} onSync={doSync} message={message} report={report} />;
   }
   async function chooseVault() {
@@ -1124,6 +1213,28 @@ export default function App() {
       >
         <div className="editor-actions">
           <div className="save-status-group">
+            {isMobile && (
+              <>
+                <button
+                  type="button"
+                  className="mobile-editor-nav-btn"
+                  aria-label="작품 화면으로"
+                  title="작품 화면으로"
+                  onClick={attempt(() => goView("project", active.projectId))}
+                >
+                  <ArrowLeft size={16} />
+                </button>
+                <button
+                  type="button"
+                  className={`mobile-editor-nav-btn ${treeOpen ? "active" : ""}`}
+                  aria-label="문서 목록 열기"
+                  title="문서 목록"
+                  onClick={toggleTree}
+                >
+                  <PanelLeft size={16} />
+                </button>
+              </>
+            )}
           <span
             className={`save-indicator ${groupSaveStatus !== "저장됨" ? "pending" : ""}`}
           >
@@ -1131,6 +1242,21 @@ export default function App() {
             {groupSaveStatus}
           </span>
           <SyncStatus status={autoSync} checking={syncChecking} available={syncAvailable} editing={groupSaveStatus !== "저장됨"} />
+          {isMobile && (
+            <button
+              type="button"
+              className="mobile-char-pill"
+              aria-label="글자 수 및 위젯 보드 열기"
+              onClick={() => {
+                setRightView("widgets");
+                setRight((r) => !r);
+              }}
+            >
+              {active.kind === "episode"
+                ? `${stats ? platformChars.toLocaleString() : "…"}자`
+                : `${stats ? charsWithoutSpaces.toLocaleString() : "…"}자`}
+            </button>
+          )}
           </div>
           <div className="editor-action-buttons" aria-hidden={!focused}>
             <button
@@ -1178,8 +1304,18 @@ export default function App() {
             >
               <Code2 size={18} />
             </button>
+            {isMobile && (
+              <button
+                className={right && rightView === "typesetting" ? "active" : ""}
+                aria-label="조판 설정"
+                title="조판 설정"
+                onClick={toggleTypesettingPanel}
+              >
+                <Pilcrow size={17} />
+              </button>
+            )}
             <button
-              className={previewOpen ? "active" : ""}
+              className={`desktop-only-btn ${previewOpen ? "active" : ""}`}
               aria-label="모바일 미리보기"
               title="모바일 미리보기 (Ctrl+K V)"
               aria-pressed={previewOpen}
@@ -1188,6 +1324,7 @@ export default function App() {
               <Smartphone size={17} />
             </button>
             <button
+              className="desktop-only-btn"
               aria-label="집중 모드"
               title="집중 모드 (F11)"
               onClick={() => setFocus((f) => !f)}
@@ -1296,28 +1433,31 @@ export default function App() {
                 defaultLabel: active.kind === "episode" ? "새 에피소드 기본값" : "기본값",
                 onChange: (manualLineBreak) => edit({ manualLineBreak }),
               }}
-              bookmarks={active.bookmarks}
-              onBookmarksChange={(bookmarks) => { if (focused) edit({ bookmarks }); }}
-              jumpToBookmark={focused && bookmarkJump?.docId === active.id ? bookmarkJump : null}
-              onQuickNote={(text, at) =>
-                setQuickNote({
-                  projectId: active.projectId,
-                  docId: active.id,
-                  // 회차는 회차 번호를 붙여 출처를 알아보기 쉽게 한다(예: 44. 아이스크림 두 개).
-                  title:
-                    active.kind === "episode" && numberOf(active)
-                      ? `${numberOf(active)}. ${active.title || "제목 없음"}`
-                      : active.title,
-                  text,
-                  episodeId: active.kind === "episode" ? active.id : active.episodeId || undefined,
-                  at,
-                })
+              bookmarks={isMobile ? undefined : active.bookmarks}
+              onBookmarksChange={isMobile ? undefined : (bookmarks) => { if (focused) edit({ bookmarks }); }}
+              jumpToBookmark={isMobile ? null : (focused && bookmarkJump?.docId === active.id ? bookmarkJump : null)}
+              onQuickNote={
+                isMobile
+                  ? undefined
+                  : (text, at) =>
+                      setQuickNote({
+                        projectId: active.projectId,
+                        docId: active.id,
+                        // 회차는 회차 번호를 붙여 출처를 알아보기 쉽게 한다(예: 44. 아이스크림 두 개).
+                        title:
+                          active.kind === "episode" && numberOf(active)
+                            ? `${numberOf(active)}. ${active.title || "제목 없음"}`
+                            : active.title,
+                        text,
+                        episodeId: active.kind === "episode" ? active.id : active.episodeId || undefined,
+                        at,
+                      })
               }
               links={active.kind === "memo" || active.kind === "plot"}
               onOpenLink={(href, quote) => attempt(() => openNoteLink(href, quote))()}
-              notes={noteMarks[active.id]}
-              onOpenNotes={openNotes}
-              contextMenu
+              notes={isMobile ? undefined : noteMarks[active.id]}
+              onOpenNotes={isMobile ? undefined : openNotes}
+              contextMenu={!isMobile}
               onCursorLine={focused ? setCursorLine : undefined}
               images={docImages(active, !isProtected)}
             />
@@ -1521,6 +1661,124 @@ export default function App() {
     recoverable = (lib.drafts || []).filter(
       (d: any) => !(saving && d.id === active?.id && Date.parse(d.savedAt) >= appStartedAt),
     ).length;
+  if (isMobile) {
+    return (
+      <MobileShell
+        lib={lib}
+        loaded={loaded}
+        view={view}
+        projectId={projectId}
+        project={project}
+        tab={tab}
+        setTab={setTab}
+        archive={archive}
+        setArchive={setArchive}
+        active={active}
+        saveStatus={saveStatus}
+        conflict={conflict}
+        autoSync={autoSync}
+        syncChecking={syncChecking}
+        syncAvailable={syncAvailable}
+        prefs={prefs}
+        savePrefs={savePrefs}
+        saveKindPrefs={saveKindPrefs}
+        writingRules={writingRules}
+        stats={stats}
+        platformChars={platformChars}
+        charsWithoutSpaces={charsWithoutSpaces}
+        charsWithSpaces={charsWithSpaces}
+        sessionCount={sessionCount}
+        source={source}
+        setSource={setSource}
+        reveal={reveal}
+        scrollPositions={session.scrollPositions}
+        tree={fileTree}
+        docImages={docImages}
+        dialog={dialog}
+        setDialog={setDialog}
+        settingsPage={settingsPage}
+        setSettingsPage={setSettingsPage}
+        typesettingKind={typesettingKind}
+        setTypesettingKind={setTypesettingKind}
+        newRepFrom={newRepFrom}
+        newRepTo={newRepTo}
+        newRepLabel={newRepLabel}
+        setNewRepFrom={setNewRepFrom}
+        setNewRepTo={setNewRepTo}
+        setNewRepLabel={setNewRepLabel}
+        commonMemoPath={commonMemoPath}
+        setCommonMemoPath={setCommonMemoPath}
+        skillDownloading={skillDownloading}
+        setSkillDownloading={setSkillDownloading}
+        busy={busy}
+        setBusy={setBusy}
+        toast={toast}
+        toastAction={toastAction}
+        clearToast={() => {
+          setToast("");
+          setToastAction(null);
+        }}
+        error={error}
+        setError={setError}
+        viewer={viewer}
+        closeViewer={closeViewer}
+        confirmTitle={confirmTitle}
+        setConfirmTitle={setConfirmTitle}
+        confirmDialog={confirmDialog}
+        recoverable={recoverable}
+        updater={updater}
+        releaseNotice={releaseNotice}
+        releaseNotesOpen={releaseNotesOpen}
+        setReleaseNotesOpen={setReleaseNotesOpen}
+        searchQuery={searchQuery}
+        setSearchQuery={setSearchQuery}
+        searchCase={searchCase}
+        setSearchCase={setSearchCase}
+        bookmarkQuery={bookmarkQuery}
+        setBookmarkQuery={setBookmarkQuery}
+        bookmarkJump={bookmarkJump}
+        setBookmarkJump={setBookmarkJump}
+        memoApi={memoApi}
+        memoFlush={memoFlush}
+        attempt={attempt}
+        navigate={navigate}
+        goView={goView}
+        openLibraryProject={openLibraryProject}
+        switchProject={switchProject}
+        openDoc={openDoc}
+        createDoc={createDoc}
+        patchDoc={patchDoc}
+        archiveDoc={archiveDoc}
+        deleteDocs={deleteDocs}
+        deleteProject={deleteProject}
+        askDeleteProject={askDeleteProject}
+        duplicateDoc={duplicateDoc}
+        copyDocManuscript={copyDocManuscript}
+        openBinding={openBinding}
+        bindDocument={bindDocument}
+        openNoteLink={openNoteLink}
+        openSearchResult={openSearchResult}
+        replaceActiveSymbols={replaceActiveSymbols}
+        showHistory={showHistory}
+        chooseVault={chooseVault}
+        openSettingsData={loadSettingsData}
+        renderSyncConnections={renderSyncConnections}
+        onUpdateProjectWriting={updateProjectWriting}
+        edit={edit}
+        composition={composition}
+        counterUpdate={(body, delta) => counter.update(body, delta)}
+        manualSave={manualSave}
+        flush={flush}
+        resolveConflict={resolveConflict}
+        checkOpenDocument={checkOpenDocument}
+        restoreHistory={(id, name, onDone) => session.restoreHistory(id, name, onDone)}
+        discardDraft={(id) => session.discardDraft(id)}
+        refresh={refresh}
+        message={message}
+        report={report}
+      />
+    );
+  }
   return (
     <>
     <div
@@ -1997,14 +2255,25 @@ export default function App() {
                     >
                       <Pilcrow size={15} />
                     </button>
-                    <button
-                      className="bookmark-toggle"
-                      aria-label="북마크 목록"
-                      title="북마크 목록 보기"
-                      onClick={() => setRightView("bookmarks")}
-                    >
-                      <BookmarkIcon size={15} />
-                    </button>
+                    {!isMobile && (
+                      <button
+                        className="bookmark-toggle"
+                        aria-label="북마크 목록"
+                        title="북마크 목록 보기"
+                        onClick={() => setRightView("bookmarks")}
+                      >
+                        <BookmarkIcon size={15} />
+                      </button>
+                    )}
+                    {isMobile && (
+                      <button
+                        aria-label="위젯 보드 닫기"
+                        title="위젯 보드 닫기"
+                        onClick={() => setRight(false)}
+                      >
+                        <X size={15} />
+                      </button>
+                    )}
                   </>
                 )}
               </div>
@@ -2397,7 +2666,7 @@ export default function App() {
             )}
             {dialog.type === "serverSync" && (
               <div className="server-sync-content">
-                <RealtimeSync onClose={() => setDialog(null)} />
+                <RealtimeSync onClose={() => setDialog(null)} prefs={prefs} savePrefs={savePrefs} report={report} />
               </div>
             )}
             {dialog.type === "export" && (
@@ -2457,6 +2726,7 @@ export default function App() {
               renderSyncConnections={renderSyncConnections}
               skillDownloading={skillDownloading}
               setSkillDownloading={setSkillDownloading}
+              chooseVault={chooseVault}
               onOpenExport={() =>
                 setDialog({ type: "export", returnToSettings: true })
               }

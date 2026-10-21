@@ -8,9 +8,12 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "dev": "vite --host 127.0.0.1 --port 5173 --strictPort",
+    "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "start": "tauri dev",
+    "android:dev": "node scripts/build-android-apk.mjs --target=x86_64 --run",
+    "android:run": "node scripts/build-android-apk.mjs --target=x86_64 --run-only",
+    "android:build": "node scripts/build-android-apk.mjs",
     "tauri": "tauri",
     "test": "node --test tests/*.test.mjs",
     "package": "node scripts/package-tauri.mjs dir",

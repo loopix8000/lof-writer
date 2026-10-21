@@ -2,6 +2,7 @@ use crate::error::{fail_invalid, hash_bytes, LofError};
 use crate::store::{atomic_write_bytes, atomic_write_str};
 use base64::Engine;
 use flate2::read::ZlibDecoder;
+#[cfg(not(target_os = "android"))]
 use rfd::FileDialog;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashSet};
@@ -613,6 +614,7 @@ fn system_font_dirs() -> Vec<PathBuf> {
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
+        dirs.push(PathBuf::from("/system/fonts"));
         dirs.push(PathBuf::from("/usr/share/fonts"));
         dirs.push(PathBuf::from("/usr/local/share/fonts"));
         if let Ok(home) = std::env::var("HOME") {
@@ -767,14 +769,21 @@ pub fn install_font_files(
     let picked = match paths {
         Some(list) => list,
         None => {
-            let dialog = FileDialog::new()
-                .set_title("글꼴 파일 추가")
-                .add_filter("글꼴 파일", &["ttf", "otf", "woff", "woff2", "ttc"])
-                .pick_files();
-            let Some(files) = dialog else {
+            #[cfg(not(target_os = "android"))]
+            {
+                let dialog = FileDialog::new()
+                    .set_title("글꼴 파일 추가")
+                    .add_filter("글꼴 파일", &["ttf", "otf", "woff", "woff2", "ttc"])
+                    .pick_files();
+                let Some(files) = dialog else {
+                    return Ok(Value::Null);
+                };
+                files
+            }
+            #[cfg(target_os = "android")]
+            {
                 return Ok(Value::Null);
-            };
-            files
+            }
         }
     };
     if picked.is_empty() {
