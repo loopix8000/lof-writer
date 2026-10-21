@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { androidConfig, prepareAndroidProject } from "./prepare-android-project.mjs";
 
 const rootDir = process.cwd();
 const isRelease = process.argv.includes("--release");
@@ -48,7 +49,8 @@ const targetMap = {
   },
 };
 
-const targetInfo = targetMap[targetArg] || targetMap.aarch64;
+const targetInfo = targetMap[targetArg];
+if (!targetInfo) throw new Error(`지원하지 않는 Android 대상: ${targetArg}`);
 const profileDir = isRelease ? "release" : "debug";
 const gradleVariant = `${targetInfo.gradleFlavor}${isRelease ? "Release" : "Debug"}`;
 
@@ -74,6 +76,8 @@ const buildEnv = {
   ANDROID_HOME: androidHome,
   NDK_HOME: ndkHome,
   TAURI_ANDROID_PROJECT_PATH: androidDir,
+  TAURI_ENV_TARGET_TRIPLE: targetInfo.triple,
+  TAURI_CONFIG: JSON.stringify(androidConfig),
   WRY_ANDROID_PACKAGE: "local.lof.writer",
   WRY_ANDROID_LIBRARY: "lof_writer_lib",
   [`CARGO_TARGET_${targetInfo.envUpper}_LINKER`]: clangCmd,
@@ -132,6 +136,7 @@ const apkPath = path.join(
 );
 
 if (!runOnly || !fs.existsSync(apkPath)) {
+  prepareAndroidProject();
   // 1. Build frontend
   console.log("[1/3] 프론트엔드 빌드 중...");
   if (run("npm", ["run", "build"]) !== 0) {
@@ -142,6 +147,7 @@ if (!runOnly || !fs.existsSync(apkPath)) {
   console.log(`[2/3] Rust Android 라이브러리 빌드 중 (${targetInfo.triple})...`);
   const cargoArgs = [
     "build",
+    "--locked",
     "--manifest-path",
     "src-tauri/Cargo.toml",
     "--target",
@@ -178,7 +184,7 @@ if (!runOnly || !fs.existsSync(apkPath)) {
   // 3. Assemble APK via Gradle
   console.log(`[3/3] Gradle APK 패키징 중 (assemble${gradleVariant})...`);
   const gradlew = process.platform === "win32" ? "gradlew.bat" : "./gradlew";
-  if (run(gradlew, [`assemble${gradleVariant}`], androidDir) !== 0) {
+  if (run(gradlew, ["--no-daemon", `assemble${gradleVariant}`], androidDir) !== 0) {
     process.exit(1);
   }
 

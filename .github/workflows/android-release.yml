@@ -1,0 +1,90 @@
+name: Build Android APK release
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the signed APK release and Android alpha channel
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-apk-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: android-arm64-release
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK and NDK
+        shell: pwsh
+        run: |
+          sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'ndk;30.0.16248370'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "NDK_HOME=$env:ANDROID_HOME\ndk\30.0.16248370" >> $env:GITHUB_ENV
+      - run: npm ci
+      - name: Initialize Android project
+        run: npm run tauri -- android init --ci --skip-targets-install
+      - name: Build ARM64 release APK
+        run: npm run android:build -- --release --target=aarch64
+      - name: Sign and verify APK
+        id: apk
+        env:
+          ANDROID_KEY_BASE64: ${{ secrets.ANDROID_KEY_BASE64 }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: node scripts/sign-android-apk.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-release
+          path: |
+            release/*.apk
+            release/*.apk.sha256
+            release/android-latest.json
+      - name: Publish Android release
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ steps.apk.outputs.version }}
+          APK_ASSET: ${{ steps.apk.outputs.asset }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = "v$env:RELEASE_VERSION"
+          gh release create $tag "release/$env:APK_ASSET" "release/$env:APK_ASSET.sha256" release/android-latest.json --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --draft --prerelease --title "Lof Writer Android $tag" --notes-file ANDROID_RELEASE_NOTES.md
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          gh release edit $tag --repo $env:GITHUB_REPOSITORY --draft=false --latest=false
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          gh release view android-alpha --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create android-alpha --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --draft --prerelease --title 'Android alpha update channel' --notes 'Android 알파 버전의 배포 정보를 제공합니다. APK는 버전별 릴리즈에서 다운로드하세요.'
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          $channelDir = Join-Path $env:RUNNER_TEMP 'android-channel'
+          New-Item -ItemType Directory -Force -Path $channelDir | Out-Null
+          Copy-Item -LiteralPath release/android-latest.json -Destination (Join-Path $channelDir 'latest.json')
+          gh release upload android-alpha (Join-Path $channelDir 'latest.json') --repo $env:GITHUB_REPOSITORY --clobber
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          gh release edit android-alpha --repo $env:GITHUB_REPOSITORY --draft=false --prerelease --latest=false
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

@@ -1,5 +1,7 @@
 # Windows 설치형 릴리즈와 업데이트
 
+Android APK는 별도 워크플로 **Build Android APK release**로 배포한다. 버전과 내부 버전 번호는 `src-tauri/tauri.android.conf.json`에서 관리하고, 배포용 APK는 ARM64 release 빌드에 `ANDROID_KEY_BASE64`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`로 서명한다. Android 채널은 `android-alpha/latest.json`이며 PC의 `beta/latest.json`과 분리한다. Android 앱의 자동 업데이트 기능은 아직 구현되지 않았으며, APK는 GitHub 릴리즈에서 직접 받아 설치한다. Android 릴리즈 노트는 `ANDROID_RELEASE_NOTES.md`를 사용한다.
+
 공개 배포 저장소는 `loopix8000/lof-writer`이다. 베타 업데이트 주소는 `https://github.com/loopix8000/lof-writer/releases/download/beta/latest.json`이다. Actions가 등록된 공개키와 이 주소를 빌드에 포함한다. 기본 개발 설정에는 업데이트 주소와 공개키가 비어 있으며, 앱의 설정 > 앱 업데이트에서 준비 상태를 확인할 수 있다.
 
 ## 앱의 동작
