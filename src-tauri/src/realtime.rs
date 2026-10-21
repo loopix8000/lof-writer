@@ -28,6 +28,8 @@ use std::{
 use tauri::{AppHandle, Manager};
 use uuid::Uuid;
 
+const SYNC_BUSY_MESSAGE: &str = "다른 동기화가 진행 중입니다.";
+
 #[derive(Default)]
 pub struct Realtime {
     runtime: Mutex<Option<(tokio::runtime::Handle, Node)>>,
@@ -377,6 +379,7 @@ pub fn progress(app: &AppHandle) -> Value {
     }
     let statuses = rt.statuses.lock().unwrap();
     let mut syncing = false;
+    let mut pending = false;
     let mut reached = false;
     let mut unreached = Vec::new();
     for peer in &list {
@@ -384,14 +387,17 @@ pub fn progress(app: &AppHandle) -> Value {
         let name = peer["name"].as_str().unwrap_or("다른 장치");
         match statuses.get(id).and_then(|s| s["phase"].as_str()) {
             Some("syncing") => syncing = true,
+            Some("pending") => pending = true,
             Some("connected") => reached = true,
             Some("offline" | "error") => unreached.push(name.to_string()),
             _ => {}
         }
     }
-    // 장치 간 연결은 늘 보장되지 않으므로 한 곳이라도 동기화되면 완료로 본다.
+    // 진행 중인 작업과 대기를 우선하고, 나머지는 연결된 장치가 있으면 완료로 본다.
     let phase = if syncing {
         "syncing"
+    } else if pending {
+        "pending"
     } else if reached {
         "idle"
     } else {
@@ -662,7 +668,7 @@ impl WriterHost {
                 .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
                 .is_err()
             {
-                return Err(fail("다른 동기화가 진행 중입니다.", "SYNC_BUSY"));
+                return Err(fail(SYNC_BUSY_MESSAGE, "SYNC_BUSY"));
             }
             *lease = Some((
                 session.into(),
@@ -799,7 +805,14 @@ impl PeerRemote {
                 &self.connection,
                 Message { meta, data },
             ))
-            .map_err(net)
+            .map_err(|error| {
+                // 이전 앱도 오류 문구만 전송하므로 수신 시 대기 사유를 복원한다.
+                if error == SYNC_BUSY_MESSAGE {
+                    fail(error, "SYNC_BUSY")
+                } else {
+                    net(error)
+                }
+            })
     }
 }
 impl FileRemote for PeerRemote {
@@ -862,7 +875,7 @@ fn sync(
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
         .is_err()
     {
-        return Err(fail("다른 동기화가 진행 중입니다.", "SYNC_BUSY"));
+        return Err(fail(SYNC_BUSY_MESSAGE, "SYNC_BUSY"));
     }
     let _guard = crate::SyncGuard(&state.syncing);
     let current = root(app)?;
@@ -1092,10 +1105,12 @@ pub fn start(app: &AppHandle) {
                         if !initial && *seen == generation {
                             return Ok(());
                         }
-                        rt.statuses
-                            .lock()
-                            .unwrap()
-                            .insert(id.clone(), json!({"phase":"syncing"}));
+                        {
+                            let mut statuses = rt.statuses.lock().unwrap();
+                            let status = statuses.entry(id.clone()).or_insert_with(|| json!({}));
+                            status["phase"] = json!("syncing");
+                            status["message"] = Value::Null;
+                        }
                         crate::auto_sync::refresh_realtime(&app);
                         let leader = peer["storage"].as_bool().unwrap_or(false)
                             || own < peer["endpoint"].as_str().unwrap_or("").to_string();
@@ -1118,6 +1133,14 @@ pub fn start(app: &AppHandle) {
                     match result {
                         Ok(()) => {
                             retry.remove(&id);
+                        }
+                        Err(error) if error.code == "SYNC_BUSY" => {
+                            let mut statuses = rt.statuses.lock().unwrap();
+                            let status = statuses.entry(id.clone()).or_insert_with(|| json!({}));
+                            status["phase"] = json!("pending");
+                            status["message"] = Value::Null;
+                            // 연결과 미처리 변경분을 유지하고 짧은 간격으로 다시 시도한다.
+                            retry.insert(id, (Instant::now() + Duration::from_secs(2), 2));
                         }
                         Err(error) => {
                             let mut statuses = rt.statuses.lock().unwrap();

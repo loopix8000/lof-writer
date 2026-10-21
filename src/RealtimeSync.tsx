@@ -22,7 +22,7 @@ const tabs = [
 const copied = "페어링 코드를 복사했습니다.";
 const groupLabel = (id: string) => id.slice(0, 8).toUpperCase().replace(/(.{4})/, "$1-");
 type Tab = typeof tabs[number]["id"];
-const labels: Record<string, string> = { connecting: "연결 중", connected: "연결됨", syncing: "동기화 중", offline: "오프라인", error: "재연결 대기" };
+const labels: Record<string, string> = { connecting: "연결 중", connected: "연결됨", pending: "동기화 대기", syncing: "동기화 중", offline: "오프라인", error: "재연결 대기" };
 const problem = (error: unknown): Problem => ({ message: error instanceof Error ? error.message : String(error), code: (error as { code?: string })?.code });
 const time = (seconds: number) => `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
 
@@ -283,6 +283,7 @@ export default function RealtimeSync({
   const success = (snapshot: Peer, title: string) => {
     const peer = resolvePeer(snapshot); const completed = !!peer.status?.lastSync;
     const failed = peer.status?.phase === "error";
+    const pending = peer.status?.phase === "pending";
     const syncing = peer.status?.phase === "syncing";
     const others = status.peers.length - 1;
     return <div className="realtime-success">
@@ -291,9 +292,9 @@ export default function RealtimeSync({
       {device(peer)}
       {others > 0 && <p className="settings-note">그룹의 다른 장치 {others}대와도 자동으로 연결합니다.</p>}
       <div className="realtime-first-sync" role="status" aria-live="polite">
-        <span>{failed ? "동기화 재시도 대기" : syncing ? (completed ? "변경 내용을 동기화하는 중…" : "첫 동기화 중…") : completed ? "동기화 완료" : "첫 동기화를 기다리는 중…"}</span>
+        <span>{failed ? "동기화 재시도 대기" : pending ? "동기화 대기" : syncing ? (completed ? "변경 내용을 동기화하는 중…" : "첫 동기화 중…") : completed ? "동기화 완료" : "첫 동기화를 기다리는 중…"}</span>
         {failed ? <p className="realtime-inline-error">{peer.status?.message}</p>
-          : syncing || !completed ? <div className="realtime-indeterminate" role="progressbar" aria-label="동기화 진행 중"><span /></div>
+          : pending || syncing || !completed ? <div className="realtime-indeterminate" role="progressbar" aria-label={pending ? "동기화 대기" : "동기화 진행 중"}><span /></div>
           : <CheckCircle2 size={16} aria-hidden="true" />}
       </div>
     </div>;
