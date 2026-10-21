@@ -37,6 +37,9 @@ jobs:
           workspaces: src-tauri -> target
           key: android-arm64-release
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
       - name: Install Android SDK and NDK
         shell: pwsh
         run: |
