@@ -70,16 +70,31 @@ const clangxxCmd = path.join(llvmBin, `${targetInfo.clangPrefix}-clang++.cmd`);
 const arExe = path.join(llvmBin, "llvm-ar.exe");
 const ranlibExe = path.join(llvmBin, "llvm-ranlib.exe");
 const androidDir = path.join(rootDir, "src-tauri", "gen", "android");
+const kotlinGeneratedDir = path.join(androidDir, "app/src/main/java/local/lof/writer/generated");
+
+const kotlinGeneratedDir = path.join(
+  androidDir,
+  "app",
+  "src",
+  "main",
+  "java",
+  "local",
+  "lof",
+  "writer",
+  "generated",
+);
 
 const buildEnv = {
   ...process.env,
   ANDROID_HOME: androidHome,
   NDK_HOME: ndkHome,
   TAURI_ANDROID_PROJECT_PATH: androidDir,
+  WRY_ANDROID_KOTLIN_FILES_OUT_DIR: kotlinGeneratedDir,
   TAURI_ENV_TARGET_TRIPLE: targetInfo.triple,
   TAURI_CONFIG: JSON.stringify(androidConfig),
   WRY_ANDROID_PACKAGE: "local.lof.writer",
   WRY_ANDROID_LIBRARY: "lof_writer_lib",
+  WRY_ANDROID_KOTLIN_FILES_OUT_DIR: kotlinGeneratedDir,
   [`CARGO_TARGET_${targetInfo.envUpper}_LINKER`]: clangCmd,
   [`CC_${targetInfo.envLower}`]: clangCmd,
   [`CXX_${targetInfo.envLower}`]: clangxxCmd,
@@ -137,6 +152,8 @@ const apkPath = path.join(
 
 if (!runOnly || !fs.existsSync(apkPath)) {
   prepareAndroidProject();
+  fs.mkdirSync(kotlinGeneratedDir, { recursive: true });
+  fs.mkdirSync(kotlinGeneratedDir, { recursive: true });
   // 1. Build frontend
   console.log("[1/3] 프론트엔드 빌드 중...");
   if (run("npm", ["run", "build"]) !== 0) {

@@ -36,6 +36,7 @@ jobs:
         with:
           workspaces: src-tauri -> target
           key: android-arm64-release
+          cache-on-failure: true
       - uses: android-actions/setup-android@v3
         with:
           packages: platform-tools
