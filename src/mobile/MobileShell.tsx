@@ -128,7 +128,6 @@ export default function MobileShell({
   navigate,
   goView,
   openLibraryProject,
-  switchProject,
   openDoc,
   createDoc,
   patchDoc,
@@ -258,7 +257,6 @@ export default function MobileShell({
   ) => Promise<void>;
   goView: (next: "library" | "project" | "bookmarks", id?: string) => Promise<void>;
   openLibraryProject: (id: string) => Promise<void>;
-  switchProject: (id: string) => Promise<void>;
   openDoc: (id: string, pinned?: boolean) => Promise<void>;
   createDoc: (
     kind: Kind,
@@ -530,9 +528,6 @@ export default function MobileShell({
                 copyDocManuscript={copyDocManuscript}
                 openBinding={openBinding}
                 bindDocument={bindDocument}
-                switchProject={async (id) => {
-                  await goView("project", id);
-                }}
                 goLibrary={async () => {
                   await goView("library");
                 }}

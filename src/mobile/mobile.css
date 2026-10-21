@@ -713,19 +713,8 @@
   line-height: 1.25;
 }
 
-.m-project-hero-title-btn {
-  max-width: 100%;
-  padding: 0;
-  border: none;
-  background: transparent;
-  color: var(--ink);
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  text-align: left;
-}
-
 .m-project-hero-title {
+  margin: 0;
   font-size: 19px;
   font-weight: 800;
   line-height: 1.25;

@@ -1742,7 +1742,6 @@ export default function App() {
         navigate={navigate}
         goView={goView}
         openLibraryProject={openLibraryProject}
-        switchProject={switchProject}
         openDoc={openDoc}
         createDoc={createDoc}
         patchDoc={patchDoc}

@@ -66,7 +66,6 @@ export default function MobileProjectView({
   copyDocManuscript,
   openBinding,
   bindDocument,
-  switchProject,
   goLibrary,
   setDialog,
   refresh,
@@ -91,7 +90,6 @@ export default function MobileProjectView({
   copyDocManuscript: (doc: Doc, rawMarkdown?: boolean) => Promise<void>;
   openBinding: (id: string) => Promise<void>;
   bindDocument: (id: string, episodeId: string | null) => Promise<void>;
-  switchProject: (id: string) => Promise<void>;
   goLibrary: () => Promise<void>;
   setDialog: React.Dispatch<React.SetStateAction<Dialog | null>>;
   refresh: () => Promise<Library | undefined>;
@@ -104,7 +102,6 @@ export default function MobileProjectView({
   const [docScope, setDocScope] = useState<"all" | "byEpisode">("all");
   const [openFolders, setOpenFolders] = useState<Set<string>>(() => new Set());
   const [openEpGroups, setOpenEpGroups] = useState<Set<number>>(() => new Set([0]));
-  const [projectSwitcherOpen, setProjectSwitcherOpen] = useState(false);
   const [activeDocSheet, setActiveDocSheet] = useState<Doc | null>(null);
   const [activeFolderSheet, setActiveFolderSheet] = useState<FolderEntry | null>(null);
   const [addMenuFolder, setAddMenuFolder] = useState<string | null>(null);
@@ -571,27 +568,6 @@ export default function MobileProjectView({
     },
   ];
 
-  const projectSwitcherItems: MobileActionItem[] = [
-    ...lib.projects.map((p) => ({
-      label: p.title || "제목 없는 작품",
-      sublabel: `${lib.documents.filter((d) => d.projectId === p.id && d.kind === "episode" && !d.archived).length}편`,
-      icon: <BookOpen size={18} />,
-      checked: p.id === project.id,
-      action: attempt(() => switchProject(p.id)),
-    })),
-    "separator",
-    {
-      label: "새 작품 만들기",
-      icon: <Plus size={18} />,
-      action: () => setDialog({ type: "newProject", value: "" }),
-    },
-    {
-      label: "내 서재 전체 보기",
-      icon: <FolderOpen size={18} />,
-      action: attempt(goLibrary),
-    },
-  ];
-
   const rules = normalizeWriting(project.writing || prefs.defaultWriting);
   const totalProjectChars = episodes.reduce(
     (sum, d) => sum + (d.platformCharacters ?? d.characters ?? 0),
@@ -794,15 +770,12 @@ export default function MobileProjectView({
             <ArrowLeft size={16} />
             <span>내 서재</span>
           </button>
-          <button
-            type="button"
+          <div
             className="m-project-compact-title"
             aria-hidden={!heroCollapsed}
-            tabIndex={heroCollapsed ? 0 : -1}
-            onClick={() => setProjectSwitcherOpen(true)}
           >
             {project.title || "제목 없는 작품"}
-          </button>
+          </div>
           <div className="m-topbar-actions">
             <button
               type="button"
@@ -850,16 +823,9 @@ export default function MobileProjectView({
                 {episodes.length}편 · 총 {totalProjectChars.toLocaleString()}자
               </div>
 
-              <button
-                type="button"
-                className="m-project-hero-title-btn"
-                onClick={() => setProjectSwitcherOpen(true)}
-              >
-                <span className="m-project-hero-title">
-                  {project.title || "제목 없는 작품"}
-                </span>
-                <ChevronDown size={17} className="m-modern-title-chevron" />
-              </button>
+              <h1 className="m-project-hero-title">
+                {project.title || "제목 없는 작품"}
+              </h1>
 
               {project.description ? (
                 <p className="m-project-hero-desc">{project.description}</p>
@@ -1183,15 +1149,6 @@ export default function MobileProjectView({
           </div>
         )}
       </div>
-
-      {/* 작품 전환 시트 */}
-      <MobileActionSheet
-        open={projectSwitcherOpen}
-        title="작품 전환"
-        subtitle="작업할 작품을 선택하세요"
-        items={projectSwitcherItems}
-        onClose={() => setProjectSwitcherOpen(false)}
-      />
 
       {/* 문서 탭 추가 메뉴 시트 (플롯 / 메모 / 폴더) */}
       <MobileActionSheet
