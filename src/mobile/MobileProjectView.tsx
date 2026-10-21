@@ -29,7 +29,6 @@ import {
   SquarePen,
   StickyNote,
   Trash2,
-  Upload,
   X,
 } from "lucide-react";
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -814,6 +813,15 @@ export default function MobileProjectView({
             >
               <Archive size={18} />
             </button>
+            <button
+              type="button"
+              className="m-icon-btn"
+              aria-label="소설 관리"
+              title="소설 관리"
+              onClick={openEditProjectDialog}
+            >
+              <Settings size={18} />
+            </button>
           </div>
         </div>
 
@@ -869,31 +877,6 @@ export default function MobileProjectView({
                   onClick={openEditProjectDialog}
                 >
                   + 태그 추가
-                </button>
-              </div>
-
-              <div className="m-project-hero-actions">
-                <button
-                  type="button"
-                  className="m-project-action-btn"
-                  onClick={openEditProjectDialog}
-                >
-                  <Settings size={14} />
-                  <span>소설 관리하기</span>
-                </button>
-                <button
-                  type="button"
-                  className="m-project-action-btn"
-                  onClick={attempt(async () => {
-                    const result = await call("importFiles", { projectId: project.id });
-                    if (result) {
-                      await refresh();
-                      message(`${result.count}편 가져옴`);
-                    }
-                  })}
-                >
-                  <Upload size={14} />
-                  <span>원고 가져오기</span>
                 </button>
               </div>
             </div>

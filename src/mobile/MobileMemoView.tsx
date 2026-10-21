@@ -629,6 +629,19 @@ export default function MobileMemoView({
           moreOpen={editorMenuOpen}
           onToggleMore={() => setEditorMenuOpen((open) => !open)}
           onReplaceSymbols={replaceMemoSymbols}
+          onSave={() => void manualSaveMemo().catch(report)}
+          onCopy={() => {
+            void navigator.clipboard
+              .writeText(plainText(memo.body))
+              .then(() => message("메모 본문을 복사했습니다."));
+          }}
+          onAddMemo={() =>
+            setPromptTarget({
+              mode: "newMemo",
+              folder: parentOf(memo.path),
+              initialValue: "새 메모",
+            })
+          }
         />
 
         {/* 메모 하단 툴바 우측 더보기(⋮) 플로팅 팝업 메뉴 */}

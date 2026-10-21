@@ -1,7 +1,10 @@
 import {
   Bold,
+  Copy,
   CornerDownLeft,
+  FileText,
   Heading2,
+  History,
   ImagePlus,
   Italic,
   MessageSquareCode,
@@ -10,15 +13,18 @@ import {
   Redo2,
   Save,
   Sparkles,
+  StickyNote,
   Strikethrough,
   Table2,
   Undo2,
 } from "lucide-react";
-import { Fragment } from "react";
 
-const tools = [
+const historyTools = [
   { action: "undo", label: "실행 취소", icon: Undo2 },
-  { action: "redo", label: "다시 실행", icon: Redo2 },
+  { action: "redo", label: "되돌리기", icon: Redo2 },
+] as const;
+
+const formatTools = [
   { action: "bold", label: "굵게", icon: Bold },
   { action: "italic", label: "기울임", icon: Italic },
   { action: "strike", label: "취소선", icon: Strikethrough },
@@ -35,31 +41,81 @@ export default function MobileEditorToolbar({
   moreOpen,
   onToggleMore,
   onReplaceSymbols,
+  onHistory,
+  onSave,
+  onCopy,
+  onAddPlot,
+  onAddMemo,
 }: {
   disabled?: boolean;
   moreOpen: boolean;
   onToggleMore: () => void;
   onReplaceSymbols: () => void;
+  onHistory?: () => void;
+  onSave?: () => void;
+  onCopy?: () => void;
+  onAddPlot?: () => void;
+  onAddMemo?: () => void;
 }) {
+  const quickActions = [
+    ...(onHistory ? [{ key: "history", label: "기록", icon: History, onClick: onHistory, lockable: false }] : []),
+    ...(onSave ? [{ key: "save", label: "저장", icon: Save, onClick: onSave, lockable: true }] : []),
+    ...(onCopy ? [{ key: "copy", label: "복사", icon: Copy, onClick: onCopy, lockable: false }] : []),
+    ...(onAddPlot ? [{ key: "plot", label: "플롯", icon: FileText, onClick: onAddPlot, lockable: false }] : []),
+    ...(onAddMemo ? [{ key: "memo", label: "메모", icon: StickyNote, onClick: onAddMemo, lockable: false }] : []),
+  ];
+
   return (
     <div className="m-floating-pill-wrap">
       <div className="m-floating-pill-bar" role="toolbar" aria-label="모바일 집필 툴바">
         <div className="m-pill-scroll-track">
-          {tools.map(({ action, label, icon: Icon }) => (
-            <Fragment key={action}>
-              {action === "bold" && <span className="m-pill-sub-divider" aria-hidden="true" />}
-              <button
-                type="button"
-                className="m-pill-tool-btn"
-                aria-label={label}
-                title={label}
-                disabled={disabled}
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => editorAction(action)}
-              >
-                <Icon size={18} strokeWidth={2} />
-              </button>
-            </Fragment>
+          {historyTools.map(({ action, label, icon: Icon }) => (
+            <button
+              key={action}
+              type="button"
+              className="m-pill-tool-btn"
+              aria-label={label}
+              title={label}
+              disabled={disabled}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => editorAction(action)}
+            >
+              <Icon size={18} strokeWidth={2} />
+            </button>
+          ))}
+          {quickActions.length > 0 && (
+            <>
+              <span className="m-pill-sub-divider" aria-hidden="true" />
+              {quickActions.map(({ key, label, icon: Icon, onClick, lockable }) => (
+                <button
+                  key={key}
+                  type="button"
+                  className="m-pill-tool-btn"
+                  aria-label={label}
+                  title={label}
+                  disabled={lockable ? disabled : false}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={onClick}
+                >
+                  <Icon size={18} strokeWidth={2} />
+                </button>
+              ))}
+            </>
+          )}
+          <span className="m-pill-sub-divider" aria-hidden="true" />
+          {formatTools.map(({ action, label, icon: Icon }) => (
+            <button
+              key={action}
+              type="button"
+              className="m-pill-tool-btn"
+              aria-label={label}
+              title={label}
+              disabled={disabled}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => editorAction(action)}
+            >
+              <Icon size={18} strokeWidth={2} />
+            </button>
           ))}
           <button
             type="button"

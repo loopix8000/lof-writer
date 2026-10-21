@@ -981,6 +981,28 @@ export default function MobileEditorView({
         moreOpen={moreMenuOpen}
         onToggleMore={() => setMoreMenuOpen((open) => !open)}
         onReplaceSymbols={replaceActiveSymbols}
+        onHistory={attempt(showHistory)}
+        onSave={() => void manualSave().catch(report)}
+        onCopy={attempt(() =>
+          copyDocManuscript(
+            active,
+            sourceMode || requiresSource(active.body),
+          ),
+        )}
+        onAddPlot={() => {
+          const epId =
+            active.kind === "episode" ? active.id : active.episodeId;
+          attempt(() =>
+            createDoc("plot", epId ? { episodeId: epId } : undefined),
+          )();
+        }}
+        onAddMemo={() => {
+          const epId =
+            active.kind === "episode" ? active.id : active.episodeId;
+          attempt(() =>
+            createDoc("memo", epId ? { episodeId: epId } : undefined),
+          )();
+        }}
       />
 
       {/* 하단 툴바 우측 더보기(⋮) 플로팅 팝업 메뉴 */}
