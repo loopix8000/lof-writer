@@ -123,12 +123,23 @@ impl LibraryDb {
             .read(true)
             .write(true)
             .open(dir.join("library.sqlite.lock"))?;
-        fs2::FileExt::try_lock_exclusive(&lock).map_err(|_| {
-            fail(
-                "다른 Lof Writer가 이 서재의 관리 DB를 사용 중입니다.",
-                "DATABASE_BUSY",
-            )
-        })?;
+        if let Err(error) = fs2::FileExt::try_lock_exclusive(&lock) {
+            // 다른 프로세스가 잠금을 쥐고 있을 때만 사용 중으로 본다.
+            if error.kind() == fs2::lock_contended_error().kind() {
+                return Err(fail(
+                    "다른 Lof Writer가 이 서재의 관리 DB를 사용 중입니다.",
+                    "DATABASE_BUSY",
+                ));
+            }
+            // Android 기기 저장공간은 파일 잠금을 지원하지 않을 수 있다. Android 앱은 프로세스가 하나뿐이므로 잠금 없이 연다.
+            if !cfg!(target_os = "android") {
+                return Err(fail(
+                    format!("서재의 관리 DB를 잠그지 못했습니다: {error}"),
+                    "DATABASE_BUSY",
+                ));
+            }
+            eprintln!("서재 관리 DB 잠금을 건너뜁니다: {error}");
+        }
         let target = dir.join("library.sqlite");
         let initial = !target.exists();
         let path = if initial {

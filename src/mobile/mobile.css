@@ -1099,22 +1099,56 @@
   flex-shrink: 0;
 }
 
-.m-editor-doc-Switch {
+/* 상단 제목 표시줄: < > 버튼이나 좌우 슬라이드로 이전·다음 회차 이동 */
+.m-editor-title-nav {
   flex: 1 1 auto;
   min-width: 0;
   max-width: 60%;
   min-height: 34px;
-  padding: 0 10px;
+  padding: 0 2px;
   border-radius: 999px;
-  border: none;
   background: var(--panel);
   color: var(--ink);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 2px;
+  font-size: 13.5px;
+  font-weight: 650;
+  touch-action: pan-y;
+}
+
+.m-editor-title-label {
+  flex: 1 1 auto;
+  min-width: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
-  font-size: 13.5px;
-  font-weight: 650;
+  padding: 0 4px;
+}
+
+.m-title-nav-btn {
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--ink);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.m-title-nav-btn:active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.m-title-nav-btn:disabled {
+  opacity: 0.3;
 }
 
 .m-editor-doc-title {

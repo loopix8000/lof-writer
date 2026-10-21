@@ -5,6 +5,7 @@ import {
   BookOpen,
   Check,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   Code2,
   Copy,
@@ -121,9 +122,6 @@ export default function MobileEditorView({
   bindDocument,
   openNoteLink,
   showHistory,
-  goBackToProject,
-  goLibrary,
-  switchProject,
   onUpdateProjectWriting,
   setDialog,
   message,
@@ -187,9 +185,6 @@ export default function MobileEditorView({
   bindDocument: (id: string, episodeId: string | null) => Promise<void>;
   openNoteLink: (href: string, quote: string) => Promise<void>;
   showHistory: () => Promise<void>;
-  goBackToProject: () => Promise<void>;
-  goLibrary: () => Promise<void>;
-  switchProject: (id: string) => Promise<void>;
   onUpdateProjectWriting: (rules: WritingRules) => void;
   setDialog: React.Dispatch<React.SetStateAction<Dialog | null>>;
   message: (text: string) => void;
@@ -296,7 +291,7 @@ export default function MobileEditorView({
     // 하단 툴바 슬라이드나 팝업 메뉴 터치 시에는 사이드바 제스처 제외
     const ignore = Boolean(
       target?.closest(
-        'input[type="range"], .tableWrapper, .m-doc-scope-bar, .m-pill-tabs, .m-floating-pill-bar, .m-floating-popup-menu, .m-floating-anchor-popup',
+        'input[type="range"], .tableWrapper, .m-editor-title-nav, .m-doc-scope-bar, .m-pill-tabs, .m-floating-pill-bar, .m-floating-popup-menu, .m-floating-anchor-popup',
       ),
     );
     const t = e.touches[0];
@@ -356,6 +351,32 @@ export default function MobileEditorView({
     () => projectDocs.filter((d) => d.kind === "plot" || d.kind === "memo"),
     [projectDocs],
   );
+
+  // 상단 제목 표시줄의 < > 버튼과 좌우 슬라이드로 이전·다음 회차를 연다.
+  const episodeIndex = episodes.findIndex((ep) => ep.id === active.id);
+  const prevEpisode = episodeIndex > 0 ? episodes[episodeIndex - 1] : undefined;
+  const nextEpisode =
+    episodeIndex >= 0 ? episodes[episodeIndex + 1] : undefined;
+  const openSibling = (doc?: Doc) => {
+    if (doc) attempt(() => openDoc(doc.id, false))();
+  };
+  const titleTouchRef = useRef<{ x: number; y: number } | null>(null);
+  const handleTitleTouchStart = (e: React.TouchEvent) => {
+    const t = e.touches[0];
+    titleTouchRef.current =
+      e.touches.length === 1 ? { x: t.clientX, y: t.clientY } : null;
+  };
+  const handleTitleTouchEnd = (e: React.TouchEvent) => {
+    const start = titleTouchRef.current;
+    titleTouchRef.current = null;
+    if (!start || active.kind !== "episode" || e.changedTouches.length !== 1) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - start.x;
+    const dy = t.clientY - start.y;
+    if (Math.abs(dx) < 40 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+    // 왼쪽으로 밀면 다음 회차, 오른쪽으로 밀면 이전 회차
+    openSibling(dx < 0 ? nextEpisode : prevEpisode);
+  };
 
   const allFolders = useMemo(() => {
     const set = new Set<string>(
@@ -578,48 +599,43 @@ export default function MobileEditorView({
           </button>
         </div>
 
-        <button
-          type="button"
-          className="m-editor-doc-Switch"
-          aria-haspopup="menu"
-          aria-expanded={Boolean(propPopup)}
-          onClick={(e) => {
-            const rect = e.currentTarget.getBoundingClientRect();
-            const projects = [...lib.projects].sort((a, b) =>
-              a.title.localeCompare(b.title, "ko"),
-            );
-            setPropPopup({
-              x: rect.left + rect.width / 2,
-              y: rect.bottom + 6,
-              align: "center",
-              items: [
-                ...projects.map((p) => ({
-                  label: p.title || "제목 없는 작품",
-                  checked: p.id === active.projectId,
-                  action: attempt(() => switchProject(p.id)),
-                })),
-                "separator",
-                {
-                  label: "작품 페이지로 이동",
-                  action: attempt(goBackToProject),
-                },
-                {
-                  label: "내 서재로 이동",
-                  action: attempt(goLibrary),
-                },
-              ],
-            });
-          }}
+        <div
+          className="m-editor-title-nav"
+          onTouchStart={handleTitleTouchStart}
+          onTouchEnd={handleTitleTouchEnd}
         >
-          <span
-            className={`m-save-dot ${saveStatus === "저장됨" ? "saved" : "pending"}`}
-            title={saveStatus}
-          />
-          <span className="m-editor-doc-title">
-            {active.title || "제목 없음"}
+          {active.kind === "episode" && (
+            <button
+              type="button"
+              className="m-title-nav-btn"
+              aria-label="이전 회차"
+              disabled={!prevEpisode}
+              onClick={() => openSibling(prevEpisode)}
+            >
+              <ChevronLeft size={18} />
+            </button>
+          )}
+          <span className="m-editor-title-label">
+            <span
+              className={`m-save-dot ${saveStatus === "저장됨" ? "saved" : "pending"}`}
+              title={saveStatus}
+            />
+            <span className="m-editor-doc-title">
+              {active.title || "제목 없음"}
+            </span>
           </span>
-          <ChevronDown size={14} />
-        </button>
+          {active.kind === "episode" && (
+            <button
+              type="button"
+              className="m-title-nav-btn"
+              aria-label="다음 회차"
+              disabled={!nextEpisode}
+              onClick={() => openSibling(nextEpisode)}
+            >
+              <ChevronRight size={18} />
+            </button>
+          )}
+        </div>
 
         <div className="m-topbar-actions">
           <button

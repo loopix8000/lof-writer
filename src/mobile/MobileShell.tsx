@@ -488,9 +488,6 @@ export default function MobileShell({
                 bindDocument={bindDocument}
                 openNoteLink={openNoteLink}
                 showHistory={showHistory}
-                goBackToProject={() => goView("project", active.projectId)}
-                goLibrary={() => goView("library")}
-                switchProject={switchProject}
                 onUpdateProjectWriting={onUpdateProjectWriting}
                 setDialog={setDialog}
                 message={message}

@@ -7,9 +7,13 @@ use crate::{bind_vault, get_documents_dir, persist_settings, AppState};
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use tauri::AppHandle;
 
 const DEFAULT_NAME: &str = "Lof Library";
+
+// 화면이 다시 열리며 준비 요청이 겹쳐도 서재를 한 번만 열도록 순서대로 처리한다.
+static PREPARE: Mutex<()> = Mutex::new(());
 
 /// 앱 전용 저장공간(/data 아래)의 경로인지 확인한다.
 pub fn is_internal(path: &Path) -> bool {
@@ -18,6 +22,7 @@ pub fn is_internal(path: &Path) -> bool {
 
 /// 모든 파일 접근 권한을 받은 뒤 서재를 연다. 앱 내부 서재가 남아 있으면 기기 폴더로 옮긴 다음 연다.
 pub fn prepare(state: &AppState, app: &AppHandle) -> Result<Value, LofError> {
+    let _guard = PREPARE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let opened = state.store.lock().unwrap().as_ref().map(|store| store.root.clone());
     if opened.as_deref().is_some_and(|root| !is_internal(root)) {
         return Ok(json!({ "moved": [], "notice": Value::Null }));
