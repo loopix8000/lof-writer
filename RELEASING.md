@@ -1,6 +1,6 @@
 # Windows 설치형 릴리즈와 업데이트
 
-Android APK는 별도 워크플로 **Build Android APK release**로 배포한다. 버전과 내부 버전 번호는 `src-tauri/tauri.android.conf.json`에서 관리하고, 배포용 APK는 ARM64 release 빌드에 `ANDROID_KEY_BASE64`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`로 서명한다. Android 채널은 `android-alpha/latest.json`이며 PC의 `beta/latest.json`과 분리한다. 앱은 시작 시 새 버전을 확인하고, 사용자가 다운로드·설치를 누르면 APK의 해시·패키지·버전·서명을 확인한 뒤 원고를 저장하고 Android 설치 화면을 연다. APK에 쓰인 서명 키는 이후 릴리즈에서도 유지하고 `versionCode`를 매번 올린다. Android 릴리즈 노트는 `ANDROID_RELEASE_NOTES.md`를 사용한다. Android 앱 아이콘은 `src-tauri/android/app/src/main/res`의 적응형 아이콘 벡터와, `node scripts/make-icon.mjs`로 만드는 Android 7.x용 PNG를 사용한다.
+Android APK는 별도 워크플로 **Build Android APK release**로 배포한다. 버전과 내부 버전 번호는 `src-tauri/tauri.android.conf.json`에서 관리하고, 배포용 APK는 ARM64 release 빌드에 `ANDROID_KEY_BASE64`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`로 서명한다. Android 채널은 `android-beta/latest.json`이며 PC의 `beta/latest.json`과 분리한다. 0.0.2 알파 버전까지 설치한 앱은 `android-alpha/latest.json`을 확인하므로, 워크플로는 두 채널에 같은 배포 정보를 올린다. 앱은 시작 시 새 버전을 확인하고, 사용자가 다운로드·설치를 누르면 APK의 해시·패키지·버전·서명을 확인한 뒤 원고를 저장하고 Android 설치 화면을 연다. APK에 쓰인 서명 키는 이후 릴리즈에서도 유지하고 `versionCode`를 매번 올린다. Android 릴리즈 노트는 `ANDROID_RELEASE_NOTES.md`를 사용한다. Android 앱 아이콘은 `src-tauri/android/app/src/main/res`의 적응형 아이콘 벡터와, `node scripts/make-icon.mjs`로 만드는 Android 7.x용 PNG를 사용한다.
 
 공개 배포 저장소는 `loopix8000/lof-writer`이다. 베타 업데이트 주소는 `https://github.com/loopix8000/lof-writer/releases/download/beta/latest.json`이다. Actions가 등록된 공개키와 이 주소를 빌드에 포함한다. 기본 개발 설정에는 업데이트 주소와 공개키가 비어 있으며, 앱의 설정 > 앱 업데이트에서 준비 상태를 확인할 수 있다.
 

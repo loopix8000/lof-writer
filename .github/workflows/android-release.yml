@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: Publish the signed APK release and Android alpha channel
+        description: Publish the signed APK release and Android beta channel
         type: boolean
         default: false
 
@@ -80,15 +80,23 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           gh release edit $tag --repo $env:GITHUB_REPOSITORY --draft=false --latest=false
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          gh release view android-alpha --repo $env:GITHUB_REPOSITORY *> $null
-          if ($LASTEXITCODE -ne 0) {
-            gh release create android-alpha --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --draft --prerelease --title 'Android alpha update channel' --notes 'Android 알파 버전의 배포 정보를 제공합니다. APK는 버전별 릴리즈에서 다운로드하세요.'
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          }
+          # 앱은 android-beta 채널을 확인한다. 0.0.2 알파 버전까지 설치한 앱은 android-alpha 채널을 확인하므로
+          # 두 채널에 같은 배포 정보를 올려 기존 알파 사용자도 베타로 업데이트되게 한다.
           $channelDir = Join-Path $env:RUNNER_TEMP 'android-channel'
           New-Item -ItemType Directory -Force -Path $channelDir | Out-Null
           Copy-Item -LiteralPath release/android-latest.json -Destination (Join-Path $channelDir 'latest.json')
-          gh release upload android-alpha (Join-Path $channelDir 'latest.json') --repo $env:GITHUB_REPOSITORY --clobber
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          gh release edit android-alpha --repo $env:GITHUB_REPOSITORY --draft=false --prerelease --latest=false
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $channels = @(
+            @{ Tag = 'android-beta'; Title = 'Android beta update channel'; Notes = 'Android 베타 버전의 배포 정보를 제공합니다. APK는 버전별 릴리즈에서 다운로드하세요.' },
+            @{ Tag = 'android-alpha'; Title = 'Android alpha update channel'; Notes = 'Android 알파 버전의 배포 정보를 제공합니다. APK는 버전별 릴리즈에서 다운로드하세요.' }
+          )
+          foreach ($channel in $channels) {
+            gh release view $channel.Tag --repo $env:GITHUB_REPOSITORY *> $null
+            if ($LASTEXITCODE -ne 0) {
+              gh release create $channel.Tag --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --draft --prerelease --title $channel.Title --notes $channel.Notes
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            }
+            gh release upload $channel.Tag (Join-Path $channelDir 'latest.json') --repo $env:GITHUB_REPOSITORY --clobber
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            gh release edit $channel.Tag --repo $env:GITHUB_REPOSITORY --draft=false --prerelease --latest=false
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }

@@ -27,7 +27,7 @@ import javax.net.ssl.HttpsURLConnection
 class AndroidUpdaterPlugin(private val activity: Activity) : Plugin(activity) {
   private data class Update(val version: String, val code: Long, val url: String, val sha256: String, val certificate: String)
   private val worker = Executors.newSingleThreadExecutor()
-  private val endpoint = "https://github.com/loopix8000/lof-writer/releases/download/android-alpha/latest.json"
+  private val endpoint = "https://github.com/loopix8000/lof-writer/releases/download/android-beta/latest.json"
   private var available: Update? = null
   private val updatesDir get() = File(activity.cacheDir, "updates")
   private val downloaded get() = File(updatesDir, "update.apk")
