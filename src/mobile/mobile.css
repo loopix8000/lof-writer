@@ -3342,8 +3342,13 @@
   color: var(--ink);
 }
 
-/* 드로어 회차 목록은 꾹 눌러 집필 상태를 바꾸므로 글자 선택과 시스템 길게 누르기 메뉴를 막는다 */
-.m-slide-drawer .m-episode-row .m-tree-row-main {
+/* 드로어 문서와 관리 메뉴에서는 길게 눌러도 글자 선택이나 시스템 메뉴가 뜨지 않는다. */
+.m-slide-drawer .m-episode-row .m-tree-row-main,
+.m-slide-drawer .m-episode-row .m-tree-row-main *,
+.m-slide-drawer .m-doc-tree-item .m-tree-row-main,
+.m-slide-drawer .m-doc-tree-item .m-tree-row-main *,
+.m-drawer-document-menu,
+.m-drawer-document-menu * {
   -webkit-user-select: none;
   user-select: none;
   -webkit-touch-callout: none;

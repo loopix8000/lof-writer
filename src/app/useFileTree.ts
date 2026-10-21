@@ -630,7 +630,7 @@ export function useFileTree(options: Options) {
     enterTab, enterEpisodeGroup, setEpisodeGroup, toggleDocGroup, toggleFolder,
     startRename, changeRename, cancelRename, commitRename,
     startFolderRename, cancelFolderRename, folderMenu, folderDragProps,
-    docCreateMenu, memoCreateMenu, plotItems, addDocFile, loadMemoFolders, addMemoFolder, renameMemoFolder, archiveMemoFolder, removeMemoFolder,
+    docCreateMenu, memoCreateMenu, plotItems, addDocFile, loadMemoFolders, addMemoFolder, renameMemoFolder, archiveMemoFolder, removeMemoFolder, moveDocPaths,
     rowProps, folderDropProps, draggedDocument, finishEditorDrop,
     openDoc, openMenu, attempt, archiveDoc,
   };

@@ -66,6 +66,7 @@ import Writer from "../Writer";
 import MobileEditorToolbar, { MobileEditorMenuActions } from "./MobileEditorToolbar";
 import {
   MobileActionSheet,
+  MobileFolderPickerSheet,
   MobilePromptSheet,
   type MobileActionItem,
 } from "./MobileActionSheet";
@@ -203,6 +204,8 @@ export default function MobileEditorView({
   const [collapsedPaths, setCollapsedPaths] = useState<Record<string, boolean>>({});
   const [createMenuFolder, setCreateMenuFolder] = useState<string | null>(null);
   const [newFolderParent, setNewFolderParent] = useState<string | null>(null);
+  const [renamingDoc, setRenamingDoc] = useState<Doc | null>(null);
+  const [moveFolderDoc, setMoveFolderDoc] = useState<Doc | null>(null);
 
   // 하단 플로팅 필 툴바 우측 더보기 플로팅 팝업 & 상단 속성 작은 플로팅 팝업 상태
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
@@ -210,6 +213,7 @@ export default function MobileEditorView({
     x: number;
     y: number;
     align?: "left" | "center";
+    drawer?: boolean;
     items: Array<
       | "separator"
       | {
@@ -256,7 +260,7 @@ export default function MobileEditorView({
   }, [syncBusy]);
 
   // 회차의 집필 상태를 고르는 플로팅 메뉴. 열려 있는 회차는 편집 중인 원고와 함께 저장한다.
-  const showStatusMenu = (doc: Doc, x: number, y: number) => {
+  const statusMenuItems = (doc: Doc): NonNullable<typeof propPopup>["items"] => {
     const current = normalizeStatus(doc.status);
     const pick = (status: string) => () => {
       if (status === current) return;
@@ -274,29 +278,75 @@ export default function MobileEditorView({
         })();
       }
     };
+    return [
+      {
+        label: STATUS_LABELS.in_progress,
+        icon: <PenLine size={16} />,
+        checked: current === "in_progress",
+        action: pick("in_progress"),
+      },
+      {
+        label: STATUS_LABELS.revision,
+        icon: <Pencil size={16} />,
+        checked: current === "revision",
+        action: pick("revision"),
+      },
+      {
+        label: STATUS_LABELS.completed,
+        icon: <CheckCircle2 size={16} />,
+        badge: "원고 보호",
+        checked: current === "completed",
+        action: pick("completed"),
+      },
+    ];
+  };
+
+  const showStatusMenu = (doc: Doc, x: number, y: number) => {
     setPropPopup({
       x,
       y,
       align: "center",
+      items: statusMenuItems(doc),
+    });
+  };
+
+  const showDrawerMenu = (doc: Doc, x: number, y: number) => {
+    const target = doc.id === active.id ? active : doc;
+    setPropPopup({
+      x,
+      y,
+      align: "center",
+      drawer: true,
       items: [
+        ...(target.kind === "episode"
+          ? [...statusMenuItems(target), "separator" as const]
+          : []),
         {
-          label: STATUS_LABELS.in_progress,
-          icon: <PenLine size={16} />,
-          checked: current === "in_progress",
-          action: pick("in_progress"),
-        },
-        {
-          label: STATUS_LABELS.revision,
+          label: "이름 변경",
           icon: <Pencil size={16} />,
-          checked: current === "revision",
-          action: pick("revision"),
+          action: () => setRenamingDoc(target),
+        },
+        ...(target.kind !== "episode"
+          ? [{
+              label: "폴더 이동",
+              icon: <FolderOpen size={16} />,
+              disabled: !target.relPath?.startsWith("doc/"),
+              action: () => setMoveFolderDoc(target),
+            }]
+          : []),
+        {
+          label: "보관함으로 이동",
+          icon: <Archive size={16} />,
+          action: attempt(() => archiveDoc(target)),
         },
         {
-          label: STATUS_LABELS.completed,
-          icon: <CheckCircle2 size={16} />,
-          badge: "원고 보호",
-          checked: current === "completed",
-          action: pick("completed"),
+          label: "영구 삭제",
+          icon: <Trash2 size={16} />,
+          danger: true,
+          action: () => {
+            setLeftDrawerOpen(false);
+            setDialog({ type: "deleteDoc", value: target.id });
+          },
         },
       ],
     });
@@ -308,7 +358,7 @@ export default function MobileEditorView({
     showStatusMenu(active, rect.left + rect.width / 2, rect.bottom + 6);
   };
 
-  // 드로어 회차 목록은 꾹 누르면 누른 자리 아래에 집필 상태 메뉴를 띄운다
+  // 드로어 문서 목록은 꾹 누르면 문서 관리 메뉴를 띄운다.
   const longPressRef = useRef<{
     timer: number;
     x: number;
@@ -318,35 +368,43 @@ export default function MobileEditorView({
   const cancelLongPress = () => {
     if (longPressRef.current) window.clearTimeout(longPressRef.current.timer);
   };
-  const statusLongPress = (doc: Doc) => ({
-    onTouchStart: (e: React.TouchEvent) => {
+  useEffect(() => {
+    return () => {
+      if (longPressRef.current) window.clearTimeout(longPressRef.current.timer);
+      longPressRef.current = null;
+    };
+  }, [leftDrawerOpen]);
+  const drawerLongPress = (doc: Doc) => ({
+    onPointerDown: (e: React.PointerEvent) => {
       cancelLongPress();
-      if (e.touches.length !== 1) {
+      if (!e.isPrimary || e.button !== 0) {
         longPressRef.current = null;
         return;
       }
-      const t = e.touches[0];
-      const press = { timer: 0, x: t.clientX, y: t.clientY, fired: false };
+      const press = { timer: 0, x: e.clientX, y: e.clientY, fired: false };
       press.timer = window.setTimeout(() => {
         press.fired = true;
         navigator.vibrate?.(12);
-        showStatusMenu(doc, press.x, press.y + 12);
+        showDrawerMenu(doc, press.x, press.y + 12);
       }, 450);
       longPressRef.current = press;
     },
-    onTouchMove: (e: React.TouchEvent) => {
+    onPointerMove: (e: React.PointerEvent) => {
       const press = longPressRef.current;
-      const t = e.touches[0];
-      if (press && !press.fired && Math.hypot(t.clientX - press.x, t.clientY - press.y) > 10) {
+      if (press && !press.fired && Math.hypot(e.clientX - press.x, e.clientY - press.y) > 10) {
         cancelLongPress();
         longPressRef.current = null;
       }
     },
-    onTouchEnd: cancelLongPress,
-    onTouchCancel: cancelLongPress,
+    onPointerUp: cancelLongPress,
+    onPointerLeave: cancelLongPress,
+    onPointerCancel: () => {
+      cancelLongPress();
+      longPressRef.current = null;
+    },
     onContextMenu: (e: React.MouseEvent) => e.preventDefault(),
   });
-  // 꾹 눌러 메뉴를 띄운 뒤 따라오는 클릭으로 회차가 열리지 않게 한다
+  // 꾹 눌러 메뉴를 띄운 뒤 따라오는 클릭으로 문서가 열리지 않게 한다.
   const consumeLongPress = () => {
     const fired = !!longPressRef.current?.fired;
     longPressRef.current = null;
@@ -369,6 +427,14 @@ export default function MobileEditorView({
     (window as any).__lofEditorSubBack = () => {
       if (propPopup) {
         setPropPopup(null);
+        return true;
+      }
+      if (renamingDoc) {
+        setRenamingDoc(null);
+        return true;
+      }
+      if (moveFolderDoc) {
+        setMoveFolderDoc(null);
         return true;
       }
       if (newFolderParent !== null) {
@@ -398,6 +464,8 @@ export default function MobileEditorView({
     };
   }, [
     propPopup,
+    renamingDoc,
+    moveFolderDoc,
     newFolderParent,
     createMenuFolder,
     moreMenuOpen,
@@ -521,6 +589,23 @@ export default function MobileEditorView({
     }
     return Array.from(set).sort((a, b) => a.localeCompare(b, "ko"));
   }, [tree.memoEntries, docItems]);
+
+  const moveDrawerDocument = async (doc: Doc, folder: string) => {
+    if (!doc.relPath?.startsWith("doc/") || docFolderOf(doc) === folder) return;
+    await tree.moveDocPaths([doc.relPath.slice(4)], folder);
+    if (folder) {
+      setCollapsedPaths((previous) => {
+        const next = { ...previous };
+        let path = "";
+        for (const part of folder.split("/")) {
+          path = path ? `${path}/${part}` : part;
+          next[path] = false;
+        }
+        return next;
+      });
+    }
+    message(folder ? `'${folder}' 폴더로 이동했습니다.` : "최상위 위치로 이동했습니다.");
+  };
 
   const toggleFolder = (path: string) => {
     setCollapsedPaths((prev) => ({ ...prev, [path]: !prev[path] }));
@@ -673,7 +758,9 @@ export default function MobileEditorView({
               <button
                 type="button"
                 className="m-tree-row-main"
+                {...drawerLongPress(d)}
                 onClick={() => {
+                  if (consumeLongPress()) return;
                   setLeftDrawerOpen(false);
                   if (!isCur) attempt(() => openDoc(d.id, false))();
                 }}
@@ -1283,7 +1370,7 @@ export default function MobileEditorView({
                           <button
                             type="button"
                             className="m-tree-row-main"
-                            {...statusLongPress(ep)}
+                            {...drawerLongPress(ep)}
                             onClick={() => {
                               if (consumeLongPress()) return;
                               setLeftDrawerOpen(false);
@@ -1339,7 +1426,9 @@ export default function MobileEditorView({
                               <button
                                 type="button"
                                 className="m-tree-row-main"
+                                {...drawerLongPress(d)}
                                 onClick={() => {
+                                  if (consumeLongPress()) return;
                                   setLeftDrawerOpen(false);
                                   if (!isCur)
                                     attempt(() => openDoc(d.id, false))();
@@ -1644,9 +1733,9 @@ export default function MobileEditorView({
           role="presentation"
         >
           <div
-            className="m-floating-anchor-popup"
+            className={`m-floating-anchor-popup${propPopup.drawer ? " m-drawer-document-menu" : ""}`}
             role="menu"
-            aria-label="속성 선택 팝업"
+            aria-label={propPopup.drawer ? "문서 관리" : "속성 선택 팝업"}
             style={{
               top: `${Math.max(52, Math.min(propPopup.y, window.innerHeight - 280))}px`,
               left:
@@ -1655,6 +1744,7 @@ export default function MobileEditorView({
                   : `${Math.max(12, Math.min(propPopup.x, window.innerWidth - 232))}px`,
             }}
             onClick={(e) => e.stopPropagation()}
+            onContextMenu={propPopup.drawer ? (e) => e.preventDefault() : undefined}
           >
             {propPopup.items.map((item, idx) =>
               item === "separator" ? (
@@ -1700,6 +1790,34 @@ export default function MobileEditorView({
         }
         items={createMenuItems}
         onClose={() => setCreateMenuFolder(null)}
+      />
+
+      <MobileFolderPickerSheet
+        open={moveFolderDoc !== null}
+        title="폴더 이동"
+        currentFolder={moveFolderDoc ? docFolderOf(moveFolderDoc) : ""}
+        folders={allFolders}
+        onSelect={(folder) => {
+          if (moveFolderDoc) {
+            attempt(() => moveDrawerDocument(moveFolderDoc, folder))();
+          }
+        }}
+        onClose={() => setMoveFolderDoc(null)}
+      />
+
+      <MobilePromptSheet
+        open={renamingDoc !== null}
+        title="이름 변경"
+        placeholder="문서 이름 입력"
+        initialValue={renamingDoc?.title || ""}
+        confirmLabel="변경"
+        onConfirm={(title) =>
+          attempt(async () => {
+            if (!renamingDoc || title === renamingDoc.title) return;
+            await patchDoc(renamingDoc.id, { title });
+          })()
+        }
+        onClose={() => setRenamingDoc(null)}
       />
 
       <MobilePromptSheet
