@@ -934,6 +934,9 @@ impl Store {
     }
 
     pub fn poll_disk(&mut self) -> Result<bool, LofError> {
+        if let Some(db) = &self.index.database {
+            crate::project_order::load(&self.root, db)?;
+        }
         let files = disk_inventory(&self.root)?;
         let changed = self.disk_inventory.as_ref() != Some(&files);
         let revision = self.sync_revision();
@@ -2108,7 +2111,7 @@ impl Store {
 
     fn ordered_projects(&self, projects: &[CatalogProject]) -> Result<Vec<Value>, LofError> {
         let saved = match &self.index.database {
-            Some(db) => db.get("projectOrder")?,
+            Some(db) => crate::project_order::load(&self.root, db)?.map(|order| json!(order.ids)),
             None => None,
         };
         let positions: HashMap<&str, usize> = saved
@@ -2171,7 +2174,11 @@ impl Store {
         if &current == ids {
             return Ok(false);
         }
-        self.database()?.set("projectOrder", &json!(ids))?;
+        crate::project_order::set(
+            &self.root,
+            self.database()?,
+            ids.iter().filter_map(Value::as_str).map(str::to_string).collect(),
+        )?;
         Ok(true)
     }
 

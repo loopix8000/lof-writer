@@ -26,6 +26,7 @@ pub mod markdown;
 pub mod memo;
 pub mod platforms;
 mod pin;
+mod project_order;
 #[cfg(not(target_os = "android"))]
 mod single_instance;
 mod skills;
@@ -451,7 +452,7 @@ fn handle_method(
     let result = dispatch_method(method, args, state, app, window);
     if result.as_ref().is_ok_and(|value| !value.is_null()) && matches!(method,
         "createProject" | "updateProject" | "chooseCover" | "removeCover" | "createDocument" |
-        "saveDocument" | "reorderDocuments" | "deleteProject" | "repair" | "relinkDocument" |
+        "saveDocument" | "reorderDocuments" | "reorderProjects" | "deleteProject" | "repair" | "relinkDocument" |
         "adoptFile" | "forgetDocument" | "memoSave" | "memoCreate" | "memoCreateFolder" |
         "memoRename" | "memoMove" | "memoArchiveFolder" | "memoRemove" | "restore" | "deleteDocument" | "importFiles" |
         "saveConnection" | "chooseVault" | "moveVault")

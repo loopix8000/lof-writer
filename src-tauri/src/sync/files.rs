@@ -166,6 +166,44 @@ fn retry() -> LofError {
         "SYNC_RETRY",
     )
 }
+
+fn sync_project_order(
+    store: &Mutex<Option<Store>>,
+    root: &Path,
+    remote: &mut dyn FileRemote,
+    pair: &Pair,
+    total: &mut Value,
+) -> Result<Option<String>, LofError> {
+    let path = crate::project_order::FILE;
+    let local = with_store(store, root, |_| read_local(root, path))?;
+    let other = if pair.remote.is_some() {
+        Some(remote.read(path)?)
+    } else {
+        None
+    };
+    if local.as_deref().map(hash_bytes) != pair.local
+        || other.as_deref().map(hash_bytes) != pair.remote
+    {
+        return Err(retry());
+    }
+    let Some(merged) = crate::project_order::merge_bytes(local.as_deref(), other.as_deref()) else {
+        // 알 수 없는 형식은 기존 파일 동기화 방식으로 전달한다.
+        return Ok(None);
+    };
+    let hash = hash_bytes(&merged);
+    if pair.local.as_deref() != Some(&hash) {
+        apply_local(store, root, path, Some(&merged), pair.local.as_deref(), None)?;
+        add(total, "downloaded", 1);
+    }
+    if pair.remote.as_deref() != Some(&hash) {
+        with_store(store, root, |st| st.require_database())?;
+        remote.write(path, &merged, pair.remote_info.as_ref())?;
+        add(total, "uploaded", 1);
+        add(total, "uploadedBytes", merged.len());
+    }
+    Ok(Some(hash))
+}
+
 fn add(total: &mut Value, key: &str, count: usize) {
     total[key] = json!(total[key].as_u64().unwrap_or(0) + count as u64);
 }
@@ -222,6 +260,11 @@ pub(crate) fn apply_local(
         let old = read_local(root, path)?;
         if old.as_deref().map(hash_bytes).as_deref() != expected {
             return Err(retry());
+        }
+        if path == crate::project_order::FILE
+            && crate::project_order::receive(root, st.database()?, bytes)?
+        {
+            return Ok(());
         }
         let target = file_remote::safe_path(root, path)?;
         let project = path.rsplit('/').next() == Some("project.json");
@@ -536,6 +579,13 @@ fn run(
         if deferred.contains(&path) { continue; }
         let operation = (|| -> Result<(), LofError> {
             let pair = &pairs[&path];
+            if path == crate::project_order::FILE {
+                if let Some(hash) = sync_project_order(store, root, remote, pair, total)? {
+                    checkpoint(state, &path, Some(&hash), None);
+                    save(store, root, key, state)?;
+                    return Ok(());
+                }
+            }
             let base = state.files.get(&path);
             let local = pair.local.as_deref();
             let other = pair.remote.as_deref();

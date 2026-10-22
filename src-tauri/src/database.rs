@@ -394,6 +394,15 @@ impl LibraryDb {
         Ok(())
     }
 
+    pub fn set_project_order(&self, ids: &Value, state: &Value) -> Result<(), LofError> {
+        let transaction = self.connection.unchecked_transaction()?;
+        // 기존 앱이 읽는 배열과 동기화용 변경 정보를 함께 저장한다.
+        self.set("projectOrder", ids)?;
+        self.set("projectOrderState", state)?;
+        transaction.commit()?;
+        Ok(())
+    }
+
     pub fn cache_body(&self, project: &str, id: &str, body: &str) -> Result<(), LofError> {
         self.connection.execute("INSERT INTO bodies VALUES(?1,?2,?3) ON CONFLICT(project_id,doc_id) DO UPDATE SET body=excluded.body WHERE body<>excluded.body", params![project,id,body])?;
         Ok(())

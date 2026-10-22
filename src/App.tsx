@@ -691,11 +691,8 @@ export default function App() {
   }
   // 파일 트리 위 작품 카드의 드롭다운: 다른 작품으로 바로 전환한다.
   function projectMenu(): MenuItem[] {
-    const projects = [...lib.projects].sort((a, b) =>
-      a.title.localeCompare(b.title, "ko"),
-    );
     return [
-      ...projects.map((p) => ({
+      ...lib.projects.map((p) => ({
         label: p.title || "제목 없는 작품",
         checked: p.id === projectId,
         action: attempt(() => switchProject(p.id)),
