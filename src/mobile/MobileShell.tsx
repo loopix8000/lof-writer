@@ -106,6 +106,7 @@ export default function MobileShell({
   error,
   setError,
   viewer,
+  setViewer,
   closeViewer,
   confirmTitle,
   setConfirmTitle,
@@ -227,6 +228,7 @@ export default function MobileShell({
   error: string;
   setError: React.Dispatch<React.SetStateAction<string>>;
   viewer: { src: string; alt: string } | null;
+  setViewer: React.Dispatch<React.SetStateAction<{ src: string; alt: string } | null>>;
   closeViewer: () => void;
   confirmTitle: string;
   setConfirmTitle: React.Dispatch<React.SetStateAction<string>>;
@@ -527,6 +529,7 @@ export default function MobileShell({
               <MobileProjectView
                 lib={lib}
                 project={project}
+                onViewImage={(src, alt) => setViewer({ src, alt })}
                 docs={tree.docs}
                 tab={tab}
                 setTab={setTab}

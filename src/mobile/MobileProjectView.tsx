@@ -74,6 +74,7 @@ export default function MobileProjectView({
   setDialog,
   refresh,
   message,
+  onViewImage,
   numberOf,
 }: {
   lib: Library;
@@ -101,6 +102,7 @@ export default function MobileProjectView({
   setDialog: React.Dispatch<React.SetStateAction<Dialog | null>>;
   refresh: () => Promise<Library | undefined>;
   message: (text: string) => void;
+  onViewImage: (src: string, alt: string) => void;
   numberOf: (d: Doc) => any;
 }) {
   // 작품 화면은 에피소드 / 플롯 / 메모 3탭으로 구분
@@ -898,11 +900,19 @@ export default function MobileProjectView({
         {/* 작품 표지(좌측) + 작품 정보·태그·관리 버튼(우측) */}
         <div className="m-project-hero-wrap" aria-hidden={heroCollapsed}>
           <div className="m-project-hero" ref={heroRef}>
-            <div
+            <button
+              type="button"
               className={`m-project-hero-cover ${
                 project.coverData && !prefs.hideCovers ? "has-image" : ""
               }`}
-              onClick={openEditProjectDialog}
+              aria-label={project.coverData && !prefs.hideCovers ? "표지 크게 보기" : "표지 설정"}
+              onClick={() => {
+                if (project.coverData && !prefs.hideCovers) {
+                  onViewImage(project.coverData, `${project.title} 표지`);
+                } else {
+                  openEditProjectDialog();
+                }
+              }}
             >
               {project.coverData && !prefs.hideCovers ? (
                 <CoverImage src={project.coverData} alt={`${project.title} 표지`} />
@@ -912,7 +922,7 @@ export default function MobileProjectView({
                   <span>YOUR STORY</span>
                 </>
               )}
-            </div>
+            </button>
 
             <div className="m-project-hero-info">
               <div className="m-project-hero-meta">

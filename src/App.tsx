@@ -1753,6 +1753,7 @@ export default function App() {
         error={error}
         setError={setError}
         viewer={viewer}
+        setViewer={setViewer}
         closeViewer={closeViewer}
         confirmTitle={confirmTitle}
         setConfirmTitle={setConfirmTitle}
