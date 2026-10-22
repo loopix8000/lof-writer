@@ -125,30 +125,78 @@ export default function MobileProjectView({
   } | null>(null);
   const [moveFolderDoc, setMoveFolderDoc] = useState<Doc | null>(null);
   const [heroCollapsed, setHeroCollapsed] = useState(false);
-  const heroRef = useRef<HTMLDivElement>(null);
+  const collapsedRef = useRef(false);
   const listScrollRef = useRef<HTMLDivElement>(null);
+  const scrollIntent = useRef({ direction: 0, distance: 0 });
+  const listPosition = useRef({ top: 0, height: 0 });
+  const touchScroll = useRef({ active: false, startX: 0, startY: 0, y: 0 });
 
   // 탭·작품·보관함을 바꾸면 목록을 맨 위로 돌리고 작품 정보를 다시 펼친다
   useEffect(() => {
     setHeroCollapsed(false);
-    if (listScrollRef.current) listScrollRef.current.scrollTop = 0;
+    collapsedRef.current = false;
+    scrollIntent.current = { direction: 0, distance: 0 };
+    touchScroll.current.active = false;
+    const list = listScrollRef.current;
+    if (list) {
+      list.scrollTop = 0;
+      listPosition.current = { top: 0, height: list.clientHeight };
+    }
   }, [activeTab, archive, project.id]);
 
   useEffect(() => {
     setClosedFolders(new Set());
   }, [project.id]);
 
-  const onListScroll = (e: React.UIEvent<HTMLDivElement>) => {
-    const el = e.currentTarget;
-    if (heroCollapsed) {
-      if (el.scrollTop <= 0) setHeroCollapsed(false);
+  const followScrollIntent = (delta: number, el: HTMLDivElement) => {
+    if (!delta) return;
+    const direction = Math.sign(delta);
+    const intent = scrollIntent.current;
+    intent.distance = intent.direction === direction ? intent.distance + Math.abs(delta) : Math.abs(delta);
+    intent.direction = direction;
+    // 아래로 12px면 접고, 위로 8px면 현재 목록 위치에서 바로 펼친다.
+    const next = direction > 0;
+    if (next === collapsedRef.current || intent.distance < (next ? 12 : 8)) return;
+    if (next && el.scrollHeight <= el.clientHeight + 1) return;
+    collapsedRef.current = next;
+    intent.distance = 0;
+    setHeroCollapsed(next);
+  };
+
+  const onListTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
+    const touch = e.touches[0];
+    touchScroll.current = {
+      active: e.touches.length === 1,
+      startX: touch.clientX,
+      startY: touch.clientY,
+      y: touch.clientY,
+    };
+    scrollIntent.current = { direction: 0, distance: 0 };
+  };
+
+  const onListTouchMove = (e: React.TouchEvent<HTMLDivElement>) => {
+    const gesture = touchScroll.current;
+    if (!gesture.active) return;
+    if (e.touches.length !== 1) {
+      gesture.active = false;
       return;
     }
-    // 접은 뒤에도 목록이 스크롤될 만큼 길 때만 접어서 접힘·펼침이 반복되지 않게 한다
-    const heroHeight = heroRef.current?.offsetHeight ?? 0;
-    if (el.scrollTop > 24 && el.scrollHeight - el.clientHeight > heroHeight + 24) {
-      setHeroCollapsed(true);
-    }
+    const touch = e.touches[0];
+    const delta = gesture.y - touch.clientY;
+    gesture.y = touch.clientY;
+    if (Math.abs(touch.clientY - gesture.startY) <= Math.abs(touch.clientX - gesture.startX)) return;
+    followScrollIntent(delta, e.currentTarget);
+  };
+
+  const onListScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    const previous = listPosition.current;
+    const top = Math.max(0, el.scrollTop);
+    const height = el.clientHeight;
+    listPosition.current = { top, height };
+    // 터치는 손가락 방향으로 판정하고, 높이 전환에 따른 스크롤 보정은 무시한다.
+    if (touchScroll.current.active || height !== previous.height) return;
+    followScrollIntent(top - previous.top, el);
   };
 
   const episodes = useMemo(
@@ -899,7 +947,7 @@ export default function MobileProjectView({
 
         {/* 작품 표지(좌측) + 작품 정보·태그·관리 버튼(우측) */}
         <div className="m-project-hero-wrap" aria-hidden={heroCollapsed}>
-          <div className="m-project-hero" ref={heroRef}>
+          <div className="m-project-hero">
             <button
               type="button"
               className={`m-project-hero-cover ${
@@ -1109,6 +1157,10 @@ export default function MobileProjectView({
         className="m-scroll-body m-tree-scroll"
         ref={listScrollRef}
         onScroll={onListScroll}
+        onTouchStart={onListTouchStart}
+        onTouchMove={onListTouchMove}
+        onTouchEnd={() => { touchScroll.current.active = false; }}
+        onTouchCancel={() => { touchScroll.current.active = false; }}
       >
         {activeTab === "episode" ? (
           <div className="m-tree-container">
