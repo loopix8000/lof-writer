@@ -50,6 +50,7 @@ import { NodeSelection, TextSelection } from "@tiptap/pm/state";
 import type { EditorProps, EditorView } from "@tiptap/pm/view";
 import { createCachedMarkdown } from "./cached-markdown";
 import EditorFind, { FindHighlights } from "./EditorFind";
+import { readEditorSelection, saveEditorSelection, type EditorSession } from "./workspace-state";
 
 const SourceEditor = lazy(() => import("./SourceEditor"));
 
@@ -359,6 +360,7 @@ export default function Writer({
   contextMenu = false,
   images,
   onCursorLine,
+  session,
 }: {
   id: string;
   body: string;
@@ -369,6 +371,7 @@ export default function Writer({
   source: boolean;
   typingOptions: Record<string, any>;
   revision: string;
+  session?: EditorSession;
   // 원고 보호 여부와 그룹 포커스를 분리해 도구 막대 구성을 그대로 유지한다.
   readOnly?: boolean;
   inactive?: boolean;
@@ -688,6 +691,24 @@ export default function Writer({
     // Only replace editor content for a document revision or a mode transition.
     // Mirroring every local keystroke can replay a stale React effect over newer input.
   }, [revision, source, protectedSource, editor, id]);
+  useEffect(() => {
+    if (!session || !editor || editor.isDestroyed || source || protectedSource) return;
+    const saved = readEditorSelection(session, "rich", editor.state.doc.content.size);
+    if (saved && !reveal?.query && !jumpToBookmark) editor.view.dispatch(editor.state.tr.setSelection(TextSelection.between(
+      editor.state.doc.resolve(saved.anchor), editor.state.doc.resolve(saved.head),
+    )));
+    const remember = () => {
+      if (editor.isDestroyed) return;
+      const { anchor, head } = editor.state.selection;
+      saveEditorSelection(session, "rich", { anchor, head });
+    };
+    editor.on("selectionUpdate", remember);
+    editor.on("update", remember);
+    return () => {
+      editor.off("selectionUpdate", remember);
+      editor.off("update", remember);
+    };
+  }, [editor, id, source, protectedSource, session?.scope, session?.documentId]);
   // 강제 줄바꿈 들여쓰기 설정이 바뀌면 장식(Decoration)을 즉시 갱신한다.
   useEffect(() => {
     if (editor && !editor.isDestroyed && editor.view) {
@@ -963,6 +984,7 @@ export default function Writer({
           <Suspense fallback={<div role="status">원문 편집기를 준비하고 있습니다…</div>}>
           <SourceEditor
             ref={sourceRef} id={id} body={body} editable={editable} inactive={inactive} visible={visible}
+            session={session}
             manualLineBreak={manualLineBreak} typingOptions={typingOptions} countingRules={countingRules}
             fontSize={style.fontSize} lineHeight={style.lineHeight} normalizePaste={normalizePastedText}
             reveal={reveal}

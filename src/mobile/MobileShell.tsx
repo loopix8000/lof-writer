@@ -25,6 +25,7 @@ import SettingsContent from "../app/SettingsContent";
 import type { FileTreeController } from "../app/useFileTree";
 import { ImageViewer } from "../CoverImage";
 import type { EditorScrollPositions } from "../EditorScroll";
+import type { MenuItem } from "../ContextMenu";
 import EpisodeBindingPicker from "../EpisodeBindingPicker";
 import HistoryDialog from "../HistoryDialog";
 import PlatformPicker from "../PlatformPicker";
@@ -130,6 +131,7 @@ export default function MobileShell({
   navigate,
   goView,
   openLibraryProject,
+  projectMenu,
   openDoc,
   createDoc,
   patchDoc,
@@ -262,6 +264,7 @@ export default function MobileShell({
   ) => Promise<void>;
   goView: (next: "library" | "project" | "bookmarks", id?: string) => Promise<void>;
   openLibraryProject: (id: string) => Promise<void>;
+  projectMenu: () => MenuItem[];
   openDoc: (id: string, pinned?: boolean) => Promise<void>;
   createDoc: (
     kind: Kind,
@@ -520,7 +523,7 @@ export default function MobileShell({
                 bindDocument={bindDocument}
                 openNoteLink={openNoteLink}
                 showHistory={showHistory}
-                goProject={() => goView("project", active.projectId)}
+                projectMenu={projectMenu}
                 onUpdateProjectWriting={onUpdateProjectWriting}
                 setDialog={setDialog}
                 message={message}
@@ -571,9 +574,7 @@ export default function MobileShell({
                 prefs={prefs}
                 busy={busy}
                 attempt={attempt}
-                onSelectProject={async (id) => {
-                  await goView("project", id);
-                }}
+                onSelectProject={openLibraryProject}
                 setDialog={setDialog}
                 chooseVault={chooseVault}
               />

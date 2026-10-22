@@ -1,6 +1,13 @@
 import { call } from "./types";
 
-type WorkspaceState = { layout?: unknown; scroll?: Record<string, unknown> };
+export type EditorSelection = { anchor: number; head: number };
+export type EditorSession = { scope: string; documentId: string };
+type SelectionMode = "rich" | "source";
+type WorkspaceState = {
+  layout?: unknown;
+  scroll?: Record<string, unknown>;
+  selections?: Record<string, Partial<Record<SelectionMode, EditorSelection>>>;
+};
 let states: Record<string, WorkspaceState> = {};
 let initialized = false;
 let revision = 0, saved = 0;
@@ -21,6 +28,20 @@ export function workspaceKey(root: string, project: string) {
 
 export function readWorkspaceState(key: string): WorkspaceState {
   return states[key] ?? {};
+}
+
+export function readEditorSelection(session: EditorSession | undefined, mode: SelectionMode, length: number): EditorSelection | undefined {
+  const value = session && readWorkspaceState(session.scope).selections?.[session.documentId]?.[mode];
+  if (!value || !Number.isSafeInteger(value.anchor) || !Number.isSafeInteger(value.head) || value.anchor < 0 || value.head < 0) return;
+  return { anchor: Math.min(value.anchor, length), head: Math.min(value.head, length) };
+}
+
+export function saveEditorSelection(session: EditorSession | undefined, mode: SelectionMode, selection: EditorSelection) {
+  if (!session) return;
+  const selections = readWorkspaceState(session.scope).selections ?? {};
+  const previous = selections[session.documentId];
+  if (previous?.[mode]?.anchor === selection.anchor && previous[mode]?.head === selection.head) return;
+  saveWorkspaceState(session.scope, { selections: { ...selections, [session.documentId]: { ...previous, [mode]: selection } } });
 }
 
 export function saveWorkspaceState(key: string, patch: WorkspaceState) {

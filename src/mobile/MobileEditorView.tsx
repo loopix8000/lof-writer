@@ -48,6 +48,7 @@ import { type Dialog } from "../app/model";
 import TypesettingSettings from "../app/TypesettingSettings";
 import type { FileTreeController } from "../app/useFileTree";
 import EditorScroll, { type EditorScrollPositions } from "../EditorScroll";
+import type { MenuItem } from "../ContextMenu";
 import EpisodeProperties from "../EpisodeProperties";
 import PlatformCount from "../PlatformCount";
 import SyncStatus from "../SyncStatus";
@@ -117,7 +118,7 @@ export default function MobileEditorView({
   bindDocument,
   openNoteLink,
   showHistory,
-  goProject,
+  projectMenu,
   onUpdateProjectWriting,
   setDialog,
   message,
@@ -181,7 +182,7 @@ export default function MobileEditorView({
   bindDocument: (id: string, episodeId: string | null) => Promise<void>;
   openNoteLink: (href: string, quote: string) => Promise<void>;
   showHistory: () => Promise<void>;
-  goProject: () => Promise<void>;
+  projectMenu: () => MenuItem[];
   onUpdateProjectWriting: (rules: WritingRules) => void;
   setDialog: React.Dispatch<React.SetStateAction<Dialog | null>>;
   message: (text: string, action?: { label: string; run: () => void }, duration?: number) => void;
@@ -213,6 +214,7 @@ export default function MobileEditorView({
     y: number;
     align?: "left" | "center";
     drawer?: boolean;
+    project?: boolean;
     items: Array<
       | "separator"
       | {
@@ -1053,6 +1055,7 @@ export default function MobileEditorView({
             manualLineBreak={!!active.manualLineBreak}
             copyWithBlankLines={prefs.copyWithBlankLines === true}
             id={active.id}
+            session={{ scope: workspaceKey(lib.root, active.projectId), documentId: `mobile\n${active.id}` }}
             revision={active.revision}
             body={active.body}
             tables={active.kind === "memo" || active.kind === "plot"}
@@ -1249,13 +1252,26 @@ export default function MobileEditorView({
                 <button
                   type="button"
                   className="m-drawer-title-btn"
-                  aria-label="작품 페이지로 이동"
-                  onClick={() => {
-                    setLeftDrawerOpen(false);
-                    attempt(goProject)();
+                  aria-label="작품 및 서재 메뉴"
+                  aria-haspopup="menu"
+                  aria-expanded={propPopup?.project === true}
+                  onClick={(event) => {
+                    const rect = event.currentTarget.getBoundingClientRect();
+                    setPropPopup({
+                      x: rect.left,
+                      y: rect.bottom + 8,
+                      project: true,
+                      items: projectMenu().map(item => item === "separator" ? item : {
+                        ...item,
+                        action: () => {
+                          setLeftDrawerOpen(false);
+                          item.action();
+                        },
+                      }),
+                    });
                   }}
                 >
-                  <ChevronLeft size={18} aria-hidden="true" style={{ flexShrink: 0 }} />
+                  <ChevronDown size={18} aria-hidden="true" style={{ flexShrink: 0 }} />
                   <strong>{project?.title || "제목 없는 작품"}</strong>
                 </button>
               </div>
@@ -1708,15 +1724,21 @@ export default function MobileEditorView({
           role="presentation"
         >
           <div
-            className={`m-floating-anchor-popup${propPopup.drawer ? " m-drawer-document-menu" : ""}`}
+            className={`m-floating-anchor-popup${propPopup.drawer ? " m-drawer-document-menu" : ""}${propPopup.project ? " m-drawer-project-menu" : ""}`}
             role="menu"
-            aria-label={propPopup.drawer ? "문서 관리" : "속성 선택 팝업"}
+            aria-label={propPopup.project ? "작품 및 서재 메뉴" : propPopup.drawer ? "문서 관리" : "속성 선택 팝업"}
             style={{
-              top: `${Math.max(52, Math.min(propPopup.y, window.innerHeight - 280))}px`,
-              left:
-                propPopup.align === "center"
-                  ? `${Math.max(12, Math.min(propPopup.x - 110, window.innerWidth - 232))}px`
-                  : `${Math.max(12, Math.min(propPopup.x, window.innerWidth - 232))}px`,
+              ...(propPopup.project ? {
+                top: Math.max(12, Math.min(propPopup.y, window.innerHeight - 120)),
+                left: Math.max(12, Math.min(propPopup.x, window.innerWidth - Math.min(300, window.innerWidth - 24) - 12)),
+                maxHeight: Math.min(window.innerHeight * 0.6, window.innerHeight - Math.max(12, Math.min(propPopup.y, window.innerHeight - 120)) - 12),
+              } : {
+                top: `${Math.max(52, Math.min(propPopup.y, window.innerHeight - 280))}px`,
+                left:
+                  propPopup.align === "center"
+                    ? `${Math.max(12, Math.min(propPopup.x - 110, window.innerWidth - 232))}px`
+                    : `${Math.max(12, Math.min(propPopup.x, window.innerWidth - 232))}px`,
+              }),
             }}
             onClick={(e) => e.stopPropagation()}
             onContextMenu={propPopup.drawer ? (e) => e.preventDefault() : undefined}
@@ -1732,7 +1754,8 @@ export default function MobileEditorView({
                 <button
                   key={`${item.label}:${idx}`}
                   type="button"
-                  role="menuitem"
+                  role={item.checked === undefined ? "menuitem" : "menuitemradio"}
+                  aria-checked={item.checked}
                   disabled={item.disabled}
                   className={`m-floating-popup-item ${item.danger ? "danger" : ""} ${item.checked ? "checked" : ""}`}
                   onClick={() => {

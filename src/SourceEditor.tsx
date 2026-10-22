@@ -12,6 +12,7 @@ import { markdownImage } from "./image-extension";
 import { textCounts, type ManuscriptCounts } from "./manuscript-counts";
 import type { WritingRules } from "./types";
 import type { FindRange } from "./EditorFind";
+import { readEditorSelection, saveEditorSelection, type EditorSession } from "./workspace-state";
 
 type Image = { src: string; alt: string };
 const externalChange = Annotation.define<boolean>();
@@ -176,6 +177,7 @@ export type SourceEditorHandle = {
 };
 
 type Props = {
+  session?: EditorSession;
   id: string; body: string; editable: boolean; inactive: boolean; visible: boolean;
   fontSize: number; lineHeight: number; manualLineBreak: boolean;
   typingOptions: Record<string, any>; countingRules?: WritingRules;
@@ -249,7 +251,10 @@ const SourceEditor = forwardRef<SourceEditorHandle, Props>(function SourceEditor
     if (!host.current) return;
     const view = new EditorView({
       parent: host.current,
-      state: EditorState.create({ doc: latest.current.body, extensions: [
+      state: EditorState.create({
+        doc: latest.current.body,
+        selection: readEditorSelection(latest.current.session, "source", latest.current.body.length),
+        extensions: [
         markdown({ extensions: GFM, addKeymap: false, completeHTMLTags: false, pasteURLAsLink: false }),
         history(), keymap.of([{ key: "Mod-/", run: toggleSourceJsdocComment }, ...historyKeymap, ...defaultKeymap]), EditorView.lineWrapping,
         findHighlights,
@@ -258,6 +263,10 @@ const SourceEditor = forwardRef<SourceEditorHandle, Props>(function SourceEditor
         EditorView.clipboardInputFilter.of((text, state) => latest.current.manualLineBreak || inCode(state)
           ? text : latest.current.normalizePaste(text, false)),
         EditorView.updateListener.of(update => {
+          if (update.docChanged || update.selectionSet) {
+            const { anchor, head } = update.state.selection.main;
+            saveEditorSelection(latest.current.session, "source", { anchor, head });
+          }
           if (update.docChanged && !update.transactions.some(tr => tr.annotation(externalChange))) {
             const body = update.state.doc.toString(); lastBody.current = body;
             latest.current.onChange(body, countDelta(update, latest.current.countingRules));

@@ -1897,6 +1897,22 @@
     0 2px 8px rgba(0, 0, 0, 0.32);
 }
 
+.m-drawer-project-menu {
+  width: min(300px, calc(100vw - 24px));
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.m-drawer-project-menu .m-floating-popup-item {
+  flex-shrink: 0;
+}
+
+.m-drawer-project-menu .m-floating-popup-item span {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .m-floating-popup-item.checked {
   background: var(--accent-soft);
   color: var(--accent);

@@ -702,9 +702,14 @@ export default function App() {
       { label: "내 서재로 이동", action: attempt(() => goView("library")) },
     ];
   }
-  // 그 작품에서 가장 최근에 수정한 문서를 연다. 문서가 없으면 작품 페이지로 간다.
+  // 작품에서 마지막으로 보던 문서를 연다. 저장된 화면이 없으면 최근 수정한 문서를 고른다.
   async function switchProject(id: string) {
     if (id === projectId) return;
+    const previous = getProjectDocument(id);
+    if (previous) {
+      await openDoc(previous);
+      return;
+    }
     const recent = libraryRef.current.documents
       .filter((d) => d.projectId === id && !d.archived)
       .sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || ""))[0];
@@ -1781,6 +1786,7 @@ export default function App() {
         navigate={navigate}
         goView={goView}
         openLibraryProject={openLibraryProject}
+        projectMenu={projectMenu}
         openDoc={openDoc}
         createDoc={createDoc}
         patchDoc={patchDoc}
