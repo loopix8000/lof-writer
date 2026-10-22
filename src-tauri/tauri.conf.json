@@ -54,6 +54,7 @@
     ],
     "windows": {
       "wix": {
+        "template": "wix/main.wxs",
         "version": "1.0.40",
         "language": "ko-KR",
         "upgradeCode": "CCB5E981-0E56-55BC-ABDF-2EF14082207A"
