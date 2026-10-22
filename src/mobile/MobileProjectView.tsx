@@ -169,6 +169,11 @@ export default function MobileProjectView({
     [activeTab, plots, memos],
   );
 
+  const projectEpisodes = useMemo(
+    () => lib.documents.filter((d) => d.projectId === project.id && d.kind === "episode"),
+    [lib.documents, project.id],
+  );
+
   const filteredEpisodes = useMemo(() => {
     const q = filterQuery.trim().toLowerCase();
     if (!q) return episodes;
@@ -191,17 +196,22 @@ export default function MobileProjectView({
     });
   }, [currentKindDocs, filterQuery]);
 
+  const unlinkedKindDocs = useMemo(() => {
+    const episodeIds = new Set(projectEpisodes.map((ep) => ep.id));
+    return filteredKindDocs.filter((d) => !d.episodeId || !episodeIds.has(d.episodeId));
+  }, [filteredKindDocs, projectEpisodes]);
+
   const allFolderEntries = useMemo(
     () =>
       tree.memoEntries
-        .filter((e) => e.type === "folder" && !!e.archived === archive)
+        .filter((e) => e.type === "folder")
         .sort((a, b) => a.name.localeCompare(b.name, "ko", { numeric: true })),
-    [tree.memoEntries, archive],
+    [tree.memoEntries],
   );
 
   const allFolderPaths = useMemo(
-    () => allFolderEntries.map((e) => e.path),
-    [allFolderEntries],
+    () => allFolderEntries.filter((e) => !!e.archived === archive).map((e) => e.path),
+    [allFolderEntries, archive],
   );
 
   const visibleFolderEntries = useMemo(
@@ -1191,7 +1201,7 @@ export default function MobileProjectView({
           </div>
         ) : docScope === "byEpisode" ? (
           <div className="m-tree-container">
-            {episodes.map((ep) => {
+            {projectEpisodes.map((ep) => {
               const bound = filteredKindDocs.filter((d) => d.episodeId === ep.id);
               if (bound.length === 0) return null;
               return (
@@ -1209,16 +1219,14 @@ export default function MobileProjectView({
                 </div>
               );
             })}
-            {filteredKindDocs.filter((d) => !d.episodeId).length > 0 && (
+            {unlinkedKindDocs.length > 0 && (
               <div className="m-tree-node">
                 <div className="m-tree-group-header">
                   <Folder size={14} />
                   <span>독립 {labels[activeTab]} (회차 미연결)</span>
                 </div>
                 <div className="m-tree-children">
-                  {filteredKindDocs
-                    .filter((d) => !d.episodeId)
-                    .map((d) => renderDocRow(d))}
+                  {unlinkedKindDocs.map((d) => renderDocRow(d))}
                 </div>
               </div>
             )}
