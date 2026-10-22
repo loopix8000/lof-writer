@@ -184,7 +184,7 @@ export default function MobileEditorView({
   goProject: () => Promise<void>;
   onUpdateProjectWriting: (rules: WritingRules) => void;
   setDialog: React.Dispatch<React.SetStateAction<Dialog | null>>;
-  message: (text: string) => void;
+  message: (text: string, action?: { label: string; run: () => void }, duration?: number) => void;
   report: (e: any) => void;
   numberOf: (d: Doc) => any;
   bookmarkJump?: { docId: string; index: number; seq: number } | null;
@@ -1111,7 +1111,7 @@ export default function MobileEditorView({
         onToggleMore={() => setMoreMenuOpen((open) => !open)}
         onReplaceSymbols={replaceActiveSymbols}
         onHistory={attempt(showHistory)}
-        onSave={() => void manualSave().then(() => message("저장했습니다.")).catch(report)}
+        onSave={() => void manualSave().then(() => message("저장했습니다.", undefined, 1500)).catch(report)}
         onCopy={attempt(() =>
           copyDocManuscript(
             active,

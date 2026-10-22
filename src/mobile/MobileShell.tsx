@@ -303,7 +303,7 @@ export default function MobileShell({
   ) => Promise<{ historyWarning?: string }>;
   discardDraft: (id: string) => void;
   refresh: () => Promise<Library | undefined>;
-  message: (text: string, action?: { label: string; run: () => void }) => void;
+  message: (text: string, action?: { label: string; run: () => void }, duration?: number) => void;
   report: (e: any) => void;
 }) {
   const [mobileTab, setMobileTab] = useState<MobileTab>("library");

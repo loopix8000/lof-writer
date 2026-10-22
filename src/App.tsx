@@ -244,14 +244,14 @@ export default function App() {
     // 조판 설정을 열 때 우측 사이드바가 닫혀 있었으면, 조판 설정을 닫을 때 사이드바도 다시 닫는다.
     typesettingOpenedRight = useRef(false);
   const project = lib.projects.find((p) => p.id === projectId);
-  const message = useCallback((text: string, action?: { label: string; run: () => void }) => {
+  const message = useCallback((text: string, action?: { label: string; run: () => void }, duration = 4500) => {
     setToast(text);
     setToastAction(action ?? null);
     if (toastTimer.current) clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => {
       setToast("");
       setToastAction(null);
-    }, 4500);
+    }, duration);
   }, []);
   const report = useCallback((e: any) => {
     setError(e.message || String(e));

@@ -81,7 +81,7 @@ export default function MobileMemoView({
   } | null>;
   flushRef: React.MutableRefObject<((options?: { closing?: boolean }) => Promise<void>) | null>;
   onOpenLink: (href: string, quote: string) => void;
-  message: (text: string) => void;
+  message: (text: string, action?: { label: string; run: () => void }, duration?: number) => void;
   report: (e: any) => void;
   onDetailStateChange?: (inEditor: boolean, closeEditor: () => void) => void;
 }) {
@@ -287,7 +287,7 @@ export default function MobileMemoView({
   const manualSaveMemo = async () => {
     await commitTitleRename(titleInput);
     await flush();
-    message("메모를 저장했습니다.");
+    message("메모를 저장했습니다.", undefined, 1500);
   };
 
   const createNewMemo = async (folder: string, name: string) => {
