@@ -5,6 +5,7 @@ import {
   Code2,
   Copy,
   Download,
+  FolderInput,
   FolderOpen,
   FolderSync,
   HardDrive,
@@ -71,6 +72,7 @@ type Props = {
   setSkillDownloading: React.Dispatch<React.SetStateAction<boolean>>;
   onOpenExport: () => void;
   chooseVault?: () => Promise<void>;
+  moveVault?: () => Promise<void>;
   mobileDetailOpen?: boolean;
   onMobileDetailChange?: (open: boolean) => void;
 };
@@ -112,6 +114,7 @@ export default function SettingsContent({
   setSkillDownloading,
   onOpenExport,
   chooseVault,
+  moveVault,
   mobileDetailOpen: controlledDetailOpen,
   onMobileDetailChange,
 }: Props) {
@@ -120,6 +123,7 @@ export default function SettingsContent({
     ? requestedSettingsPage
     : "editor";
   const [internalDetailOpen, setInternalDetailOpen] = useState(false);
+  const [movingVault, setMovingVault] = useState(false);
   const mobileDetailOpen = controlledDetailOpen ?? internalDetailOpen;
   const setMobileDetailOpen = (open: boolean) => {
     setInternalDetailOpen(open);
@@ -293,8 +297,24 @@ export default function SettingsContent({
                   </button>
                 </div>
                 <p className="muted">
-                  작품 원고, 플롯, 작품별 메모를 보관할 서재 폴더 위치를 변경합니다.
+                  서재 변경으로 다른 폴더의 서재를 엽니다.
                 </p>
+                {moveVault && (
+                  <>
+                    <div className="history-actions">
+                      <button disabled={busy} onClick={attempt(async () => {
+                        setMovingVault(true);
+                        try { await moveVault(); } finally { setMovingVault(false); }
+                      })}>
+                        <FolderInput size={15} />
+                        {movingVault ? "서재 이동 중…" : "서재 이동"}
+                      </button>
+                    </div>
+                    <p className="muted">
+                      현재 서재의 파일·변경 이력·동기화 연결을 유지한 채 새 위치로 옮깁니다. 이동할 빈 폴더를 선택하세요.
+                    </p>
+                  </>
+                )}
               </div>
             )}
             <h3>

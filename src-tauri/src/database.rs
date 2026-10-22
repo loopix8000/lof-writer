@@ -746,6 +746,30 @@ impl LibraryDb {
         Ok(())
     }
 
+    pub(crate) fn remap_library_paths(&self, source: &Path, target: &Path) -> Result<(), LofError> {
+        let transaction = self.connection.unchecked_transaction()?;
+        if let Some(mut pending) = self.get("missingFiles")? {
+            if let Some(files) = pending.as_object_mut() {
+                for info in files.values_mut() {
+                    if let Some(path) = info.get_mut("path") { crate::library_move::remap_path(path, source, target); }
+                }
+            }
+            self.set("missingFiles", &pending)?;
+        }
+        if let Some(mut catalog) = self.get("catalog")? {
+            if let Some(root) = catalog.get_mut("common").and_then(|common| common.get_mut("root")) {
+                crate::library_move::remap_path(root, source, target);
+            }
+            self.set("catalog", &catalog)?;
+        }
+        for mut doc in self.observations()? {
+            if let Some(path) = doc.get_mut("path") { crate::library_move::remap_path(path, source, target); }
+            self.connection.execute("UPDATE observations SET doc=?1 WHERE doc_id=?2", params![encode(&doc)?, doc["id"].as_str().unwrap_or("")])?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
     pub fn retain_keys(
         &self,
         prefix: &str,

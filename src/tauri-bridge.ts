@@ -19,6 +19,8 @@ const methods = [
   "bootstrap",
   "prepareAndroidLibrary",
   "chooseVault",
+  "pickVaultDestination",
+  "moveVault",
   "createProject",
   "updateProject",
   "createDocument",
@@ -167,6 +169,9 @@ export function installTauriBridge() {
       async (args?: any) => {
         const payload = args ?? {};
         if (android) {
+          if (name === "pickVaultDestination") {
+            return { ok: true, data: await pickAndroidFolder() };
+          }
           // Android 서재와 공용 메모는 기기 폴더에만 둔다.
           if ((name === "chooseVault" || name === "chooseCommonMemo") && !payload.path) {
             const folder = await pickAndroidFolder();

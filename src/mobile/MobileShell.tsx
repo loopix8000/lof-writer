@@ -144,6 +144,7 @@ export default function MobileShell({
   replaceActiveSymbols,
   showHistory,
   chooseVault,
+  moveVault,
   openSettingsData,
   renderSyncConnections,
   onUpdateProjectWriting,
@@ -280,6 +281,7 @@ export default function MobileShell({
   replaceActiveSymbols: () => void;
   showHistory: () => Promise<void>;
   chooseVault: () => Promise<void>;
+  moveVault: () => Promise<void>;
   openSettingsData: () => Promise<void>;
   renderSyncConnections: () => React.JSX.Element;
   onUpdateProjectWriting: (rules: WritingRules) => void;
@@ -724,6 +726,7 @@ export default function MobileShell({
                 setSkillDownloading={setSkillDownloading}
                 onOpenExport={() => setDialog({ type: "export" })}
                 chooseVault={chooseVault}
+                moveVault={moveVault}
                 mobileDetailOpen={settingsDetailOpen}
                 onMobileDetailChange={setSettingsDetailOpen}
               />

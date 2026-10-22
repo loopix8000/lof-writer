@@ -17,6 +17,7 @@ mod file_sync_reset;
 mod git_worker;
 mod git_history;
 mod library_sync_reset;
+mod library_move;
 mod realtime;
 pub mod local_git;
 pub mod import;
@@ -452,7 +453,7 @@ fn handle_method(
         "saveDocument" | "reorderDocuments" | "deleteProject" | "repair" | "relinkDocument" |
         "adoptFile" | "forgetDocument" | "memoSave" | "memoCreate" | "memoCreateFolder" |
         "memoRename" | "memoMove" | "memoArchiveFolder" | "memoRemove" | "restore" | "deleteDocument" | "importFiles" |
-        "saveConnection" | "chooseVault")
+        "saveConnection" | "chooseVault" | "moveVault")
     {
         auto_sync::request(app);
     }
@@ -573,6 +574,16 @@ fn dispatch_method(
             );
             Ok(Value::Object(out))
         }
+        "pickVaultDestination" => {
+            #[cfg(not(target_os = "android"))]
+            {
+                let picked = FileDialog::new().set_title("서재를 이동할 빈 폴더 선택").pick_folder();
+                Ok(picked.map(|folder| json!(strip_verbatim_prefix(&folder).to_string_lossy())).unwrap_or(Value::Null))
+            }
+            #[cfg(target_os = "android")]
+            { Ok(Value::Null) }
+        }
+        "moveVault" => library_move::move_library(state, app, &args),
         "chooseVault" => {
             if let Some(custom_path) = args
                 .get("path")
@@ -1781,7 +1792,7 @@ async fn lof_invoke(
     window: WebviewWindow,
 ) -> Result<Value, String> {
     let args_val = args.unwrap_or_else(|| json!({}));
-    let result = if method.starts_with("realtime") || matches!(method.as_str(), "sync" | "pinUnlock" | "pinSave" | "backupStorage" | "backupGitHistory" | "history" | "historyPage" | "historyRead" | "restore" | "checkpointDocument" | "countManuscript" | "downloadSkill" | "checkSyncUpdates" | "systemFonts" | "readUserFont" | "exportLibrary" | "exportProject" | "prepareAndroidLibrary") {
+    let result = if method.starts_with("realtime") || matches!(method.as_str(), "sync" | "pinUnlock" | "pinSave" | "backupStorage" | "backupGitHistory" | "history" | "historyPage" | "historyRead" | "restore" | "checkpointDocument" | "countManuscript" | "downloadSkill" | "checkSyncUpdates" | "systemFonts" | "readUserFont" | "exportLibrary" | "exportProject" | "prepareAndroidLibrary" | "moveVault") {
         tauri::async_runtime::spawn_blocking(move || {
             let state = app.state::<AppState>();
             if method == "pinUnlock" || method == "pinSave" {

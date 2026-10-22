@@ -941,6 +941,40 @@ export default function App() {
       setBusy(false);
     }
   }
+  async function moveVault() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await flush();
+      await writingQueue.current;
+      const destination = await call<string | null>("pickVaultDestination");
+      if (!destination) return;
+      if (!await confirm({
+        title: "서재 이동",
+        message: "현재 서재의 파일과 변경 이력, 동기화 연결을 아래 폴더로 옮길까요?",
+        detail: destination,
+        confirmLabel: "이동",
+      })) return;
+      const result = await call<{ root: string; source: string; sourceRetained: boolean }>("moveVault", {
+        path: destination,
+        expectedRoot: lib.root,
+      });
+      const data = await refresh();
+      if (data) {
+        setPrefs((current) => ({ ...current, ...data.preferences }));
+        for (const doc of data.documents) {
+          const retained = getRetainedDocument(doc.id);
+          if (retained) retainDocument({ ...retained, path: doc.path, relPath: doc.relPath });
+        }
+      }
+      await loadSettingsData();
+      message(result.sourceRetained
+        ? `서재를 이동했습니다. 정리하지 못한 원본 파일은 '${result.source}'에 남겨 두었습니다.`
+        : "서재를 이동했습니다.");
+    } finally {
+      setBusy(false);
+    }
+  }
   async function doSync(id: string) {
     setBusy(true);
     try {
@@ -1758,6 +1792,7 @@ export default function App() {
         replaceActiveSymbols={replaceActiveSymbols}
         showHistory={showHistory}
         chooseVault={chooseVault}
+        moveVault={moveVault}
         openSettingsData={loadSettingsData}
         renderSyncConnections={renderSyncConnections}
         onUpdateProjectWriting={updateProjectWriting}
@@ -2723,6 +2758,7 @@ export default function App() {
               skillDownloading={skillDownloading}
               setSkillDownloading={setSkillDownloading}
               chooseVault={chooseVault}
+              moveVault={moveVault}
               onOpenExport={() =>
                 setDialog({ type: "export", returnToSettings: true })
               }
