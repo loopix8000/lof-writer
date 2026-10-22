@@ -126,7 +126,7 @@ Windows는 사이드바의 **구름 아이콘**, Android는 **설정 → 실시�
 
 연결은 암호화되며, 직접 연결이 어려우면 릴레이를 이용합니다. 그룹의 장치는 공유된 서재 파일을 읽고 수정할 수 있습니다. 장치를 제거하거나 그룹에서 나가도 이미 받은 파일은 각 기기에 남습니다.
 
-PC·NAS용 개인 서재 동기화 서버 프로젝트는 [Lof Library Daemon](https://github.com/loopix8000/Lof-library-daemon)에서 확인할 수 있습니다. 현재 기획 단계이며, 서버와 앱 연동은 아직 구현되지 않았습니다.
+PC·NAS용 개인 서재 동기화 서버 프로젝트는 [Lof Library Daemon](https://github.com/loopix8000/Lof-library-daemon)에서 확인할 수 있습니다.
 
 ## 파일 동기화
 
