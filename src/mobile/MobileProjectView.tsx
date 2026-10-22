@@ -108,7 +108,7 @@ export default function MobileProjectView({
   const [filterQuery, setFilterQuery] = useState("");
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const [docScope, setDocScope] = useState<"all" | "byEpisode">("all");
-  const [openFolders, setOpenFolders] = useState<Set<string>>(() => new Set());
+  const [closedFolders, setClosedFolders] = useState<Set<string>>(() => new Set());
   const [openEpGroups, setOpenEpGroups] = useState<Set<number>>(() => new Set([0]));
   const [activeDocSheet, setActiveDocSheet] = useState<Doc | null>(null);
   const [activeFolderSheet, setActiveFolderSheet] = useState<FolderEntry | null>(null);
@@ -131,6 +131,10 @@ export default function MobileProjectView({
     setHeroCollapsed(false);
     if (listScrollRef.current) listScrollRef.current.scrollTop = 0;
   }, [activeTab, archive, project.id]);
+
+  useEffect(() => {
+    setClosedFolders(new Set());
+  }, [project.id]);
 
   const onListScroll = (e: React.UIEvent<HTMLDivElement>) => {
     const el = e.currentTarget;
@@ -200,11 +204,28 @@ export default function MobileProjectView({
     [allFolderEntries],
   );
 
+  const visibleFolderEntries = useMemo(
+    () => allFolderEntries.filter((folder) =>
+      currentKindDocs.some((doc) => doc.relPath?.startsWith(`doc/${folder.path}/`)),
+    ),
+    [allFolderEntries, currentKindDocs],
+  );
+
   const toggleFolder = (path: string) => {
-    setOpenFolders((prev) => {
+    setClosedFolders((prev) => {
       const next = new Set(prev);
       if (next.has(path)) next.delete(path);
       else next.add(path);
+      return next;
+    });
+  };
+
+  const expandFolder = (path: string) => {
+    setClosedFolders((prev) => {
+      const next = new Set(prev);
+      for (let folder = path; folder; folder = parentOfRel(folder)) {
+        next.delete(folder);
+      }
       return next;
     });
   };
@@ -253,7 +274,7 @@ export default function MobileProjectView({
       to: targetFolder,
     });
     if (targetFolder) {
-      setOpenFolders((prev) => new Set([...prev, targetFolder]));
+      expandFolder(targetFolder);
     }
     await refresh();
     await tree.loadMemoFolders();
@@ -275,7 +296,7 @@ export default function MobileProjectView({
       ...(kind !== "episode" ? { manualLineBreak: false } : {}),
     });
     if (folder) {
-      setOpenFolders((prev) => new Set([...prev, folder]));
+      expandFolder(folder);
     }
     await refresh();
     await tree.loadMemoFolders();
@@ -288,11 +309,7 @@ export default function MobileProjectView({
       parent,
       name,
     });
-    if (parent) {
-      setOpenFolders((prev) => new Set([...prev, parent, r.path]));
-    } else if (r?.path) {
-      setOpenFolders((prev) => new Set([...prev, r.path]));
-    }
+    if (r?.path) expandFolder(r.path);
     await tree.loadMemoFolders();
     message(`'${name}' 폴더를 만들었습니다.`);
   };
@@ -471,8 +488,8 @@ export default function MobileProjectView({
 
   const getFolderActionItems = (folder: FolderEntry): MobileActionItem[] => [
     {
-      label: openFolders.has(folder.path) ? "폴더 접기" : "폴더 펼치기",
-      icon: openFolders.has(folder.path) ? <Folder size={18} /> : <FolderOpen size={18} />,
+      label: closedFolders.has(folder.path) ? "폴더 펼치기" : "폴더 접기",
+      icon: closedFolders.has(folder.path) ? <FolderOpen size={18} /> : <Folder size={18} />,
       action: () => toggleFolder(folder.path),
     },
     {
@@ -669,14 +686,14 @@ export default function MobileProjectView({
   // 옵시디언 / 노션 스타일 계층형 문서 트리 렌더링
   const renderDocTreeLevel = (parentPath: string, depth: number): React.ReactNode => {
     const q = filterQuery.trim();
-    const subFolders = allFolderEntries.filter((f) => {
+    const subFolders = visibleFolderEntries.filter((f) => {
       if (parentOfRel(f.path) !== parentPath) return false;
       if (!q) return true;
       const prefix = "doc/" + f.path + "/";
       return (
         f.name.toLowerCase().includes(q.toLowerCase()) ||
         filteredKindDocs.some((d) => d.relPath?.startsWith(prefix)) ||
-        allFolderEntries.some(
+        visibleFolderEntries.some(
           (sub) =>
             sub.path.startsWith(f.path + "/") &&
             sub.name.toLowerCase().includes(q.toLowerCase()),
@@ -692,7 +709,7 @@ export default function MobileProjectView({
     return (
       <>
         {subFolders.map((folder) => {
-          const isOpen = !!q || openFolders.has(folder.path);
+          const isOpen = !!q || !closedFolders.has(folder.path);
           const prefix = "doc/" + folder.path + "/";
           const insideCount = currentKindDocs.filter((d) =>
             d.relPath?.startsWith(prefix),
@@ -1210,7 +1227,7 @@ export default function MobileProjectView({
           <div className="m-tree-container">
             {renderDocTreeLevel("", 0)}
 
-            {allFolderEntries.length === 0 && filteredKindDocs.length === 0 && (
+            {filteredKindDocs.length === 0 && (
               <div className="m-empty-state">
                 {activeTab === "plot" ? <FileText size={30} /> : <StickyNote size={30} />}
                 <h3>
