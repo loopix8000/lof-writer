@@ -11,6 +11,7 @@ export function usePreferences() {
     colorTheme: "modern",
     copyWithBlankLines: false,
     hideCovers: false,
+    libraryProjectOpenTarget: "workspace",
     autoCloseQuotes: true,
     autoCloseBrackets: true,
     smartBrackets: true,

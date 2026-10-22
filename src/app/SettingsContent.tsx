@@ -248,6 +248,23 @@ export default function SettingsContent({
                 onChange={(checked) => savePrefs({ hideCovers: checked }).catch(report)}
               />
             </div>
+            <h3 style={{ marginTop: 24 }}>내 서재</h3>
+            <div className="settings-grid">
+              <label>
+                작품 클릭 시 이동할 화면
+                <select
+                  aria-label="작품 클릭 시 이동할 화면"
+                  value={prefs.libraryProjectOpenTarget === "project" ? "project" : "workspace"}
+                  onChange={(e) => savePrefs({ libraryProjectOpenTarget: e.target.value }).catch(report)}
+                >
+                  <option value="workspace">마지막 집필 화면</option>
+                  <option value="project">작품 정보 화면</option>
+                </select>
+              </label>
+            </div>
+            {prefs.libraryProjectOpenTarget !== "project" && (
+              <p className="settings-note">집필 기록이 없는 작품은 작품 정보 화면으로 이동합니다.</p>
+            )}
             <PropertyPresetSettings presets={prefs.propertyPresets} tags={prefs.favoriteTags} onChange={savePrefs} />
           </section>
           <section id="settings-typesetting" className="settings-section" hidden={settingsPage !== "typesetting"}>

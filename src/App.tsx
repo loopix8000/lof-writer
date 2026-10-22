@@ -878,8 +878,11 @@ export default function App() {
     await navigate({ view: next, projectId: id,
       tab: keep ? tab : "episode", archive: keep ? archive : false });
   }
-  async function openLibraryProject(id: string) {
-    const documentId = getProjectDocument(id);
+  async function openLibraryProject(
+    id: string,
+    target: "workspace" | "project" = prefsRef.current.libraryProjectOpenTarget === "project" ? "project" : "workspace",
+  ) {
+    const documentId = target === "workspace" ? getProjectDocument(id) : undefined;
     if (documentId) await openDoc(documentId);
     else await goView("project", id);
   }

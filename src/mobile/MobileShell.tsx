@@ -266,7 +266,7 @@ export default function MobileShell({
     beforeCommit?: () => boolean | void,
   ) => Promise<void>;
   goView: (next: "library" | "project" | "bookmarks", id?: string) => Promise<void>;
-  openLibraryProject: (id: string) => Promise<void>;
+  openLibraryProject: (id: string, target?: "workspace" | "project") => Promise<void>;
   projectMenu: () => MenuItem[];
   openDoc: (id: string, pinned?: boolean) => Promise<void>;
   createDoc: (
@@ -564,7 +564,7 @@ export default function MobileShell({
                 onSelectProject={async (id) => {
                   await goView("project", id);
                 }}
-                onOpenLastDoc={openLibraryProject}
+                onOpenLastDoc={(id) => openLibraryProject(id, "workspace")}
                 askDeleteProject={askDeleteProject}
                 setDialog={setDialog}
                 refresh={refresh}
