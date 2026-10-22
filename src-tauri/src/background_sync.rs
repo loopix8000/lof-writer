@@ -17,7 +17,7 @@ pub struct BackgroundSync {
     tick: AtomicBool,
     realtime_pending: AtomicBool,
     files_pending: AtomicBool,
-    pushed: Mutex<Option<(String, bool, u64)>>,
+    pushed: Mutex<Option<(String, bool)>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -152,22 +152,21 @@ fn pushed_active(app: &AppHandle) -> bool {
         .lock()
         .unwrap()
         .as_ref()
-        .is_some_and(|(_, active, _)| *active)
+        .is_some_and(|(_, active)| *active)
 }
 
 /// 앱을 닫을 때 알림을 띄울지 Android에 미리 알려 둔다. 동기화할 대상이 없으면 띄우지 않는다.
 pub fn refresh(app: &AppHandle, has_peers: bool) {
-    let (mode, enabled, minutes) = {
+    let (mode, enabled) = {
         let state = app.state::<AppState>();
         let settings = state.settings.lock().unwrap();
         (
             keep_alive_mode(&settings).to_string(),
             crate::auto_sync::background_enabled(&settings),
-            crate::auto_sync::background_interval_seconds(&settings) / 60,
         )
     };
     let active = enabled && (has_peers || crate::auto_sync::has_connections(app));
-    let next = Some((mode.clone(), active, minutes));
+    let next = Some((mode.clone(), active));
     let state = app.state::<BackgroundSync>();
     let mut pushed = state.pushed.lock().unwrap();
     if *pushed == next {
@@ -175,7 +174,7 @@ pub fn refresh(app: &AppHandle, has_peers: bool) {
     }
     *pushed = next;
     drop(pushed);
-    call(app, "configure", json!({"mode": mode, "active": active, "intervalMinutes": minutes}));
+    call(app, "configure", json!({"mode": mode, "active": active}));
 }
 
 fn schedule(app: &AppHandle, delay: Duration) {

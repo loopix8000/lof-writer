@@ -45,10 +45,9 @@ object BackgroundSync {
   private fun prefs(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
   fun mode(context: Context) = prefs(context).getString("mode", "live") ?: "live"
   private fun active(context: Context) = prefs(context).getBoolean("active", false)
-  private fun interval(context: Context) = prefs(context).getInt("intervalMinutes", 5)
 
-  fun configure(context: Context, mode: String, active: Boolean, intervalMinutes: Int) {
-    prefs(context).edit().putString("mode", mode).putBoolean("active", active).putInt("intervalMinutes", intervalMinutes).apply()
+  fun configure(context: Context, mode: String, active: Boolean) {
+    prefs(context).edit().putString("mode", mode).putBoolean("active", active).apply()
   }
 
   fun appHidden(context: Context) {
@@ -142,7 +141,6 @@ object BackgroundSync {
     return NotificationCompat.Builder(context, CHANNEL)
       .setSmallIcon(android.R.drawable.stat_notify_sync_noanim)
       .setContentTitle(if (live) "실시간 동기화 중" else "주기 동기화 중")
-      .setContentText(if (live) "30분 뒤 주기 동기화로 바뀝니다" else "${interval(context)}분마다 변경 내용을 확인합니다")
       .setOngoing(true)
       .setSilent(true)
       .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -161,12 +159,7 @@ class BackgroundSyncPlugin(private val activity: Activity) : Plugin(activity) {
   @Command
   fun configure(invoke: Invoke) {
     val args = invoke.getArgs()
-    BackgroundSync.configure(
-      activity.applicationContext,
-      args.optString("mode", "live"),
-      args.optBoolean("active", false),
-      args.optInt("intervalMinutes", 5)
-    )
+    BackgroundSync.configure(activity.applicationContext, args.optString("mode", "live"), args.optBoolean("active", false))
     invoke.resolve()
   }
 
