@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { AlertCircle, ArrowLeft, ArrowRight, Check, CheckCircle2, ChevronDown, ChevronRight, Clock3, Cloud, Copy, Link, Loader2, LogOut, Maximize2, Monitor, Pencil, QrCode, RefreshCw, ScanLine, Server, Smartphone, Users, X } from "lucide-react";
 import SettingsToggle from "./app/SettingsToggle";
+import { useConfirm } from "./ConfirmDialog";
 import { isAndroidApp } from "./tauri-bridge";
 import { call } from "./types";
 
@@ -71,6 +72,7 @@ export default function RealtimeSync({
   const [cancelling, setCancelling] = useState(false);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [leaving, setLeaving] = useState(false);
+  const [confirm, confirmDialog] = useConfirm();
   const [alias, setAlias] = useState("");
   const alive = useRef(false);
   const scope = useRef<string | undefined>(undefined);
@@ -261,6 +263,18 @@ export default function RealtimeSync({
   const leaveGroup = () => void run("leave", async () => {
     await call("realtimeLeave"); setLeaving(false); setInvite(null); setNotice("그룹에서 나갔습니다.");
   });
+  const removePeer = (peer: Peer) => void run("remove", async () => {
+    const origin = scope.current;
+    const ok = await confirm({
+      title: "동기화 그룹에서 장치 제거",
+      message: `‘${peer.name}’ 장치를 그룹에서 제거할까요?`,
+      detail: "이 장치와의 동기화가 중단됩니다. 다시 연결하려면 초대 코드로 가입해야 합니다.",
+      confirmLabel: "제거",
+      danger: true,
+    });
+    if (!ok || !alive.current || scope.current !== origin) return;
+    await call("realtimeRemove", { id: peer.id });
+  });
   const showDevices = () => { dismissPair(); selectTab("devices"); };
   const resolvePeer = (peer: Peer) => status.peers.find(value => value.id === peer.id) ?? peer;
   // 장치 이름 입력란과 저장·취소 버튼을 한 줄로 묶어 좁은 화면에서도 버튼이 흩어지지 않게 한다.
@@ -310,7 +324,7 @@ export default function RealtimeSync({
       </div>
       {controls && <div className="realtime-device-actions">
         <button disabled={!!action} title="변경 다시 확인" aria-label={`${peer.name} 변경 다시 확인`} onClick={() => void run("sync", async () => { await call("realtimeSync"); setNotice("변경 확인을 요청했습니다."); })}><RefreshCw size={15} /></button>
-        <button disabled={!!action} title="그룹에서 제거" aria-label={`${peer.name} 그룹에서 제거`} onClick={() => void run("remove", async () => { await call("realtimeRemove", { id: peer.id }); })}><X size={15} /></button>
+        <button disabled={!!action} title="그룹에서 제거" aria-label={`${peer.name} 그룹에서 제거`} onClick={() => removePeer(peer)}><X size={15} /></button>
       </div>}
     </div>;
   };
@@ -549,5 +563,6 @@ export default function RealtimeSync({
         {tab === "connect" && !paired && !connecting && <button id="realtime-connect-submit" type="submit" form="realtime-pair-form" className="primary" disabled={!!action || !ready || validation !== "valid" || failure?.code === "PAIR_CODE_EXPIRED"}>가입하기</button>}
       </div>
     </footer>
+    {confirmDialog}
   </div>;
 }
