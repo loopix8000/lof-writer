@@ -45,6 +45,7 @@ type Entry = {
   kind?: "plot" | "memo";
   episodeId?: string;
 };
+type EntryChange = (entries: Entry[]) => Entry[];
 type Memo = {
   id?: string;
   space: string;
@@ -156,6 +157,9 @@ export default function MemoSession({
 }) {
   const images = useImages(report);
   const [historyTarget, setHistoryTarget] = useState<(Memo & { id: string }) | null>(null);
+  // 처리 중인 트리 변경. 처리 도중 다시 읽은 트리에도 덧씌운다.
+  const entryChanges = useRef(new Set<EntryChange>()),
+    treeSeq = useRef(0);
   const [spaces, setSpaces] = useState<Space[]>([]),
     [space, setSpace] = useState(COMMON),
     [entries, setEntries] = useState<Entry[]>([]),
@@ -360,9 +364,30 @@ export default function MemoSession({
   }
 
   const loadTree = useCallback(async (id = spaceRef.current) => {
+    const seq = ++treeSeq.current;
     const r = await call<{ entries: Entry[] }>("memoTree", { space: id });
-    if (id === spaceRef.current) setEntries(r.entries);
+    if (seq !== treeSeq.current || id !== spaceRef.current) return;
+    let next = r.entries;
+    for (const change of entryChanges.current) next = change(next);
+    setEntries(next);
   }, []);
+  // 트리를 먼저 바꾸고, 백엔드 처리가 끝나면 실제 트리를 다시 읽는다.
+  async function changeEntries<T>(change: EntryChange, run: () => Promise<T>): Promise<T> {
+    const id = spaceRef.current;
+    entryChanges.current.add(change);
+    setEntries(change);
+    try {
+      return await run();
+    } finally {
+      entryChanges.current.delete(change);
+      await loadTree(id).catch(report);
+    }
+  }
+  // 백엔드가 만든 항목을 트리를 다시 읽기 전에 보여 준다.
+  function showCreatedEntry(entry: Entry) {
+    setEntries((list) => (list.some((e) => e.path === entry.path) ? list : [...list, entry]));
+    void loadTree().catch(report);
+  }
   const loadSpaces = useCallback(async () => {
     const list = await call<Space[]>("memoSpaces");
     setSpaces(list);
@@ -690,16 +715,17 @@ export default function MemoSession({
   }
   async function newMemo(folder = targetFolder()) {
     const m = await call<Memo>("memoCreate", { space, folder, title: "새 메모" });
-    await loadTree();
+    showCreatedEntry({ path: m.path, name: m.title, type: "file" });
     await openMemo(m.path, space, true);
     setRenaming({ path: m.path, value: m.title });
   }
   async function newFolder(parent = targetFolder()) {
     const r = await call<{ path: string }>("memoCreateFolder", { space, parent, name: "새 폴더" });
+    const name = r.path.slice(r.path.lastIndexOf("/") + 1);
     setExpanded((old) => new Set([...old, ...(parent ? [parent, ...ancestors(parent)] : [])]));
-    await loadTree();
+    showCreatedEntry({ path: r.path, name, type: "folder" });
     setSelected(r.path);
-    setRenaming({ path: r.path, value: r.path.slice(r.path.lastIndexOf("/") + 1) });
+    setRenaming({ path: r.path, value: name });
   }
   // 이름을 바꾸거나 옮긴 뒤 열린 메모·선택·펼침 상태의 경로를 맞춘다.
   async function remap(from: string, to: string) {
@@ -725,11 +751,16 @@ export default function MemoSession({
   };
   async function rename(path: string, name: string) {
     const entry = entries.find((e) => e.path === path);
-    if (!name.trim() || !entry || name.trim() === entry.name) return;
-    if (touchesOpen(path)) await flush();
-    const r = await call<{ path: string }>("memoRename", { space, path, name: name.trim() });
-    await remap(path, r.path);
-    await loadTree();
+    const next = name.trim();
+    if (!next || !entry || next === entry.name) return;
+    await changeEntries(
+      (list) => list.map((e) => (e.path === path ? { ...e, name: next } : e)),
+      async () => {
+        if (touchesOpen(path)) await flush();
+        const r = await call<{ path: string }>("memoRename", { space, path, name: next });
+        await remap(path, r.path);
+      },
+    );
   }
   async function commitRename() {
     const r = renaming;
@@ -741,13 +772,25 @@ export default function MemoSession({
   async function move(paths: string[], to: string) {
     const valid = paths.filter((path) => path && path !== to && parentOf(path) !== to && !to.startsWith(path + "/"));
     if (!valid.length) return;
-    if (valid.some(touchesOpen)) await flush();
-    for (const path of valid) {
-      const r = await call<{ path: string }>("memoMove", { space, path, to });
-      await remap(path, r.path);
-    }
+    const top = valid.filter((path) => !valid.some((other) => other !== path && path.startsWith(other + "/")));
+    const relocate = (p: string) => {
+      for (const path of top) {
+        const moved = movedPath(p, path, (to ? to + "/" : "") + path.slice(path.lastIndexOf("/") + 1));
+        if (moved) return moved;
+      }
+      return p;
+    };
     if (to) setExpanded((old) => new Set([...old, to, ...ancestors(to)]));
-    await loadTree();
+    await changeEntries(
+      (list) => list.map((e) => ({ ...e, path: relocate(e.path) })),
+      async () => {
+        if (valid.some(touchesOpen)) await flush();
+        for (const path of valid) {
+          const r = await call<{ path: string }>("memoMove", { space, path, to });
+          await remap(path, r.path);
+        }
+      },
+    );
   }
   // 고른 폴더 안에 든 항목은 폴더와 함께 다뤄지므로 빼고, 바깥쪽 항목만 남긴다.
   const outermost = <T extends { path: string }>(list: T[]) =>
@@ -768,20 +811,25 @@ export default function MemoSession({
       icon: <Trash2 size={15} />,
     });
     if (!ok) return;
-    for (const entry of top) {
-      const gone = (t: MemoTab) =>
-        t.space === space && (t.path === entry.path || t.path.startsWith(entry.path + "/"));
-      if (touchesOpen(entry.path)) {
-        clearTimeout(timer.current);
-        await chain.current;
-        closeCurrent();
-      }
-      await call("memoRemove", { space, path: entry.path });
-      area.mapTabs((t) => (gone(t) ? null : t));
-    }
+    const gone = (p: string) => top.some((entry) => p === entry.path || p.startsWith(entry.path + "/"));
     setSelected("");
     setPicked([]);
-    await loadTree();
+    await changeEntries(
+      (list) => list.filter((e) => !gone(e.path)),
+      async () => {
+        for (const entry of top) {
+          const inside = (t: MemoTab) =>
+            t.space === space && (t.path === entry.path || t.path.startsWith(entry.path + "/"));
+          if (touchesOpen(entry.path)) {
+            clearTimeout(timer.current);
+            await chain.current;
+            closeCurrent();
+          }
+          await call("memoRemove", { space, path: entry.path });
+          area.mapTabs((t) => (inside(t) ? null : t));
+        }
+      },
+    );
   }
   async function reloadFromDisk() {
     await checkOpenMemo(true);

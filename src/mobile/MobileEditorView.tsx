@@ -1,5 +1,7 @@
 import {
   Archive,
+  ArrowDown01,
+  ArrowDown10,
   Bookmark as BookmarkIcon,
   BookOpen,
   Check,
@@ -71,6 +73,7 @@ import {
   MobilePromptSheet,
   type MobileActionItem,
 } from "./MobileActionSheet";
+import { useEpisodeSort } from "./useEpisodeSort";
 
 type TreeTab = "episode" | "document";
 
@@ -202,6 +205,7 @@ export default function MobileEditorView({
     active.kind === "episode" ? "episode" : "document",
   );
   const [treeFilter, setTreeFilter] = useState("");
+  const { sort: episodeSort, toggleSort: toggleEpisodeSort } = useEpisodeSort();
   const [collapsedPaths, setCollapsedPaths] = useState<Record<string, boolean>>({});
   const [createMenuFolder, setCreateMenuFolder] = useState<string | null>(null);
   const [newFolderParent, setNewFolderParent] = useState<string | null>(null);
@@ -278,8 +282,9 @@ export default function MobileEditorView({
         done();
       } else {
         attempt(async () => {
-          await patchDoc(doc.id, { status });
+          const saving = patchDoc(doc.id, { status });
           done();
+          await saving;
         })();
       }
     };
@@ -1340,13 +1345,28 @@ export default function MobileEditorView({
                     </button>
                   )}
                 </div>
+                {treeTab === "episode" && (
+                  <button
+                    type="button"
+                    className="m-sort-btn"
+                    aria-label={episodeSort === "asc" ? "오름차순 정렬" : "내림차순 정렬"}
+                    title={episodeSort === "asc" ? "오름차순 정렬" : "내림차순 정렬"}
+                    onClick={toggleEpisodeSort}
+                  >
+                    {episodeSort === "asc" ? (
+                      <ArrowDown01 size={16} />
+                    ) : (
+                      <ArrowDown10 size={16} />
+                    )}
+                  </button>
+                )}
               </div>
             </div>
 
             <div className="m-drawer-body m-tree-scroll">
               {treeTab === "episode" ? (
                 <div className="m-tree-container">
-                  {episodes
+                  {(episodeSort === "desc" ? [...episodes].reverse() : episodes)
                     .filter(
                       (ep) =>
                         !treeFilter.trim() ||
@@ -1829,17 +1849,19 @@ export default function MobileEditorView({
         placeholder="폴더 이름 입력"
         initialValue=""
         confirmLabel="만들기"
-        onConfirm={async (name: string) => {
-          const parent = newFolderParent || "";
-          setNewFolderParent(null);
-          const nextPath = parent ? `${parent}/${name}` : name;
-          await call("createMemoFolder", {
-            projectId: active.projectId,
-            path: nextPath,
-          });
-          await tree.loadMemoFolders();
-          message("폴더를 만들었습니다.");
-        }}
+        onConfirm={(name: string) =>
+          attempt(async () => {
+            const parent = newFolderParent || "";
+            setNewFolderParent(null);
+            await call("memoCreateFolder", {
+              space: active.projectId,
+              parent,
+              name: name.trim() || "새 폴더",
+            });
+            message("폴더를 만들었습니다.");
+            await tree.loadMemoFolders();
+          })()
+        }
         onClose={() => setNewFolderParent(null)}
       />
     </div>

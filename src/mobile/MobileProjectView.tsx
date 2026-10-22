@@ -1,6 +1,8 @@
 import {
   Archive,
   ArrowDown,
+  ArrowDown01,
+  ArrowDown10,
   ArrowDownToLine,
   ArrowLeft,
   ArrowUp,
@@ -38,6 +40,7 @@ import { normalizeWriting } from "../../core/platforms.mjs";
 import CoverImage from "../CoverImage";
 import { labels } from "../app/document-ui";
 import { EPISODE_GROUP, parentOfRel, type FolderEntry } from "../app/file-tree-model";
+import { patchDocuments, reorderDocuments, type LibraryChange } from "../app/library-changes";
 import { type Dialog } from "../app/model";
 import type { FileTreeController } from "../app/useFileTree";
 import { call, type Doc, type Kind, type Library, type Project } from "../types";
@@ -47,6 +50,7 @@ import {
   MobilePromptSheet,
   type MobileActionItem,
 } from "./MobileActionSheet";
+import { useEpisodeSort } from "./useEpisodeSort";
 
 export default function MobileProjectView({
   lib,
@@ -73,6 +77,8 @@ export default function MobileProjectView({
   askDeleteProject,
   setDialog,
   refresh,
+  changeLibrary,
+  showCreatedDocument,
   message,
   onViewImage,
   numberOf,
@@ -101,6 +107,8 @@ export default function MobileProjectView({
   askDeleteProject: (id: string) => void;
   setDialog: React.Dispatch<React.SetStateAction<Dialog | null>>;
   refresh: () => Promise<Library | undefined>;
+  changeLibrary: <T>(change: LibraryChange, run: () => Promise<T>) => Promise<T>;
+  showCreatedDocument: (doc: Doc) => void;
   message: (text: string) => void;
   onViewImage: (src: string, alt: string) => void;
   numberOf: (d: Doc) => any;
@@ -111,7 +119,17 @@ export default function MobileProjectView({
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const [docScope, setDocScope] = useState<"all" | "byEpisode">("all");
   const [closedFolders, setClosedFolders] = useState<Set<string>>(() => new Set());
-  const [openEpGroups, setOpenEpGroups] = useState<Set<number>>(() => new Set([0]));
+  const { sort: episodeSort, toggleSort: toggleEpisodeSort } = useEpisodeSort();
+  // 내림차순이면 최신 회차 묶음을 먼저 펼친다.
+  const lastEpGroupStart = (count: number) =>
+    Math.max(0, Math.ceil(count / EPISODE_GROUP) - 1) * EPISODE_GROUP;
+  const [openEpGroups, setOpenEpGroups] = useState<Set<number>>(() =>
+    new Set([
+      episodeSort === "desc"
+        ? lastEpGroupStart(docs.filter((d) => d.kind === "episode").length)
+        : 0,
+    ]),
+  );
   const [activeDocSheet, setActiveDocSheet] = useState<Doc | null>(null);
   const [activeFolderSheet, setActiveFolderSheet] = useState<FolderEntry | null>(null);
   const [addMenuFolder, setAddMenuFolder] = useState<string | null>(null);
@@ -235,6 +253,18 @@ export default function MobileProjectView({
     });
   }, [episodes, filterQuery, numberOf]);
 
+  const sortedEpisodes = useMemo(
+    () => (episodeSort === "desc" ? [...filteredEpisodes].reverse() : filteredEpisodes),
+    [filteredEpisodes, episodeSort],
+  );
+
+  const changeEpisodeSort = () => {
+    setOpenEpGroups(
+      new Set([episodeSort === "asc" ? lastEpGroupStart(filteredEpisodes.length) : 0]),
+    );
+    toggleEpisodeSort();
+  };
+
   const filteredKindDocs = useMemo(() => {
     const q = filterQuery.trim().toLowerCase();
     if (!q) return currentKindDocs;
@@ -317,28 +347,29 @@ export default function MobileProjectView({
     const next = [...activeEps];
     const [item] = next.splice(idx, 1);
     next.splice(targetIdx, 0, item);
-    await call("reorderDocuments", {
-      projectId: project.id,
-      ids: next.map((d) => d.id),
-    });
-    await refresh();
+    const ids = next.map((d) => d.id);
+    const saving = changeLibrary(reorderDocuments(ids), () =>
+      call("reorderDocuments", { projectId: project.id, ids }),
+    );
     message("회차 순서를 변경했습니다.");
+    await saving;
   };
 
   const moveDocumentToFolder = async (doc: Doc, targetFolder: string) => {
     const rel = doc.relPath?.startsWith("doc/") ? doc.relPath.slice(4) : "";
     if (!rel || parentOfRel(rel) === targetFolder) return;
-    await call("memoMove", {
-      space: project.id,
-      path: rel,
-      to: targetFolder,
-    });
+    const name = rel.slice(rel.lastIndexOf("/") + 1);
     if (targetFolder) {
       expandFolder(targetFolder);
     }
-    await refresh();
-    await tree.loadMemoFolders();
+    // 새 폴더 자리에 먼저 보여 주고, 파일 이동으로 바뀐 문서 ID는 다시 읽은 서재에서 받는다.
+    const moving = changeLibrary(
+      patchDocuments([doc.id], { relPath: `doc/${targetFolder ? `${targetFolder}/` : ""}${name}` }),
+      () => call("memoMove", { space: project.id, path: rel, to: targetFolder }),
+    );
     message(targetFolder ? `'${targetFolder}' 폴더로 이동했습니다.` : "최상위 위치로 이동했습니다.");
+    await moving;
+    await tree.loadMemoFolders();
   };
 
   const createNewDocWithTitle = async (
@@ -358,8 +389,8 @@ export default function MobileProjectView({
     if (folder) {
       expandFolder(folder);
     }
-    await refresh();
-    await tree.loadMemoFolders();
+    showCreatedDocument(doc);
+    void tree.loadMemoFolders().catch(() => {});
     await openDoc(doc.id, true);
   };
 
@@ -370,8 +401,8 @@ export default function MobileProjectView({
       name,
     });
     if (r?.path) expandFolder(r.path);
-    await tree.loadMemoFolders();
     message(`'${name}' 폴더를 만들었습니다.`);
+    await tree.loadMemoFolders();
   };
 
   const getDocActionItems = (d: Doc): MobileActionItem[] => {
@@ -419,8 +450,9 @@ export default function MobileProjectView({
               icon: <CheckCircle2 size={18} />,
               checked: status === "completed",
               action: attempt(async () => {
-                await patchDoc(d.id, { status: "completed" });
+                const saving = patchDoc(d.id, { status: "completed" });
                 message("원고 보호 모드로 전환되었습니다.");
+                await saving;
               }),
             },
             ...(!d.archived && episodes.length > 1
@@ -1083,6 +1115,18 @@ export default function MobileProjectView({
             )}
           </div>
 
+          {activeTab === "episode" && (
+            <button
+              type="button"
+              className="m-sort-btn"
+              aria-label={episodeSort === "asc" ? "오름차순 정렬" : "내림차순 정렬"}
+              title={episodeSort === "asc" ? "오름차순 정렬" : "내림차순 정렬"}
+              onClick={changeEpisodeSort}
+            >
+              {episodeSort === "asc" ? <ArrowDown01 size={16} /> : <ArrowDown10 size={16} />}
+            </button>
+          )}
+
           {!archive && (
             <div className="m-toolbar-create-btns">
               {activeTab === "episode" ? (
@@ -1167,9 +1211,12 @@ export default function MobileProjectView({
             {!filterQuery.trim() && filteredEpisodes.length > EPISODE_GROUP
               ? Array.from(
                   { length: Math.ceil(filteredEpisodes.length / EPISODE_GROUP) },
-                  (_, g) => {
-                    const start = g * EPISODE_GROUP;
-                    const items = filteredEpisodes.slice(start, start + EPISODE_GROUP);
+                  (_, g) => g * EPISODE_GROUP,
+                )
+                  .sort((a, b) => (episodeSort === "desc" ? b - a : a - b))
+                  .map((start) => {
+                    const group = filteredEpisodes.slice(start, start + EPISODE_GROUP);
+                    const items = episodeSort === "desc" ? [...group].reverse() : group;
                     const isOpen = openEpGroups.has(start);
                     return (
                       <div key={start} className="m-tree-node">
@@ -1187,7 +1234,9 @@ export default function MobileProjectView({
                               )}
                             </span>
                             <span className="m-tree-label">
-                              {start + 1} – {start + items.length}화
+                              {episodeSort === "desc"
+                                ? `${start + items.length} – ${start + 1}화`
+                                : `${start + 1} – ${start + items.length}화`}
                             </span>
                             <span className="m-tree-count">{items.length}</span>
                           </button>
@@ -1199,9 +1248,8 @@ export default function MobileProjectView({
                         )}
                       </div>
                     );
-                  },
-                )
-              : filteredEpisodes.map((d) => renderEpisodeRow(d))}
+                  })
+              : sortedEpisodes.map((d) => renderEpisodeRow(d))}
 
             {filteredEpisodes.length === 0 && (
               <div className="m-empty-state">

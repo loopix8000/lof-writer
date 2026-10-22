@@ -6,6 +6,9 @@ import type { MenuItem } from "../ContextMenu";
 import { statusItems } from "../EpisodeProperties";
 import { call, type Doc, type Kind, type Library } from "../types";
 import { EPISODE_GROUP, episodeNumber, parentOfRel, treeMatch, type FolderEntry } from "./file-tree-model";
+import { patchDocuments, removeDocuments, reorderDocuments, type LibraryChange } from "./library-changes";
+
+type FolderChange = (entries: FolderEntry[]) => FolderEntry[];
 
 type Options = {
   library: Library;
@@ -19,6 +22,10 @@ type Options = {
   currentDocument: () => Doc | null;
   flush: () => Promise<void>;
   refresh: () => Promise<Library | undefined>;
+  // 서재 변경을 화면에 먼저 반영하고 백엔드 작업을 처리한다.
+  changeLibrary: <T>(change: LibraryChange, run: () => Promise<T>) => Promise<T>;
+  // 백엔드가 만든 문서를 서재를 다시 읽기 전에 목록에 넣는다.
+  showCreatedDocument: (doc: Doc) => void;
   moveDocuments: (action: () => Promise<void>) => Promise<void>;
   openDoc: (id: string, pinned?: boolean) => Promise<void>;
   closeTab: (id: string) => Promise<void>;
@@ -53,6 +60,7 @@ export function useFileTree(options: Options) {
   // 저장과 문서 이동은 앱의 동작을 사용하고, 트리 상태는 이 훅에서만 변경한다.
   const flush = () => latest.current.flush();
   const refresh = () => latest.current.refresh();
+  const changeLibrary = <T,>(change: LibraryChange, run: () => Promise<T>) => latest.current.changeLibrary(change, run);
   // 변경 알림의 갱신과 겹치더라도 ID 교체에 쓸 최신 목록을 확보한다.
   const refreshAfterMove = async () => { while (!await refresh()) { /* 뒤에 시작된 갱신이 앞선 결과를 대체했다. */ } };
   const openDoc = (id: string, pinned?: boolean) => latest.current.openDoc(id, pinned);
@@ -73,6 +81,9 @@ export function useFileTree(options: Options) {
   const [episodeDrop, setEpisodeDrop] = useState<{ id: string; after: boolean } | null>(null);
   const [treeSelection, setTreeSelection] = useState<string[]>([]);
   const [memoEntries, setMemoEntries] = useState<FolderEntry[]>([]);
+  // 처리 중인 폴더 변경. 서재가 바뀔 때마다 다시 읽는 폴더 목록에도 덧씌운다.
+  const folderChanges = useRef(new Set<FolderChange>());
+  const folderLoadSeq = useRef(0);
   const [memoOpenFolders, setMemoOpenFolders] = useState<Set<string>>(new Set());
   const [folderRenaming, setFolderRenaming] = useState<{ path: string; value: string } | null>(null);
   const [treeTab, setTreeTab] = useState<"episode" | "memo">("episode");
@@ -153,12 +164,14 @@ export function useFileTree(options: Options) {
           // 상태가 섞여 있으면 어느 항목도 막지 않는다.
           ...statusItems([...status][0], (next) =>
             attempt(async () => {
-              for (const d of docs)
-                if (normalizeStatus(d.status) !== next) await writeMeta(d.id, { status: next });
-              await refresh();
+              const targets = docs.filter((d) => normalizeStatus(d.status) !== next);
+              const saving = changeLibrary(patchDocuments(targets.map((d) => d.id), { status: next }), async () => {
+                for (const d of targets) await writeMeta(d.id, { status: next });
+              });
               done();
               if (next === "completed")
                 message("원고 보호 모드로 전환되었습니다. 집필 완료된 에피소드는 편집이 제한됩니다.");
+              await saving;
             })(),
           ).map((item) => (item === "separator" || status.size === 1 ? item : { ...item, disabled: false })),
         ] as MenuItem[])
@@ -344,16 +357,17 @@ export function useFileTree(options: Options) {
         const binding = latest.current.getLibrary().documents.filter((d) => fileIds.includes(d.id) && d.episodeId !== ep.id);
         if (!binding.length) return;
         attempt(async () => {
-          for (const d of binding) await writeMeta(d.id, { episodeId: ep.id });
-          await refresh();
+          const saving = changeLibrary(patchDocuments(binding.map((d) => d.id), { episodeId: ep.id }), async () => {
+            for (const d of binding) await writeMeta(d.id, { episodeId: ep.id });
+          });
           message(binding.length > 1 ? `문서 ${binding.length}개를 에피소드에 연결했습니다.` : "에피소드에 연결했습니다.");
+          await saving;
         })();
       },
     };
   }
 
   async function moveEpisodes(ids: string[], targetId: string, after: boolean) {
-    await flush();
     const target = latest.current.getLibrary().documents.find((d) => d.id === targetId && d.kind === "episode");
     if (!target || ids.includes(targetId)) return;
     const items = latest.current.getLibrary().documents.filter(
@@ -365,11 +379,11 @@ export function useFileTree(options: Options) {
     if (at < 0 || !moving.length) return;
     next.splice(at + (after ? 1 : 0), 0, ...moving);
     if (next.every((d, i) => d.id === items[i].id)) return;
-    await call("reorderDocuments", {
-      projectId: target.projectId,
-      ids: next.map((d) => d.id),
+    const order = next.map((d) => d.id);
+    await changeLibrary(reorderDocuments(order), async () => {
+      await flush();
+      await call("reorderDocuments", { projectId: target.projectId, ids: order });
     });
-    await refresh();
   }
 
   async function addDocFile(folder: string, kind: "plot" | "memo", ep?: Doc, widget = false) {
@@ -382,8 +396,8 @@ export function useFileTree(options: Options) {
       episodeId: ep?.id,
       manualLineBreak: false,
     });
-    await refresh();
-    await loadMemoFolders();
+    latest.current.showCreatedDocument(doc);
+    void loadMemoFolders().catch(latest.current.report);
     if (widget) return startRename(doc, true);
     if (folder) setMemoOpenFolders((old) => new Set([...old, folder]));
     latest.current.showTree();
@@ -393,10 +407,26 @@ export function useFileTree(options: Options) {
   async function loadMemoFolders() {
     const pid = latest.current.currentProjectId();
     if (!pid) return;
+    const seq = ++folderLoadSeq.current;
     const r = await call<{ entries: FolderEntry[] }>("memoTree", {
       space: pid,
     });
-    if (latest.current.currentProjectId() === pid) setMemoEntries(r.entries);
+    if (seq !== folderLoadSeq.current || latest.current.currentProjectId() !== pid) return;
+    let entries = r.entries;
+    for (const change of folderChanges.current) entries = change(entries);
+    setMemoEntries(entries);
+  }
+
+  // 폴더 목록을 먼저 바꾸고, 백엔드 처리가 끝나면 실제 목록을 다시 읽는다.
+  async function changeFolders<T>(change: FolderChange, run: () => Promise<T>): Promise<T> {
+    folderChanges.current.add(change);
+    setMemoEntries(change);
+    try {
+      return await run();
+    } finally {
+      folderChanges.current.delete(change);
+      await loadMemoFolders().catch(latest.current.report);
+    }
   }
 
   async function addMemoFolder(parent: string) {
@@ -405,9 +435,13 @@ export function useFileTree(options: Options) {
       parent,
       name: "새 폴더",
     });
-    await loadMemoFolders();
+    const name = r.path.slice(r.path.lastIndexOf("/") + 1);
+    setMemoEntries((entries) =>
+      entries.some((e) => e.path === r.path) ? entries : [...entries, { path: r.path, name, type: "folder" }],
+    );
     if (parent) setMemoOpenFolders((old) => new Set([...old, parent]));
-    setFolderRenaming({ path: r.path, value: r.path.slice(r.path.lastIndexOf("/") + 1) });
+    setFolderRenaming({ path: r.path, value: name });
+    void loadMemoFolders().catch(latest.current.report);
   }
 
   async function renameMemoFolder(path: string, name: string) {
@@ -434,21 +468,26 @@ export function useFileTree(options: Options) {
 
   async function archiveMemoFolder(path: string, archived: boolean) {
     const pid = latest.current.currentProjectId();
-    await flush();
     const inside = latest.current.getLibrary().documents.filter(
       d => d.projectId === pid && d.relPath?.startsWith("doc/" + path + "/"),
     );
-    await call("memoArchiveFolder", { space: pid, path, archived });
+    const inFolder = (p: string) => p === path || p.startsWith(path + "/");
+    setTreeSelection([]);
+    const saving = changeFolders(
+      (entries) => entries.map((e) => (e.type === "folder" && inFolder(e.path) ? { ...e, archived } : e)),
+      () => changeLibrary(patchDocuments(inside.map((d) => d.id), { archived }), async () => {
+        await flush();
+        await call("memoArchiveFolder", { space: pid, path, archived });
+      }),
+    );
+    message(archived ? "폴더를 보관함으로 옮겼습니다." : "폴더를 보관함에서 꺼냈습니다.");
+    await saving;
     if (archived) {
       for (const d of inside) {
         await closeTab(d.id);
         closeSideTab(d.id);
       }
     }
-    setTreeSelection([]);
-    await refresh();
-    await loadMemoFolders();
-    message(archived ? "폴더를 보관함으로 옮겼습니다." : "폴더를 보관함에서 꺼냈습니다.");
   }
 
   async function removeMemoFolder(path: string) {
@@ -468,12 +507,16 @@ export function useFileTree(options: Options) {
       danger: true,
     });
     if (!ok || latest.current.currentProjectId() !== pid) return;
-    await flush();
-    for (const d of inside) await closeTab(d.id);
-    for (const d of inside) closeSideTab(d.id);
-    await call("memoRemove", { space: pid, path, archived: archive });
-    await refresh();
-    await loadMemoFolders();
+    const inFolder = (p: string) => p === path || p.startsWith(path + "/");
+    await changeFolders(
+      (entries) => entries.filter((e) => !(e.type === "folder" && inFolder(e.path) && !!e.archived === archive)),
+      () => changeLibrary(removeDocuments(inside.map((d) => d.id)), async () => {
+        await flush();
+        for (const d of inside) await closeTab(d.id);
+        for (const d of inside) closeSideTab(d.id);
+        await call("memoRemove", { space: pid, path, archived: archive });
+      }),
+    );
   }
   // 다른 곳(검색, 탭, 회차 우클릭으로 만든 플롯 등)에서 문서를 열면 그 문서가 있는 탭으로 옮긴다.
   // 현재 회차는 마지막으로 연 회차이거나, 연 문서가 연결된 회차다.

@@ -45,6 +45,8 @@ type Entry = {
   kind?: "plot" | "memo";
   episodeId?: string;
 };
+type EntryChange = (entries: Entry[]) => Entry[];
+
 type Memo = {
   id?: string;
   space: string;
@@ -92,6 +94,9 @@ export default function MobileMemoView({
   const [spaces, setSpaces] = useState<Space[]>([]);
   const [space, setSpace] = useState<string>(COMMON);
   const [entries, setEntries] = useState<Entry[]>([]);
+  // 처리 중인 목록 변경. 처리 도중 다시 읽은 목록에도 덧씌운다.
+  const entryChanges = useRef(new Set<EntryChange>());
+  const treeSeq = useRef(0);
   const [openFolders, setOpenFolders] = useState<Set<string>>(() => new Set());
   const [filterQuery, setFilterQuery] = useState<string>("");
   const [memo, setMemo] = useState<Memo | null>(null);
@@ -138,11 +143,27 @@ export default function MobileMemoView({
   }, []);
 
   const loadTree = useCallback(async (targetSpace = spaceRef.current) => {
+    const seq = ++treeSeq.current;
     const r = await call<{ entries: Entry[] }>("memoTree", { space: targetSpace });
-    if (targetSpace === spaceRef.current) {
-      setEntries(r.entries);
+    if (seq === treeSeq.current && targetSpace === spaceRef.current) {
+      let next = r.entries;
+      for (const change of entryChanges.current) next = change(next);
+      setEntries(next);
     }
   }, []);
+
+  // 목록을 먼저 바꾸고, 백엔드 처리가 끝나면 실제 목록을 다시 읽는다.
+  const changeEntries = async <T,>(change: EntryChange, run: () => Promise<T>): Promise<T> => {
+    const targetSpace = spaceRef.current;
+    entryChanges.current.add(change);
+    setEntries(change);
+    try {
+      return await run();
+    } finally {
+      entryChanges.current.delete(change);
+      await loadTree(targetSpace).catch(report);
+    }
+  };
 
   useEffect(() => {
     loadSpaces().catch(report);
@@ -284,15 +305,19 @@ export default function MobileMemoView({
       setTitleInput(m?.title ?? "");
       return;
     }
-    await flush();
-    const r = await call<{ path: string }>("memoRename", {
-      space: m.space,
-      path: m.path,
-      name: trimmed,
-    });
-    const nextMemo = await call<Memo>("memoRead", { space: m.space, path: r.path });
-    setCurrentMemo(nextMemo);
-    await loadTree(m.space);
+    await changeEntries(
+      (list) => list.map((e) => (e.path === m.path ? { ...e, name: trimmed } : e)),
+      async () => {
+        await flush();
+        const r = await call<{ path: string }>("memoRename", {
+          space: m.space,
+          path: m.path,
+          name: trimmed,
+        });
+        const nextMemo = await call<Memo>("memoRead", { space: m.space, path: r.path });
+        setCurrentMemo(nextMemo);
+      },
+    );
   };
 
   const manualSaveMemo = async () => {
@@ -325,7 +350,12 @@ export default function MobileMemoView({
     if (folder) {
       setOpenFolders((prev) => new Set([...prev, folder]));
     }
-    await loadTree(space);
+    setEntries((list) =>
+      list.some((e) => e.path === created.path)
+        ? list
+        : [...list, { path: created.path, name: created.title, type: "file" }],
+    );
+    void loadTree(space).catch(report);
     await openMemoFile(space, created.path);
   };
 
@@ -340,8 +370,14 @@ export default function MobileMemoView({
     } else if (r?.path) {
       setOpenFolders((prev) => new Set([...prev, r.path]));
     }
-    await loadTree(space);
+    if (r?.path)
+      setEntries((list) =>
+        list.some((e) => e.path === r.path)
+          ? list
+          : [...list, { path: r.path, name: r.path.slice(r.path.lastIndexOf("/") + 1), type: "folder" }],
+      );
     message(`'${name.trim()}' 폴더를 만들었습니다.`);
+    await loadTree(space);
   };
 
   const renameEntry = async (path: string, newName: string) => {
@@ -350,28 +386,40 @@ export default function MobileMemoView({
       await commitTitleRename(newName);
       return;
     }
-    await call("memoRename", { space, path, name: newName.trim() });
-    await loadTree(space);
+    const name = newName.trim();
+    const saving = changeEntries(
+      (list) => list.map((e) => (e.path === path ? { ...e, name } : e)),
+      () => call("memoRename", { space, path, name }),
+    );
     message("이름을 변경했습니다.");
+    await saving;
   };
 
   const moveEntry = async (path: string, targetFolder: string) => {
     if (path === targetFolder || parentOf(path) === targetFolder || targetFolder.startsWith(path + "/")) {
       return;
     }
-    await flush();
-    const r = await call<{ path: string }>("memoMove", {
-      space,
-      path,
-      to: targetFolder,
-    });
-    if (memoRef.current?.path === path) {
-      const previous = memoRef.current;
-      const fresh = await call<Memo>("memoRead", { space: previous.space, path: r.path });
-      setCurrentMemo(fresh);
-    }
-    await loadTree(space);
+    const moved = (targetFolder ? targetFolder + "/" : "") + path.slice(path.lastIndexOf("/") + 1);
+    const relocate = (p: string) => (p === path || p.startsWith(path + "/") ? moved + p.slice(path.length) : p);
+    const moving = changeEntries(
+      (list) => list.map((e) => ({ ...e, path: relocate(e.path) })),
+      async () => {
+        await flush();
+        const r = await call<{ path: string }>("memoMove", {
+          space,
+          path,
+          to: targetFolder,
+        });
+        if (memoRef.current?.path === path) {
+          const previous = memoRef.current;
+          const fresh = await call<Memo>("memoRead", { space: previous.space, path: r.path });
+          setCurrentMemo(fresh);
+        }
+      },
+    );
+    if (targetFolder) setOpenFolders((prev) => new Set([...prev, targetFolder]));
     message(targetFolder ? `'${targetFolder}' 폴더로 이동했습니다.` : "최상위 위치로 이동했습니다.");
+    await moving;
   };
 
   const removeEntry = async (entry: Entry) => {
@@ -382,16 +430,17 @@ export default function MobileMemoView({
       danger: true,
     });
     if (!ok) return;
-    await flush();
-    await call("memoRemove", { space, path: entry.path });
-    if (
-      memoRef.current &&
-      (memoRef.current.path === entry.path || memoRef.current.path.startsWith(entry.path + "/"))
-    ) {
-      setCurrentMemo(null);
-    }
-    await loadTree(space);
+    const inside = (p: string) => p === entry.path || p.startsWith(entry.path + "/");
+    const removing = changeEntries(
+      (list) => list.filter((e) => !inside(e.path)),
+      async () => {
+        await flush();
+        await call("memoRemove", { space, path: entry.path });
+        if (memoRef.current && inside(memoRef.current.path)) setCurrentMemo(null);
+      },
+    );
     message("삭제했습니다.");
+    await removing;
   };
 
   const allFolderEntries = useMemo(

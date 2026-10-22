@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ButtonHTMLAttributes, type DragEvent, type RefObject } from "react";
+import { reorderProjects, type LibraryChange } from "./app/library-changes";
 import { call, type Library } from "./types";
 
 type DropPosition = { id: string | null; after: boolean; vertical: boolean };
@@ -8,7 +9,7 @@ export function useProjectReorder(
   root: string,
   enabled: boolean,
   busy: boolean,
-  refresh: () => Promise<unknown>,
+  change: (change: LibraryChange, run: () => Promise<unknown>) => Promise<unknown>,
   report: (error: unknown) => void,
 ) {
   const source = useRef<{ id: string; root: string } | null>(null);
@@ -38,13 +39,10 @@ export function useProjectReorder(
     if (next.every((project, index) => project.id === current.projects[index].id)) return;
     pending.current = true;
     setSaving(true);
+    const ids = next.map((project) => project.id);
     try {
-      await call("reorderProjects", { root: sourceRoot, ids: next.map((project) => project.id) });
-      if (library.current.root === sourceRoot) await refresh();
-    } catch (error) {
-      // 목록이 외부에서 바뀐 경우 최신 목록으로 다시 시도할 수 있게 한다.
-      if (library.current.root === sourceRoot) await refresh().catch(report);
-      throw error;
+      // 카드를 먼저 옮기고, 실패하면 최신 목록으로 되돌려 다시 시도할 수 있게 한다.
+      await change(reorderProjects(ids), () => call("reorderProjects", { root: sourceRoot, ids }));
     } finally {
       pending.current = false;
       setSaving(false);

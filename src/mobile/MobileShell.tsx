@@ -18,6 +18,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { normalizeWriting } from "../../core/platforms.mjs";
 import BookmarksPage from "../app/BookmarksPage";
 import ExportDialog from "../app/ExportDialog";
+import type { LibraryChange } from "../app/library-changes";
 import { type Destination, type Dialog } from "../app/model";
 import ProjectForm from "../app/ProjectForm";
 import { settingPages, type SettingsPage } from "../app/settings-pages";
@@ -162,6 +163,8 @@ export default function MobileShell({
   restoreHistory,
   discardDraft,
   refresh,
+  changeLibrary,
+  showCreatedDocument,
   message,
   report,
 }: {
@@ -306,6 +309,8 @@ export default function MobileShell({
   ) => Promise<{ historyWarning?: string }>;
   discardDraft: (id: string) => void;
   refresh: () => Promise<Library | undefined>;
+  changeLibrary: <T>(change: LibraryChange, run: () => Promise<T>) => Promise<T>;
+  showCreatedDocument: (doc: Doc) => void;
   message: (text: string, action?: { label: string; run: () => void }, duration?: number) => void;
   report: (e: any) => void;
 }) {
@@ -563,6 +568,8 @@ export default function MobileShell({
                 askDeleteProject={askDeleteProject}
                 setDialog={setDialog}
                 refresh={refresh}
+                changeLibrary={changeLibrary}
+                showCreatedDocument={showCreatedDocument}
                 message={message}
                 numberOf={tree.numberOf}
               />
@@ -925,6 +932,7 @@ export default function MobileShell({
 
             {["newProject", "editProject"].includes(dialog.type) && (
               <ProjectForm
+                changeLibrary={changeLibrary}
                 mobile
                 closeRef={projectFormCloseRef}
                 dialog={dialog}
@@ -953,11 +961,11 @@ export default function MobileShell({
                   const restored = await restoreHistory(id, name, () =>
                     setDialog(null),
                   );
-                  await refresh();
                   message(
                     restored.historyWarning ??
                       "이전 원고를 복원했습니다.",
                   );
+                  void refresh().catch(report);
                 }}
               />
             )}
@@ -1018,8 +1026,8 @@ export default function MobileShell({
                     doc={target}
                     documents={lib.documents}
                     onSelect={async (episodeId) => {
-                      await bindDocument(target.id, episodeId);
                       setDialog(null);
+                      await bindDocument(target.id, episodeId).catch(report);
                     }}
                     onCancel={() => setDialog(null)}
                   />
@@ -1096,7 +1104,7 @@ export default function MobileShell({
                           body: d.body,
                         });
                         await call("clearDraft", { id: d.id });
-                        await refresh();
+                        showCreatedDocument(copy);
                         discardDraft(d.id);
                         setDialog(null);
                         setMobileTab("library");

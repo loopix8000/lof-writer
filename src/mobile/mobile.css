@@ -979,6 +979,25 @@
   padding: 0;
 }
 
+.m-sort-btn {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.m-sort-btn:active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
 .m-toolbar-create-btns {
   display: flex;
   align-items: center;

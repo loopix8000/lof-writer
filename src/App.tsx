@@ -17,6 +17,14 @@ import { useDocumentNotes } from "./app/useDocumentNotes";
 import { useDocumentSession } from "./app/useDocumentSession";
 import { useEditorGroups } from "./app/useEditorGroups";
 import { useFileTree } from "./app/useFileTree";
+import {
+  insertDocument,
+  patchDocuments,
+  patchProject,
+  removeDocuments,
+  removeProject,
+  type LibraryChange,
+} from "./app/library-changes";
 import { usePreferences } from "./app/usePreferences";
 import { prepareEditorFonts } from "./font-loader";
 
@@ -241,6 +249,10 @@ export default function App() {
     toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingWriting = useRef(new Map<string, WritingRules>()),
     writingQueue = useRef(Promise.resolve()),
+    // 백엔드 처리가 끝나기 전 화면에 먼저 반영한 서재 변경과 그 처리 순서.
+    pendingChanges = useRef(new Map<number, LibraryChange>()),
+    changeSeq = useRef(0),
+    changeQueue = useRef<Promise<unknown>>(Promise.resolve()),
     // 조판 설정을 열 때 우측 사이드바가 닫혀 있었으면, 조판 설정을 닫을 때 사이드바도 다시 닫는다.
     typesettingOpenedRight = useRef(false);
   const project = lib.projects.find((p) => p.id === projectId);
@@ -301,6 +313,7 @@ export default function App() {
     currentProjectId: () => projectRef.current,
     currentDocument: session.currentDocument,
     flush: () => flush(), refresh: () => refresh(),
+    changeLibrary: optimistic, showCreatedDocument,
     moveDocuments,
     openDoc, closeTab, closeSideTab,
     writeMeta, patchDoc, archiveDoc, archiveDocs, copyPath, docMenu, openMenu,
@@ -337,19 +350,51 @@ export default function App() {
       setPrefs(p=>({...p,...data.preferences}));
       if(!data.preferences.setupComplete)setDialog({type:'setup',writing:normalizeWriting(data.preferences.defaultWriting)});
     }
-    libraryRef.current = data;
-    setLib(data);
+    // 아직 처리 중인 변경은 다시 읽은 서재에도 덧씌워 화면이 예전 상태로 돌아가지 않게 한다.
+    let shown = data;
+    for (const change of pendingChanges.current.values()) shown = change(shown);
+    libraryRef.current = shown;
+    setLib(shown);
     // 폴더 이동이 새 ID를 탭·세션에 반영할 때까지 기존 탭을 정리하지 않는다.
     if (!documentMove.current) pruneDocuments(new Set(data.documents.map((doc) => doc.id)));
     setLoaded(true);
-    if (!projectRef.current && data.projects.length) {
-      projectRef.current = data.projects[0].id;
+    if (!projectRef.current && shown.projects.length) {
+      projectRef.current = shown.projects[0].id;
       setProjectId(projectRef.current);
     }
     reconcileDocuments(data.documents);
-    return data;
+    return shown;
   }, [pruneDocuments, reconcileDocuments]);
-  const projectReorder = useProjectReorder(libraryRef, lib.root, loaded && view === "library", busy, refresh, report);
+  function updateLibrary(change: LibraryChange) {
+    libraryRef.current = change(libraryRef.current);
+    setLib(libraryRef.current);
+  }
+  // 화면을 먼저 바꾸고 백엔드 작업은 들어온 순서대로 처리한다. 실패하면 서재를 다시 읽어 되돌린다.
+  function optimistic<T>(change: LibraryChange, run: () => Promise<T>): Promise<T> {
+    const key = ++changeSeq.current;
+    pendingChanges.current.set(key, change);
+    updateLibrary(change);
+    const task = changeQueue.current.then(run);
+    changeQueue.current = task.catch(() => {});
+    return task.then(
+      (result) => {
+        // 처리 결과를 담은 서재를 받을 때까지 변경을 유지해, 먼저 시작한 갱신이 화면을 되돌리지 않게 한다.
+        refresh().catch(report).finally(() => pendingChanges.current.delete(key));
+        return result;
+      },
+      async (error) => {
+        pendingChanges.current.delete(key);
+        await refresh().catch(report);
+        throw error;
+      },
+    );
+  }
+  // 백엔드가 만든 문서를 서재를 다시 읽기 전에 목록에 넣는다.
+  function showCreatedDocument(doc: Doc) {
+    updateLibrary(insertDocument(doc));
+    void refresh().catch(report);
+  }
+  const projectReorder = useProjectReorder(libraryRef, lib.root, loaded && view === "library", busy, optimistic, report);
   const updater = useAppUpdater({
     loaded,
     autoCheck: prefs.checkUpdatesOnStartup !== false,
@@ -531,17 +576,17 @@ export default function App() {
     }
   }
   async function patchDoc(id: string, patch: Partial<Doc>) {
-    await writeMeta(id, patch);
-    await refresh();
+    await optimistic(patchDocuments([id], patch), () => writeMeta(id, patch));
   }
   async function openBinding(id: string) {
+    setDialog({ type: "linkEpisode", value: id });
     await flush();
     await refresh();
-    setDialog({ type: "linkEpisode", value: id });
   }
   async function bindDocument(id: string, episodeId: string | null) {
-    await patchDoc(id, { episodeId });
+    const saving = patchDoc(id, { episodeId });
     message(episodeId ? "에피소드에 연결했습니다." : "연결을 해제했습니다. 독립 문서로 보관됩니다.");
+    await saving;
   }
   async function archiveDoc(doc: Doc) {
     await archiveDocs([doc], !doc.archived);
@@ -550,34 +595,38 @@ export default function App() {
   async function archiveDocs(docs: Doc[], archived: boolean) {
     const targets = docs.filter((d) => !!d.archived !== archived);
     if (!targets.length) return;
-    // 서재는 다 바꾼 뒤 한 번만 다시 읽는다.
-    for (const doc of targets) await writeMeta(doc.id, { archived });
-    await refresh();
+    const what = targets.length > 1 ? `문서 ${targets.length}개를` : "문서를";
+    // 목록에서 먼저 옮기고 파일 저장은 이어서 처리한다. 서재는 다 바꾼 뒤 한 번만 다시 읽는다.
+    const saving = optimistic(patchDocuments(targets.map((d) => d.id), { archived }), async () => {
+      for (const doc of targets) await writeMeta(doc.id, { archived });
+    });
+    message(archived ? `${what} 보관함으로 옮겼습니다.` : `${what} 보관함에서 꺼냈습니다.`);
+    await saving;
     if (archived)
       for (const doc of targets) {
         await closeTab(doc.id);
         closeSideTab(doc.id);
       }
-    const what = targets.length > 1 ? `문서 ${targets.length}개를` : "문서를";
-    message(archived ? `${what} 보관함으로 옮겼습니다.` : `${what} 보관함에서 꺼냈습니다.`);
   }
   // 영구 삭제: 편집 중인 내용을 먼저 저장하고 탭을 닫은 뒤 지운다.
   // 문서 파일은 Windows 휴지통으로 가고, 로컬 변경 이력은 보존 정책에 따라 남긴다.
   async function deleteDocs(docs: Doc[]) {
     if (!docs.length) return;
-    await flush();
-    for (const doc of docs) {
-      await closeTab(doc.id);
-      closeSideTab(doc.id);
-      session.discardDraft(doc.id);
-      await call("deleteDocument", { id: doc.id });
-    }
-    await refresh();
+    const deleting = optimistic(removeDocuments(docs.map((d) => d.id)), async () => {
+      await flush();
+      for (const doc of docs) {
+        await closeTab(doc.id);
+        closeSideTab(doc.id);
+        session.discardDraft(doc.id);
+        await call("deleteDocument", { id: doc.id });
+      }
+    });
     message(
       docs.length > 1
         ? `문서 ${docs.length}개를 영구 삭제했습니다.`
         : `'${docs[0].title || "제목 없음"}' 문서를 영구 삭제했습니다.`,
     );
+    await deleting;
   }
   // 작품 삭제: 작품 폴더 전체를 Windows 휴지통으로 옮긴다. 지금 보고 있는 작품이면 내 서재로 돌아간다.
   async function deleteProject(id: string) {
@@ -592,9 +641,9 @@ export default function App() {
       setProjectId("");
       resetNavigation();
     }
-    await call("deleteProject", { id });
-    await refresh();
+    const deleting = optimistic(removeProject(id), () => call("deleteProject", { id }));
     message(`'${target.title || "제목 없는 작품"}' 작품을 휴지통으로 옮겼습니다.`);
+    await deleting;
   }
   function askDeleteProject(id: string) {
     setConfirmTitle("");
@@ -620,7 +669,7 @@ export default function App() {
           }
         : {}),
     });
-    await refresh();
+    showCreatedDocument(copy);
     await openDoc(copy.id, true);
   }
   async function copyPath(doc: Doc) {
@@ -731,9 +780,10 @@ export default function App() {
             "separator",
             ...statusItems(d.status, (status) =>
               attempt(async () => {
-                await patchDoc(d.id, { status });
+                const saving = patchDoc(d.id, { status });
                 if (status === "completed")
                   message("원고 보호 모드로 전환되었습니다. 집필 완료된 에피소드는 편집이 제한됩니다.");
+                await saving;
               })(),
             ),
             "separator",
@@ -867,7 +917,7 @@ export default function App() {
           }
         : {}),
     });
-    await refresh();
+    showCreatedDocument(doc);
     await openDoc(doc.id, true);
     if (focusRef.current) setFocusTree(true);
     else setSidebar(true);
@@ -908,7 +958,7 @@ export default function App() {
   function updateProjectWriting(rules: WritingRules) {
     const id = projectId;
     pendingWriting.current.set(id, rules);
-    setLib(current => ({...current, projects: current.projects.map(p => p.id === id ? {...p, writing: rules} : p)}));
+    updateLibrary(patchProject(id, { writing: rules }));
     writingQueue.current = writingQueue.current.catch(() => {}).then(async () => {
       await call("updateProject", {id, writing: rules});
       if (pendingWriting.current.get(id) === rules) {
@@ -1679,9 +1729,9 @@ export default function App() {
       manualLineBreak: false,
     });
     setQuickNote(null);
-    await refresh();
-    await loadMemoFolders();
+    showCreatedDocument(doc);
     message("메모가 저장되었습니다", { label: "열기", run: attempt(() => openDoc(doc.id, true)) });
+    await loadMemoFolders();
   }
 
   // 조판 버튼: 위젯 보드 자리에 조판 설정을 펼치거나 접는다.
@@ -1817,6 +1867,8 @@ export default function App() {
         restoreHistory={(id, name, onDone) => session.restoreHistory(id, name, onDone)}
         discardDraft={(id) => session.discardDraft(id)}
         refresh={refresh}
+        changeLibrary={optimistic}
+        showCreatedDocument={showCreatedDocument}
         message={message}
         report={report}
       />
@@ -2340,24 +2392,7 @@ export default function App() {
               stats={stats}
               rules={writingRules}
               documentOnly={active.kind !== "episode"}
-              onChange={(rules) => {
-                const id = projectId;
-                pendingWriting.current.set(id, rules);
-                setLib(current => ({...current, projects: current.projects.map(p => p.id === id ? {...p, writing: rules} : p)}));
-                writingQueue.current = writingQueue.current.catch(() => {}).then(async () => {
-                  await call("updateProject", {id, writing: rules});
-                  if (pendingWriting.current.get(id) === rules) {
-                    pendingWriting.current.delete(id);
-                    await refresh();
-                  }
-                }).catch(async e => {
-                  if (pendingWriting.current.get(id) === rules) pendingWriting.current.delete(id);
-                  report(e);
-                  await refresh();
-                  throw e;
-                });
-                writingQueue.current.catch(() => {});
-              }}
+              onChange={updateProjectWriting}
             />
             <section className="widget session-widget">
               <span>{active.kind === "episode" ? "이번 회차에서 새로 쓴 글" : "이번 문서에서 새로 쓴 글"}</span>
@@ -2534,6 +2569,7 @@ export default function App() {
               </div>
             )}
             {["newProject", "editProject"].includes(dialog.type) && (<ProjectForm
+              changeLibrary={optimistic}
               dialog={dialog}
               prefs={prefs}
               refresh={refresh}
@@ -2550,8 +2586,8 @@ export default function App() {
             {dialog.type === "history" && active && (
               <HistoryDialog documentId={active.id} report={report} onRestore={async (id, name) => {
                 const restored = await session.restoreHistory(id, name, () => setDialog(null));
-                await refresh();
                 message(restored.historyWarning ?? "이전 원고를 복원했습니다. 복원 전 원고와 복원 결과를 모두 이력에 남겼습니다.");
+                void refresh().catch(report);
               }} />
             )}
             {dialog.type === "document" && active && (
@@ -2624,8 +2660,8 @@ export default function App() {
                 return (
                   <EpisodeBindingPicker key={target.id} doc={target} documents={lib.documents}
                     onSelect={async (episodeId) => {
-                      await bindDocument(target.id, episodeId);
                       setDialog(null);
+                      await bindDocument(target.id, episodeId).catch(report);
                     }}
                     onCancel={() => setDialog(null)} />
                 );
@@ -2695,7 +2731,11 @@ export default function App() {
                           body: d.body,
                         });
                         await call("clearDraft", { id: d.id });
-                        await refresh();
+                        updateLibrary((data) => ({
+                          ...insertDocument(copy)(data),
+                          drafts: data.drafts.filter((x) => x.id !== d.id),
+                        }));
+                        void refresh().catch(report);
                         session.discardDraft(d.id);
                         await openDoc(copy.id, true);
                         message("임시 원고를 새 문서로 복구했습니다.");

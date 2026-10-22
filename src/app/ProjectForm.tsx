@@ -15,6 +15,7 @@ import {
   type Library,
   type Project
 } from "../types";
+import { insertProject, patchProject, type LibraryChange } from "./library-changes";
 import { type Destination, type Dialog } from "./model";
 
 import { useEffect, useRef, useState, type MutableRefObject } from "react";
@@ -25,6 +26,7 @@ type Props = {
   dialog: Dialog;
   prefs: Record<string, any>;
   refresh: () => Promise<Library | undefined>;
+  changeLibrary: <T>(change: LibraryChange, run: () => Promise<T>) => Promise<T>;
   navigate: (destination: Destination, historyIndex?: number, beforeCommit?: () => void) => Promise<void>;
   projectId: string;
   project: Project | undefined;
@@ -42,6 +44,7 @@ export default function ProjectForm({
   dialog,
   prefs,
   refresh,
+  changeLibrary,
   navigate,
   projectId,
   project,
@@ -103,23 +106,26 @@ export default function ProjectForm({
                   dialog.writing ||
                   normalizeWriting(prefs.defaultWriting),
               });
-              await refresh();
+              // 다시 읽기를 기다리지 않고 새 작품을 목록에 넣은 뒤 바로 연다.
+              void changeLibrary(insertProject(p), async () => {}).catch(report);
               await navigate({ view: "project", projectId: p.id, tab: "episode", archive: false });
             } else if (dialog.type === "editProject") {
-              await call("updateProject", {
-                id: projectId,
+              const id = projectId;
+              const patch = {
                 title: dialog.value,
                 description: dialog.description,
                 tags: dialog.tags || [],
-                manualLineBreak: dialog.manualLineBreak ?? null,
+                manualLineBreak: dialog.manualLineBreak ?? undefined,
                 writing:
                   dialog.writing ||
                   normalizeWriting(
                     project?.writing || prefs.defaultWriting,
                   ),
-              });
-              await refresh();
+              };
               setDialog(null);
+              await changeLibrary(patchProject(id, patch), () =>
+                call("updateProject", { id, ...patch, manualLineBreak: dialog.manualLineBreak ?? null }),
+              );
             }
           })().catch(report);
         }}
@@ -220,9 +226,11 @@ export default function ProjectForm({
                 <button
                   type="button"
                   onClick={attempt(async () => {
-                    await call("removeCover", { id: projectId });
-                    await refresh();
+                    const saving = changeLibrary(patchProject(projectId, { cover: null, coverData: null }), () =>
+                      call("removeCover", { id: projectId }),
+                    );
                     message("기본 표지로 바꿨습니다.");
+                    await saving;
                   })}
                 >
                   기본 표지로
