@@ -1,7 +1,7 @@
 import { forwardRef, useImperativeHandle, useLayoutEffect, useRef } from "react";
 import { Annotation, Compartment, EditorState, Prec, StateEffect, StateField, Transaction } from "@codemirror/state";
 import { Decoration, EditorView, keymap, type DecorationSet, type ViewUpdate } from "@codemirror/view";
-import { defaultKeymap, history, historyKeymap, redo, redoDepth, undo, undoDepth } from "@codemirror/commands";
+import { defaultKeymap, history, historyKeymap, isolateHistory, redo, redoDepth, undo, undoDepth } from "@codemirror/commands";
 import { markdown } from "@codemirror/lang-markdown";
 import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
 import { GFM } from "@lezer/markdown";
@@ -171,6 +171,7 @@ export type SourceEditorHandle = {
   readonly view: EditorView | null;
   undo: (focus?: boolean) => void;
   redo: (focus?: boolean) => void;
+  replaceRanges: (ranges: FindRange[], text: string) => void;
   replace: (from: number, to: number, text: string, caret?: number) => void;
   paste: (text: string) => void;
   insertImage: (image: Image) => void;
@@ -205,6 +206,14 @@ const SourceEditor = forwardRef<SourceEditorHandle, Props>(function SourceEditor
     redo(focus = true) {
       const view = viewRef.current;
       if (view && !view.state.readOnly && redo(view) && focus) view.focus();
+    },
+    replaceRanges(ranges, text) {
+      const view = viewRef.current;
+      if (!view || view.state.readOnly || !ranges.length) return;
+      view.dispatch({
+        changes: ranges.map(({ from, to }) => ({ from, to, insert: text })),
+        annotations: [Transaction.userEvent.of("input.replace"), isolateHistory.of("full")],
+      });
     },
     highlight(hits, active) {
       viewRef.current?.dispatch({ effects: findMarks.of({ hits, active }) });

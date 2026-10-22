@@ -10,6 +10,7 @@ import {
   FolderPlus,
   HardDrive,
   History,
+  Search,
   StickyNote,
   BookOpen,
   Trash2,
@@ -1128,6 +1129,10 @@ export default function MemoSession({
             {crumbs(memo)}
           </span>
           <div className="save-status-group">
+            {focused && <button type="button" aria-label="문자 검색 및 치환" title="문자 검색 및 치환 (F3)"
+              onClick={() => window.dispatchEvent(new CustomEvent("lof:editor-find", { detail: { replace: true } }))}>
+              <Search size={16} />
+            </button>}
             {focused && memo.space === COMMON && <button type="button" aria-label="공용 메모 변경 이력" title="변경 이력"
               onClick={attempt(async () => {
                 await flush();

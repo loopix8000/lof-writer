@@ -1667,7 +1667,7 @@ body.sidebar-resizing * {
   /* 고정 막대가 가리던 본문을 드러내되 높이를 유지해 스크롤 위치를 보존한다. */
   visibility: hidden;
 }
-/* 검색창은 현재 원고 폭 안에 두고, 스크롤 중에도 편집 도구 위에 유지한다. */
+/* PC 검색창은 그룹 상단에 떠 있어 원고와 편집 도구의 배치를 바꾸지 않는다. */
 .editor-find {
   position: sticky;
   top: 0;
@@ -1686,7 +1686,17 @@ body.sidebar-resizing * {
   box-shadow: 0 3px 10px #00000026;
   font-size: 12px;
 }
-.editor-find > svg { flex-shrink: 0; color: var(--muted); }
+.editor-find-row { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; width: 100%; }
+.editor-find-row > svg { flex-shrink: 0; color: var(--muted); }
+.editor-find-notice { color: var(--muted); padding: 2px 4px; }
+.editor-find.is-floating {
+  position: absolute;
+  top: 50px;
+  right: 12px;
+  z-index: 30;
+  width: min(460px, calc(100% - 24px));
+  margin: 0;
+}
 .editor-find input { flex: 1 1 100px; width: 0; padding: 5px 7px; font-size: 13px; }
 .editor-find button { flex-shrink: 0; padding: 5px; min-height: 28px; border: 0; border-radius: 4px; color: var(--muted); }
 @media (hover: hover) and (pointer: fine) {
@@ -1695,7 +1705,6 @@ body.sidebar-resizing * {
 .editor-find button.active { color: var(--accent); background: var(--selection-bg); }
 .editor-find button:disabled { cursor: default; }
 .editor-find-count { color: var(--muted); white-space: nowrap; padding: 0 4px; font-variant-numeric: tabular-nums; }
-.manuscript:has(.editor-find) > .format-bar { top: var(--editor-find-offset, 52px); }
 .editor-find-hit { background: var(--find-match); color: var(--find-text); }
 .editor-find-hit.current { background: var(--find-current); outline: 1px solid var(--find-text); }
 .tiptap {
@@ -3311,6 +3320,7 @@ body.sash-dragging-all {
   user-select: none;
 }
 .group-body {
+  position: relative;
   flex: 1;
   display: flex;
   flex-direction: column;

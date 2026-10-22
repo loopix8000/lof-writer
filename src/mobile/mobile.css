@@ -3409,6 +3409,20 @@
   padding: 0 !important;
 }
 
+.m-editor-screen .editor-find {
+  top: 58px;
+}
+
+.mobile-app .editor-find input {
+  min-height: 36px;
+  font-size: 14px;
+}
+
+.mobile-app .editor-find button {
+  min-height: 36px;
+  padding: 6px 8px;
+}
+
 .m-editor-screen > .editor-scroll,
 .m-memo-editor-screen > .editor-scroll {
   scroll-padding-bottom: 76px;

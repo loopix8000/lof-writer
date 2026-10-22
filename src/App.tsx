@@ -1355,6 +1355,14 @@ export default function App() {
           </div>
           <div className="editor-action-buttons" aria-hidden={!focused}>
             <button
+              type="button"
+              aria-label="문자 검색 및 치환"
+              title="문자 검색 및 치환 (F3)"
+              onClick={() => window.dispatchEvent(new CustomEvent("lof:editor-find", { detail: { replace: true } }))}
+            >
+              <Search size={18} />
+            </button>
+            <button
               aria-label="저장"
               title="저장 (Ctrl+S)"
               onClick={attempt(manualSave)}

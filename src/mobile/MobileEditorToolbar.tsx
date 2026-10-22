@@ -11,6 +11,7 @@ import {
   Minus,
   MoreVertical,
   Redo2,
+  Replace,
   Save,
   Sparkles,
   StickyNote,
@@ -169,6 +170,20 @@ export function MobileEditorMenuActions({
   ];
   return (
     <div className="m-floating-popup-section">
+      <button
+        type="button"
+        className="m-floating-popup-item"
+        role="menuitem"
+        disabled={disabled}
+        onPointerDown={(event) => event.preventDefault()}
+        onClick={() => {
+          onClose();
+          window.dispatchEvent(new CustomEvent("lof:editor-find", { detail: { replace: true } }));
+        }}
+      >
+        <Replace size={16} />
+        <span>문자 치환</span>
+      </button>
       {actions.map(({ action, label, icon: Icon }) => (
         <button
           key={action}

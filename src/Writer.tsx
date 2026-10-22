@@ -1054,7 +1054,7 @@ export default function Writer({
   if (source || protectedSource)
     return (
       <div className="source-editor">
-        <EditorFind sourceRef={sourceRef} body={body} enabled={visible && !inactive} />
+        <EditorFind sourceRef={sourceRef} body={body} enabled={visible && !inactive} editable={editable} />
         {protectedSource && <div className="source-hint">원문 편집</div>}
         <div onContextMenu={(event) => {
           const handle = sourceRef.current, view = handle?.view;
@@ -1168,7 +1168,7 @@ export default function Writer({
   ];
   return (
     <>
-      <EditorFind editor={editor} enabled={visible && !inactive} />
+      <EditorFind editor={editor} enabled={visible && !inactive} editable={editable} />
       {/* 다른 그룹의 막대도 원래 위치에서는 표시하고 상단에 고정됐을 때만 숨긴다. */}
       <FormatBar inactive={inactive} visible={visible}>
         {tools.map((t) => (
