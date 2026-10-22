@@ -30,6 +30,37 @@ use tauri::{AppHandle, Manager};
 use uuid::Uuid;
 
 const SYNC_BUSY_MESSAGE: &str = "다른 동기화가 진행 중입니다.";
+const CONNECTION_CHECK_INTERVAL: Duration = Duration::from_secs(20);
+const CONTROL_TIMEOUT: Duration = Duration::from_secs(8);
+
+struct Session {
+    root: PathBuf,
+    connection: Connection,
+    authenticated: bool,
+}
+
+struct ConnectionProbe {
+    task: tokio::task::JoinHandle<lof_realtime::Result<(Connection, Message)>>,
+    // 기존 연결 확인인지, 새 연결 시도인지 구분한다.
+    connection: Option<usize>,
+}
+
+async fn control(
+    app: &AppHandle,
+    connection: &Connection,
+    message: Message,
+) -> lof_realtime::Result<Message> {
+    let request = lof_realtime::request(connection, message);
+    tokio::pin!(request);
+    loop {
+        match tokio::time::timeout(CONTROL_TIMEOUT, &mut request).await {
+            Ok(result) => return result,
+            // 파일 전송과 연결 확인이 겹치면 기존 전송 제한 시간 안에서 응답을 더 기다린다.
+            Err(_) if app.state::<AppState>().syncing.load(Ordering::SeqCst) => continue,
+            Err(_) => return Err("장치의 연결 확인 응답이 없습니다.".into()),
+        }
+    }
+}
 
 #[derive(Default)]
 pub struct Realtime {
@@ -39,6 +70,7 @@ pub struct Realtime {
     group: Mutex<Option<(PathBuf, Option<Group>)>>,
     announcer: Mutex<Option<Announcer>>,
     live: Mutex<HashMap<String, Connection>>,
+    sessions: Mutex<HashMap<String, Session>>,
     dirty: AtomicU64,
     requested: AtomicU64,
     subscription_lost: AtomicBool,
@@ -528,6 +560,12 @@ pub fn changed(app: &AppHandle) {
 pub fn configure(app: &AppHandle) {
     signal(&app.state::<Realtime>());
 }
+pub fn reconnect(app: &AppHandle) {
+    app.state::<Realtime>()
+        .clear_retries
+        .store(true, Ordering::SeqCst);
+    remote_changed(app);
+}
 fn signal(rt: &Realtime) {
     *rt.urgent.lock().unwrap() = true;
     rt.wake.notify_all();
@@ -550,8 +588,7 @@ pub fn set_background(app: &AppHandle, background: bool) {
         wake(app);
     } else if !background && was_bg {
         // 포그라운드 복귀 시 재시도 대기를 초기화하고 즉시 연결·동기화를 재개한다.
-        rt.clear_retries.store(true, Ordering::SeqCst);
-        remote_changed(app);
+        reconnect(app);
     }
 }
 fn release(app: &AppHandle, session: &str) {
@@ -566,6 +603,18 @@ fn release(app: &AppHandle, session: &str) {
 }
 struct WriterHost(AppHandle);
 impl Host for WriterHost {
+    fn connected(&self, _peer: &str, session: &str, connection: Connection) {
+        if let Ok(root) = root(&self.0) {
+            self.0.state::<Realtime>().sessions.lock().unwrap().insert(
+                session.into(),
+                Session {
+                    root,
+                    connection,
+                    authenticated: false,
+                },
+            );
+        }
+    }
     fn handle(&self, peer: &str, session: &str, message: Message) -> lof_realtime::Result<Message> {
         let res = self.handle_inner(peer, session, message);
         crate::auto_sync::refresh_realtime(&self.0);
@@ -574,6 +623,14 @@ impl Host for WriterHost {
     }
     fn disconnected(&self, session: &str) {
         release(&self.0, session);
+        let rt = self.0.state::<Realtime>();
+        let removed = rt.sessions.lock().unwrap().remove(session);
+        if let Some(session) = removed {
+            session.connection.close(0u8.into(), b"disconnected");
+            let mut live = rt.live.lock().unwrap();
+            live.retain(|_, connection| connection.stable_id() != session.connection.stable_id());
+        }
+        wake(&self.0);
     }
 }
 /// 일회용 토큰을 확인한 뒤 가입한 장치를 서명해 구성원에 추가하고 그룹 정보를 돌려준다.
@@ -682,6 +739,32 @@ impl WriterHost {
         if request["target"].as_str() != Some(vault(app)?.as_str()) {
             return Err(fail_invalid("연결 대상 서재가 변경되었습니다."));
         }
+        // 전송 계층의 접속만으로는 온라인으로 간주하지 않는다. 서재와 구성원을 확인한
+        // 첫 요청에서만 연결을 등록해, 상대가 먼저 연 연결도 양방향으로 재사용한다.
+        let current = root(app)?;
+        let accepted = {
+            let mut sessions = rt.sessions.lock().unwrap();
+            sessions.get_mut(session).and_then(|session| {
+                if session.root != current || session.authenticated {
+                    None
+                } else {
+                    session.authenticated = true;
+                    Some(session.connection.clone())
+                }
+            })
+        };
+        if let Some(connection) = accepted {
+            let id = peer_config["id"].as_str().unwrap_or("").to_string();
+            rt.live.lock().unwrap().insert(id.clone(), connection);
+            let mut statuses = rt.statuses.lock().unwrap();
+            let status = statuses.entry(id).or_insert_with(|| json!({}));
+            if !matches!(status["phase"].as_str(), Some("syncing" | "pending")) {
+                status["phase"] = json!("connected");
+                status["message"] = Value::Null;
+            }
+            drop(statuses);
+            wake(app);
+        }
         if op == "members" {
             return Ok(Message::json(json!(true)));
         }
@@ -751,6 +834,7 @@ impl WriterHost {
                 peer_config["id"].as_str().unwrap_or("").into(),
                 json!({"phase":"connected","lastSync":chrono::Utc::now().to_rfc3339()}),
             );
+            wake(app);
             return Ok(Message::json(json!(true)));
         }
         if op == "touch" {
@@ -1010,6 +1094,10 @@ pub fn start(app: &AppHandle) {
             let own = node.endpoint.id().to_string();
             let mut connected: HashMap<String, (Connection, (u64, u64))> = HashMap::new();
             let mut retry: HashMap<String, (Instant, u64)> = HashMap::new();
+            let mut probes: HashMap<String, ConnectionProbe> = HashMap::new();
+            let mut checked: HashMap<String, Instant> = HashMap::new();
+            let mut periodic_active = false;
+            let mut periodic_attempted = HashSet::new();
             let mut previous_root = PathBuf::new();
             let mut subscription: Option<Subscription> = None;
             let mut subscription_retry: Option<Instant> = None;
@@ -1023,11 +1111,23 @@ pub fn start(app: &AppHandle) {
                     continue;
                 };
                 if current != previous_root {
+                    for (_, probe) in probes.drain() {
+                        probe.task.abort();
+                    }
+                    for (_, conn) in rt.live.lock().unwrap().drain() {
+                        conn.close(0u8.into(), b"vault changed");
+                    }
+                    rt.sessions.lock().unwrap().retain(|_, session| {
+                        if session.root == current { return true; }
+                        session.connection.close(0u8.into(), b"vault changed");
+                        false
+                    });
                     for (conn, _) in connected.values() {
                         conn.close(0u8.into(), b"vault changed");
                     }
                     connected.clear();
                     retry.clear();
+                    checked.clear();
                     subscription_retry = None;
                     previous_root = current.clone();
                     // 다른 서재에 있을 때 바꾼 장치 이름은 연결 확인 요청으로 전한다.
@@ -1075,11 +1175,27 @@ pub fn start(app: &AppHandle) {
                 let wanted = peers(&app);
                 let phase = crate::background_sync::phase(&app);
                 crate::background_sync::refresh(&app, !wanted.is_empty());
-                if phase == Phase::Periodic {
+                if phase == Phase::Periodic && !periodic_active {
                     // 주기 확인에서는 재시도 대기와 관계없이 모든 구성원을 확인한다.
                     retry.clear();
+                    checked.clear();
+                    periodic_active = true;
+                    periodic_attempted.clear();
                 }
+                if phase != Phase::Periodic { periodic_active = false; }
                 retry.retain(|id, _| wanted.iter().any(|peer| peer["id"].as_str() == Some(id.as_str())));
+                checked.retain(|id, _| wanted.iter().any(|peer| peer["id"].as_str() == Some(id.as_str())));
+                probes.retain(|id, probe| {
+                    let keep = wanted.iter().any(|peer| peer["id"].as_str() == Some(id.as_str()));
+                    if !keep { probe.task.abort(); }
+                    keep
+                });
+                rt.live.lock().unwrap().retain(|id, connection| {
+                    let keep = connection.close_reason().is_none()
+                        && wanted.iter().any(|peer| peer["id"].as_str() == Some(id.as_str()));
+                    if !keep { connection.close(0u8.into(), b"revoked or closed"); }
+                    keep
+                });
                 connected.retain(|id, (conn, _)| {
                     let keep = wanted.iter().any(|p| p["id"].as_str() == Some(id));
                     if !keep {
@@ -1089,6 +1205,12 @@ pub fn start(app: &AppHandle) {
                 });
                 if rt.clear_retries.swap(false, Ordering::SeqCst) {
                     retry.clear();
+                    checked.clear();
+                    probes.retain(|_, probe| {
+                        if probe.connection.is_some() { return true; }
+                        probe.task.abort();
+                        false
+                    });
                 }
                 for endpoint in rt.reconnect.lock().unwrap().drain() {
                     retry.retain(|id, _| id.split(':').next() != Some(endpoint.as_str()));
@@ -1098,11 +1220,87 @@ pub fn start(app: &AppHandle) {
                 let revision = (generation, requested);
                 for peer in wanted {
                     let id = peer["id"].as_str().unwrap_or("").to_string();
+                    let accepted = rt.live.lock().unwrap().get(&id).cloned();
+                    if let Some(conn) = accepted {
+                        if connected.get(&id).is_none_or(|(old, _)| old.stable_id() != conn.stable_id()) {
+                            connected.insert(id.clone(), (conn, (u64::MAX, u64::MAX)));
+                            checked.insert(id.clone(), Instant::now());
+                            retry.remove(&id);
+                            let mut statuses = rt.statuses.lock().unwrap();
+                            let status = statuses.entry(id.clone()).or_insert_with(|| json!({}));
+                            if !matches!(status["phase"].as_str(), Some("syncing" | "pending")) {
+                                status["phase"] = json!("connected");
+                                status["message"] = Value::Null;
+                            }
+                            drop(statuses);
+                            if probes.get(&id).is_some_and(|probe| probe.connection.is_none()) {
+                                if let Some(probe) = probes.remove(&id) { probe.task.abort(); }
+                            }
+                        }
+                    }
                     if connected
                         .get(&id)
                         .is_some_and(|(c, _)| c.close_reason().is_some())
                     {
                         connected.remove(&id);
+                        if matches!(phase, Phase::Foreground | Phase::Live) {
+                            let mut statuses = rt.statuses.lock().unwrap();
+                            let status = statuses.entry(id.clone()).or_insert_with(|| json!({}));
+                            status["phase"] = json!("offline");
+                            status["message"] = Value::Null;
+                        }
+                    }
+                    if probes.get(&id).is_some_and(|probe| probe.task.is_finished()) {
+                        let probe = probes.remove(&id).unwrap();
+                        let result = runtime.block_on(probe.task)
+                            .map_err(|error| error.to_string()).and_then(|result| result);
+                        // 새 연결이 성립한 뒤 오래된 확인 결과로 다시 끊지 않는다.
+                        let obsolete = probe.connection.is_some_and(|checked_id|
+                            connected.get(&id).is_some_and(|(conn, _)| conn.stable_id() != checked_id));
+                        if !obsolete {
+                            let result = result.and_then(|(conn, reply)| {
+                                let list: Vec<Member> = serde_json::from_value(reply.meta["members"].clone()).unwrap_or_default();
+                                absorb(&app, &list).map_err(|error| error.message)?;
+                                if reply.meta["removed"] == true {
+                                    conn.close(0u8.into(), b"removed");
+                                    return Err("이 장치가 동기화 그룹에서 제거되었습니다.".into());
+                                }
+                                if !connected.contains_key(&id) {
+                                    rt.live.lock().unwrap().insert(id.clone(), conn.clone());
+                                    connected.insert(id.clone(), (conn, (u64::MAX, u64::MAX)));
+                                }
+                                Ok(())
+                            });
+                            match result {
+                                Ok(()) => {
+                                    checked.insert(id.clone(), Instant::now());
+                                    retry.remove(&id);
+                                    let mut statuses = rt.statuses.lock().unwrap();
+                                    let status = statuses.entry(id.clone()).or_insert_with(|| json!({}));
+                                    if !matches!(status["phase"].as_str(), Some("syncing" | "pending")) {
+                                        status["phase"] = json!("connected");
+                                        status["message"] = Value::Null;
+                                    }
+                                }
+                                Err(_) if probe.connection.is_none() && connected.contains_key(&id) => {
+                                    // 역방향 연결이 먼저 성공했으면 별도 발신 실패는 무시한다.
+                                    retry.remove(&id);
+                                }
+                                Err(_) => {
+                                    if let Some((conn, _)) = connected.remove(&id) {
+                                        conn.close(1u8.into(), b"connection check failed");
+                                    }
+                                    rt.live.lock().unwrap().retain(|key, conn|
+                                        key != &id || conn.close_reason().is_none());
+                                    let mut statuses = rt.statuses.lock().unwrap();
+                                    let status = statuses.entry(id.clone()).or_insert_with(|| json!({}));
+                                    status["phase"] = json!("offline");
+                                    status["message"] = Value::Null;
+                                    let delay = retry.get(&id).map(|(_, d)| (*d * 2).min(30)).unwrap_or(1);
+                                    retry.insert(id.clone(), (Instant::now() + Duration::from_secs(delay), delay));
+                                }
+                            }
+                        }
                     }
                     if retry
                         .get(&id)
@@ -1110,54 +1308,51 @@ pub fn start(app: &AppHandle) {
                     {
                         continue;
                     }
-                    let mut initial = false;
-                    let mut unreachable = false;
-                    let result = (|| -> Result<(), LofError> {
-                        if !connected.contains_key(&id) {
-                            // 꺼져 있는 장치는 재시도 중에도 오프라인으로 둔다.
+                    let needs_check = connected.contains_key(&id)
+                        && checked.get(&id).is_none_or(|at| at.elapsed() >= CONNECTION_CHECK_INTERVAL)
+                        && !app.state::<AppState>().syncing.load(Ordering::SeqCst);
+                    if (!connected.contains_key(&id) || needs_check) && !probes.contains_key(&id)
+                        && (phase != Phase::Periodic || !periodic_attempted.contains(&id)) {
+                        let existing = connected.get(&id).map(|(conn, _)| conn.clone());
+                        let connection = existing.as_ref().map(Connection::stable_id);
+                        if existing.is_none() {
                             let mut statuses = rt.statuses.lock().unwrap();
-                            if statuses.get(&id).map(|s| &s["phase"]) != Some(&json!("offline")) {
+                            if statuses.get(&id).and_then(|s| s["phase"].as_str()) != Some("offline") {
                                 statuses.insert(id.clone(), json!({"phase":"connecting"}));
                             }
-                            drop(statuses);
-                            crate::auto_sync::refresh_realtime(&app);
-                            let endpoint = peer["endpoint"]
-                                .as_str()
-                                .unwrap_or("")
-                                .parse()
-                                .map_err(net)?;
-                            let conn = runtime
-                                .block_on(node.connect(EndpointAddr::new(endpoint)))
-                                .map_err(|error| {
-                                    unreachable = true;
-                                    net(error)
-                                })?;
-                            let hello = json!({"op":"hello","vault":vault(&app)?,"target":peer["remoteVault"],"members":members(&app)});
-                            let reply = runtime
-                                .block_on(lof_realtime::request(&conn, Message::json(hello)))
-                                .map_err(net)?;
-                            let list: Vec<Member> =
-                                serde_json::from_value(reply.meta["members"].clone())
-                                    .unwrap_or_default();
-                            absorb(&app, &list)?;
-                            if reply.meta["removed"] == true {
-                                conn.close(0u8.into(), b"removed");
-                                return Err(fail(
-                                    "이 장치가 동기화 그룹에서 제거되었습니다.",
-                                    "PEER_REVOKED",
-                                ));
-                            }
-                            let closed = conn.clone();
-                            let events = app.clone();
-                            runtime.spawn(async move {
-                                closed.closed().await;
-                                wake(&events);
-                            });
-                            connected.insert(id.clone(), (conn, (u64::MAX, u64::MAX)));
-                            initial = true;
                         }
+                        let node = node.clone();
+                        let events = app.clone();
+                        let endpoint = peer["endpoint"].as_str().unwrap_or("").to_string();
+                        let hello = json!({"op":"hello","vault":vault(&app)?,"target":peer["remoteVault"],"members":members(&app)});
+                        let task = runtime.spawn(async move {
+                            let result = async {
+                                let conn = match existing {
+                                    Some(conn) => conn,
+                                    None => node.connect(EndpointAddr::new(endpoint.parse().map_err(|error| format!("{error}"))?)).await?,
+                                };
+                                match control(&events, &conn, Message::json(hello)).await {
+                                    Ok(reply) => Ok((conn, reply)),
+                                    Err(error) => {
+                                        if connection.is_none() {
+                                            conn.close(1u8.into(), b"connection check failed");
+                                        }
+                                        Err(error)
+                                    }
+                                }
+                            }.await;
+                            wake(&events);
+                            result
+                        });
+                        probes.insert(id.clone(), ConnectionProbe { task, connection });
+                        periodic_attempted.insert(id.clone());
+                    }
+                    if !connected.contains_key(&id) || probes.contains_key(&id) {
+                        continue;
+                    }
+                    let result = (|| -> Result<(), LofError> {
                         let (conn, seen) = connected.get_mut(&id).unwrap();
-                        if !initial && *seen == revision {
+                        if *seen == revision {
                             return Ok(());
                         }
                         {
@@ -1174,7 +1369,7 @@ pub fn start(app: &AppHandle) {
                             rt.statuses.lock().unwrap().insert(id.clone(),json!({"phase":"connected","lastSync":chrono::Utc::now().to_rfc3339(),"conflicts":outcome["fileConflicts"]}));
                             crate::auto_sync::refresh_realtime(&app);
                         } else {
-                            runtime.block_on(lof_realtime::request(conn,Message::json(json!({"op":"notify","vault":vault(&app)?,"target":peer["remoteVault"]})))).map_err(net)?;
+                            runtime.block_on(control(&app,conn,Message::json(json!({"op":"notify","vault":vault(&app)?,"target":peer["remoteVault"]})))).map_err(net)?;
                             let mut statuses = rt.statuses.lock().unwrap();
                             let status = statuses.entry(id.clone()).or_insert_with(|| json!({}));
                             status["phase"] = json!("connected");
@@ -1183,6 +1378,7 @@ pub fn start(app: &AppHandle) {
                             crate::auto_sync::refresh_realtime(&app);
                         }
                         *seen = revision;
+                        checked.insert(id.clone(), Instant::now());
                         Ok(())
                     })();
                     match result {
@@ -1199,39 +1395,39 @@ pub fn start(app: &AppHandle) {
                         }
                         Err(error) => {
                             let mut statuses = rt.statuses.lock().unwrap();
-                            let status = if unreachable {
-                                let last = statuses.get(&id).map(|s| s["lastSync"].clone());
-                                json!({"phase":"offline","lastSync":last.unwrap_or(Value::Null)})
-                            } else {
-                                json!({"phase":"error","message":error.message})
-                            };
+                            let status = json!({"phase":"error","message":error.message});
                             statuses.insert(id.clone(), status);
                             drop(statuses);
                             if let Some((conn, _)) = connected.remove(&id) {
                                 conn.close(1u8.into(), b"retry");
                             }
-                            let delay = retry.get(&id).map(|(_, d)| (*d * 2).min(60)).unwrap_or(5);
+                            rt.live.lock().unwrap().retain(|key, conn|
+                                key != &id || conn.close_reason().is_none());
+                            let delay = retry.get(&id).map(|(_, d)| (*d * 2).min(30)).unwrap_or(1);
                             retry.insert(id, (Instant::now() + Duration::from_secs(delay), delay));
                         }
                     }
                 }
                 crate::auto_sync::refresh_realtime(&app);
-                *rt.live.lock().unwrap() = connected
-                    .iter()
-                    .map(|(id, (conn, _))| (id.clone(), conn.clone()))
-                    .collect();
                 // 연결이 끊긴 구성원도 변경 알림을 받으면 재시도 대기 없이 다시 접속한다.
                 if generation != announced && group.is_some() {
                     announce(&app, Announcement::Changed { endpoint: own.clone() });
                     announced = generation;
                 }
                 if phase == Phase::Periodic {
+                    if !probes.is_empty() {
+                        // 접속 확인은 기기별로 병렬 실행하되 주기 확인이 끝나기 전 결과를 받는다.
+                        let urgent = rt.urgent.lock().unwrap();
+                        drop(rt.wake.wait_timeout(urgent, Duration::from_millis(250)).unwrap());
+                        continue;
+                    }
                     // 확인을 마치면 연결을 닫아 다음 주기까지 배터리를 아낀다.
                     for (conn, _) in connected.values() {
                         conn.close(0u8.into(), b"background");
                     }
                     connected.clear();
                     rt.live.lock().unwrap().clear();
+                    periodic_active = false;
                     crate::background_sync::realtime_done(&app);
                 }
                 // 화면에 있을 때와 앱을 닫은 뒤 30분 동안은 저장·수신·접속 알림을 기다린다.
@@ -1251,7 +1447,12 @@ pub fn start(app: &AppHandle) {
                             let live = (phase == Phase::Live)
                                 .then(|| crate::background_sync::live_deadline(&app))
                                 .flatten();
-                            retry.values().map(|(when, _)| *when).chain(subscription_retry).chain(live).min()
+                            let health = connected.keys().filter(|id| !probes.contains_key(*id))
+                                .filter_map(|id| checked.get(id).map(|at| (*at + CONNECTION_CHECK_INTERVAL).max(Instant::now() + Duration::from_secs(1))))
+                                .min();
+                            let pending = (!probes.is_empty()).then(|| Instant::now() + Duration::from_millis(250));
+                            retry.iter().filter(|(id, _)| !probes.contains_key(*id)).map(|(_, (when, _))| *when)
+                                .chain(subscription_retry).chain(live).chain(health).chain(pending).min()
                         }
                         Phase::Periodic => {
                             *urgent = false;
@@ -1273,12 +1474,14 @@ pub fn start(app: &AppHandle) {
                         if remaining.is_zero() {
                             break;
                         }
-                        drop(rt.wake.wait_timeout(urgent, remaining).unwrap());
+                        let waited = rt.wake.wait_timeout(urgent, remaining).unwrap();
+                        if waited.1.timed_out() { break; }
                     } else {
                         drop(rt.wake.wait(urgent).unwrap());
                     }
                 }
             }
+            for (_, probe) in probes { probe.task.abort(); }
             drop(subscription);
             runtime.block_on(node.close());
             Ok(())
@@ -1559,7 +1762,7 @@ pub fn command(app: &AppHandle, method: &str, args: &Value) -> Result<Value, Lof
         return reset_notice(app, method == "realtimeDismissReset");
     }
     if method == "realtimeSync" {
-        remote_changed(app);
+        reconnect(app);
         return Ok(json!(true));
     }
     if method == "realtimeInvite" && args["reuse"].as_bool() == Some(true) {
