@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
-import { AlertCircle, ArrowLeft, ArrowRight, Check, CheckCircle2, ChevronDown, ChevronRight, Clock3, Cloud, Copy, Link, Loader2, LogOut, Monitor, Pencil, QrCode, RefreshCw, ScanLine, Server, Smartphone, Users, X } from "lucide-react";
+import { AlertCircle, ArrowLeft, ArrowRight, Check, CheckCircle2, ChevronDown, ChevronRight, Clock3, Cloud, Copy, Link, Loader2, LogOut, Maximize2, Monitor, Pencil, QrCode, RefreshCw, ScanLine, Server, Smartphone, Users, X } from "lucide-react";
 import SettingsToggle from "./app/SettingsToggle";
 import { isAndroidApp } from "./tauri-bridge";
 import { call } from "./types";
@@ -170,6 +171,18 @@ export default function RealtimeSync({
   const ready = status.uxVersion === 2 && !!status.endpoint && !status.error;
 
   useEffect(() => { setActionProblem(null); setNotice(""); }, [paired?.id, invitedPeer?.id]);
+
+  // 다른 장치가 스캔하기 쉽도록 QR 코드를 화면 가득 보여 준다.
+  const [qrZoom, setQrZoom] = useState(false);
+  const zoomable = inviteReady && tab === "invite" && !invitedPeer;
+  useEffect(() => { if (!zoomable) setQrZoom(false); }, [zoomable]);
+  useEffect(() => {
+    if (!qrZoom) return;
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") setQrZoom(false); };
+    (window as any).__lofOverlayBack = () => { setQrZoom(false); return true; };
+    window.addEventListener("keydown", onKey);
+    return () => { delete (window as any).__lofOverlayBack; window.removeEventListener("keydown", onKey); };
+  }, [qrZoom]);
 
   useEffect(() => {
     const phase = connecting ? "connecting" : paired ? "connected" : failure ? "error" : "input";
@@ -475,7 +488,11 @@ export default function RealtimeSync({
           {!status.invite ? <div className="realtime-empty"><QrCode size={44} /><strong>일회용 페어링 코드를 만들어 주세요</strong><p>코드는 10분 동안 한 번만 사용할 수 있어요.<br />그룹이 없으면 이 서재로 새 그룹을 만듭니다.</p></div> : <>
             <div className={`realtime-invite-grid ${expired ? "is-expired" : ""}`}>
               <div className="realtime-qr-card">
-                {invite?.id === status.invite.id ? <img src={invite.qr} width={228} height={228} alt={expired ? "" : "다른 장치에 보여 줄 그룹 페어링 QR 코드"} aria-hidden={expired || undefined} /> : <QrCode size={100} aria-hidden="true" />}
+                {zoomable && invite ? <button type="button" className="realtime-qr-zoom" aria-label="QR 코드 크게 보기" onClick={() => setQrZoom(true)}>
+                  <img src={invite.qr} width={228} height={228} alt="다른 장치에 보여 줄 그룹 페어링 QR 코드" />
+                  <span className="realtime-qr-hint"><Maximize2 size={12} aria-hidden="true" />눌러서 크게 보기</span>
+                </button>
+                  : invite?.id === status.invite.id ? <img src={invite.qr} width={228} height={228} alt={expired ? "" : "다른 장치에 보여 줄 그룹 페어링 QR 코드"} aria-hidden={expired || undefined} /> : <QrCode size={100} aria-hidden="true" />}
                 {expired && <div className="realtime-qr-expired"><Clock3 size={28} /><strong>00:00</strong></div>}
               </div>
               <div className="realtime-invite-guide">
@@ -493,6 +510,11 @@ export default function RealtimeSync({
               <summary><ChevronDown size={15} />페어링 코드 직접 보기</summary>
               <textarea readOnly rows={3} aria-label="그룹 페어링 코드" value={invite.code} onFocus={event => event.currentTarget.select()} />
             </details>}
+            {qrZoom && invite && createPortal(<div className="realtime-qr-zoom-view" role="dialog" aria-modal="true" aria-label="그룹 페어링 QR 코드" onClick={() => setQrZoom(false)}>
+              <img src={invite.qr} alt="다른 장치에 보여 줄 그룹 페어링 QR 코드" />
+              <strong role="timer" aria-live="off">{time(seconds)}</strong>
+              <span>화면을 누르면 닫힙니다</span>
+            </div>, document.body)}
           </>}
         </>)}
         {tab === "connect" && (paired ? success(paired, "그룹에 가입했습니다") : connecting ? <div className="realtime-connecting" role="status" aria-live="polite">

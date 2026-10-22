@@ -358,6 +358,10 @@ export default function MobileShell({
   // 안드로이드 시스템 뒤로가기 버튼/제스처 연결
   useEffect(() => {
     (window as any).__lofMobileBack = () => {
+      // 설정 화면 위에 띄운 전체 화면 보기(QR 확대 등)를 먼저 닫는다.
+      if ((window as any).__lofOverlayBack?.()) {
+        return true;
+      }
       if (viewer) {
         closeViewer();
         return true;

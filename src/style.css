@@ -6396,6 +6396,13 @@ input.property-text {
 .realtime-invite-grid { display: grid; grid-template-columns: minmax(0, 244px) minmax(0, 1fr); gap: 20px; }
 .realtime-qr-card { position: relative; min-height: 244px; padding: 8px; border: 1px solid var(--border); border-radius: 10px; display: grid; place-items: center; background: #fff; color: #172033; overflow: hidden; }
 .realtime-qr-card img { display: block; width: 100%; max-width: 228px; height: auto; aspect-ratio: 1; }
+.realtime-sync .realtime-qr-zoom { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 100%; padding: 0; border: 0; border-radius: 6px; background: transparent; color: #5b6475; cursor: zoom-in; }
+.realtime-sync .realtime-qr-zoom img { margin: 0 auto; }
+.realtime-qr-hint { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; }
+.realtime-qr-zoom-view { position: fixed; inset: 0; z-index: 400; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 24px; background: #fff; color: #172033; cursor: zoom-out; }
+.realtime-qr-zoom-view img { width: min(92vw, 70vh); height: auto; aspect-ratio: 1; image-rendering: pixelated; }
+.realtime-qr-zoom-view strong { font-size: 28px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.realtime-qr-zoom-view span { font-size: 13px; color: #5b6475; }
 .realtime-invite-guide { display: flex; flex-direction: column; gap: 15px; min-width: 0; }
 .realtime-timer-card { padding: 16px 18px; border: 1px solid var(--border); border-radius: 10px; background: var(--sidebar); }
 .realtime-timer-label { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--muted); }

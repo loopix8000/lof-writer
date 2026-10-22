@@ -3105,7 +3105,31 @@
   display: flex !important;
   flex-direction: column !important;
   align-items: center !important;
-  gap: 14px !important;
+  gap: 12px !important;
+}
+
+/* QR 카드와 타이머 카드를 같은 폭으로 맞춘다. */
+.m-settings-host .realtime-qr-card,
+.m-settings-host .realtime-invite-guide {
+  width: 100%;
+  max-width: 320px;
+}
+
+.m-settings-host .realtime-qr-card {
+  padding: 14px 12px 10px;
+}
+
+.m-settings-host .realtime-qr-card img {
+  max-width: 240px;
+}
+
+.m-settings-host .realtime-timer-card {
+  padding: 14px 16px;
+}
+
+.m-settings-host .realtime-countdown {
+  margin: 2px 0 8px;
+  font-size: 34px;
 }
 
 /* ---------- 8. 전체 화면 서브 다이얼로그 및 폼 (새 작품, 소설 관리, 내보내기, 이력 등) ---------- */
