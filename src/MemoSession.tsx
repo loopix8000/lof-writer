@@ -28,6 +28,8 @@ import { splitMenuItems } from "./split/menu";
 import { copyWorkspaceScroll, readWorkspaceState, saveWorkspaceState, workspaceKey } from "./workspace-state";
 import ContextMenu, { type MenuItem } from "./ContextMenu";
 import { useConfirm } from "./ConfirmDialog";
+import { autoSaveCondition } from "./app/auto-save";
+import { clearMemoDraft, readMemoDraft, saveMemoDraft } from "./memo-drafts";
 import { readFileForClose, useSyncFileUpdates } from "./useSyncFileUpdates";
 import { useGitActivity } from "./useGitActivity";
 import { call, type AutoSyncStatus, type Doc, type Kind } from "./types";
@@ -196,8 +198,12 @@ export default function MemoSession({
   const memoRef = useRef<Memo | null>(null),
     spaceRef = useRef(space),
     dirty = useRef({ seq: 0, saved: 0 }),
+    // 마지막으로 저장하거나 읽은 본문과 그 시각. 자동 저장 조건을 여기서부터 잰다.
+    lastSaved = useRef({ body: "", at: 0 }),
+    prefsRef = useRef(prefs),
     conflictRef = useRef(false),
     timer = useRef<number | undefined>(undefined),
+    draftTimer = useRef<number | undefined>(undefined),
     chain = useRef<Promise<void>>(Promise.resolve()),
     openSeq = useRef(0),
     // 트리에서 끌고 있는 경로. 여러 줄을 골랐으면 고른 것을 함께 끈다.
@@ -206,12 +212,29 @@ export default function MemoSession({
     pickAnchor = useRef(""),
     dragTreeMemo = useRef<MemoTab | null>(null);
   spaceRef.current = space;
+  prefsRef.current = prefs;
   conflictRef.current = conflict;
   const [confirm, confirmDialog] = useConfirm();
   const setCurrent = (m: Memo | null) => {
     if (m) retainedMemos.current.set(`${m.space}\n${m.path}`, m);
     memoRef.current = m;
     setMemo(m);
+  };
+  const markSaved = (body: string) => { lastSaved.current = { body, at: Date.now() }; };
+  // 새로 연 메모에 이 기기에 남은 저장 전 입력이 있으면 이어서 쓴다.
+  const restoreDraft = (m: Memo) => {
+    const draft = readMemoDraft(m.space, m.path);
+    if (!draft) return;
+    if (draft.revision !== m.revision) {
+      clearMemoDraft(m.space, m.path);
+      if (draft.body !== m.body) report(Error("다른 곳에서 바뀐 메모라 이 기기에 남아 있던 저장 전 입력은 불러오지 않았습니다."));
+      return;
+    }
+    if (draft.body === m.body) return clearMemoDraft(m.space, m.path);
+    setCurrent({ ...m, body: draft.body });
+    dirty.current.seq++;
+    setStatus("저장 대기");
+    schedule();
   };
   // 분할 그룹(집필 창과 같은 공통 규칙). 포커스된 그룹의 현재 탭은 memo가 정한다.
   const area = useSplitGroups<MemoTab>({
@@ -266,6 +289,8 @@ export default function MemoSession({
           throw Error("닫는 동안 메모가 변경되었습니다. 다시 닫아 주세요.");
         if (onlyIfChanged && !conflictRef.current && fresh.revision === m.revision) return false;
         dirty.current = { seq: 0, saved: 0 };
+        markSaved(fresh.body);
+        clearMemoDraft(m.space, m.path);
         conflictRef.current = false;
         setConflict(false);
         setStatus("저장됨");
@@ -277,6 +302,13 @@ export default function MemoSession({
       if (closing && await loadExternalOnClose(true)) return;
       if (dirty.current.seq === dirty.current.saved) return;
       if (auto && conflictRef.current) return;
+      if (auto) {
+        const cond = autoSaveCondition(prefsRef.current, lastSaved.current.body, m.body, lastSaved.current.at);
+        if (!cond.met) {
+          if (cond.chars >= cond.minChars) timer.current = window.setTimeout(() => save(true).catch(report), cond.delay);
+          return;
+        }
+      }
       const seq = dirty.current.seq;
       setStatus("저장 중");
       try {
@@ -293,6 +325,11 @@ export default function MemoSession({
               expectedRevision: m.revision, forceHistory: !auto,
             });
         dirty.current.saved = seq;
+        markSaved(m.body);
+        if (dirty.current.seq === seq) {
+          clearTimeout(draftTimer.current);
+          clearMemoDraft(m.space, m.path);
+        }
         const now = memoRef.current;
         if (now && now.space === m.space && now.path === m.path)
           setCurrent({ ...now, revision: saved.revision, updatedAt: saved.updatedAt });
@@ -349,9 +386,14 @@ export default function MemoSession({
     };
     return () => { manualSaveRef.current = null; };
   }, [flush, manualSaveRef]);
+  // 설정한 최소 글자 수를 채우면 남은 주기 뒤 자동 저장을 확인한다.
   function schedule() {
     clearTimeout(timer.current);
-    timer.current = window.setTimeout(() => save(true).catch(report), 700);
+    const m = memoRef.current;
+    if (!m) return;
+    const cond = autoSaveCondition(prefsRef.current, lastSaved.current.body, m.body, lastSaved.current.at);
+    if (cond.chars < cond.minChars) return;
+    timer.current = window.setTimeout(() => save(true).catch(report), cond.delay);
   }
   function edit(body: string) {
     const m = memoRef.current;
@@ -361,6 +403,11 @@ export default function MemoSession({
     setCurrent({ ...m, body });
     dirty.current.seq++;
     setStatus("저장 대기");
+    clearTimeout(draftTimer.current);
+    draftTimer.current = window.setTimeout(() => {
+      const now = memoRef.current;
+      if (now && dirty.current.seq !== dirty.current.saved) saveMemoDraft(now.space, now.path, now.body, now.revision);
+    }, 300);
     schedule();
   }
 
@@ -416,6 +463,8 @@ export default function MemoSession({
     },
     apply: (fresh) => {
       dirty.current = { seq: 0, saved: 0 };
+      markSaved(fresh.body);
+      clearMemoDraft(fresh.space, fresh.path);
       conflictRef.current = false;
       setConflict(false);
       setStatus("저장됨");
@@ -473,10 +522,12 @@ export default function MemoSession({
     const opening = await readForOpening(spaceId, path), m = opening.doc;
     if (seq !== openSeq.current) return;
     dirty.current = { seq: opening.stale ? 1 : 0, saved: 0 };
+    markSaved(m.body);
     conflictRef.current = opening.stale;
     setConflict(opening.stale);
     setStatus(opening.stale ? "외부 변경 있음" : "저장됨");
     setCurrent(m);
+    if (!opening.stale) restoreDraft(m);
     area.updateTabs((list) => placeMemoTab(list, { space: spaceId, path }, pinned, prev));
     if (spaceId === spaceRef.current) {
       setSelected(path);
@@ -497,6 +548,10 @@ export default function MemoSession({
   function closeCurrent() {
     ++openSeq.current;
     clearTimeout(timer.current);
+    clearTimeout(draftTimer.current);
+    // 저장하지 않고 닫는 경우(삭제 등)는 남은 입력도 버린다.
+    const m = memoRef.current;
+    if (m && dirty.current.seq !== dirty.current.saved) clearMemoDraft(m.space, m.path);
     dirty.current = { seq: 0, saved: 0 };
     conflictRef.current = false;
     setConflict(false);
@@ -531,12 +586,14 @@ export default function MemoSession({
   }
   function selectGroupMemo(next: Memo | null, stale = false) {
     dirty.current = { seq: stale ? 1 : 0, saved: 0 };
+    markSaved(next?.body ?? "");
     conflictRef.current = stale;
     setConflict(stale);
     setStatus(stale ? "외부 변경 있음" : "저장됨");
     setCurrent(next);
     setTitle(next?.title ?? "");
     if (!next) return;
+    if (!stale) restoreDraft(next);
     if (next.space !== spaceRef.current) {
       spaceRef.current = next.space;
       setEntries([]); setSpace(next.space); setExpanded(new Set(ancestors(next.path)));
@@ -1567,6 +1624,7 @@ export default function MemoSession({
               });
               const fresh = await readItem(current.space, current.path);
               dirty.current = { seq: 0, saved: 0 };
+              markSaved(fresh.body);
               conflictRef.current = false;
               setConflict(false);
               setCurrent(fresh);

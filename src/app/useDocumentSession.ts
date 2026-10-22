@@ -3,6 +3,7 @@ import type { EditorScrollPositions } from "../EditorScroll";
 import { call, type Doc } from "../types";
 import { useGitActivity } from "../useGitActivity";
 import { readFileForClose, useSyncFileUpdates } from "../useSyncFileUpdates";
+import { autoSaveCondition as checkAutoSave } from "./auto-save";
 import { cloneDocument, editDocument, relocateDocument, sameDocumentContent, updateDocumentLocation } from "./model";
 
 type FlushOptions = { auto?: boolean; closing?: boolean; skipMemo?: boolean; manual?: boolean };
@@ -35,42 +36,6 @@ type DraftState = {
   lastSavedAt: number;
   edited: boolean;
 };
-
-const isHighSurrogate = (code: number) => code >= 0xd800 && code <= 0xdbff;
-const isLowSurrogate = (code: number) => code >= 0xdc00 && code <= 0xdfff;
-function codePoints(text: string, from: number, to: number) {
-  let count = 0;
-  for (let i = from; i < to; i++) {
-    if (isHighSurrogate(text.charCodeAt(i)) && i + 1 < to && isLowSurrogate(text.charCodeAt(i + 1))) i++;
-    count++;
-  }
-  return count;
-}
-// 앞뒤로 같은 부분을 뺀 가운데 구간의 글자(코드 포인트) 수. 긴 원고에서도 글자 배열을 만들지 않도록
-// 같은 구간은 큰 묶음으로 비교해 건너뛰고, 서로게이트 쌍은 쪼개지 않는다.
-const SKIP = 4096;
-function changedChars(before: string, after: string): number {
-  if (before === after) return 0;
-  const min = Math.min(before.length, after.length);
-  let pre = 0;
-  while (pre + SKIP <= min && before.slice(pre, pre + SKIP) === after.slice(pre, pre + SKIP)) pre += SKIP;
-  while (pre < min && before.charCodeAt(pre) === after.charCodeAt(pre)) pre++;
-  if (pre > 0 && pre < min && isHighSurrogate(before.charCodeAt(pre - 1))) pre--;
-  let endA = before.length, endB = after.length;
-  while (endA - SKIP >= pre && endB - SKIP >= pre && before.slice(endA - SKIP, endA) === after.slice(endB - SKIP, endB)) {
-    endA -= SKIP;
-    endB -= SKIP;
-  }
-  while (endA > pre && endB > pre && before.charCodeAt(endA - 1) === after.charCodeAt(endB - 1)) {
-    endA--;
-    endB--;
-  }
-  if (endA < before.length && endA > pre && isLowSurrogate(before.charCodeAt(endA))) {
-    endA++;
-    endB++;
-  }
-  return Math.max(codePoints(before, pre, endA), codePoints(after, pre, endB));
-}
 
 // 원고와 저장 버전은 이 훅 안에서만 변경한다. 화면 이동은 저장 완료 뒤 commitDocument를 호출한다.
 export function useDocumentSession(options: Options) {
@@ -112,29 +77,12 @@ export function useDocumentSession(options: Options) {
   useEffect(() => () => { if (renderTimer.current) clearTimeout(renderTimer.current); }, []);
   const shownActive = pendingActive.current ?? active;
 
-  const isMobileEnv = () =>
-    typeof window !== "undefined" &&
-    (window.innerWidth <= 768 || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent));
-
-  const autoSaveCondition = useCallback((d: DraftState) => {
-    const mobile = isMobileEnv();
-    const maxMinutes = Math.max(1, Number(latest.current.prefs?.historyMaxMinutes ?? 1));
-    const minChars = mobile ? 1 : Math.max(0, Number(latest.current.prefs?.historyMinChars ?? 200));
-    const intervalMs = mobile ? 2500 : maxMinutes * 60_000;
-    const elapsed = Date.now() - d.lastSavedAt;
-    const chars = changedChars(d.base.body, d.doc.body);
-    const metaChanged =
-      d.base.title !== d.doc.title ||
-      d.base.description !== d.doc.description ||
-      d.base.authorComment !== d.doc.authorComment;
-    return {
-      intervalMs,
-      elapsed,
-      chars,
-      minChars,
-      met: (chars >= minChars || (mobile && metaChanged)) && elapsed >= intervalMs,
-    };
-  }, []);
+  // 자동 저장은 기기와 관계없이 설정한 주기와 최소 변경 글자 수를 모두 채울 때만 한다.
+  // 그 사이 입력은 임시본으로 남는다.
+  const autoSaveCondition = useCallback(
+    (d: DraftState) => checkAutoSave(latest.current.prefs, d.base.body, d.doc.body, d.lastSavedAt),
+    [],
+  );
 
   const persistDraftNow = useCallback((target = draft.current) => {
     if (draftTimer.current) {
@@ -171,10 +119,8 @@ export function useDocumentSession(options: Options) {
     }
     const d = draft.current;
     if (!d || d.seq === d.saved || conflictRef.current) return;
-    const mobile = isMobileEnv();
-    const { intervalMs, elapsed, chars, minChars } = autoSaveCondition(d);
-    if (!mobile && chars < minChars) return;
-    const delay = mobile ? 2500 : Math.max(650, intervalMs - elapsed);
+    const { chars, minChars, delay } = autoSaveCondition(d);
+    if (chars < minChars) return;
     timer.current = setTimeout(() => {
       timer.current = null;
       void flushRef.current({ auto: true }).catch(report);

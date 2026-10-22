@@ -26,7 +26,9 @@ import HistoryDialog from "../HistoryDialog";
 import { useUndoState } from "../useUndoState";
 import SyncStatus from "../SyncStatus";
 import { call, type AutoSyncStatus } from "../types";
+import { autoSaveCondition } from "../app/auto-save";
 import { memoImageScope, useImages } from "../app/useDocumentImages";
+import { clearMemoDraft, readMemoDraft, saveMemoDraft } from "../memo-drafts";
 import Writer from "../Writer";
 import MobileEditorToolbar, { MobileEditorMenuActions } from "./MobileEditorToolbar";
 import {
@@ -126,7 +128,15 @@ export default function MobileMemoView({
 
   const dirty = useRef({ seq: 0, saved: 0 });
   const timer = useRef<number | undefined>(undefined);
+  const draftTimer = useRef<number | undefined>(undefined);
   const chain = useRef<Promise<void>>(Promise.resolve());
+  // 마지막으로 저장하거나 읽은 본문과 그 시각. 자동 저장 조건을 여기서부터 잰다.
+  const lastSaved = useRef({ body: "", at: 0 });
+  const prefsRef = useRef(prefs);
+  prefsRef.current = prefs;
+  const markSaved = (body: string) => {
+    lastSaved.current = { body, at: Date.now() };
+  };
 
   const setCurrentMemo = (m: Memo | null) => {
     memoRef.current = m;
@@ -175,6 +185,13 @@ export default function MobileMemoView({
       const m = memoRef.current;
       if (!m) return;
       if (dirty.current.seq === dirty.current.saved) return;
+      if (auto) {
+        const cond = autoSaveCondition(prefsRef.current, lastSaved.current.body, m.body, lastSaved.current.at);
+        if (!cond.met) {
+          if (cond.chars >= cond.minChars) timer.current = window.setTimeout(() => save(true).catch(report), cond.delay);
+          return;
+        }
+      }
       const seq = dirty.current.seq;
       setStatus("저장 중");
       try {
@@ -186,6 +203,11 @@ export default function MobileMemoView({
           forceHistory: !auto,
         });
         dirty.current.saved = seq;
+        markSaved(m.body);
+        if (dirty.current.seq === seq) {
+          clearTimeout(draftTimer.current);
+          clearMemoDraft(m.space, m.path);
+        }
         if (memoRef.current && memoRef.current.path === m.path && memoRef.current.space === m.space) {
           memoRef.current = {
             ...memoRef.current,
@@ -231,8 +253,10 @@ export default function MobileMemoView({
       }
       const loaded = await call<Memo>("memoRead", { space: targetSpace, path });
       dirty.current = { seq: 0, saved: 0 };
+      markSaved(loaded.body);
       setStatus("저장됨");
       setCurrentMemo(loaded);
+      restoreDraft(loaded);
       if (loaded.historyWarning) report(Error(loaded.historyWarning));
     },
     [flush, loadTree],
@@ -264,6 +288,33 @@ export default function MobileMemoView({
     });
   }, [memo, historyTarget, closeMemoEditor, onDetailStateChange]);
 
+  // 설정한 최소 글자 수를 채우면 남은 주기 뒤 자동 저장을 확인한다.
+  function schedule() {
+    clearTimeout(timer.current);
+    const m = memoRef.current;
+    if (!m) return;
+    const cond = autoSaveCondition(prefsRef.current, lastSaved.current.body, m.body, lastSaved.current.at);
+    if (cond.chars < cond.minChars) return;
+    timer.current = window.setTimeout(() => save(true).catch(report), cond.delay);
+  }
+
+  // 새로 연 메모에 이 기기에 남은 저장 전 입력이 있으면 이어서 쓴다.
+  function restoreDraft(m: Memo) {
+    const draft = readMemoDraft(m.space, m.path);
+    if (!draft) return;
+    if (draft.revision !== m.revision) {
+      clearMemoDraft(m.space, m.path);
+      if (draft.body !== m.body) report(Error("다른 곳에서 바뀐 메모라 이 기기에 남아 있던 저장 전 입력은 불러오지 않았습니다."));
+      return;
+    }
+    if (draft.body === m.body) return clearMemoDraft(m.space, m.path);
+    memoRef.current = { ...m, body: draft.body };
+    setMemo(memoRef.current);
+    dirty.current.seq++;
+    setStatus("저장 대기");
+    schedule();
+  }
+
   const editBody = (body: string) => {
     const m = memoRef.current;
     if (!m || body === m.body) return;
@@ -272,8 +323,12 @@ export default function MobileMemoView({
     setMemo(updated);
     dirty.current.seq++;
     setStatus("저장 대기");
-    clearTimeout(timer.current);
-    timer.current = window.setTimeout(() => save(true).catch(report), 1200);
+    clearTimeout(draftTimer.current);
+    draftTimer.current = window.setTimeout(() => {
+      const now = memoRef.current;
+      if (now && dirty.current.seq !== dirty.current.saved) saveMemoDraft(now.space, now.path, now.body, now.revision);
+    }, 300);
+    schedule();
   };
 
   const replaceMemoSymbols = () => {
@@ -861,6 +916,7 @@ export default function MobileMemoView({
                   });
                   const fresh = await call<Memo>("memoRead", { space: current.space, path: current.path });
                   dirty.current = { seq: 0, saved: 0 };
+                  markSaved(fresh.body);
                   setCurrentMemo(fresh);
                   setStatus("저장됨");
                   setHistoryTarget(null);
