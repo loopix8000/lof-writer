@@ -879,7 +879,7 @@ export default function MobileMemoView({
             className="m-modern-title-btn"
             onClick={() => setSpaceSheetOpen(true)}
           >
-            <span className="m-modern-title">{currentSpaceTitle}</span>
+            <span className="m-modern-title-text" title={currentSpaceTitle}>{currentSpaceTitle}</span>
             <ChevronDown size={18} className="m-modern-title-chevron" />
           </button>
           <div className="m-topbar-actions">
