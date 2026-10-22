@@ -60,7 +60,7 @@ export default function MobileEditorToolbar({
   onAddMemo?: () => void;
 }) {
   const quickActions = [
-    ...(onHistory ? [{ key: "history", label: "기록", icon: History, onClick: onHistory, lockable: false }] : []),
+    ...(onHistory ? [{ key: "history", label: "이력", icon: History, onClick: onHistory, lockable: false }] : []),
     ...(onSave ? [{ key: "save", label: "저장", icon: Save, onClick: onSave, lockable: true }] : []),
     ...(onCopy ? [{ key: "copy", label: "복사", icon: Copy, onClick: onCopy, lockable: false }] : []),
     ...(onAddPlot ? [{ key: "plot", label: "플롯", icon: FileText, onClick: onAddPlot, lockable: false }] : []),

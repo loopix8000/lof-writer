@@ -22,6 +22,7 @@ import { normalizeTextReplacements } from "../../core/typing.mjs";
 import { plainText } from "../../core/text.mjs";
 import { useConfirm } from "../ConfirmDialog";
 import EditorScroll, { type EditorScrollPositions } from "../EditorScroll";
+import HistoryDialog from "../HistoryDialog";
 import SyncStatus from "../SyncStatus";
 import { call, type AutoSyncStatus } from "../types";
 import { memoImageScope, useImages } from "../app/useDocumentImages";
@@ -52,6 +53,7 @@ type Memo = {
   revision: string;
   updatedAt: string;
   manualLineBreak?: boolean;
+  historyWarning?: string;
 };
 
 const COMMON = "common";
@@ -93,6 +95,7 @@ export default function MobileMemoView({
   const [filterQuery, setFilterQuery] = useState<string>("");
   const [memo, setMemo] = useState<Memo | null>(null);
   const [titleInput, setTitleInput] = useState<string>("");
+  const [historyTarget, setHistoryTarget] = useState<(Memo & { id: string }) | null>(null);
   const [status, setStatus] = useState<string>("저장됨");
 
   const [spaceSheetOpen, setSpaceSheetOpen] = useState(false);
@@ -169,6 +172,7 @@ export default function MobileMemoView({
           setMemo(memoRef.current);
         }
         setStatus(dirty.current.seq === dirty.current.saved ? "저장됨" : "저장 대기");
+        if (saved.historyWarning) report(Error(saved.historyWarning));
         if (!auto) void call("requestSyncNow").catch(() => {});
       } catch (e: any) {
         setStatus("저장 안 됨");
@@ -206,6 +210,7 @@ export default function MobileMemoView({
       dirty.current = { seq: 0, saved: 0 };
       setStatus("저장됨");
       setCurrentMemo(loaded);
+      if (loaded.historyWarning) report(Error(loaded.historyWarning));
     },
     [flush, loadTree],
   );
@@ -228,9 +233,13 @@ export default function MobileMemoView({
 
   useEffect(() => {
     onDetailStateChange?.(!!memo, () => {
+      if (historyTarget) {
+        setHistoryTarget(null);
+        return;
+      }
       void closeMemoEditor();
     });
-  }, [memo, closeMemoEditor, onDetailStateChange]);
+  }, [memo, historyTarget, closeMemoEditor, onDetailStateChange]);
 
   const editBody = (body: string) => {
     const m = memoRef.current;
@@ -279,7 +288,7 @@ export default function MobileMemoView({
       path: m.path,
       name: trimmed,
     });
-    const nextMemo = { ...m, path: r.path, title: tabName(r.path) };
+    const nextMemo = await call<Memo>("memoRead", { space: m.space, path: r.path });
     setCurrentMemo(nextMemo);
     await loadTree(m.space);
   };
@@ -287,7 +296,21 @@ export default function MobileMemoView({
   const manualSaveMemo = async () => {
     await commitTitleRename(titleInput);
     await flush();
+    const current = memoRef.current;
+    if (current?.space === COMMON) {
+      await call("checkpointDocument", { id: current.id, space: COMMON, path: current.path, force: true });
+    }
     message("메모를 저장했습니다.", undefined, 1500);
+  };
+
+  const showMemoHistory = async () => {
+    await commitTitleRename(titleInput);
+    await flush();
+    const current = memoRef.current;
+    if (!current) return;
+    const target = await call<Memo>("memoRead", { space: current.space, path: current.path });
+    if (!target.id) throw Error("메모의 변경 이력을 찾을 수 없습니다.");
+    setHistoryTarget({ ...target, id: target.id });
   };
 
   const createNewMemo = async (folder: string, name: string) => {
@@ -341,7 +364,9 @@ export default function MobileMemoView({
       to: targetFolder,
     });
     if (memoRef.current?.path === path) {
-      setCurrentMemo({ ...memoRef.current, path: r.path, title: tabName(r.path) });
+      const previous = memoRef.current;
+      const fresh = await call<Memo>("memoRead", { space: previous.space, path: r.path });
+      setCurrentMemo(fresh);
     }
     await loadTree(space);
     message(targetFolder ? `'${targetFolder}' 폴더로 이동했습니다.` : "최상위 위치로 이동했습니다.");
@@ -633,19 +658,13 @@ export default function MobileMemoView({
           moreOpen={editorMenuOpen}
           onToggleMore={() => setEditorMenuOpen((open) => !open)}
           onReplaceSymbols={replaceMemoSymbols}
+          onHistory={() => void showMemoHistory().catch(report)}
           onSave={() => void manualSaveMemo().catch(report)}
           onCopy={() => {
             void navigator.clipboard
               .writeText(plainText(memo.body))
               .catch(report);
           }}
-          onAddMemo={() =>
-            setPromptTarget({
-              mode: "newMemo",
-              folder: parentOf(memo.path),
-              initialValue: "새 메모",
-            })
-          }
         />
 
         {/* 메모 하단 툴바 우측 더보기(⋮) 플로팅 팝업 메뉴 */}
@@ -670,6 +689,18 @@ export default function MobileMemoView({
               <div className="m-floating-popup-divider" />
 
               <div className="m-floating-popup-section">
+                <button
+                  type="button"
+                  className="m-floating-popup-item"
+                  role="menuitem"
+                  onClick={() => {
+                    setEditorMenuOpen(false);
+                    setPromptTarget({ mode: "newMemo", folder: parentOf(memo.path), initialValue: "새 메모" });
+                  }}
+                >
+                  <FilePlus size={16} />
+                  <span>새 메모</span>
+                </button>
                 <button
                   type="button"
                   className="m-floating-popup-item"
@@ -740,16 +771,52 @@ export default function MobileMemoView({
 
         <MobilePromptSheet
           open={!!promptTarget}
-          title="메모 이름 바꾸기"
+          title={promptTarget?.mode === "newMemo" ? "새 메모" : "메모 이름 바꾸기"}
           initialValue={promptTarget?.initialValue || ""}
-          confirmLabel="변경"
+          confirmLabel={promptTarget?.mode === "newMemo" ? "만들기" : "변경"}
           onConfirm={(val) => {
-            if (promptTarget?.path) {
+            if (promptTarget?.mode === "newMemo") {
+              void createNewMemo(promptTarget.folder || "", val).catch(report);
+            } else if (promptTarget?.path) {
               void renameEntry(promptTarget.path, val).catch(report);
             }
           }}
           onClose={() => setPromptTarget(null)}
         />
+        {historyTarget && (
+          <div className="m-dialog-page" role="dialog" aria-modal="true" aria-label="메모 변경 이력">
+            <header className="m-topbar m-topbar-centered">
+              <button type="button" className="m-back-btn" onClick={() => setHistoryTarget(null)}>
+                <ArrowLeft size={18} /><span>메모</span>
+              </button>
+              <div className="m-topbar-title"><h1>변경 이력</h1></div>
+            </header>
+            <div className="m-dialog-body">
+              <HistoryDialog
+                documentId={historyTarget.id}
+                memoContext={historyTarget.space === COMMON ? { space: COMMON, path: historyTarget.path } : undefined}
+                report={report}
+                onRestore={async (id, name) => {
+                  await flush();
+                  const current = memoRef.current;
+                  if (!current || current.space !== historyTarget.space || current.path !== historyTarget.path)
+                    throw Error("열린 메모가 변경되었습니다. 이력을 다시 열어 주세요.");
+                  const restored = await call<{ historyWarning?: string }>("restore", {
+                    id, name, expectedRevision: historyTarget.revision,
+                    ...(historyTarget.space === COMMON ? { space: COMMON, path: historyTarget.path } : {}),
+                  });
+                  const fresh = await call<Memo>("memoRead", { space: current.space, path: current.path });
+                  dirty.current = { seq: 0, saved: 0 };
+                  setCurrentMemo(fresh);
+                  setStatus("저장됨");
+                  setHistoryTarget(null);
+                  await loadTree(current.space);
+                  message(restored.historyWarning ?? "이전 메모를 복원했습니다.");
+                }}
+              />
+            </div>
+          </div>
+        )}
         {confirmDialog}
       </div>
     );

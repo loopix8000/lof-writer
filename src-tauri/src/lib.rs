@@ -8,6 +8,7 @@ mod android_system_bars;
 mod android_updater;
 mod background_sync;
 pub mod database;
+mod common_memo_history;
 mod document_patch;
 pub mod episode;
 pub mod error;
@@ -495,6 +496,16 @@ fn dispatch_method(
         Ok(st.get_project(project_id)?.dir)
     };
 
+    if args["space"].as_str() == Some(memo::COMMON) && matches!(method,
+        "history" | "historyPage" | "historyRead" | "deleteHistory" | "restore" | "checkpointDocument") {
+        let (_, common_root) = get_store_and_common()?;
+        let guard = state.store.lock().unwrap();
+        let policy = guard.as_ref().ok_or_else(|| fail_invalid("서재가 열려 있지 않습니다."))?.history_policy;
+        let result = common_memo_history::request(&common_root, method, &args, policy)?;
+        drop(guard);
+        if matches!(method, "restore" | "checkpointDocument") { schedule_notify(app, &state.notify_seq); }
+        return Ok(result);
+    }
     match method {
         "realtimeStatus" | "realtimeInvite" | "realtimePair" | "realtimeRemove" | "realtimeSync" |
         "realtimeCancelPair" | "realtimeValidateCode" | "realtimeClipboard" | "realtimeRename" | "realtimeRenameDevice" | "realtimeLeave" |

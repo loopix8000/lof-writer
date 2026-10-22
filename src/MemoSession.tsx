@@ -9,6 +9,7 @@ import {
   FolderOpen,
   FolderPlus,
   HardDrive,
+  History,
   StickyNote,
   BookOpen,
   Trash2,
@@ -30,6 +31,7 @@ import { readFileForClose, useSyncFileUpdates } from "./useSyncFileUpdates";
 import { useGitActivity } from "./useGitActivity";
 import { call, type AutoSyncStatus, type Doc, type Kind } from "./types";
 import SyncStatus from "./SyncStatus";
+import HistoryDialog from "./HistoryDialog";
 import { normalizeEditorStyle, resolveKindPrefs } from "../core/typesetting.mjs";
 import ResizableSidebar from "./ResizableSidebar";
 
@@ -52,6 +54,7 @@ type Memo = {
   revision: string;
   updatedAt: string;
   manualLineBreak?: boolean;
+  historyWarning?: string;
 };
 // 메모 탭. 다른 스페이스의 메모도 탭으로 계속 열어 둘 수 있다.
 // 이전 세션에는 pinned가 없으므로 false인 탭만 미리보기로 취급한다.
@@ -152,6 +155,7 @@ export default function MemoSession({
   onOpenLink: (href: string, quote: string) => void;
 }) {
   const images = useImages(report);
+  const [historyTarget, setHistoryTarget] = useState<(Memo & { id: string }) | null>(null);
   const [spaces, setSpaces] = useState<Space[]>([]),
     [space, setSpace] = useState(COMMON),
     [entries, setEntries] = useState<Entry[]>([]),
@@ -288,6 +292,7 @@ export default function MemoSession({
         if (now && now.space === m.space && now.path === m.path)
           setCurrent({ ...now, revision: saved.revision, updatedAt: saved.updatedAt });
         setStatus(dirty.current.seq === dirty.current.saved ? "저장됨" : "저장 대기");
+        if (saved.historyWarning) report(Error(saved.historyWarning));
         if (!auto) void call("requestSyncNow").catch(() => {});
       } catch (e: any) {
         if (closing && e.code === "CONFLICT") { await loadExternalOnClose(); return; }
@@ -327,7 +332,12 @@ export default function MemoSession({
     manualSaveRef.current = async () => {
       await flush();
       const memo = memoRef.current;
-      if (!memo || memo.space === COMMON) return;
+      if (!memo) return;
+      if (memo.space === COMMON) {
+        const fresh = await readItem(memo.space, memo.path);
+        await call("checkpointDocument", { id: fresh.id, space: COMMON, path: fresh.path, force: true });
+        return;
+      }
       const document = isDocPath(memo.path) ? memo.path.slice(DOC.length)
         : (await readItem(memo.space, memo.path)).id;
       if (document) await call("checkpointDocument", { id: document, force: true });
@@ -692,7 +702,7 @@ export default function MemoSession({
     setRenaming({ path: r.path, value: r.path.slice(r.path.lastIndexOf("/") + 1) });
   }
   // 이름을 바꾸거나 옮긴 뒤 열린 메모·선택·펼침 상태의 경로를 맞춘다.
-  function remap(from: string, to: string) {
+  async function remap(from: string, to: string) {
     const m = memoRef.current;
     const next = m && m.space === spaceRef.current && movedPath(m.path, from, to);
     if (m && next) setCurrent({ ...m, path: next, title: tabName(next) });
@@ -702,6 +712,12 @@ export default function MemoSession({
     });
     setSelected((s) => movedPath(s, from, to) ?? s);
     setExpanded((old) => new Set([...old].map((p) => movedPath(p, from, to) ?? p)));
+    if (m && next && m.space === COMMON) {
+      const fresh = await readItem(m.space, next);
+      const current = memoRef.current;
+      if (current?.space === m.space && current.path === next)
+        setCurrent({ ...current, id: fresh.id, revision: fresh.revision, updatedAt: fresh.updatedAt });
+    }
   }
   const touchesOpen = (path: string) => {
     const m = memoRef.current;
@@ -712,7 +728,7 @@ export default function MemoSession({
     if (!name.trim() || !entry || name.trim() === entry.name) return;
     if (touchesOpen(path)) await flush();
     const r = await call<{ path: string }>("memoRename", { space, path, name: name.trim() });
-    remap(path, r.path);
+    await remap(path, r.path);
     await loadTree();
   }
   async function commitRename() {
@@ -728,7 +744,7 @@ export default function MemoSession({
     if (valid.some(touchesOpen)) await flush();
     for (const path of valid) {
       const r = await call<{ path: string }>("memoMove", { space, path, to });
-      remap(path, r.path);
+      await remap(path, r.path);
     }
     if (to) setExpanded((old) => new Set([...old, to, ...ancestors(to)]));
     await loadTree();
@@ -1064,6 +1080,15 @@ export default function MemoSession({
             {crumbs(memo)}
           </span>
           <div className="save-status-group">
+            {focused && memo.space === COMMON && <button type="button" aria-label="공용 메모 변경 이력" title="변경 이력"
+              onClick={attempt(async () => {
+                await flush();
+                const current = memoRef.current;
+                if (!current) return;
+                const target = await readItem(current.space, current.path);
+                if (!target.id) throw Error("메모의 변경 이력을 찾을 수 없습니다.");
+                setHistoryTarget({ ...target, id: target.id });
+              })}><History size={14} /></button>}
             <span className={`memo-status ${groupStatus === "저장됨" ? "" : "pending"}`}>{groupStatus}</span>
             <SyncStatus status={syncStatus} checking={syncChecking} available={syncAvailable} editing={groupStatus !== "저장됨"} />
           </div>
@@ -1470,6 +1495,35 @@ export default function MemoSession({
   return (
     <div className="memo-session" style={active ? undefined : { display: "none" }}>
       {confirmDialog}
+      {historyTarget && <div className="modal-backdrop" onMouseDown={event => {
+        if (event.target === event.currentTarget) setHistoryTarget(null);
+      }}>
+        <div className="modal wide" role="dialog" aria-modal="true" aria-label="공용 메모 변경 이력">
+          <div className="modal-header">
+            <h2>변경 이력</h2>
+            <button type="button" aria-label="닫기" onClick={() => setHistoryTarget(null)}><X size={18} /></button>
+          </div>
+          <HistoryDialog documentId={historyTarget.id} memoContext={{ space: COMMON, path: historyTarget.path }} report={report}
+            onRestore={async (id, name) => {
+              await flush();
+              const current = memoRef.current;
+              if (!current || current.space !== historyTarget.space || current.path !== historyTarget.path)
+                throw Error("열린 메모가 변경되었습니다. 이력을 다시 열어 주세요.");
+              const restored = await call<{ historyWarning?: string }>("restore", {
+                id, name, space: COMMON, path: historyTarget.path, expectedRevision: historyTarget.revision,
+              });
+              const fresh = await readItem(current.space, current.path);
+              dirty.current = { seq: 0, saved: 0 };
+              conflictRef.current = false;
+              setConflict(false);
+              setCurrent(fresh);
+              setStatus("저장됨");
+              setHistoryTarget(null);
+              if (restored.historyWarning) report(Error(restored.historyWarning));
+              await loadTree();
+            }} />
+        </div>
+      </div>}
       <ResizableSidebar className="memo-sidebar" label="메모" width={prefs.leftSidebarWidth}
         onResize={onSidebarResize} active={active}>
         <div className="panel-caption">

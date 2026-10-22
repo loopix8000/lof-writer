@@ -24,8 +24,9 @@ function metadataValue(change: MetadataChange, value: unknown, exists: boolean):
   return JSON.stringify(value, null, 2);
 }
 
-export default function HistoryDialog({ documentId, onRestore, report }: {
+export default function HistoryDialog({ documentId, memoContext, onRestore, report }: {
   documentId: string;
+  memoContext?: { space: string; path: string };
   onRestore: (id: string, name: string) => Promise<void>;
   report: (error: any) => void;
 }) {
@@ -40,36 +41,37 @@ export default function HistoryDialog({ documentId, onRestore, report }: {
   const [confirm, confirmDialog] = useConfirm();
   const sequence = useRef(0);
   const alive = useRef(true);
-  const currentId = useRef(documentId); currentId.current = documentId;
+  const requestKey = JSON.stringify([documentId, memoContext?.space, memoContext?.path]);
+  const currentId = useRef(requestKey); currentId.current = requestKey;
   useEffect(() => {
     alive.current = true;
     const request = ++sequence.current;
     setEntries([]); setPreview(null); setPage(null); setLoading(true);
-    call<Page>("historyPage", { id: documentId }).then((result) => {
+    call<Page>("historyPage", { id: documentId, ...memoContext }).then((result) => {
       if (alive.current && request === sequence.current) { setPage(result); setEntries(result.entries); }
     }).catch((error) => { if (alive.current && request === sequence.current) report(error); })
       .finally(() => { if (alive.current && request === sequence.current) setLoading(false); });
     return () => { alive.current = false; ++sequence.current; };
-  }, [documentId]);
+  }, [documentId, memoContext?.space, memoContext?.path]);
   async function more() {
     if (loading || page?.nextOffset == null) return;
     setLoading(true);
     try {
-      const result = await call<Page>("historyPage", { id: documentId, offset: page.nextOffset, anchor: page.anchor });
-      if (!alive.current || currentId.current !== documentId) return;
+      const result = await call<Page>("historyPage", { id: documentId, ...memoContext, offset: page.nextOffset, anchor: page.anchor });
+      if (!alive.current || currentId.current !== requestKey) return;
       setPage(result);
       setEntries((existing) => [...existing, ...result.entries.filter((entry) => !existing.some((old) => old.name === entry.name))]);
-    } catch (error) { if (alive.current && currentId.current === documentId) report(error); }
-    finally { if (alive.current && currentId.current === documentId) setLoading(false); }
+    } catch (error) { if (alive.current && currentId.current === requestKey) report(error); }
+    finally { if (alive.current && currentId.current === requestKey) setLoading(false); }
   }
   async function select(entry: Entry) {
     const request = ++sequence.current;
     setReading(true); setPreview(null);
     try {
-      const document = await call("historyRead", { id: documentId, name: entry.name, compare: true });
-      if (alive.current && request === sequence.current) setPreview({ ...document, ...entry });
-    } catch (error) { if (alive.current && request === sequence.current) report(error); }
-    finally { if (alive.current && request === sequence.current) setReading(false); }
+      const document = await call("historyRead", { id: documentId, ...memoContext, name: entry.name, compare: true });
+      if (alive.current && currentId.current === requestKey && request === sequence.current) setPreview({ ...document, ...entry });
+    } catch (error) { if (alive.current && currentId.current === requestKey && request === sequence.current) report(error); }
+    finally { if (alive.current && currentId.current === requestKey && request === sequence.current) setReading(false); }
   }
   // 고른 이력 하나를 지운다. 지운 이력은 목록에서 빠지므로 다음 쪽을 읽을 자리도 하나 당긴다.
   async function remove(entry: Entry) {
@@ -80,16 +82,16 @@ export default function HistoryDialog({ documentId, onRestore, report }: {
       confirmLabel: "삭제",
       danger: true,
     });
-    if (!ok || !alive.current || currentId.current !== documentId) return;
+    if (!ok || !alive.current || currentId.current !== requestKey) return;
     setDeleting(true);
     try {
-      await call("deleteHistory", { id: documentId, name: entry.name });
-      if (!alive.current || currentId.current !== documentId) return;
+      await call("deleteHistory", { id: documentId, ...memoContext, name: entry.name });
+      if (!alive.current || currentId.current !== requestKey) return;
       setEntries((existing) => existing.filter((old) => old.name !== entry.name));
       setPage((current) => current && current.nextOffset != null ? { ...current, nextOffset: Math.max(0, current.nextOffset - 1) } : current);
       setPreview((current: any) => current?.name === entry.name ? null : current);
-    } catch (error) { if (alive.current) report(error); }
-    finally { if (alive.current) setDeleting(false); }
+    } catch (error) { if (alive.current && currentId.current === requestKey) report(error); }
+    finally { if (alive.current && currentId.current === requestKey) setDeleting(false); }
   }
   const comparison = preview?.comparison;
   const busy = restoring || deleting;

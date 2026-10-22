@@ -53,6 +53,43 @@ impl LocalHistory {
             "importedHistory": self.imported, "path": self.path.to_string_lossy()})
     }
 
+    pub(crate) fn common_memos(root: &Path) -> Result<Self, LofError> {
+        let mut history = Self::new(root);
+        history.path = root.join(".lof").join("common-memo-git");
+        let repo = history.repository()?;
+        let owner = repo.path().join("lof-owner.json");
+        let format = json!({"format": 1, "vaultId": "common-memos"});
+        match fs::read(&owner) {
+            Ok(bytes) => {
+                let value: Value = serde_json::from_slice(&bytes)
+                    .map_err(|error| fail(error.to_string(), "LOCAL_GIT"))?;
+                check_format(&value, "common-memos")?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if repo.references()?.next().is_some() {
+                    return Err(fail("앱이 만들지 않은 공용 메모 이력 저장소입니다.", "LOCAL_GIT"));
+                }
+                crate::store::atomic_write_bytes(&owner, &json_bytes(&format)?)?;
+            }
+            Err(error) => return Err(error.into()),
+        }
+        if let Some(head) = tip(&repo, MAIN)? {
+            check_format(&read_json(&repo, &head.tree()?, "format.json")?, "common-memos")?;
+            history.head = head.id().to_string();
+        } else {
+            if repo.references()?.next().is_some() {
+                return Err(fail("공용 메모 이력의 현재 기록을 찾을 수 없습니다.", "LOCAL_GIT"));
+            }
+            let mut files = BTreeMap::new();
+            put(&repo, &mut files, "format.json", &json_bytes(&format)?)?;
+            let tree = repo.find_tree(tree(&repo, &files)?)?;
+            let sig = signature()?;
+            history.head = repo.commit(Some(MAIN), &sig, &sig, "공용 메모 이력 시작", &tree, &[])?.to_string();
+        }
+        history.ready = true;
+        Ok(history)
+    }
+
     pub(crate) fn repository(&self) -> Result<Repository, LofError> {
         // NAS 등 네트워크 공유 폴더는 파일 소유자가 현재 Windows 사용자와 달라
         // 소유자 검사에 걸린다. 앱 전용 저장소는 lof-owner.json으로 서재를 확인하므로 끈다.

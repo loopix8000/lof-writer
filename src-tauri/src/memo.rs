@@ -304,16 +304,23 @@ impl Memos {
             .modified()
             .map(sys_time_to_iso)
             .unwrap_or_else(|_| now_iso());
-        Ok(json!({
+        let mut value = json!({
             "space": space.id,
             "path": rel,
-            "id": parsed.properties.get("id").cloned().unwrap_or_else(|| json!(crate::store::memo_id(&space.id, &format!("doc/{rel}")))),
+            "id": parsed.properties.get("id").and_then(Value::as_str).filter(|id| valid_id(id))
+                .map(|id| json!(id)).unwrap_or_else(|| json!(crate::store::memo_id(&space.id, &format!("doc/{rel}")))),
             "title": strip_md_ext(name_of(rel)),
             "body": parsed.body,
             "manualLineBreak": mlb,
             "revision": hash_str(&raw),
             "updatedAt": updated_at,
-        }))
+        });
+        if space.id == COMMON {
+            if let Err(error) = crate::common_memo_history::record(&space.root, rel, &raw, None) {
+                value["historyWarning"] = json!(format!("공용 메모 이력을 기록하지 못했습니다: {}", error.message));
+            }
+        }
+        Ok(value)
     }
 
     pub fn save(
@@ -366,10 +373,11 @@ impl Memos {
                     "manualHistory": input.get("manualHistory").and_then(|v| v.as_bool()).unwrap_or(false),
                 }))?;
             } else {
+                crate::common_memo_history::record(&space.root, rel, &raw, None)?;
                 let doc = markdown_entry(
                     &raw,
                     &json!({
-                        "id": Uuid::new_v4().to_string(),
+                        "id": memo_id(COMMON, &format!("doc/{rel}")),
                         "kind": "memo",
                         "title": strip_md_ext(name_of(rel)),
                     }),
@@ -382,7 +390,14 @@ impl Memos {
                 )?;
             }
         }
-        Self::read(store, common_root, &space.id, rel)
+        let mut saved = Self::read(store, common_root, &space.id, rel)?;
+        if space.id == COMMON && (input["forceHistory"].as_bool() == Some(true) || input["manualHistory"].as_bool() == Some(true)) {
+            let raw = fs::read_to_string(&file)?;
+            if let Err(error) = crate::common_memo_history::record(&space.root, rel, &raw, Some("manual")) {
+                saved["historyWarning"] = json!(format!("메모는 저장했지만 수동 저장 이력을 기록하지 못했습니다: {}", error.message));
+            }
+        }
+        Ok(saved)
     }
 
     fn unique_in_space(space: &SpaceInfo, folder: &str, name: &str, ext: &str) -> String {
@@ -612,11 +627,12 @@ impl Memos {
         from: &str,
         to: &str,
     ) -> Result<(), LofError> {
-        let before = if space.project_id.is_some() {
-            Self::files_under(space, from)?
-        } else {
-            Vec::new()
-        };
+        let before = Self::files_under(space, from)?;
+        if space.project_id.is_none() {
+            for path in &before {
+                crate::common_memo_history::prepare_move(&space.root, path)?;
+            }
+        }
         let temp = format!("{}.{}.lofmv", from, Uuid::new_v4().simple());
         rename_with_retry(&abs(&space.root, from), &abs(&space.root, &temp))?;
         if let Err(e) = rename_with_retry(&abs(&space.root, &temp), &abs(&space.root, to)) {
