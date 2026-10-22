@@ -169,8 +169,8 @@ function countDelta(update: ViewUpdate, rules?: WritingRules): ManuscriptCounts 
 
 export type SourceEditorHandle = {
   readonly view: EditorView | null;
-  undo: () => void;
-  redo: () => void;
+  undo: (focus?: boolean) => void;
+  redo: (focus?: boolean) => void;
   replace: (from: number, to: number, text: string, caret?: number) => void;
   paste: (text: string) => void;
   insertImage: (image: Image) => void;
@@ -198,13 +198,13 @@ const SourceEditor = forwardRef<SourceEditorHandle, Props>(function SourceEditor
   const lastBody = useRef(props.body);
   const handle = useRef<SourceEditorHandle>({
     get view() { return viewRef.current; },
-    undo() {
+    undo(focus = true) {
       const view = viewRef.current;
-      if (view && !view.state.readOnly && undo(view)) view.focus();
+      if (view && !view.state.readOnly && undo(view) && focus) view.focus();
     },
-    redo() {
+    redo(focus = true) {
       const view = viewRef.current;
-      if (view && !view.state.readOnly && redo(view)) view.focus();
+      if (view && !view.state.readOnly && redo(view) && focus) view.focus();
     },
     highlight(hits, active) {
       viewRef.current?.dispatch({ effects: findMarks.of({ hits, active }) });

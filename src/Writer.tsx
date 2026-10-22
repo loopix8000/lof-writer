@@ -886,11 +886,11 @@ export default function Writer({
       if (source || protectedSource) {
         const view = sourceRef.current?.view;
         if (cmd === "undo") {
-          sourceRef.current?.undo();
+          sourceRef.current?.undo(false);
           return;
         }
         if (cmd === "redo") {
-          sourceRef.current?.redo();
+          sourceRef.current?.redo(false);
           return;
         }
         if (view && cmd === "enter") {
@@ -902,8 +902,8 @@ export default function Writer({
         return;
       }
       if (!editor || editor.isDestroyed) return;
-      if (cmd === "undo") editor.chain().focus().undo().run();
-      else if (cmd === "redo") editor.chain().focus().redo().run();
+      if (cmd === "undo") editor.commands.undo();
+      else if (cmd === "redo") editor.commands.redo();
       else if (cmd === "enter") editor.chain().focus().splitBlock().scrollIntoView().run();
       else if (cmd === "divider") editor.chain().focus().setHorizontalRule().run();
       else if (cmd === "heading") editor.chain().focus().toggleHeading({ level: 2 }).run();

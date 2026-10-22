@@ -83,7 +83,7 @@ export default function MobileEditorToolbar({
               aria-label={label}
               title={label}
               disabled={disabled || !(action === "undo" ? canUndo : canRedo)}
-              onMouseDown={(event) => event.preventDefault()}
+              onPointerDown={(event) => event.preventDefault()}
               onClick={() => editorAction(action)}
             >
               <Icon size={18} strokeWidth={2} />
@@ -100,7 +100,7 @@ export default function MobileEditorToolbar({
                   aria-label={label}
                   title={label}
                   disabled={(lockable && disabled) || (key === "save" && saveDisabled)}
-                  onMouseDown={(event) => event.preventDefault()}
+                  onPointerDown={(event) => event.preventDefault()}
                   onClick={onClick}
                 >
                   <Icon size={18} strokeWidth={2} />
@@ -117,7 +117,7 @@ export default function MobileEditorToolbar({
               aria-label={label}
               title={label}
               disabled={disabled}
-              onMouseDown={(event) => event.preventDefault()}
+              onPointerDown={(event) => event.preventDefault()}
               onClick={() => editorAction(action)}
             >
               <Icon size={18} strokeWidth={2} />
@@ -129,7 +129,7 @@ export default function MobileEditorToolbar({
             aria-label="기호 일괄 대치"
             title="기호 일괄 대치"
             disabled={disabled}
-            onMouseDown={(event) => event.preventDefault()}
+            onPointerDown={(event) => event.preventDefault()}
             onClick={onReplaceSymbols}
           >
             <Sparkles size={17} strokeWidth={2} />
@@ -141,7 +141,7 @@ export default function MobileEditorToolbar({
           className={`m-pill-more-btn ${moreOpen ? "active" : ""}`}
           aria-label="더보기 팝업 메뉴"
           aria-expanded={moreOpen}
-          onMouseDown={(event) => event.preventDefault()}
+          onPointerDown={(event) => event.preventDefault()}
           onClick={onToggleMore}
         >
           <MoreVertical size={19} strokeWidth={2} />
