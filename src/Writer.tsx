@@ -222,6 +222,8 @@ type EditorMenuOps = {
 };
 // 이미지를 눌렀을 때 고르는 크기. 너비(px)로 저장하고 본문 폭보다 넓으면 본문 폭에 맞춘다.
 const IMAGE_SIZES: [string, number | null][] = [["작게", 240], ["보통", 400], ["크게", 640], ["원본", null]];
+// 이미지 위에서 시작한 터치의 위치와 시각. 짧게 누르고 뗐는지 가린다.
+let imageTouch: { x: number; y: number; at: number } | null = null;
 type SaveImage =(file?: { name: string; data: string }) => Promise<{ src: string; alt: string } | null>;
 
 const imageFiles = (data: DataTransfer | null) =>
@@ -557,6 +559,29 @@ export default function Writer({
             const anchor = (event.target as HTMLElement).closest?.("a[href]");
             if (anchor && view.dom.contains(anchor)) event.preventDefault();
             return false;
+          },
+          touchstart: (_view, event) => {
+            const touch = event.touches[0];
+            imageTouch =
+              event.touches.length === 1 && (event.target as HTMLElement).closest?.(".md-image")
+                ? { x: touch.clientX, y: touch.clientY, at: event.timeStamp }
+                : null;
+            return false;
+          },
+          // 터치로 이미지를 짧게 누르면 본문에 포커스를 주지 않고 이미지만 고른다.
+          // 키보드가 뜨지 않고, 키보드 입력이 선택을 바꿔 크기·삭제 도구가 듣지 않는 일도 없다.
+          touchend: (view, event) => {
+            const start = imageTouch, touch = event.changedTouches[0];
+            imageTouch = null;
+            if (!start || !touch || !view.editable || !event.cancelable) return false;
+            if (Math.hypot(touch.clientX - start.x, touch.clientY - start.y) > 10 || event.timeStamp - start.at > 500)
+              return false;
+            const hit = view.posAtCoords({ left: touch.clientX, top: touch.clientY });
+            if (!hit || hit.inside < 0 || view.state.doc.nodeAt(hit.inside)?.type.name !== "image") return false;
+            event.preventDefault();
+            if (view.hasFocus()) (view.dom as HTMLElement).blur();
+            view.dispatch(view.state.tr.setSelection(NodeSelection.create(view.state.doc, hit.inside)));
+            return true;
           },
         },
       },
@@ -1180,7 +1205,7 @@ export default function Writer({
               aria-label="이미지 삭제"
               title="이미지 삭제"
               onMouseDown={(e) => e.preventDefault()}
-              onClick={() => editor.chain().focus().deleteSelection().run()}
+              onClick={() => editor.commands.deleteSelection()}
             >
               <Trash2 size={14} />
               <span>삭제</span>
