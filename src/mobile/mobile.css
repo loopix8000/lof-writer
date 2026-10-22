@@ -1141,6 +1141,9 @@
   font-weight: 500;
   color: var(--muted);
   margin-left: 4px;
+  min-width: 4.4em;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 .m-ep-pill {
@@ -1173,6 +1176,11 @@
 .m-status-dot-badge.completed {
   background: var(--accent-soft);
   color: var(--accent);
+}
+
+/* 선택된 행 배경과 배지 배경이 같아 배지 윤곽이 사라지지 않도록 한다 */
+.m-tree-row.active .m-status-dot-badge {
+  background: var(--surface);
 }
 
 .m-tree-ep-badge {
