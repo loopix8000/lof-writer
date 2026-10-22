@@ -394,12 +394,10 @@ export default function RealtimeSync({
           {status.device && <div className="realtime-device-list realtime-own-device">{ownDevice(status.device.name)}</div>}
           {status.peers.length ? <div className="realtime-device-list">{status.peers.map(peer => device(peer, true))}</div>
             : <div className="realtime-empty"><Cloud size={38} /><strong>아직 그룹에 다른 장치가 없습니다</strong><p>초대 코드를 만들어 다른 장치를 그룹에 추가하거나, 다른 장치의 코드로 그룹에 가입해 보세요.</p></div>}
-          {savePrefs && (
+          {savePrefs && isAndroidApp() && (
             <div className="realtime-bg-sync-box">
               <h4>백그라운드 동기화 설정</h4>
-              <p className="settings-description">{isAndroidApp()
-                ? "앱을 닫은 뒤 30분 동안은 변경 내용을 바로 동기화하고, 이후에는 설정한 주기마다 확인합니다 (5분~1시간, 기본값 5분)."
-                : "앱이 백그라운드에 있을 때 그룹 기기 및 저장소와 변경 내용을 동기화할 주기를 설정합니다 (5분~1시간, 기본값 5분)."}</p>
+              <p className="settings-description">앱을 닫은 뒤 30분 동안은 변경 내용을 바로 동기화하고, 이후에는 설정한 주기마다 확인합니다 (5분~1시간, 기본값 5분).</p>
               <div className="settings-toggles" style={{ marginBottom: 10 }}>
                 <SettingsToggle
                   label="백그라운드 동기화 사용"
@@ -456,7 +454,7 @@ export default function RealtimeSync({
                     }}
                   />
                 </label>
-                {isAndroidApp() && <label>
+                <label>
                   앱을 닫은 뒤 알림
                   <select
                     aria-label="앱을 닫은 뒤 동기화 유지 알림"
@@ -471,9 +469,9 @@ export default function RealtimeSync({
                     <option value="always">계속 표시</option>
                     <option value="off">표시 안 함</option>
                   </select>
-                </label>}
+                </label>
               </div>}
-              {bgEnabled && isAndroidApp() && <p className="settings-note">
+              {bgEnabled && <p className="settings-note">
                 {keepAlive === "live" ? "알림이 떠 있는 30분 동안 연결을 유지합니다. 이후에는 알림을 내리고 주기마다 잠시 깨어나 확인합니다."
                   : keepAlive === "always" ? "알림을 계속 띄워 Android가 앱을 멈추지 않게 합니다. 배터리를 조금 더 사용합니다."
                     : "알림 없이 동작합니다. Android가 앱을 멈추면 30분이 지나기 전에도 동기화가 멈출 수 있습니다."}

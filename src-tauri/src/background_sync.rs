@@ -1,5 +1,6 @@
 //! 앱을 닫은 뒤의 동기화 시점을 정한다.
 //! Android에서는 30분 동안 화면에 있을 때처럼 변경 즉시 동기화하고, 이후에는 설정한 주기마다 한 번씩 확인한다.
+//! PC는 창을 닫아도 계속 화면에 있을 때처럼 동기화한다.
 use crate::AppState;
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -48,13 +49,16 @@ fn elapsed(since: SystemTime) -> Duration {
 }
 
 pub fn phase(app: &AppHandle) -> Phase {
+    // PC는 앱이 멈추지 않으므로 창을 닫아도 화면에 있을 때와 똑같이 동기화한다.
+    if !cfg!(target_os = "android") {
+        return Phase::Foreground;
+    }
     let Some(since) = *app.state::<BackgroundSync>().since.lock().unwrap() else {
         return Phase::Foreground;
     };
     if !crate::auto_sync::background_enabled(&app.state::<AppState>().settings.lock().unwrap()) {
         Phase::Paused
-    } else if !cfg!(target_os = "android") || elapsed(since) < LIVE_WINDOW {
-        // PC는 앱이 멈추지 않으므로 창을 닫아도 계속 바로 동기화한다.
+    } else if elapsed(since) < LIVE_WINDOW {
         Phase::Live
     } else {
         Phase::Periodic
@@ -91,11 +95,8 @@ pub fn set_background(app: &AppHandle, background: bool) {
     }
 }
 
-/// 파일 저장소가 백그라운드 주기를 쓸 때인지. PC는 창을 닫으면 바로 백그라운드 주기를 쓴다.
+/// 파일 저장소가 백그라운드 주기를 쓸 때인지.
 pub fn is_periodic(app: &AppHandle) -> bool {
-    if !cfg!(target_os = "android") {
-        return app.state::<BackgroundSync>().since.lock().unwrap().is_some();
-    }
     matches!(phase(app), Phase::Periodic | Phase::Paused)
 }
 

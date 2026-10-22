@@ -40,6 +40,8 @@ export default function SyncConnections({
   const attempt = (action: () => Promise<unknown>) => () => { void action().catch(report); };
   const reload = async () => { setConnections((await call("settings")).connections); };
   const bgMinutes = Math.max(5, Math.min(60, Math.round(backgroundIntervalSeconds / 60)));
+  // PC는 창을 닫아도 계속 동기화하므로 백그라운드 설정은 Android에서만 보여 준다.
+  const backgroundChange = isAndroid ? onBackgroundSyncChange : undefined;
   const hasCustomBgInterval = backgroundEnabled && !PRESET_BG_SECONDS.includes(backgroundIntervalSeconds);
   return <fieldset className="sync-connections" disabled={busy}>
     <p className="settings-description">로컬 폴더·WebDAV·FTP 저장소와 서재의 Markdown 원본, 작품 정보, 이미지·첨부 파일을 폴더 구조 그대로 동기화합니다. 앱 실행 시와 트레이에서 열 때, 설정한 주기마다 변경을 확인합니다.</p>
@@ -47,7 +49,7 @@ export default function SyncConnections({
       <label className="connection-conflict-policy">자동 동기화 주기<select aria-label="파일 자동 동기화 주기" value={intervalSeconds} onChange={event => onIntervalChange(Number(event.target.value)).catch(report)}>
         <option value={60}>1분</option><option value={180}>3분</option><option value={300}>5분 (기본)</option><option value={600}>10분</option><option value={900}>15분</option><option value={1800}>30분</option><option value={3600}>1시간</option>
       </select></label>
-      {onBackgroundSyncChange && backgroundEnabled && (
+      {backgroundChange && backgroundEnabled && (
         <label className="connection-conflict-policy">
           백그라운드 동기화 주기
           <select
@@ -56,9 +58,9 @@ export default function SyncConnections({
             onChange={event => {
               const val = event.target.value;
               if (val === "off") {
-                onBackgroundSyncChange({ backgroundSyncEnabled: false }).catch(report);
+                backgroundChange({ backgroundSyncEnabled: false }).catch(report);
               } else {
-                onBackgroundSyncChange({
+                backgroundChange({
                   backgroundSyncEnabled: true,
                   backgroundSyncIntervalSeconds: Number(val),
                 }).catch(report);
@@ -77,7 +79,7 @@ export default function SyncConnections({
           </select>
         </label>
       )}
-      {onBackgroundSyncChange && backgroundEnabled && (
+      {backgroundChange && backgroundEnabled && (
         <label className="connection-conflict-policy">
           백그라운드 주기 직접 입력 (5~60분)
           <input
@@ -89,7 +91,7 @@ export default function SyncConnections({
             onChange={event => {
               const mins = Number(event.target.value);
               if (Number.isFinite(mins) && mins >= 5 && mins <= 60) {
-                onBackgroundSyncChange({
+                backgroundChange({
                   backgroundSyncEnabled: true,
                   backgroundSyncIntervalSeconds: Math.round(mins) * 60,
                 }).catch(report);
@@ -99,15 +101,13 @@ export default function SyncConnections({
         </label>
       )}
     </div>
-    {onBackgroundSyncChange && (
+    {backgroundChange && (
       <div className="settings-toggles" style={{ marginTop: 10, marginBottom: 10 }}>
         <SettingsToggle
           label="백그라운드 동기화 사용"
-          description={isAndroid
-            ? "앱을 닫은 뒤 30분 동안은 화면에 있을 때와 같은 주기로, 이후에는 설정한 주기(5분~1시간, 기본값 5분)마다 동기화합니다. 끄면 백그라운드에서 주기적 동기화를 수행하지 않습니다."
-            : "앱이 백그라운드 상태일 때도 설정한 주기(5분~1시간, 기본값 5분)마다 동기화합니다. 끄면 백그라운드에서 주기적 동기화를 수행하지 않습니다."}
+          description="앱을 닫은 뒤 30분 동안은 화면에 있을 때와 같은 주기로, 이후에는 설정한 주기(5분~1시간, 기본값 5분)마다 동기화합니다. 끄면 백그라운드에서 주기적 동기화를 수행하지 않습니다."
           checked={backgroundEnabled}
-          onChange={checked => onBackgroundSyncChange({ backgroundSyncEnabled: checked }).catch(report)}
+          onChange={checked => backgroundChange({ backgroundSyncEnabled: checked }).catch(report)}
         />
       </div>
     )}
