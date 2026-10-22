@@ -1256,9 +1256,9 @@ export default function Writer({
           }}
           getReferencedVirtualElement={() => {
             const dom = editor.view.nodeDOM(editor.state.selection.from);
-            return dom instanceof HTMLElement ? { getBoundingClientRect: () => dom.getBoundingClientRect() } : null;
+            return dom instanceof HTMLElement ? { contextElement: dom, getBoundingClientRect: () => dom.getBoundingClientRect() } : null;
           }}
-          options={{ placement: "top", offset: 8, flip: true, shift: { padding: 8 } }}
+          options={{ strategy: "absolute", placement: "top", offset: 8, flip: false, shift: { padding: 8, mainAxis: true, crossAxis: false } }}
         >
           <div className="table-tools-group">
             {IMAGE_SIZES.map(([label, width]) => (

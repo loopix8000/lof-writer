@@ -1589,6 +1589,9 @@ body.sidebar-resizing * {
   display: flex;
   flex-direction: column;
 }
+.editor-content {
+  position: relative;
+}
 .document-kind {
   font-size: 13px;
   color: var(--muted);
