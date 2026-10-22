@@ -6,6 +6,7 @@ mod android_scanner;
 mod android_storage;
 mod android_system_bars;
 mod android_updater;
+mod background_sync;
 pub mod database;
 mod document_patch;
 pub mod episode;
@@ -507,8 +508,14 @@ fn dispatch_method(
                 .get("foreground")
                 .and_then(Value::as_bool)
                 .unwrap_or(true);
+            // 실시간 유지 시간을 먼저 정해야 이어지는 동기화가 단계를 바로 읽는다.
+            background_sync::set_background(app, !foreground);
             realtime::set_background(app, !foreground);
             auto_sync::set_background(app, !foreground);
+            Ok(json!(true))
+        }
+        "backgroundNotifications" => {
+            background_sync::request_notifications(app);
             Ok(json!(true))
         }
         "gitEditing" => git_worker::activity(app, &args),
@@ -1598,8 +1605,13 @@ fn dispatch_method(
                 }
             }
             if let Some(value) = args.get("backgroundSyncIntervalSeconds") {
-                if !value.as_u64().is_some_and(|seconds| (60..=3600).contains(&seconds)) {
-                    return Err(fail_invalid("백그라운드 동기화 주기는 1분부터 1시간 사이로 지정해 주세요."));
+                if !value.as_u64().is_some_and(|seconds| (300..=3600).contains(&seconds)) {
+                    return Err(fail_invalid("백그라운드 동기화 주기는 5분부터 1시간 사이로 지정해 주세요."));
+                }
+            }
+            if let Some(value) = args.get("backgroundKeepAlive") {
+                if !matches!(value.as_str(), Some("live" | "always" | "off")) {
+                    return Err(fail_invalid("앱을 닫은 뒤 알림 설정이 올바르지 않습니다."));
                 }
             }
             let new_prefs = {
@@ -2257,7 +2269,8 @@ pub fn run() {
         .plugin(android_updater::init())
         .plugin(android_storage::init())
         .plugin(android_scanner::init())
-        .plugin(android_system_bars::init());
+        .plugin(android_system_bars::init())
+        .plugin(background_sync::init());
     #[cfg(not(target_os = "android"))]
     let builder = builder
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -2268,6 +2281,7 @@ pub fn run() {
         .manage(pin_state)
         .manage(auto_sync::AutoSyncState::default())
         .manage(realtime::Realtime::default())
+        .manage(background_sync::BackgroundSync::default())
         .manage(git_worker::GitWorker::default())
         .invoke_handler(tauri::generate_handler![
             lof_invoke,

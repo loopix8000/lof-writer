@@ -5,7 +5,7 @@ import SettingsToggle from "./app/SettingsToggle";
 import { isAndroidApp } from "./tauri-bridge";
 import { call } from "./types";
 
-const PRESET_BG_SECONDS = [60, 180, 300, 600, 900, 1800, 3600];
+const PRESET_BG_SECONDS = [300, 600, 900, 1800, 3600];
 
 type Peer = { id: string; name: string; endpoint: string; storage: boolean; status?: { phase: string; message?: string; conflicts?: number; lastSync?: string } };
 type InviteInfo = { id: string; remainingMs: number; durationMs: number; phase: "waiting" | "expired" | "connected"; peer?: Peer };
@@ -324,7 +324,8 @@ export default function RealtimeSync({
   const currentTab = tabs.find(item => item.id === tab);
   const bgEnabled = prefs?.backgroundSyncEnabled !== false;
   const bgIntervalSeconds = prefs?.backgroundSyncIntervalSeconds ?? 300;
-  const bgMinutes = Math.max(1, Math.min(60, Math.round(bgIntervalSeconds / 60)));
+  const bgMinutes = Math.max(5, Math.min(60, Math.round(bgIntervalSeconds / 60)));
+  const keepAlive = prefs?.backgroundKeepAlive === "always" || prefs?.backgroundKeepAlive === "off" ? prefs.backgroundKeepAlive : "live";
   const hasCustomBgInterval = bgEnabled && !PRESET_BG_SECONDS.includes(bgIntervalSeconds);
   const handlePrefPatch = (patch: Record<string, any>) => {
     if (!savePrefs) return;
@@ -383,7 +384,9 @@ export default function RealtimeSync({
           {savePrefs && (
             <div className="realtime-bg-sync-box">
               <h4>백그라운드 동기화 설정</h4>
-              <p className="settings-description">앱이 백그라운드에 있을 때 그룹 기기 및 저장소와 변경 내용을 동기화할 주기를 설정합니다 (1분~1시간, 기본값 5분).</p>
+              <p className="settings-description">{isAndroidApp()
+                ? "앱을 닫은 뒤 30분 동안은 변경 내용을 바로 동기화하고, 이후에는 설정한 주기마다 확인합니다 (5분~1시간, 기본값 5분)."
+                : "앱이 백그라운드에 있을 때 그룹 기기 및 저장소와 변경 내용을 동기화할 주기를 설정합니다 (5분~1시간, 기본값 5분)."}</p>
               <div className="settings-toggles" style={{ marginBottom: 10 }}>
                 <SettingsToggle
                   label="백그라운드 동기화 사용"
@@ -411,8 +414,6 @@ export default function RealtimeSync({
                     }}
                   >
                     <option value="off">끄기 (사용 안 함)</option>
-                    <option value="60">1분</option>
-                    <option value="180">3분</option>
                     <option value="300">5분 (기본)</option>
                     <option value="600">10분</option>
                     <option value="900">15분</option>
@@ -424,16 +425,16 @@ export default function RealtimeSync({
                   </select>
                 </label>
                 <label>
-                  주기 직접 설정 (1~60분)
+                  주기 직접 설정 (5~60분)
                   <input
                     type="number"
                     aria-label="백그라운드 동기화 주기 직접 설정 (분)"
-                    min={1}
+                    min={5}
                     max={60}
                     value={bgMinutes}
                     onChange={event => {
                       const mins = Number(event.target.value);
-                      if (Number.isFinite(mins) && mins >= 1 && mins <= 60) {
+                      if (Number.isFinite(mins) && mins >= 5 && mins <= 60) {
                         handlePrefPatch({
                           backgroundSyncEnabled: true,
                           backgroundSyncIntervalSeconds: Math.round(mins) * 60,
@@ -442,7 +443,29 @@ export default function RealtimeSync({
                     }}
                   />
                 </label>
+                {isAndroidApp() && <label>
+                  앱을 닫은 뒤 알림
+                  <select
+                    aria-label="앱을 닫은 뒤 동기화 유지 알림"
+                    value={keepAlive}
+                    onChange={event => {
+                      const value = event.target.value;
+                      handlePrefPatch({ backgroundKeepAlive: value });
+                      if (value !== "off") void call("backgroundNotifications").catch(() => {});
+                    }}
+                  >
+                    <option value="live">30분 동안 표시 (기본)</option>
+                    <option value="always">계속 표시</option>
+                    <option value="off">표시 안 함</option>
+                  </select>
+                </label>}
               </div>}
+              {bgEnabled && isAndroidApp() && <p className="settings-note">
+                {keepAlive === "live" ? "알림이 떠 있는 30분 동안 연결을 유지합니다. 이후에는 알림을 내리고 주기마다 잠시 깨어나 확인합니다."
+                  : keepAlive === "always" ? "알림을 계속 띄워 Android가 앱을 멈추지 않게 합니다. 배터리를 조금 더 사용합니다."
+                    : "알림 없이 동작합니다. Android가 앱을 멈추면 30분이 지나기 전에도 동기화가 멈출 수 있습니다."}
+                {" "}기기가 대기 상태일 때는 Android가 확인 시각을 조금 늦출 수 있습니다.
+              </p>}
             </div>
           )}
         </>}

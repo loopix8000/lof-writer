@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
 const DEFAULT_INTERVAL: Duration = Duration::from_secs(300);
+const MIN_BACKGROUND_INTERVAL: u64 = 300;
 const LOCAL_CHECK_INTERVAL: Duration = Duration::from_secs(5);
 const RETRY_DELAY: Duration = Duration::from_secs(30);
 
@@ -225,7 +226,13 @@ pub fn background_interval_seconds(settings: &Value) -> u64 {
         .and_then(|prefs| prefs.get("backgroundSyncIntervalSeconds"))
         .and_then(Value::as_u64)
         .filter(|seconds| (60..=3600).contains(seconds))
+        // 이전에 고른 1·3분 주기는 최소 주기인 5분으로 올린다.
+        .map(|seconds| seconds.max(MIN_BACKGROUND_INTERVAL))
         .unwrap_or(DEFAULT_INTERVAL.as_secs())
+}
+
+pub fn has_connections(app: &AppHandle) -> bool {
+    !destinations(app).1.is_empty()
 }
 
 pub fn configure(app: &AppHandle) {
@@ -261,11 +268,12 @@ pub fn request_connection(app: &AppHandle, id: &str) {
 }
 
 // 트레이에서 복귀해도 변경 없는 서버에는 새 동기화 요청을 보내지 않는다.
-pub fn resume(app: &AppHandle) {
+pub fn resume(app: &AppHandle) -> bool {
     let (_, connections) = destinations(app);
     for connection in connections.iter() {
         request_connection(app, &connection.id);
     }
+    !connections.is_empty()
 }
 
 pub fn set_background(app: &AppHandle, background: bool) {
@@ -304,6 +312,7 @@ pub fn stop(app: &AppHandle) {
     let auto = app.state::<AutoSyncState>();
     auto.stopped.store(true, Ordering::SeqCst);
     auto.wake.notify_all();
+    crate::realtime::configure(app);
 }
 
 fn has_received_changes(result: &Value) -> bool {
@@ -472,7 +481,8 @@ fn worker(app: AppHandle) {
         {
             let mut queue = auto.queue.lock().unwrap();
             while !auto.stopped.load(Ordering::SeqCst) {
-                let bg = auto.backgrounded.load(Ordering::SeqCst);
+                // 앱을 닫은 뒤 30분 동안은 화면에 있을 때와 같은 주기로 확인한다.
+                let bg = crate::background_sync::is_periodic(&app);
                 let target_interval = if bg { queue.bg_interval } else { queue.interval };
                 if target_interval != interval {
                     interval = target_interval;
@@ -564,6 +574,9 @@ fn worker(app: AppHandle) {
             files_due,
             &mut retries,
         );
+        if crate::background_sync::is_periodic(&app) {
+            crate::background_sync::files_done(&app);
+        }
     }
 }
 

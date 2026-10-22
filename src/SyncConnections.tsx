@@ -4,6 +4,7 @@ import SettingsToggle from "./app/SettingsToggle";
 import { call, type AutoSyncStatus, type SyncConnection } from "./types";
 const labels = { idle: "동기화 완료", pending: "동기화 대기", syncing: "동기화 중", error: "동기화 재시도 대기" };
 const PRESET_SECONDS = [60, 180, 300, 600, 900, 1800, 3600];
+const PRESET_BG_SECONDS = [300, 600, 900, 1800, 3600];
 export default function SyncConnections({
   connections,
   setConnections,
@@ -38,8 +39,8 @@ export default function SyncConnections({
   const status = autoSync.channels?.files ?? { phase: "idle", message: "" };
   const attempt = (action: () => Promise<unknown>) => () => { void action().catch(report); };
   const reload = async () => { setConnections((await call("settings")).connections); };
-  const bgMinutes = Math.max(1, Math.min(60, Math.round(backgroundIntervalSeconds / 60)));
-  const hasCustomBgInterval = backgroundEnabled && !PRESET_SECONDS.includes(backgroundIntervalSeconds);
+  const bgMinutes = Math.max(5, Math.min(60, Math.round(backgroundIntervalSeconds / 60)));
+  const hasCustomBgInterval = backgroundEnabled && !PRESET_BG_SECONDS.includes(backgroundIntervalSeconds);
   return <fieldset className="sync-connections" disabled={busy}>
     <p className="settings-description">로컬 폴더·WebDAV·FTP 저장소와 서재의 Markdown 원본, 작품 정보, 이미지·첨부 파일을 폴더 구조 그대로 동기화합니다. 앱 실행 시와 트레이에서 열 때, 설정한 주기마다 변경을 확인합니다.</p>
     <div className="settings-grid">
@@ -65,8 +66,6 @@ export default function SyncConnections({
             }}
           >
             <option value="off">끄기 (사용 안 함)</option>
-            <option value="60">1분</option>
-            <option value="180">3분</option>
             <option value="300">5분 (기본)</option>
             <option value="600">10분</option>
             <option value="900">15분</option>
@@ -80,16 +79,16 @@ export default function SyncConnections({
       )}
       {onBackgroundSyncChange && backgroundEnabled && (
         <label className="connection-conflict-policy">
-          백그라운드 주기 직접 입력 (1~60분)
+          백그라운드 주기 직접 입력 (5~60분)
           <input
             type="number"
             aria-label="백그라운드 동기화 주기 (분)"
-            min={1}
+            min={5}
             max={60}
             value={bgMinutes}
             onChange={event => {
               const mins = Number(event.target.value);
-              if (Number.isFinite(mins) && mins >= 1 && mins <= 60) {
+              if (Number.isFinite(mins) && mins >= 5 && mins <= 60) {
                 onBackgroundSyncChange({
                   backgroundSyncEnabled: true,
                   backgroundSyncIntervalSeconds: Math.round(mins) * 60,
@@ -104,7 +103,9 @@ export default function SyncConnections({
       <div className="settings-toggles" style={{ marginTop: 10, marginBottom: 10 }}>
         <SettingsToggle
           label="백그라운드 동기화 사용"
-          description="앱이 백그라운드 상태일 때도 설정한 주기(1분~1시간, 기본값 5분)마다 동기화합니다. 끄면 백그라운드에서 주기적 동기화를 수행하지 않습니다."
+          description={isAndroid
+            ? "앱을 닫은 뒤 30분 동안은 화면에 있을 때와 같은 주기로, 이후에는 설정한 주기(5분~1시간, 기본값 5분)마다 동기화합니다. 끄면 백그라운드에서 주기적 동기화를 수행하지 않습니다."
+            : "앱이 백그라운드 상태일 때도 설정한 주기(5분~1시간, 기본값 5분)마다 동기화합니다. 끄면 백그라운드에서 주기적 동기화를 수행하지 않습니다."}
           checked={backgroundEnabled}
           onChange={checked => onBackgroundSyncChange({ backgroundSyncEnabled: checked }).catch(report)}
         />

@@ -23,6 +23,17 @@ class MainActivity : TauriActivity() {
     }
   }
 
+  override fun onStart() {
+    super.onStart()
+    BackgroundSync.appVisible(this)
+  }
+
+  override fun onStop() {
+    super.onStop()
+    // 백그라운드로 내려가는 즉시 시작해야 Android가 알림 서비스를 허용한다.
+    if (!isChangingConfigurations) BackgroundSync.appHidden(this)
+  }
+
   override fun onWebViewCreate(webView: WebView) {
     super.onWebViewCreate(webView)
     val callback = object : OnBackPressedCallback(true) {

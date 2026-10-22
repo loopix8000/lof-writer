@@ -9,6 +9,7 @@ const methods = [
   "countManuscript",
   "autoSyncStatus",
   "appLifecycle",
+  "backgroundNotifications",
   "gitEditing",
   "backupStorage",
   "backupGitHistory",

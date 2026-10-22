@@ -3,6 +3,7 @@
 //! 페어링 코드로 그룹에 한 번 가입하면 서명된 구성원 목록을 gossip과 연결 확인 요청으로 받아
 //! 다른 구성원을 자동으로 찾는다. 파일 비교는 구성원마다 기존 1:1 비교 엔진을 그대로 사용한다.
 use crate::{
+    background_sync::Phase,
     error::{fail, fail_invalid, LofError},
     sync::{
         file_remote::{self, FileRemote, Info, ID_FILE},
@@ -39,6 +40,8 @@ pub struct Realtime {
     announcer: Mutex<Option<Announcer>>,
     live: Mutex<HashMap<String, Connection>>,
     dirty: AtomicU64,
+    requested: AtomicU64,
+    subscription_lost: AtomicBool,
     statuses: Mutex<HashMap<String, Value>>,
     invite: Mutex<Option<Invitation>>,
     pairing: Mutex<Option<PairingJob>>,
@@ -501,6 +504,10 @@ fn gossip_event(app: &AppHandle, event: Event) {
         Event::Announcement(Announcement::Changed { endpoint }) | Event::Neighbor(endpoint) => {
             let rt = app.state::<Realtime>();
             rt.reconnect.lock().unwrap().insert(endpoint);
+            remote_changed(app);
+        }
+        Event::SubscriptionClosed => {
+            app.state::<Realtime>().subscription_lost.store(true, Ordering::SeqCst);
             wake(app);
         }
     }
@@ -514,19 +521,25 @@ fn authorized(app: &AppHandle, peer: &str, remote_vault: &str) -> Result<Value, 
         .ok_or_else(|| fail("장치가 이 서재의 동기화 그룹에 없습니다.", "PEER_REVOKED"))
 }
 pub fn changed(app: &AppHandle) {
-    app.state::<Realtime>().dirty.fetch_add(1, Ordering::SeqCst);
+    let rt = app.state::<Realtime>();
+    rt.dirty.fetch_add(1, Ordering::SeqCst);
+    signal(&rt);
 }
 pub fn configure(app: &AppHandle) {
-    app.state::<Realtime>().wake.notify_all();
+    signal(&app.state::<Realtime>());
+}
+fn signal(rt: &Realtime) {
+    *rt.urgent.lock().unwrap() = true;
+    rt.wake.notify_all();
 }
 fn wake(app: &AppHandle) {
     let rt = app.state::<Realtime>();
-    *rt.urgent.lock().unwrap() = true;
+    signal(&rt);
     crate::auto_sync::refresh_realtime(app);
-    rt.wake.notify_all();
 }
 fn remote_changed(app: &AppHandle) {
-    changed(app);
+    // 상대의 알림은 재전파하지 않고, 실제로 받아 저장한 변경만 다른 장치에 알린다.
+    app.state::<Realtime>().requested.fetch_add(1, Ordering::SeqCst);
     wake(app);
 }
 pub fn set_background(app: &AppHandle, background: bool) {
@@ -910,6 +923,13 @@ fn sync(
         &mut remote,
     );
     let ended = remote.rpc(json!({"op":"end","success":result.is_ok()}), vec![]);
+    if result.as_ref().is_ok_and(|result| {
+        ["downloaded", "removed", "fileConflicts"].iter()
+            .any(|key| result[*key].as_u64().unwrap_or(0) > 0)
+    }) {
+        // 알림만 받은 경우와 구분해, 이 장치에 반영된 변경은 다른 구성원에게도 전한다.
+        changed(app);
+    }
     crate::schedule_notify(app, &state.notify_seq);
     result.and_then(|r| ended.map(|_| r))
 }
@@ -988,10 +1008,11 @@ pub fn start(app: &AppHandle) {
             *app.state::<Realtime>().runtime.lock().unwrap() =
                 Some((runtime.handle().clone(), node.clone()));
             let own = node.endpoint.id().to_string();
-            let mut connected: HashMap<String, (Connection, u64)> = HashMap::new();
+            let mut connected: HashMap<String, (Connection, (u64, u64))> = HashMap::new();
             let mut retry: HashMap<String, (Instant, u64)> = HashMap::new();
             let mut previous_root = PathBuf::new();
             let mut subscription: Option<Subscription> = None;
+            let mut subscription_retry: Option<Instant> = None;
             let mut introduced: Vec<String> = Vec::new();
             let mut announced = u64::MAX;
             while !crate::auto_sync::stopped(&app) {
@@ -1007,6 +1028,7 @@ pub fn start(app: &AppHandle) {
                     }
                     connected.clear();
                     retry.clear();
+                    subscription_retry = None;
                     previous_root = current.clone();
                     // 다른 서재에 있을 때 바꾼 장치 이름은 연결 확인 요청으로 전한다.
                     let _ = sync_own_name(&app, false);
@@ -1016,11 +1038,13 @@ pub fn start(app: &AppHandle) {
                 match &group {
                     None => {
                         subscription = None;
+                        subscription_retry = None;
                         introduced.clear();
                         *rt.announcer.lock().unwrap() = None;
                     }
                     Some(group) => {
-                        if subscription
+                        let lost = rt.subscription_lost.swap(false, Ordering::SeqCst);
+                        if lost || subscription
                             .as_ref()
                             .is_none_or(|s| s.group != group.id() || s.finished())
                         {
@@ -1032,6 +1056,7 @@ pub fn start(app: &AppHandle) {
                                 }))
                                 .map_err(|error| eprintln!("그룹 알림 참여 실패: {error}"))
                                 .ok();
+                            subscription_retry = subscription.is_none().then(|| Instant::now() + Duration::from_secs(30));
                             *rt.announcer.lock().unwrap() =
                                 subscription.as_ref().map(Subscription::sender);
                             introduced = group.others(&own).map(|m| m.endpoint.clone()).collect();
@@ -1048,6 +1073,13 @@ pub fn start(app: &AppHandle) {
                     }
                 }
                 let wanted = peers(&app);
+                let phase = crate::background_sync::phase(&app);
+                crate::background_sync::refresh(&app, !wanted.is_empty());
+                if phase == Phase::Periodic {
+                    // 주기 확인에서는 재시도 대기와 관계없이 모든 구성원을 확인한다.
+                    retry.clear();
+                }
+                retry.retain(|id, _| wanted.iter().any(|peer| peer["id"].as_str() == Some(id.as_str())));
                 connected.retain(|id, (conn, _)| {
                     let keep = wanted.iter().any(|p| p["id"].as_str() == Some(id));
                     if !keep {
@@ -1062,6 +1094,8 @@ pub fn start(app: &AppHandle) {
                     retry.retain(|id, _| id.split(':').next() != Some(endpoint.as_str()));
                 }
                 let generation = rt.dirty.load(Ordering::SeqCst);
+                let requested = rt.requested.load(Ordering::SeqCst);
+                let revision = (generation, requested);
                 for peer in wanted {
                     let id = peer["id"].as_str().unwrap_or("").to_string();
                     if connected
@@ -1113,11 +1147,17 @@ pub fn start(app: &AppHandle) {
                                     "PEER_REVOKED",
                                 ));
                             }
-                            connected.insert(id.clone(), (conn, u64::MAX));
+                            let closed = conn.clone();
+                            let events = app.clone();
+                            runtime.spawn(async move {
+                                closed.closed().await;
+                                wake(&events);
+                            });
+                            connected.insert(id.clone(), (conn, (u64::MAX, u64::MAX)));
                             initial = true;
                         }
                         let (conn, seen) = connected.get_mut(&id).unwrap();
-                        if !initial && *seen == generation {
+                        if !initial && *seen == revision {
                             return Ok(());
                         }
                         {
@@ -1142,7 +1182,7 @@ pub fn start(app: &AppHandle) {
                             drop(statuses);
                             crate::auto_sync::refresh_realtime(&app);
                         }
-                        *seen = generation;
+                        *seen = revision;
                         Ok(())
                     })();
                     match result {
@@ -1185,41 +1225,57 @@ pub fn start(app: &AppHandle) {
                     announce(&app, Announcement::Changed { endpoint: own.clone() });
                     announced = generation;
                 }
-                // 변경이 없으면 파일 목록이나 본문을 읽지 않고 대기한다.
+                if phase == Phase::Periodic {
+                    // 확인을 마치면 연결을 닫아 다음 주기까지 배터리를 아낀다.
+                    for (conn, _) in connected.values() {
+                        conn.close(0u8.into(), b"background");
+                    }
+                    connected.clear();
+                    rt.live.lock().unwrap().clear();
+                    crate::background_sync::realtime_done(&app);
+                }
+                // 화면에 있을 때와 앱을 닫은 뒤 30분 동안은 저장·수신·접속 알림을 기다린다.
+                // 이후에는 알림을 미루고 주기 확인 시각에만 깨어난다.
                 loop {
-                    let bg = rt.backgrounded.load(Ordering::SeqCst);
-                    let (bg_enabled, bg_seconds) = {
-                        let state = app.state::<AppState>();
-                        let settings = state.settings.lock().unwrap();
-                        (
-                            crate::auto_sync::background_enabled(&settings),
-                            crate::auto_sync::background_interval_seconds(&settings),
-                        )
-                    };
-                    let wait_dur = if bg {
-                        Duration::from_secs(bg_seconds)
-                    } else {
-                        Duration::from_secs(5)
-                    };
-                    let urgent = rt.urgent.lock().unwrap();
-                    let (mut urgent, _) = rt
-                        .wake
-                        .wait_timeout_while(urgent, wait_dur, |urgent| {
-                            if crate::auto_sync::stopped(&app) {
-                                return false;
-                            }
-                            if rt.backgrounded.load(Ordering::SeqCst) && !bg_enabled {
-                                return true;
-                            }
-                            !*urgent
-                        })
-                        .unwrap();
-                    *urgent = false;
-                    if crate::auto_sync::stopped(&app)
-                        || !rt.backgrounded.load(Ordering::SeqCst)
-                        || crate::auto_sync::background_enabled(&app.state::<AppState>().settings.lock().unwrap())
-                    {
+                    let phase = crate::background_sync::phase(&app);
+                    let mut urgent = rt.urgent.lock().unwrap();
+                    if crate::auto_sync::stopped(&app) {
                         break;
+                    }
+                    let deadline = match phase {
+                        Phase::Foreground | Phase::Live => {
+                            if *urgent {
+                                *urgent = false;
+                                break;
+                            }
+                            let live = (phase == Phase::Live)
+                                .then(|| crate::background_sync::live_deadline(&app))
+                                .flatten();
+                            retry.values().map(|(when, _)| *when).chain(subscription_retry).chain(live).min()
+                        }
+                        Phase::Periodic => {
+                            *urgent = false;
+                            if crate::background_sync::take_tick(&app) {
+                                break;
+                            }
+                            // 실시간 유지가 막 끝났으면 바로 첫 확인을 한다.
+                            let Some(next) = crate::background_sync::next_tick(&app) else { break };
+                            Some(next)
+                        }
+                        Phase::Paused => {
+                            *urgent = false;
+                            None
+                        }
+                    };
+                    // 설정 변경이나 앱 복귀 알림을 놓치지 않도록 깨어날 때마다 상태를 다시 읽는다.
+                    if let Some(deadline) = deadline {
+                        let remaining = deadline.saturating_duration_since(Instant::now());
+                        if remaining.is_zero() {
+                            break;
+                        }
+                        drop(rt.wake.wait_timeout(urgent, remaining).unwrap());
+                    } else {
+                        drop(rt.wake.wait(urgent).unwrap());
                     }
                 }
             }
