@@ -230,12 +230,15 @@ export default function MobileEditorView({
     active.kind === "episode" ? "episode" : "document",
   );
 
-  // 스와이프 제스처 추적 (왼쪽 슬라이드 -> 파일트리, 오른쪽 슬라이드 -> 위젯 영역)
+  const screenRef = useRef<HTMLDivElement>(null);
+  const suppressPointerUntil = useRef(0);
+  // 가로 스와이프와 세로 스크롤·일반 탭을 구분한다.
   const touchRef = useRef<{
     x: number;
     y: number;
     time: number;
     ignore: boolean;
+    horizontal: boolean;
   } | null>(null);
 
   const isProtected =
@@ -472,54 +475,104 @@ export default function MobileEditorView({
     rightDrawerOpen,
   ]);
 
-  const handleTouchStart = (e: React.TouchEvent) => {
-    if (e.touches.length !== 1) return;
-    const target = e.target as HTMLElement | null;
-    // 하단 툴바 슬라이드나 팝업 메뉴 터치 시에는 사이드바 제스처 제외
-    const ignore = Boolean(
-      target?.closest(
-        'input[type="range"], .tableWrapper, .m-editor-title-nav, .m-doc-scope-bar, .m-pill-tabs, .m-floating-pill-bar, .m-floating-popup-menu, .m-floating-anchor-popup',
-      ),
-    );
-    const t = e.touches[0];
-    touchRef.current = {
-      x: t.clientX,
-      y: t.clientY,
-      time: Date.now(),
-      ignore,
+  useEffect(() => {
+    const screen = screenRef.current;
+    if (!screen) return;
+    const blurManuscript = () => {
+      const focused = document.activeElement;
+      if (focused instanceof HTMLElement && screen.contains(focused) && focused.closest(".m-manuscript-sheet")) {
+        focused.blur();
+      }
     };
-  };
-
-  const handleTouchEnd = (e: React.TouchEvent) => {
-    const start = touchRef.current;
-    touchRef.current = null;
-    if (!start || start.ignore || e.changedTouches.length !== 1) return;
-    const t = e.changedTouches[0];
-    const dx = t.clientX - start.x;
-    const dy = t.clientY - start.y;
-    const dt = Date.now() - start.time;
-
-    // 빠르고 명확한 수평 슬라이드 제스처 판별
-    if (dt > 650) return;
-    if (Math.abs(dx) < 56 || Math.abs(dx) < Math.abs(dy) * 1.65) return;
-
-    if (dx > 0) {
-      // 왼쪽에서 오른쪽으로 슬라이드 -> 오른쪽 위젯 드로어가 열려 있으면 닫고, 아니면 왼쪽 파일트리 열기
-      if (rightDrawerOpen) {
-        setRightDrawerOpen(false);
-      } else if (!leftDrawerOpen) {
-        setTreeTab(active.kind === "episode" ? "episode" : "document");
-        setLeftDrawerOpen(true);
+    const consumeSwipe = (e: TouchEvent) => {
+      if (e.cancelable) e.preventDefault();
+      e.stopPropagation();
+      suppressPointerUntil.current = Date.now() + 650;
+      blurManuscript();
+    };
+    const handleTouchStart = (e: TouchEvent) => {
+      touchRef.current = null;
+      // 다음 터치는 스와이프 뒤에 따라오는 합성 클릭과 구분한다.
+      suppressPointerUntil.current = 0;
+      if (e.touches.length !== 1) return;
+      const target = e.target instanceof Element ? e.target : null;
+      const t = e.touches[0];
+      touchRef.current = {
+        x: t.clientX,
+        y: t.clientY,
+        time: Date.now(),
+        ignore: Boolean(target?.closest(
+          "input, textarea, select, .tableWrapper, .m-editor-title-nav, .m-doc-scope-bar, .m-pill-tabs, .m-floating-pill-bar, .m-floating-popup-menu, .m-floating-anchor-popup",
+        )),
+        horizontal: false,
+      };
+    };
+    const handleTouchMove = (e: TouchEvent) => {
+      const start = touchRef.current;
+      if (!start || start.ignore) return;
+      if (e.touches.length !== 1) { touchRef.current = null; return; }
+      const dx = Math.abs(e.touches[0].clientX - start.x);
+      const dy = Math.abs(e.touches[0].clientY - start.y);
+      if (!start.horizontal) {
+        if (Date.now() - start.time > 650 || (dy > 12 && dy > dx)) {
+          touchRef.current = null;
+          return;
+        }
+        if (dx < 12 || dx < dy * 1.65) return;
+        start.horizontal = true;
       }
-    } else {
-      // 오른쪽에서 왼쪽으로 슬라이드 -> 왼쪽 파일트리가 열려 있으면 닫고, 아니면 오른쪽 위젯 영역 열기
-      if (leftDrawerOpen) {
-        setLeftDrawerOpen(false);
-      } else if (!rightDrawerOpen) {
-        setRightDrawerOpen(true);
+      consumeSwipe(e);
+    };
+    const handleTouchEnd = (e: TouchEvent) => {
+      const start = touchRef.current;
+      touchRef.current = null;
+      if (!start || start.ignore || e.changedTouches.length !== 1) return;
+      const dx = e.changedTouches[0].clientX - start.x;
+      const dy = e.changedTouches[0].clientY - start.y;
+      const swipe = Date.now() - start.time <= 650 && Math.abs(dx) >= 56 && Math.abs(dx) >= Math.abs(dy) * 1.65;
+      if (start.horizontal || swipe) consumeSwipe(e);
+      if (!swipe) return;
+      if (dx > 0) {
+        if (rightDrawerOpen) setRightDrawerOpen(false);
+        else if (!leftDrawerOpen) {
+          setTreeTab(active.kind === "episode" ? "episode" : "document");
+          setLeftDrawerOpen(true);
+        }
+      } else {
+        if (leftDrawerOpen) setLeftDrawerOpen(false);
+        else if (!rightDrawerOpen) setRightDrawerOpen(true);
       }
-    }
-  };
+    };
+    const handleTouchCancel = () => { touchRef.current = null; };
+    const suppressSyntheticPointer = (e: MouseEvent) => {
+      if (e.detail === 0 || Date.now() >= suppressPointerUntil.current) return;
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    const handleFocus = () => {
+      if (leftDrawerOpen || rightDrawerOpen || Date.now() < suppressPointerUntil.current) blurManuscript();
+    };
+    if (leftDrawerOpen || rightDrawerOpen) blurManuscript();
+    // React의 터치 리스너는 passive이므로 기본 동작을 취소할 수 있는 네이티브 리스너를 쓴다.
+    const options = { capture: true, passive: false };
+    screen.addEventListener("touchstart", handleTouchStart, options);
+    screen.addEventListener("touchmove", handleTouchMove, options);
+    screen.addEventListener("touchend", handleTouchEnd, options);
+    screen.addEventListener("touchcancel", handleTouchCancel, true);
+    screen.addEventListener("mousedown", suppressSyntheticPointer, true);
+    screen.addEventListener("click", suppressSyntheticPointer, true);
+    screen.addEventListener("focusin", handleFocus, true);
+    return () => {
+      touchRef.current = null;
+      screen.removeEventListener("touchstart", handleTouchStart, true);
+      screen.removeEventListener("touchmove", handleTouchMove, true);
+      screen.removeEventListener("touchend", handleTouchEnd, true);
+      screen.removeEventListener("touchcancel", handleTouchCancel, true);
+      screen.removeEventListener("mousedown", suppressSyntheticPointer, true);
+      screen.removeEventListener("click", suppressSyntheticPointer, true);
+      screen.removeEventListener("focusin", handleFocus, true);
+    };
+  }, [active.id, active.kind, leftDrawerOpen, rightDrawerOpen]);
 
   // 프로젝트 내 문서 분류 (왼쪽 파일트리 & 오른쪽 위젯 공용)
   const projectDocs = useMemo(
@@ -787,8 +840,7 @@ export default function MobileEditorView({
   return (
     <div
       className="m-screen m-editor-screen"
-      onTouchStart={handleTouchStart}
-      onTouchEnd={handleTouchEnd}
+      ref={screenRef}
     >
       {/* 심플하고 깔끔한 상단 헤더 */}
       <header className="m-topbar m-editor-topbar">
