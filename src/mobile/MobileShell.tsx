@@ -1121,10 +1121,12 @@ export default function MobileShell({
 
       <UpdateNotice
         updater={updater}
-        onOpen={() => {
+        onOpen={attempt(async () => {
+          await switchMainTab("settings");
           setSettingsPage("updates");
-          void switchMainTab("settings");
-        }}
+          setSettingsDetailOpen(true);
+          updater.dismiss();
+        })}
       />
       {releaseNotice.visible && (
         <ReleaseNotice

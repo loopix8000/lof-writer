@@ -128,9 +128,6 @@ export default function MobileLibraryView({
                           <span>총 {totalChars.toLocaleString()}자</span>
                         </div>
                       )}
-                      {p.description && (
-                        <p className="m-project-desc">{p.description}</p>
-                      )}
                       {p.tags && p.tags.length > 0 && (
                         <div className="m-tag-row">
                           {p.tags.map((t) => (
@@ -139,6 +136,9 @@ export default function MobileLibraryView({
                             </span>
                           ))}
                         </div>
+                      )}
+                      {p.description && (
+                        <p className="m-project-desc">{p.description}</p>
                       )}
                     </div>
                   </button>
