@@ -504,7 +504,7 @@ export default function MobileEditorView({
         y: t.clientY,
         time: Date.now(),
         ignore: Boolean(target?.closest(
-          "input, textarea, select, .tableWrapper, .m-editor-title-nav, .m-doc-scope-bar, .m-pill-tabs, .m-floating-pill-bar, .m-floating-popup-menu, .m-floating-anchor-popup",
+          "input, textarea, select, .tableWrapper, .table-tools, .m-editor-title-nav, .m-doc-scope-bar, .m-pill-tabs, .m-floating-pill-bar, .m-floating-popup-menu, .m-floating-anchor-popup",
         )),
         horizontal: false,
       };

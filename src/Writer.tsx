@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 import { useEditor, useEditorState, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
@@ -223,6 +223,63 @@ type EditorMenuOps = {
 };
 // 이미지를 눌렀을 때 고르는 크기. 너비(px)로 저장하고 본문 폭보다 넓으면 본문 폭에 맞춘다.
 const IMAGE_SIZES: [string, number | null][] = [["작게", 240], ["보통", 400], ["크게", 640], ["원본", null]];
+
+function ImageToolButton({ onPress, ...props }: Omit<ButtonHTMLAttributes<HTMLButtonElement>, "onClick" | "onMouseDown"> & { onPress: () => void }) {
+  const ref = useRef<HTMLButtonElement>(null);
+  const press = useRef(onPress);
+  press.current = onPress;
+  const suppressClickUntil = useRef(0);
+  useLayoutEffect(() => {
+    const button = ref.current;
+    if (!button) return;
+    let start: { id: number; x: number; y: number } | null = null;
+    const touchStart = (event: TouchEvent) => {
+      start = null;
+      suppressClickUntil.current = Date.now() + 800;
+      if (event.touches.length !== 1) return;
+      // 기본 포커스 이동과 합성 마우스 클릭을 막아 이미지 선택을 유지한다.
+      if (event.cancelable) event.preventDefault();
+      event.stopPropagation();
+      const touch = event.touches[0];
+      start = { id: touch.identifier, x: touch.clientX, y: touch.clientY };
+    };
+    const touchMove = (event: TouchEvent) => {
+      const touch = [...event.touches].find(touch => touch.identifier === start?.id);
+      if (!touch || !start || Math.hypot(touch.clientX - start.x, touch.clientY - start.y) > 12) start = null;
+    };
+    const touchEnd = (event: TouchEvent) => {
+      const previous = start;
+      start = null;
+      suppressClickUntil.current = Date.now() + 800;
+      if (event.cancelable) event.preventDefault();
+      event.stopPropagation();
+      const touch = [...event.changedTouches].find(touch => touch.identifier === previous?.id);
+      if (!previous || !touch || button.disabled || Math.hypot(touch.clientX - previous.x, touch.clientY - previous.y) > 12) return;
+      const rect = button.getBoundingClientRect();
+      if (touch.clientX >= rect.left && touch.clientX <= rect.right && touch.clientY >= rect.top && touch.clientY <= rect.bottom)
+        press.current();
+    };
+    const touchCancel = () => { start = null; };
+    // React의 touch 리스너는 passive이므로 네이티브 리스너에서 기본 동작을 취소한다.
+    button.addEventListener("touchstart", touchStart, { passive: false });
+    button.addEventListener("touchmove", touchMove, { passive: true });
+    button.addEventListener("touchend", touchEnd, { passive: false });
+    button.addEventListener("touchcancel", touchCancel);
+    return () => {
+      button.removeEventListener("touchstart", touchStart);
+      button.removeEventListener("touchmove", touchMove);
+      button.removeEventListener("touchend", touchEnd);
+      button.removeEventListener("touchcancel", touchCancel);
+    };
+  }, []);
+  return <button {...props} type="button" ref={ref}
+    onMouseDown={event => event.preventDefault()}
+    onClick={event => {
+      if (event.detail !== 0 && Date.now() < suppressClickUntil.current) return;
+      onPress();
+    }} />;
+}
+
 // 이미지 위에서 시작한 터치의 위치와 시각. 짧게 누르고 뗐는지 가린다.
 let imageTouch: { x: number; y: number; at: number } | null = null;
 type SaveImage =(file?: { name: string; data: string }) => Promise<{ src: string; alt: string } | null>;
@@ -1205,13 +1262,12 @@ export default function Writer({
         >
           <div className="table-tools-group">
             {IMAGE_SIZES.map(([label, width]) => (
-              <button
+              <ImageToolButton
                 key={label}
                 aria-label={`이미지 크기: ${label}`}
                 title={width ? `너비 ${width}px` : "원래 크기"}
                 className={imageWidth === width ? "active" : ""}
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => {
+                onPress={() => {
                   const { state } = editor, sel = state.selection;
                   if (!(sel instanceof NodeSelection) || sel.node.type.name !== "image") return;
                   const tr = state.tr.setNodeMarkup(sel.from, undefined, { ...sel.node.attrs, width });
@@ -1219,19 +1275,22 @@ export default function Writer({
                 }}
               >
                 <span>{label}</span>
-              </button>
+              </ImageToolButton>
             ))}
           </div>
           <div className="table-tools-group danger">
-            <button
+            <ImageToolButton
               aria-label="이미지 삭제"
               title="이미지 삭제"
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => editor.commands.deleteSelection()}
+              onPress={() => {
+                const { state } = editor, sel = state.selection;
+                if (sel instanceof NodeSelection && sel.node.type.name === "image")
+                  editor.view.dispatch(state.tr.deleteSelection());
+              }}
             >
               <Trash2 size={14} />
               <span>삭제</span>
-            </button>
+            </ImageToolButton>
           </div>
         </BubbleMenu>
       )}
