@@ -19,6 +19,7 @@ const MCP_INSTRUCTIONS: &str = r#"Lof Writer의 작품, 회차, 플롯, 메모�
 - document_read의 truncated가 true이면 본문이 일부만 반환된 것입니다. 전체 본문을 교체하기 전에 offset과 limit으로 나머지를 읽으세요. offset, limit, totalLength는 UTF-16 코드 단위입니다. 여러 번 읽는 동안 revision이 바뀌면 처음부터 다시 조회하세요.
 - 문서 생성 시 kind를 episode(회차), plot(플롯), memo(메모) 중에서 지정하세요. 플롯과 메모의 folder는 doc/ 아래의 상대 경로이므로 doc/ 접두사 없이 전달하세요. 회차에 연결할 때는 해당 작품에 존재하는 회차의 id를 episodeId로 전달하세요.
 - 사용자가 요청한 본문과 메타데이터만 변경하고, 나머지 문장, Markdown 서식, 태그, 속성, 줄바꿈 설정은 보존하세요. 순서 변경과 이력 복원은 사용자의 요청 범위에 포함된 경우에 수행하세요.
+- 문서를 생성·수정·복원하거나 순서를 바꾸면 마지막 변경 2초 뒤에 자동으로 동기화하므로 sync_now를 따로 호출하지 않아도 됩니다. 동기화 상태는 sync_status로 확인하세요. 다른 장치에서 바뀐 내용을 먼저 받아야 할 때는 sync_now를 호출한 뒤, sync_status의 phase가 syncing 또는 pending이 아니게 될 때까지 확인하세요. 동기화 후에는 library_list와 document_read로 최신 revision을 다시 조회하세요. 연결 추가·삭제와 장치 페어링은 앱에서 진행하도록 안내하세요.
 - 도구 응답의 isError와 오류 내용을 확인하고 성공한 작업만 완료했다고 안내하세요. 연결 오류가 나면 Lof Writer 앱의 실행 상태를 확인하도록 안내하세요."#;
 
 pub fn tool_definitions() -> Value {
@@ -162,6 +163,28 @@ pub fn tool_definitions() -> Value {
             }
         },
         {
+            "name": "sync_status",
+            "description": "실시간 장치 연결과 파일 동기화(폴더, WebDAV, FTP)의 진행 상태, 오류, 연결 목록 조회. phase는 idle, pending, syncing, error 중 하나",
+            "inputSchema": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": "sync_now",
+            "description": "주기를 기다리지 않고 동기화 요청. MCP로 문서를 변경하면 자동으로 요청되므로 다른 장치의 변경을 먼저 받을 때 사용한다. connectionId를 생략하면 모든 파일 연결과 실시간 장치에 요청하고, 지정하면 해당 파일 연결만 요청한다. 완료를 기다리지 않으므로 sync_status로 진행 상태를 확인한다",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "connectionId": { "type": "string", "description": "sync_status의 connections에서 확인한 파일 연결 id" }
+                },
+                "required": [],
+                "additionalProperties": false
+            }
+        },
+        {
             "name": "history_list",
             "description": "최근 변경 이력 최대 100개",
             "inputSchema": {
@@ -209,6 +232,29 @@ pub fn tool_definitions() -> Value {
             }
         }
     ])
+}
+
+// 동기화 도구는 앱 상태를 사용하므로 앱에서 처리기를 전달받는다.
+pub type SyncHandler = Arc<dyn Fn(&str, &Value) -> Result<Value, LofError> + Send + Sync>;
+
+fn call_tool(
+    store: &Arc<Mutex<Option<Store>>>,
+    name: &str,
+    args: &Value,
+    on_mutate: &Arc<dyn Fn() + Send + Sync>,
+    on_sync: &SyncHandler,
+) -> Result<Value, LofError> {
+    // 동기화 작업은 서재를 직접 잠그므로 서재 잠금을 잡기 전에 넘긴다.
+    if name.starts_with("sync_") {
+        return on_sync(name, args);
+    }
+    let mut guard = store
+        .lock()
+        .map_err(|_| fail("Store not initialized", "ERROR"))?;
+    let Some(ref mut st) = *guard else {
+        return Err(fail("Store not initialized", "ERROR"));
+    };
+    dispatch(st, name, args, &**on_mutate)
 }
 
 pub fn dispatch(
@@ -419,6 +465,7 @@ fn handle_client(
     token: &str,
     store: &Arc<Mutex<Option<Store>>>,
     on_mutate: &Arc<dyn Fn() + Send + Sync>,
+    on_sync: &SyncHandler,
 ) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(30)));
@@ -551,19 +598,7 @@ fn handle_client(
             return;
         }
         let args = data.get("arguments").cloned().unwrap_or_else(|| json!({}));
-        let mut guard = match store.lock() {
-            Ok(g) => g,
-            Err(_) => return,
-        };
-        let Some(ref mut st) = *guard else {
-            send_json(
-                &mut stream,
-                400,
-                Some(&json!({ "error": "Store not initialized", "code": "ERROR" })),
-            );
-            return;
-        };
-        match dispatch(st, op_name, &args, &**on_mutate) {
+        match call_tool(store, op_name, &args, on_mutate, on_sync) {
             Ok(result) => send_json(&mut stream, 200, Some(&json!({ "result": result }))),
             Err(e) => {
                 let status = if e.code == "CONFLICT" { 409 } else { 400 };
@@ -633,14 +668,7 @@ fn handle_client(
                 .get("arguments")
                 .cloned()
                 .unwrap_or_else(|| json!({}));
-            let res = {
-                let mut guard = store.lock().unwrap();
-                if let Some(ref mut st) = *guard {
-                    dispatch(st, tname, &targs, &**on_mutate)
-                } else {
-                    Err(fail_invalid("Store not initialized"))
-                }
-            };
+            let res = call_tool(store, tname, &targs, on_mutate, on_sync);
             match res {
                 Ok(val) => {
                     let text = serde_json::to_string(&val).unwrap_or_default();
@@ -694,6 +722,7 @@ fn handle_client(
 pub fn start_api(
     store: Arc<Mutex<Option<Store>>>,
     on_mutate: Arc<dyn Fn() + Send + Sync>,
+    on_sync: SyncHandler,
 ) -> Result<ApiServer, LofError> {
     let mut token_bytes = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut token_bytes);
@@ -708,8 +737,9 @@ pub fn start_api(
             let tok = token_clone.clone();
             let st = Arc::clone(&store);
             let cb = Arc::clone(&on_mutate);
+            let sync = Arc::clone(&on_sync);
             thread::spawn(move || {
-                handle_client(stream, &tok, &st, &cb);
+                handle_client(stream, &tok, &st, &cb, &sync);
             });
         }
     });

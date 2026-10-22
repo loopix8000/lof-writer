@@ -316,6 +316,20 @@ fn schedule_notify(app: &AppHandle, seq: &Arc<AtomicU64>) {
     });
 }
 
+// MCP 편집이 이어지는 동안은 기다렸다가 마지막 편집 뒤에 한 번만 즉시 동기화한다.
+fn schedule_api_sync(app: &AppHandle, seq: &Arc<AtomicU64>) {
+    let my_seq = seq.fetch_add(1, Ordering::SeqCst) + 1;
+    let seq_clone = Arc::clone(seq);
+    let app_clone = app.clone();
+    thread::spawn(move || {
+        auto_sync::request(&app_clone);
+        thread::sleep(Duration::from_secs(2));
+        if seq_clone.load(Ordering::SeqCst) == my_seq {
+            auto_sync::request_now(&app_clone);
+        }
+    });
+}
+
 fn bind_vault(state: &AppState, app: &AppHandle, root: &Path) -> Result<(), LofError> {
     let resolved=strip_verbatim_prefix(&fs::canonicalize(root).unwrap_or_else(|_|root.to_path_buf()));
     if state.store.lock().unwrap().as_ref().is_some_and(|store|store.root==resolved) {return Ok(());}
@@ -432,6 +446,65 @@ fn sync_connection(state: &AppState, id: &str, root: &Path) -> Result<Value, Lof
         }
     }
     sync_once(&state.store, root, &conn, &device_id)
+}
+
+// MCP 동기화 상태는 화면과 같은 자동 동기화 상태에 연결 목록과 장치 상태를 더해 알린다.
+fn api_sync_status(app: &AppHandle) -> Value {
+    let state = app.state::<AppState>();
+    let connections: Vec<Value> = state.settings.lock().unwrap()["connections"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|c| matches!(c["type"].as_str(), Some("folder" | "webdav" | "ftp")))
+        .map(|c| json!({
+            "id": c["id"],
+            "name": c["name"],
+            "type": c["type"],
+            "conflictPolicy": c["conflictPolicy"].as_str().unwrap_or("keepBoth"),
+        }))
+        .collect();
+    let devices: Vec<Value> = realtime::command(app, "realtimeStatus", &json!({}))
+        .ok()
+        .and_then(|status| status["peers"].as_array().cloned())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|peer| json!({ "id": peer["id"], "name": peer["name"], "status": peer["status"] }))
+        .collect();
+    let mut status = app.state::<auto_sync::AutoSyncState>().status();
+    status["syncing"] = json!(state.syncing.load(Ordering::SeqCst));
+    status["connections"] = json!(connections);
+    status["devices"] = json!(devices);
+    status
+}
+
+// MCP 동기화 요청은 화면의 동기화 버튼과 같은 대기열을 사용하고 완료를 기다리지 않는다.
+fn api_sync(app: &AppHandle, name: &str, args: &Value) -> Result<Value, LofError> {
+    match name {
+        "sync_status" => Ok(api_sync_status(app)),
+        "sync_now" => {
+            if auto_sync::stopped(app) {
+                return Err(fail_invalid("앱이 종료 중이라 동기화를 요청할 수 없습니다."));
+            }
+            match args.get("connectionId").and_then(Value::as_str) {
+                Some(id) => {
+                    if !api_sync_status(app)["connections"]
+                        .as_array()
+                        .is_some_and(|list| list.iter().any(|c| c["id"].as_str() == Some(id)))
+                    {
+                        return Err(fail_invalid("파일 동기화 연결을 찾을 수 없습니다."));
+                    }
+                    auto_sync::request_connection(app, id);
+                }
+                None => {
+                    auto_sync::request_now(app);
+                    realtime::reconnect(app);
+                }
+            }
+            let status = api_sync_status(app);
+            Ok(json!({ "requested": status["hasConnections"], "status": status }))
+        }
+        _ => Err(fail_invalid("지원하지 않는 도구")),
+    }
 }
 
 fn handle_method(
@@ -2224,7 +2297,9 @@ pub fn run() {
 
     let app_handle_holder: Arc<Mutex<Option<AppHandle>>> = Arc::new(Mutex::new(None));
     let holder_for_api = Arc::clone(&app_handle_holder);
+    let holder_for_sync = Arc::clone(&app_handle_holder);
     let notify_seq_for_api = Arc::clone(&notify_seq);
+    let api_sync_seq = Arc::new(AtomicU64::new(0));
 
     let api_server = match start_api(
         Arc::clone(&store_arc),
@@ -2232,10 +2307,14 @@ pub fn run() {
             if let Ok(guard) = holder_for_api.lock() {
                 if let Some(ref app) = *guard {
                     schedule_notify(app, &notify_seq_for_api);
-                    let app = app.clone();
-                    thread::spawn(move || auto_sync::request(&app));
+                    schedule_api_sync(app, &api_sync_seq);
                 }
             }
+        }),
+        Arc::new(move |name: &str, args: &Value| {
+            let app = holder_for_sync.lock().ok().and_then(|guard| guard.clone());
+            let app = app.ok_or_else(|| fail_invalid("앱을 준비하는 중입니다. 잠시 후 다시 시도해 주세요."))?;
+            api_sync(&app, name, args)
         }),
     ) {
         Ok(srv) => srv,
