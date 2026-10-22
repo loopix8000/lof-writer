@@ -6,6 +6,7 @@ use serde_json::{json, Value};
 use std::{fs, path::Path};
 
 fn document(path: &str, raw: &str) -> Result<Value, LofError> {
+    let body = read_markdown(raw)?.body;
     let title = Path::new(path)
         .file_stem()
         .and_then(|name| name.to_str())
@@ -21,6 +22,8 @@ fn document(path: &str, raw: &str) -> Result<Value, LofError> {
     }
     value["title"] = json!(title);
     value["kind"] = json!("memo");
+    // markdown_entry는 메타정보만 반환하므로 이력에 저장할 본문을 따로 포함한다.
+    value["body"] = json!(body);
     Ok(value)
 }
 
