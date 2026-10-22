@@ -62,9 +62,3 @@ PC의 글꼴 설치 상태나 인터넷 연결에 의존하지 않도록 `src/fo
 - 원본 라이선스: https://raw.githubusercontent.com/google/fonts/b38c5c93af322c45f633e17ac440ec1e6c94d489/ofl/notosanskr/OFL.txt
 - SHA-256: `194018e6b2b293a7964f037b25c0249ce1418bc9ab3c971060a03aa57861e252`
 - 저장소에서는 파일 경로만 `NotoSansKR-Variable.ttf`로 정리했습니다. 글꼴 파일의 바이트와 내부 이름은 원본과 동일합니다.
-
-## 제외한 글꼴
-
-KoPub·KoPubWorld 파일은 포함하지 않으며 선택 목록과 플랫폼 프리셋에서도 제거했습니다.
-[공식 안내](https://www.kopus.org/biz-electronic-font2/)에서 웹서비스·프로그램 내 임베딩에 별도 승인을 요구하므로 내장 대상에서 제외했습니다.
-이전 KoPub 선택은 시스템 바탕체로, 이전 리디바탕 선택에 섞인 KoPub 대체 글꼴은 새 리디바탕 설정으로 전환합니다.
