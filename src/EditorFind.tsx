@@ -4,7 +4,7 @@ import { Extension, type Editor } from "@tiptap/core";
 import { Plugin, PluginKey, type Transaction } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import { closeHistory } from "@tiptap/pm/history";
-import { ChevronDown, ChevronUp, Replace, Search, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Replace, ReplaceAll, Search, TextSelect, X } from "lucide-react";
 import type { SourceEditorHandle } from "./SourceEditor";
 
 export type FindRange = { from: number; to: number };
@@ -57,6 +57,7 @@ export default function EditorFind({ editor, sourceRef, body, enabled, editable 
 }) {
   const [open, setOpen] = useState(false);
   const [replaceOpen, setReplaceOpen] = useState(false);
+  const [optionsOpen, setOptionsOpen] = useState(false);
   const [replacement, setReplacement] = useState("");
   const [notice, setNotice] = useState("");
   const [query, setQuery] = useState("");
@@ -73,7 +74,7 @@ export default function EditorFind({ editor, sourceRef, body, enabled, editable 
     if (sourceRef) sourceRef.current?.view?.focus();
     else if (editor && !editor.isDestroyed) editor.commands.focus();
   };
-  const close = () => { setOpen(false); focusEditor(); };
+  const close = () => { setOpen(false); setOptionsOpen(false); focusEditor(); };
   const requestReveal = () => { revealRequested.current = true; setNavigation(value => value + 1); };
   useEffect(() => {
     if (!editor || !open || !enabled) return;
@@ -104,6 +105,7 @@ export default function EditorFind({ editor, sourceRef, body, enabled, editable 
       setActive(0);
     }
     setReplaceOpen(replace && editable);
+    setOptionsOpen(false);
     setNotice(""); setOpen(true); requestReveal();
     if (open) focusInput();
   };
@@ -147,7 +149,9 @@ export default function EditorFind({ editor, sourceRef, body, enabled, editable 
       const scroll = editor.view.dom.closest<HTMLElement>(".editor-scroll");
       if (scroll) {
         const bounds = scroll.getBoundingClientRect();
-        scroll.scrollTop += editor.view.coordsAtPos(hit.from).top - bounds.top - bounds.height / 2;
+        const panelBottom = bar.current?.getBoundingClientRect().bottom ?? bounds.top;
+        const top = Math.min(bounds.bottom, Math.max(bounds.top, panelBottom + 8));
+        scroll.scrollTop += editor.view.coordsAtPos(hit.from).top - (top + bounds.bottom) / 2;
       }
     }
   }, [hits, current, editor, sourceRef, navigation]);
@@ -191,33 +195,39 @@ export default function EditorFind({ editor, sourceRef, body, enabled, editable 
   });
   if (!open || !enabled) return null;
   const dom = sourceRef?.current?.view?.dom ?? (editor && !editor.isDestroyed ? editor.view.dom : null);
-  const floatingHost = dom?.closest<HTMLElement>(".group-body");
+  const floatingHost = dom?.closest<HTMLElement>(".group-body, .m-editor-screen, .m-memo-editor-screen");
   const panel = <div ref={bar} className={`editor-find${floatingHost ? " is-floating" : ""}`} role="search" aria-label={replaceOpen ? "현재 문서 문자 치환" : "현재 문서에서 찾기"}>
-    <div className="editor-find-row">
-      <Search size={16} aria-hidden="true" />
-      <input ref={input} aria-label="문서 내 검색어" placeholder="현재 문서에서 찾기" value={query}
-        onChange={event => { setQuery(event.target.value); setActive(0); setNotice(""); requestReveal(); }}
-        onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} />
-      <button type="button" className={caseSensitive ? "active" : ""} aria-label="대소문자 구분" aria-pressed={caseSensitive}
-        title="대소문자 구분" onClick={() => { setCaseSensitive(value => !value); setActive(0); setNotice(""); requestReveal(); }}>Aa</button>
-      <span className="editor-find-count" role="status" aria-live="polite">{query ? hits.length ? `${current + 1} / ${hits.length}` : "결과 없음" : "검색어 입력"}</span>
-      <button type="button" aria-label="이전 검색 결과" title="이전 결과 (Shift+Enter)" disabled={!hits.length} onClick={() => move(-1)}><ChevronUp size={16} /></button>
-      <button type="button" aria-label="다음 검색 결과" title="다음 결과 (Enter)" disabled={!hits.length} onClick={() => move(1)}><ChevronDown size={16} /></button>
-      {editable && <button type="button" aria-label="문자 치환 표시" title="문자 치환 (F3)" aria-expanded={replaceOpen}
-        className={replaceOpen ? "active" : ""} onClick={() => setReplaceOpen(value => !value)}><Replace size={16} /></button>}
-      <button type="button" aria-label="문서 내 검색 닫기" title="닫기 (Esc)" onClick={close}><X size={16} /></button>
+    <div className="editor-find-row editor-find-search-row">
+      <div className="editor-find-search-field">
+        <Search size={20} aria-hidden="true" />
+        <input ref={input} aria-label="문서 내 검색어" placeholder="검색..." value={query}
+          onChange={event => { setQuery(event.target.value); setActive(0); setNotice(""); requestReveal(); }}
+          onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} />
+        {query && <span className="editor-find-count" role="status" aria-live="polite">{hits.length ? `${current + 1}/${hits.length}` : "0건"}</span>}
+      </div>
+      <button type="button" aria-label="이전 검색 결과" title="이전 결과 (Shift+Enter)" disabled={!hits.length} onClick={() => move(-1)}><ArrowUp size={20} /></button>
+      <button type="button" aria-label="다음 검색 결과" title="다음 결과 (Enter)" disabled={!hits.length} onClick={() => move(1)}><ArrowDown size={20} /></button>
+      <button type="button" aria-label="검색 옵션" title="검색 옵션" aria-expanded={optionsOpen}
+        className={optionsOpen || caseSensitive ? "active" : ""} onClick={() => setOptionsOpen(value => !value)}><TextSelect size={20} /></button>
+      <button type="button" aria-label="문서 내 검색 닫기" title="닫기 (Esc)" onClick={close}><X size={20} /></button>
     </div>
-    {replaceOpen && editable && <div className="editor-find-row">
-      <Replace size={16} aria-hidden="true" />
-      <input aria-label="바꿀 문자" placeholder="바꿀 문자 (비워두면 삭제)" value={replacement}
+    {replaceOpen && editable && <div className="editor-find-row editor-find-replace-row">
+      <input className="editor-find-replacement" aria-label="바꿀 문자" placeholder="바꾸기" title="비워두면 찾은 문자를 삭제합니다." value={replacement}
         onChange={event => { setReplacement(event.target.value); setNotice(""); }}
         onKeyDown={event => {
           if (event.key === "Enter" && !event.nativeEvent.isComposing && event.keyCode !== 229) {
             event.preventDefault(); replaceMatches(false);
           }
         }} />
-      <button type="button" disabled={!hits.length} onClick={() => replaceMatches(false)}>치환</button>
-      <button type="button" disabled={!hits.length} onClick={() => replaceMatches(true)}>모두 치환</button>
+      <button type="button" aria-label="치환" title="치환" disabled={!hits.length} onClick={() => replaceMatches(false)}><Replace size={20} /></button>
+      <button type="button" aria-label="모두 치환" title="모두 치환" disabled={!hits.length} onClick={() => replaceMatches(true)}><ReplaceAll size={20} /></button>
+    </div>}
+    {optionsOpen && <div className="editor-find-options">
+      <label><input type="checkbox" checked={caseSensitive} onChange={event => {
+        setCaseSensitive(event.target.checked); setActive(0); setNotice(""); requestReveal();
+      }} />대소문자 구분</label>
+      {editable && <label><input type="checkbox" checked={replaceOpen}
+        onChange={event => setReplaceOpen(event.target.checked)} />바꾸기 표시</label>}
     </div>}
     {notice && <span className="editor-find-notice" role="status">{notice}</span>}
   </div>;

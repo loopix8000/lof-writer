@@ -1670,27 +1670,63 @@ body.sidebar-resizing * {
   /* 고정 막대가 가리던 본문을 드러내되 높이를 유지해 스크롤 위치를 보존한다. */
   visibility: hidden;
 }
-/* PC 검색창은 그룹 상단에 떠 있어 원고와 편집 도구의 배치를 바꾸지 않는다. */
+/* 검색창은 스크롤 영역 밖에 떠 있어 원고와 편집 도구의 배치를 바꾸지 않는다. */
 .editor-find {
   position: sticky;
   top: 0;
   z-index: 8;
   display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 4px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
   min-height: 44px;
   margin-bottom: 8px;
-  padding: 5px 8px;
+  padding: 8px;
   border: 1px solid var(--input-border);
   border-radius: 6px;
   color: var(--text);
   background: var(--surface);
-  box-shadow: 0 3px 10px #00000026;
+  box-shadow: 0 3px 14px #00000014;
   font-size: 12px;
 }
-.editor-find-row { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; width: 100%; }
-.editor-find-row > svg { flex-shrink: 0; color: var(--muted); }
+.editor-find-row { display: grid; align-items: center; gap: 4px; min-width: 0; width: 100%; }
+.editor-find-search-row { grid-template-columns: minmax(0, 1fr) repeat(4, 32px); }
+.editor-find-replace-row { grid-template-columns: minmax(0, 1fr) repeat(2, 32px); }
+.editor-find-search-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  height: 40px;
+  padding: 0 10px;
+  border: 1px solid var(--input-border);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--muted);
+}
+.editor-find-search-field:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--focus-ring); }
+.editor-find-search-field > svg { flex-shrink: 0; }
+.editor-find .editor-find-search-field input {
+  flex: 1;
+  width: 0;
+  height: 100%;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  outline: none;
+  box-shadow: none;
+  border-radius: 0;
+  background: transparent;
+}
+.editor-find .editor-find-replacement {
+  min-width: 0;
+  width: 100%;
+  height: 40px;
+  padding: 0 7px;
+}
+.editor-find-options { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding: 4px 8px; }
+.editor-find-options label { display: inline-flex; align-items: center; gap: 6px; }
+.editor-find .editor-find-options input[type="checkbox"] { width: 14px; min-height: 14px; margin: 0; padding: 0; }
 .editor-find-notice { color: var(--muted); padding: 2px 4px; }
 .editor-find.is-floating {
   position: absolute;
@@ -1700,14 +1736,14 @@ body.sidebar-resizing * {
   width: min(460px, calc(100% - 24px));
   margin: 0;
 }
-.editor-find input { flex: 1 1 100px; width: 0; padding: 5px 7px; font-size: 13px; }
-.editor-find button { flex-shrink: 0; padding: 5px; min-height: 28px; border: 0; border-radius: 4px; color: var(--muted); }
+.editor-find input { font-size: 13px; text-overflow: ellipsis; }
+.editor-find button { display: grid; place-items: center; width: 32px; height: 40px; padding: 0; border: 0; border-radius: 8px; color: var(--muted); background: transparent; }
 @media (hover: hover) and (pointer: fine) {
   .editor-find button:hover { color: var(--text); }
 }
 .editor-find button.active { color: var(--accent); background: var(--selection-bg); }
 .editor-find button:disabled { cursor: default; }
-.editor-find-count { color: var(--muted); white-space: nowrap; padding: 0 4px; font-variant-numeric: tabular-nums; }
+.editor-find-count { flex-shrink: 0; color: var(--muted); white-space: nowrap; font-size: 11px; font-variant-numeric: tabular-nums; }
 .editor-find-hit { background: var(--find-match); color: var(--find-text); }
 .editor-find-hit.current { background: var(--find-current); outline: 1px solid var(--find-text); }
 .tiptap {

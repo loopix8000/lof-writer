@@ -3409,7 +3409,17 @@
   padding: 0 !important;
 }
 
-.m-editor-screen .editor-find {
+.mobile-app .editor-find.is-floating {
+  top: 62px;
+  left: 12px;
+  right: 12px;
+  width: auto;
+  max-height: calc(100% - 150px);
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.m-editor-screen .editor-find.is-floating {
   top: 58px;
 }
 
@@ -3419,8 +3429,8 @@
 }
 
 .mobile-app .editor-find button {
-  min-height: 36px;
-  padding: 6px 8px;
+  min-height: 40px;
+  padding: 0;
 }
 
 .m-editor-screen > .editor-scroll,
