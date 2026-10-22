@@ -73,6 +73,8 @@ pub struct Realtime {
     sessions: Mutex<HashMap<String, Session>>,
     dirty: AtomicU64,
     requested: AtomicU64,
+    // 특정 장치가 알린 변경은 그 장치와만 다시 비교하도록 공개키별로 센다.
+    peer_requests: Mutex<HashMap<String, u64>>,
     subscription_lost: AtomicBool,
     statuses: Mutex<HashMap<String, Value>>,
     invite: Mutex<Option<Invitation>>,
@@ -533,10 +535,11 @@ fn gossip_event(app: &AppHandle, event: Event) {
                 let _ = absorb(&app, &members);
             });
         }
-        Event::Announcement(Announcement::Changed { endpoint }) | Event::Neighbor(endpoint) => {
-            let rt = app.state::<Realtime>();
-            rt.reconnect.lock().unwrap().insert(endpoint);
-            remote_changed(app);
+        Event::Announcement(Announcement::Changed { endpoint }) => peer_changed(app, &endpoint),
+        // 다시 보인 장치는 재시도 대기만 건너뛴다. 새로 연결되면 그때 비교한다.
+        Event::Neighbor(endpoint) => {
+            app.state::<Realtime>().reconnect.lock().unwrap().insert(endpoint);
+            wake(app);
         }
         Event::SubscriptionClosed => {
             app.state::<Realtime>().subscription_lost.store(true, Ordering::SeqCst);
@@ -561,10 +564,43 @@ pub fn configure(app: &AppHandle) {
     signal(&app.state::<Realtime>());
 }
 pub fn reconnect(app: &AppHandle) {
+    refresh_network(app, true);
+}
+/// Android는 iroh가 네트워크 변경을 직접 감지하지 못하므로 시스템 알림을 받아 전달한다.
+/// 끊긴 장치만 다시 접속하고, 연결된 장치와는 변경이 없으면 다시 비교하지 않는다.
+#[cfg(target_os = "android")]
+pub fn network_changed(app: &AppHandle) {
+    refresh_network(app, false);
+}
+// 바뀐 네트워크가 있으면 소켓과 중계 연결을 다시 맞춘 뒤 끊긴 장치에 한 번 더 접속한다.
+fn refresh_network(app: &AppHandle, recheck: bool) {
+    retry_now(app, recheck);
+    let runtime = app.state::<Realtime>().runtime.lock().unwrap().clone();
+    if let Some((handle, node)) = runtime {
+        let app = app.clone();
+        handle.spawn(async move {
+            node.endpoint.network_change().await;
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            retry_now(&app, false);
+        });
+    }
+}
+// recheck이면 연결된 장치와도 다시 비교한다.
+fn retry_now(app: &AppHandle, recheck: bool) {
     app.state::<Realtime>()
         .clear_retries
         .store(true, Ordering::SeqCst);
-    remote_changed(app);
+    if recheck {
+        remote_changed(app);
+    } else {
+        wake(app);
+    }
+}
+fn peer_changed(app: &AppHandle, endpoint: &str) {
+    let rt = app.state::<Realtime>();
+    *rt.peer_requests.lock().unwrap().entry(endpoint.to_string()).or_default() += 1;
+    rt.reconnect.lock().unwrap().insert(endpoint.to_string());
+    wake(app);
 }
 fn signal(rt: &Realtime) {
     *rt.urgent.lock().unwrap() = true;
@@ -768,11 +804,11 @@ impl WriterHost {
         if op == "members" {
             return Ok(Message::json(json!(true)));
         }
-        if op == "notify" || op == "hello" {
+        if op == "hello" {
             rt.reconnect.lock().unwrap().insert(peer.to_string());
         }
         if op == "notify" {
-            remote_changed(app);
+            peer_changed(app, peer);
             return Ok(Message::json(json!(true)));
         }
         if op == "hello" {
@@ -1092,7 +1128,7 @@ pub fn start(app: &AppHandle) {
             *app.state::<Realtime>().runtime.lock().unwrap() =
                 Some((runtime.handle().clone(), node.clone()));
             let own = node.endpoint.id().to_string();
-            let mut connected: HashMap<String, (Connection, (u64, u64))> = HashMap::new();
+            let mut connected: HashMap<String, (Connection, (u64, u64, u64))> = HashMap::new();
             let mut retry: HashMap<String, (Instant, u64)> = HashMap::new();
             let mut probes: HashMap<String, ConnectionProbe> = HashMap::new();
             let mut checked: HashMap<String, Instant> = HashMap::new();
@@ -1103,6 +1139,7 @@ pub fn start(app: &AppHandle) {
             let mut subscription_retry: Option<Instant> = None;
             let mut introduced: Vec<String> = Vec::new();
             let mut announced = u64::MAX;
+            let mut network_checked: Option<Instant> = None;
             while !crate::auto_sync::stopped(&app) {
                 let rt = app.state::<Realtime>();
                 // Android는 저장공간 권한을 확인한 뒤 서재를 열므로 서재가 열릴 때까지 기다린다.
@@ -1217,13 +1254,15 @@ pub fn start(app: &AppHandle) {
                 }
                 let generation = rt.dirty.load(Ordering::SeqCst);
                 let requested = rt.requested.load(Ordering::SeqCst);
-                let revision = (generation, requested);
+                let peer_requests = rt.peer_requests.lock().unwrap().clone();
                 for peer in wanted {
                     let id = peer["id"].as_str().unwrap_or("").to_string();
+                    let asked = peer["endpoint"].as_str().and_then(|endpoint| peer_requests.get(endpoint)).copied().unwrap_or(0);
+                    let revision = (generation, requested, asked);
                     let accepted = rt.live.lock().unwrap().get(&id).cloned();
                     if let Some(conn) = accepted {
                         if connected.get(&id).is_none_or(|(old, _)| old.stable_id() != conn.stable_id()) {
-                            connected.insert(id.clone(), (conn, (u64::MAX, u64::MAX)));
+                            connected.insert(id.clone(), (conn, (u64::MAX, u64::MAX, u64::MAX)));
                             checked.insert(id.clone(), Instant::now());
                             retry.remove(&id);
                             let mut statuses = rt.statuses.lock().unwrap();
@@ -1267,7 +1306,7 @@ pub fn start(app: &AppHandle) {
                                 }
                                 if !connected.contains_key(&id) {
                                     rt.live.lock().unwrap().insert(id.clone(), conn.clone());
-                                    connected.insert(id.clone(), (conn, (u64::MAX, u64::MAX)));
+                                    connected.insert(id.clone(), (conn, (u64::MAX, u64::MAX, u64::MAX)));
                                 }
                                 Ok(())
                             });
@@ -1296,6 +1335,15 @@ pub fn start(app: &AppHandle) {
                                     let status = statuses.entry(id.clone()).or_insert_with(|| json!({}));
                                     status["phase"] = json!("offline");
                                     status["message"] = Value::Null;
+                                    drop(statuses);
+                                    // 감지하지 못한 네트워크 변경으로 접속이 계속 실패할 수 있어 주소를 다시 확인한다.
+                                    if probe.connection.is_none()
+                                        && network_checked.is_none_or(|at| at.elapsed() >= Duration::from_secs(60))
+                                    {
+                                        network_checked = Some(Instant::now());
+                                        let node = node.clone();
+                                        runtime.spawn(async move { node.endpoint.network_change().await });
+                                    }
                                     let delay = retry.get(&id).map(|(_, d)| (*d * 2).min(30)).unwrap_or(1);
                                     retry.insert(id.clone(), (Instant::now() + Duration::from_secs(delay), delay));
                                 }
@@ -1355,16 +1403,17 @@ pub fn start(app: &AppHandle) {
                         if *seen == revision {
                             return Ok(());
                         }
-                        {
-                            let mut statuses = rt.statuses.lock().unwrap();
-                            let status = statuses.entry(id.clone()).or_insert_with(|| json!({}));
-                            status["phase"] = json!("syncing");
-                            status["message"] = Value::Null;
-                        }
-                        crate::auto_sync::refresh_realtime(&app);
                         let leader = peer["storage"].as_bool().unwrap_or(false)
                             || own < peer["endpoint"].as_str().unwrap_or("").to_string();
                         if leader {
+                            // 변경 알림만 보내는 경우는 비교가 아니므로 동기화 중으로 표시하지 않는다.
+                            {
+                                let mut statuses = rt.statuses.lock().unwrap();
+                                let status = statuses.entry(id.clone()).or_insert_with(|| json!({}));
+                                status["phase"] = json!("syncing");
+                                status["message"] = Value::Null;
+                            }
+                            crate::auto_sync::refresh_realtime(&app);
                             let outcome = sync(&app, &peer, conn, runtime.handle())?;
                             rt.statuses.lock().unwrap().insert(id.clone(),json!({"phase":"connected","lastSync":chrono::Utc::now().to_rfc3339(),"conflicts":outcome["fileConflicts"]}));
                             crate::auto_sync::refresh_realtime(&app);

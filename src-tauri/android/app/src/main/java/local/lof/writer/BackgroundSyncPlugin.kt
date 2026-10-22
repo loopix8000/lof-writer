@@ -11,6 +11,9 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.ConnectivityManager
+import android.net.LinkProperties
+import android.net.Network
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -149,11 +152,72 @@ object BackgroundSync {
   }
 }
 
+/** Android는 네이티브 코드에 네트워크 변경을 알리지 않으므로 기본 네트워크 변경을 실시간 연결에 전달한다. */
+object NetworkWatch {
+  private val lock = Any()
+  private var registered = false
+  private var waiting: Invoke? = null
+  private var missed = false
+  private var last: String? = null
+
+  fun start(context: Context) {
+    synchronized(lock) {
+      if (registered) return
+      registered = true
+    }
+    val manager = context.getSystemService(ConnectivityManager::class.java)
+    if (manager == null) {
+      synchronized(lock) { registered = false }
+      return
+    }
+    try {
+      manager.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) = changed(key(network, manager.getLinkProperties(network)))
+        override fun onLost(network: Network) = changed(null)
+        // 같은 네트워크에서 주소만 바뀌는 경우도 알린다.
+        override fun onLinkPropertiesChanged(network: Network, properties: LinkProperties) = changed(key(network, properties))
+      })
+    } catch (_: Exception) {
+      synchronized(lock) { registered = false }
+    }
+  }
+
+  // DNS·경로 정보만 갱신된 알림은 무시하도록 네트워크와 주소 목록으로 비교한다.
+  private fun key(network: Network, properties: LinkProperties?): String =
+    "$network:" + (properties?.linkAddresses?.map { it.toString() }?.sorted()?.joinToString(",") ?: "")
+
+  private fun changed(key: String?) {
+    synchronized(lock) {
+      if (key == last) return
+      last = key
+      val call = waiting
+      if (call != null) {
+        waiting = null
+        call.resolve()
+      } else {
+        missed = true
+      }
+    }
+  }
+
+  fun wait(invoke: Invoke) {
+    synchronized(lock) {
+      if (missed) {
+        missed = false
+        invoke.resolve()
+      } else {
+        waiting = invoke
+      }
+    }
+  }
+}
+
 @Keep
 @TauriPlugin
 class BackgroundSyncPlugin(private val activity: Activity) : Plugin(activity) {
   init {
     BackgroundSync.attached = true
+    NetworkWatch.start(activity.applicationContext)
   }
 
   @Command
@@ -177,6 +241,9 @@ class BackgroundSyncPlugin(private val activity: Activity) : Plugin(activity) {
 
   @Command
   fun waitAlarm(invoke: Invoke) = BackgroundSync.wait(invoke)
+
+  @Command
+  fun waitNetwork(invoke: Invoke) = NetworkWatch.wait(invoke)
 
   @Command
   fun releaseWake(invoke: Invoke) {

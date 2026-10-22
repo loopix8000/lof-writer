@@ -206,6 +206,7 @@ pub fn init() -> tauri::plugin::TauriPlugin<tauri::Wry> {
         .setup(|app, api| {
             let handle = api.register_android_plugin("local.lof.writer", "BackgroundSyncPlugin")?;
             app.manage(Plugin(handle));
+            let network = app.clone();
             let app = app.clone();
             tauri::async_runtime::spawn(async move {
                 // 알람이 울릴 때마다 응답하는 요청을 이어서 기다린다.
@@ -217,6 +218,20 @@ pub fn init() -> tauri::plugin::TauriPlugin<tauri::Wry> {
                         .await;
                     match result {
                         Ok(_) => tick(&app),
+                        Err(_) => tokio::time::sleep(Duration::from_secs(5)).await,
+                    }
+                }
+            });
+            tauri::async_runtime::spawn(async move {
+                // 기본 네트워크가 바뀔 때마다 실시간 연결의 주소와 중계 연결을 다시 확인한다.
+                loop {
+                    let result = network
+                        .state::<Plugin>()
+                        .0
+                        .run_mobile_plugin_async::<Value>("waitNetwork", json!({}))
+                        .await;
+                    match result {
+                        Ok(_) => crate::realtime::network_changed(&network),
                         Err(_) => tokio::time::sleep(Duration::from_secs(5)).await,
                     }
                 }
