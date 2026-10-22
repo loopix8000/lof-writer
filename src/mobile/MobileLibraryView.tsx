@@ -9,6 +9,8 @@ import React from "react";
 import { type Dialog } from "../app/model";
 import CoverImage from "../CoverImage";
 import { type Library } from "../types";
+import type { useProjectReorder } from "../useProjectReorder";
+import { useMobileProjectReorder } from "./useMobileProjectReorder";
 
 export default function MobileLibraryView({
   lib,
@@ -19,6 +21,7 @@ export default function MobileLibraryView({
   onSelectProject,
   setDialog,
   chooseVault,
+  projectReorder,
 }: {
   lib: Library;
   loaded: boolean;
@@ -28,7 +31,9 @@ export default function MobileLibraryView({
   onSelectProject: (id: string) => Promise<void>;
   setDialog: React.Dispatch<React.SetStateAction<Dialog | null>>;
   chooseVault: () => Promise<void>;
+  projectReorder: ReturnType<typeof useProjectReorder>;
 }) {
+  const scrollRef = useMobileProjectReorder(lib, loaded, busy, projectReorder, attempt);
   return (
     <div className="m-screen">
       <header className="m-topbar">
@@ -59,7 +64,7 @@ export default function MobileLibraryView({
         </div>
       </header>
 
-      <div className="m-scroll-body">
+      <div className="m-scroll-body" ref={scrollRef} aria-busy={projectReorder.saving || undefined}>
         {!loaded ? (
           <div className="m-empty-state">
             <p>내 서재를 불러오는 중...</p>
@@ -98,10 +103,11 @@ export default function MobileLibraryView({
                 .reduce((acc, d) => acc + (d.platformCharacters ?? d.characters ?? 0), 0);
 
               return (
-                <div key={p.id} className="m-project-card">
+                <div key={p.id} className="m-project-card" data-project-id={p.id}>
                   <button
                     type="button"
                     className="m-project-card-main"
+                    title="길게 눌러 드래그하여 순서 변경"
                     onClick={attempt(() => onSelectProject(p.id))}
                   >
                     {!prefs.hideCovers && (

@@ -40,6 +40,7 @@ import {
   type WritingRules,
 } from "../types";
 import { isAndroidApp } from "../tauri-bridge";
+import type { useProjectReorder } from "../useProjectReorder";
 import { UpdateLock, UpdateNotice } from "../Updater";
 import MobileEditorView from "./MobileEditorView";
 import MobileLibraryView from "./MobileLibraryView";
@@ -145,6 +146,7 @@ export default function MobileShell({
   showHistory,
   chooseVault,
   moveVault,
+  projectReorder,
   openSettingsData,
   renderSyncConnections,
   onUpdateProjectWriting,
@@ -282,6 +284,7 @@ export default function MobileShell({
   showHistory: () => Promise<void>;
   chooseVault: () => Promise<void>;
   moveVault: () => Promise<void>;
+  projectReorder: ReturnType<typeof useProjectReorder>;
   openSettingsData: () => Promise<void>;
   renderSyncConnections: () => React.JSX.Element;
   onUpdateProjectWriting: (rules: WritingRules) => void;
@@ -556,6 +559,7 @@ export default function MobileShell({
             ) : (
               <MobileLibraryView
                 lib={lib}
+                projectReorder={projectReorder}
                 loaded={loaded}
                 prefs={prefs}
                 busy={busy}

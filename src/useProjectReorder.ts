@@ -128,5 +128,5 @@ export function useProjectReorder(
     };
   }
 
-  return { saving, cardProps, cardClass };
+  return { saving, move, cardProps, cardClass };
 }

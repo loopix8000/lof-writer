@@ -1793,6 +1793,7 @@ export default function App() {
         showHistory={showHistory}
         chooseVault={chooseVault}
         moveVault={moveVault}
+        projectReorder={projectReorder}
         openSettingsData={loadSettingsData}
         renderSyncConnections={renderSyncConnections}
         onUpdateProjectWriting={updateProjectWriting}

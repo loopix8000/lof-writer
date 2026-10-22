@@ -780,20 +780,7 @@ export default function MobileProjectView({
     );
   };
 
-  const moveProjectOrder = async (projectId: string, delta: -1 | 1) => {
-    const ids = lib.projects.map((p) => p.id);
-    const index = ids.indexOf(projectId);
-    const nextIndex = index + delta;
-    if (index < 0 || nextIndex < 0 || nextIndex >= ids.length) return;
-    const nextIds = [...ids];
-    const [moved] = nextIds.splice(index, 1);
-    nextIds.splice(nextIndex, 0, moved);
-    await call("reorderProjects", { ids: nextIds });
-    await refresh();
-  };
-
   const getProjectActions = (p: Project): MobileActionItem[] => {
-    const idx = lib.projects.findIndex((x) => x.id === p.id);
     const epCount = lib.documents.filter(
       (d) => d.projectId === p.id && d.kind === "episode" && !d.archived,
     ).length;
@@ -845,23 +832,6 @@ export default function MobileProjectView({
         icon: <Download size={18} />,
         action: () => setDialog({ type: "export", value: p.id }),
       },
-      ...(lib.projects.length > 1
-        ? ([
-            "separator",
-            {
-              label: "위로 순서 이동",
-              icon: <ArrowUp size={18} />,
-              disabled: idx <= 0,
-              action: attempt(() => moveProjectOrder(p.id, -1)),
-            },
-            {
-              label: "아래로 순서 이동",
-              icon: <ArrowDown size={18} />,
-              disabled: idx >= lib.projects.length - 1,
-              action: attempt(() => moveProjectOrder(p.id, 1)),
-            },
-          ] as MobileActionItem[])
-        : []),
       "separator",
       {
         label: "작품 삭제",

@@ -321,6 +321,46 @@
   overflow: hidden;
 }
 
+.m-project-card,
+.m-project-card * {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.m-project-card.m-project-dragging {
+  opacity: 0.25;
+}
+
+.m-project-card.m-project-drop-before::before,
+.m-project-card.m-project-drop-after::after {
+  content: "";
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  height: 3px;
+  background: var(--accent);
+  border-radius: 2px;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.m-project-card.m-project-drop-before::before {
+  top: 0;
+}
+
+.m-project-card.m-project-drop-after::after {
+  bottom: 0;
+}
+
+.m-project-card.m-project-reorder-preview {
+  position: fixed;
+  z-index: 310;
+  pointer-events: none;
+  opacity: 0.92;
+  box-shadow: 0 8px 30px rgb(0 0 0 / 20%);
+}
+
 .m-project-card-main {
   flex: 1 1 auto;
   min-width: 0;
