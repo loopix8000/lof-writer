@@ -1336,7 +1336,7 @@ export default function MobileEditorView({
                     .map((ep) => {
                       const isCur = ep.id === active.id;
                       const n = numberOf(ep);
-                      const st = normalizeStatus(ep.status);
+                      const st = normalizeStatus(isCur ? active.status : ep.status);
                       return (
                         <div
                           key={ep.id}
