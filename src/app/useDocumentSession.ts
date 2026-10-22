@@ -167,7 +167,10 @@ export function useDocumentSession(options: Options) {
       // 닫기는 파일의 최신 내용을 채택하며, 일반 저장은 기존 충돌 처리를 유지한다.
       if (closing && await loadExternalOnClose(true)) return;
       if (d.seq === d.saved) {
-        if (!auto && !manual && d.edited) {
+        if (manual) {
+          await call("checkpointDocument", { id: d.doc.id, force: true });
+          d.edited = false;
+        } else if (!auto && d.edited) {
           d.edited = false;
           await call("checkpointDocument", { id: d.doc.id, force: false }).catch(() => {});
           void call("requestSyncNow").catch(() => {});
@@ -327,18 +330,15 @@ export function useDocumentSession(options: Options) {
     },
     report,
   });
-  // 직접 저장은 현재 문서의 Git 기록에 수동 저장 표시를 남기고 즉시 동기화한다.
+  // 변경된 원고의 수동 이력은 saveDocument가 기록한다. 동기화 요청은 저장 완료를 지연시키지 않는다.
   const manualSave = useCallback(async () => {
     const memoOpen = latest.current.memoOpen;
-    await flush({ manual: true });
+    await flush({ manual: !memoOpen });
     if (memoOpen) {
       await latest.current.saveMemoManually();
-    } else {
-      const id = draft.current?.doc.id;
-      if (id) await call("checkpointDocument", { id, force: true });
     }
-    await call("requestSyncNow");
-  }, [flush]);
+    void call("requestSyncNow").catch(report);
+  }, [flush, report]);
   function edit(patch: Partial<Doc>, markdownCopy?: boolean) {
     const d = draft.current;
     if (!d) return;
