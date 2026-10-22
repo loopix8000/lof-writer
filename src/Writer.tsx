@@ -51,6 +51,7 @@ import type { EditorProps, EditorView } from "@tiptap/pm/view";
 import { createCachedMarkdown } from "./cached-markdown";
 import EditorFind, { FindHighlights } from "./EditorFind";
 import { readEditorSelection, saveEditorSelection, type EditorSession } from "./workspace-state";
+import type { UndoState } from "./useUndoState";
 
 const SourceEditor = lazy(() => import("./SourceEditor"));
 
@@ -417,6 +418,7 @@ export default function Writer({
   contextMenu = false,
   images,
   onCursorLine,
+  onUndoStateChange,
   session,
 }: {
   id: string;
@@ -468,6 +470,7 @@ export default function Writer({
   };
   // 편집 중인(다른 그룹이 아니고 보이는) 원고의 커서 줄 번호를 알린다.
   onCursorLine?: (line: number) => void;
+  onUndoStateChange?: (state: UndoState) => void;
 }) {
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
   const style = normalizeEditorStyle({
@@ -486,6 +489,8 @@ export default function Writer({
   const countingRulesRef = useRef(countingRules);
   countingRulesRef.current = countingRules;
   const sourceRef = useRef<SourceEditorHandle>(null);
+  const undoStateCallback = useRef(onUndoStateChange);
+  undoStateCallback.current = onUndoStateChange;
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
   const protection = useRef<{ id: string; key: string; body: string; source: boolean; required: boolean } | null>(null);
@@ -793,6 +798,24 @@ export default function Writer({
     if (!editable && editor.isFocused) editor.view.dom.blur();
   }, [editor, editable, inactive, visible]);
   useLayoutEffect(() => { if (!visible || inactive) setMenu(null); }, [visible, inactive]);
+  useLayoutEffect(() => {
+    if (!undoStateCallback.current) return;
+    if (source || protectedSource) {
+      if (!sourceRef.current?.view) undoStateCallback.current({ canUndo: false, canRedo: false });
+      return;
+    }
+    const report = () => {
+      const enabled = !!editor && !editor.isDestroyed && editor.isEditable && visible && !inactive;
+      undoStateCallback.current?.({
+        canUndo: enabled && editor!.can().undo(),
+        canRedo: enabled && editor!.can().redo(),
+      });
+    };
+    report();
+    if (!editor || editor.isDestroyed) return;
+    editor.on("transaction", report);
+    return () => { editor.off("transaction", report); };
+  }, [editor, source, protectedSource, visible, inactive, editable, Boolean(onUndoStateChange)]);
   // 편집 중인 원고가 되거나 원문 편집으로 바뀌면 지금 줄을 알리고, 편집기에서는 바뀔 때마다 다시 알린다.
   useEffect(() => {
     if (!reportsCursor) return;
@@ -862,6 +885,14 @@ export default function Writer({
       const cmd = (e as CustomEvent<string>).detail;
       if (source || protectedSource) {
         const view = sourceRef.current?.view;
+        if (cmd === "undo") {
+          sourceRef.current?.undo();
+          return;
+        }
+        if (cmd === "redo") {
+          sourceRef.current?.redo();
+          return;
+        }
         if (view && cmd === "enter") {
           const { from, to } = view.state.selection.main;
           sourceRef.current?.replace(from, to, "\n");
@@ -1047,6 +1078,7 @@ export default function Writer({
             reveal={reveal}
             onChange={notifyChange}
             onCursorLine={reportsCursor ? line => cursorLineRef.current?.(line) : undefined}
+            onUndoStateChange={onUndoStateChange}
             onPasteImage={(event, insert) => {
               const files = imageFiles(event.clipboardData), save = imagesRef.current?.save;
               if (!files.length || !save || !editable) return false;

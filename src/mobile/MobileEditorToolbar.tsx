@@ -39,6 +39,8 @@ function editorAction(action: string) {
 export default function MobileEditorToolbar({
   disabled = false,
   saveDisabled = false,
+  canUndo = false,
+  canRedo = false,
   moreOpen,
   onToggleMore,
   onReplaceSymbols,
@@ -50,6 +52,8 @@ export default function MobileEditorToolbar({
 }: {
   disabled?: boolean;
   saveDisabled?: boolean;
+  canUndo?: boolean;
+  canRedo?: boolean;
   moreOpen: boolean;
   onToggleMore: () => void;
   onReplaceSymbols: () => void;
@@ -78,7 +82,7 @@ export default function MobileEditorToolbar({
               className="m-pill-tool-btn"
               aria-label={label}
               title={label}
-              disabled={disabled}
+              disabled={disabled || !(action === "undo" ? canUndo : canRedo)}
               onMouseDown={(event) => event.preventDefault()}
               onClick={() => editorAction(action)}
             >

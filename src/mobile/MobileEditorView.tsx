@@ -62,6 +62,7 @@ import {
   type WritingRules,
 } from "../types";
 import { workspaceKey } from "../workspace-state";
+import { useUndoState } from "../useUndoState";
 import Writer from "../Writer";
 import MobileEditorToolbar, { MobileEditorMenuActions } from "./MobileEditorToolbar";
 import {
@@ -423,6 +424,7 @@ export default function MobileEditorView({
   if (largeSource.id !== active.id)
     setLargeSource({ id: active.id, on: active.body.length >= LARGE_SOURCE_CHARS });
   const sourceMode = source || (largeSource.id === active.id && largeSource.on);
+  const { undoState, onUndoStateChange } = useUndoState(`${lib.root}\n${active.id}\n${sourceMode}`);
   const norm = normalizeEditorStyle(prefs, active.kind);
   const num = numberOf(active);
 
@@ -1050,6 +1052,7 @@ export default function MobileEditorView({
           <Writer
             key="mobile-writer"
             readOnly={isProtected}
+            onUndoStateChange={onUndoStateChange}
             inactive={false}
             visible={true}
             manualLineBreak={!!active.manualLineBreak}
@@ -1108,6 +1111,8 @@ export default function MobileEditorView({
       </EditorScroll>
 
       <MobileEditorToolbar
+        canUndo={undoState.canUndo}
+        canRedo={undoState.canRedo}
         disabled={isProtected}
         saveDisabled={saveStatus === "저장됨" || saveStatus === "저장 중"}
         moreOpen={moreMenuOpen}

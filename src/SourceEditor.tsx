@@ -1,7 +1,7 @@
 import { forwardRef, useImperativeHandle, useLayoutEffect, useRef } from "react";
 import { Annotation, Compartment, EditorState, Prec, StateEffect, StateField, Transaction } from "@codemirror/state";
 import { Decoration, EditorView, keymap, type DecorationSet, type ViewUpdate } from "@codemirror/view";
-import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import { defaultKeymap, history, historyKeymap, redo, redoDepth, undo, undoDepth } from "@codemirror/commands";
 import { markdown } from "@codemirror/lang-markdown";
 import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
 import { GFM } from "@lezer/markdown";
@@ -13,6 +13,7 @@ import { textCounts, type ManuscriptCounts } from "./manuscript-counts";
 import type { WritingRules } from "./types";
 import type { FindRange } from "./EditorFind";
 import { readEditorSelection, saveEditorSelection, type EditorSession } from "./workspace-state";
+import type { UndoState } from "./useUndoState";
 
 type Image = { src: string; alt: string };
 const externalChange = Annotation.define<boolean>();
@@ -168,6 +169,8 @@ function countDelta(update: ViewUpdate, rules?: WritingRules): ManuscriptCounts 
 
 export type SourceEditorHandle = {
   readonly view: EditorView | null;
+  undo: () => void;
+  redo: () => void;
   replace: (from: number, to: number, text: string, caret?: number) => void;
   paste: (text: string) => void;
   insertImage: (image: Image) => void;
@@ -185,6 +188,7 @@ type Props = {
   normalizePaste: (text: string, manual: boolean) => string;
   onChange: (body: string, delta?: ManuscriptCounts | null) => void;
   onCursorLine?: (line: number) => void;
+  onUndoStateChange?: (state: UndoState) => void;
   onPasteImage: (event: ClipboardEvent, insert: (image: Image) => void) => boolean;
 };
 
@@ -194,6 +198,14 @@ const SourceEditor = forwardRef<SourceEditorHandle, Props>(function SourceEditor
   const lastBody = useRef(props.body);
   const handle = useRef<SourceEditorHandle>({
     get view() { return viewRef.current; },
+    undo() {
+      const view = viewRef.current;
+      if (view && !view.state.readOnly && undo(view)) view.focus();
+    },
+    redo() {
+      const view = viewRef.current;
+      if (view && !view.state.readOnly && redo(view)) view.focus();
+    },
     highlight(hits, active) {
       viewRef.current?.dispatch({ effects: findMarks.of({ hits, active }) });
     },
@@ -247,6 +259,10 @@ const SourceEditor = forwardRef<SourceEditorHandle, Props>(function SourceEditor
     "aria-multiline": "true", role: "textbox", spellcheck: "false",
   });
   const editable = () => [EditorState.readOnly.of(!latest.current.editable), EditorView.editable.of(latest.current.editable)];
+  const reportUndoState = (state: EditorState) => {
+    const enabled = latest.current.editable && latest.current.visible && !latest.current.inactive;
+    latest.current.onUndoStateChange?.({ canUndo: enabled && undoDepth(state) > 0, canRedo: enabled && redoDepth(state) > 0 });
+  };
   useLayoutEffect(() => {
     if (!host.current) return;
     const view = new EditorView({
@@ -263,6 +279,7 @@ const SourceEditor = forwardRef<SourceEditorHandle, Props>(function SourceEditor
         EditorView.clipboardInputFilter.of((text, state) => latest.current.manualLineBreak || inCode(state)
           ? text : latest.current.normalizePaste(text, false)),
         EditorView.updateListener.of(update => {
+          reportUndoState(update.state);
           if (update.docChanged || update.selectionSet) {
             const { anchor, head } = update.state.selection.main;
             saveEditorSelection(latest.current.session, "source", { anchor, head });
@@ -309,6 +326,7 @@ const SourceEditor = forwardRef<SourceEditorHandle, Props>(function SourceEditor
       ] }),
     });
     viewRef.current = view; lastBody.current = latest.current.body;
+    reportUndoState(view.state);
     return () => {
       viewRef.current = null; view.destroy();
     };
@@ -332,6 +350,8 @@ const SourceEditor = forwardRef<SourceEditorHandle, Props>(function SourceEditor
     viewRef.current?.dispatch({ effects: [editableConfig.reconfigure(editable()), contentConfig.reconfigure(attributes())] });
   }, [props.editable, props.inactive]);
   useLayoutEffect(() => {
+    const current = viewRef.current;
+    if (current) reportUndoState(current.state);
     if (props.visible) {
       viewRef.current?.requestMeasure();
       const view = viewRef.current;

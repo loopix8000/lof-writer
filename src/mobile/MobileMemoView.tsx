@@ -23,6 +23,7 @@ import { plainText } from "../../core/text.mjs";
 import { useConfirm } from "../ConfirmDialog";
 import EditorScroll, { type EditorScrollPositions } from "../EditorScroll";
 import HistoryDialog from "../HistoryDialog";
+import { useUndoState } from "../useUndoState";
 import SyncStatus from "../SyncStatus";
 import { call, type AutoSyncStatus } from "../types";
 import { memoImageScope, useImages } from "../app/useDocumentImages";
@@ -96,6 +97,7 @@ export default function MobileMemoView({
   const [memo, setMemo] = useState<Memo | null>(null);
   const [titleInput, setTitleInput] = useState<string>("");
   const [historyTarget, setHistoryTarget] = useState<(Memo & { id: string }) | null>(null);
+  const { undoState, onUndoStateChange } = useUndoState(memo ? `${memo.space}\n${memo.path}` : "");
   const [status, setStatus] = useState<string>("저장됨");
 
   const [spaceSheetOpen, setSpaceSheetOpen] = useState(false);
@@ -614,6 +616,7 @@ export default function MobileMemoView({
               id={`memo:${memo.space}:${memo.path}`}
               revision={memo.revision}
               body={memo.body}
+              onUndoStateChange={onUndoStateChange}
               source={false}
               manualLineBreak={!!memo.manualLineBreak}
               copyWithBlankLines={prefs.copyWithBlankLines === true}
@@ -651,6 +654,8 @@ export default function MobileMemoView({
         </EditorScroll>
 
         <MobileEditorToolbar
+          canUndo={undoState.canUndo}
+          canRedo={undoState.canRedo}
           saveDisabled={status === "저장 중" || (
             dirty.current.seq === dirty.current.saved &&
             (!titleInput.trim() || titleInput.trim() === memo.title)
