@@ -597,6 +597,15 @@ fn dispatch_method(
             background_sync::set_background(app, !foreground);
             realtime::set_background(app, !foreground);
             auto_sync::set_background(app, !foreground);
+            // Android는 백그라운드로 갈 때 잠가 다시 열면 PIN을 묻는다.
+            // 파일 선택기처럼 앱이 연 화면으로 잠시 나갈 때는 화면에서 lock을 보내지 않는다.
+            if !foreground && args.get("lock").and_then(Value::as_bool).unwrap_or(false) {
+                let pin = app.state::<pin::PinState>();
+                if !pin.is_locked() {
+                    pin.lock_for_tray();
+                    let _ = app.emit("lof:pin-state", pin_status(app));
+                }
+            }
             Ok(json!(true))
         }
         "backgroundNotifications" => {

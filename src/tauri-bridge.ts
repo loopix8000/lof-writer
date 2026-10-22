@@ -94,13 +94,34 @@ export function isAndroidApp(): boolean {
   return typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent);
 }
 
+// 파일 선택기처럼 앱이 연 외부 화면이 떠 있는 동안에는 백그라운드로 가도 잠그지 않는다.
+// 선택기의 취소가 전달되지 않는 경우에 대비해 앱 화면으로 돌아오면 표시를 지운다.
+let externalScreens = 0;
+export function externalScreenOpen(): boolean {
+  return externalScreens > 0;
+}
+if (typeof document !== "undefined")
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") externalScreens = 0;
+  });
+async function withExternalScreen<T>(open: () => Promise<T>): Promise<T> {
+  externalScreens++;
+  try {
+    return await open();
+  } finally {
+    externalScreens = Math.max(0, externalScreens - 1);
+  }
+}
+
 async function pickAndroidImage(mimeTypes: string[]): Promise<{ name: string; data: string } | null> {
-  const picked = await invoke<{ name?: string; data?: string | null }>("android_pick_image", { mimeTypes });
+  const picked = await withExternalScreen(() =>
+    invoke<{ name?: string; data?: string | null }>("android_pick_image", { mimeTypes }),
+  );
   return picked?.data ? { name: picked.name || "image", data: picked.data } : null;
 }
 
 async function pickAndroidFolder(): Promise<string | null> {
-  const picked = await invoke<{ path?: string | null }>("android_pick_folder");
+  const picked = await withExternalScreen(() => invoke<{ path?: string | null }>("android_pick_folder"));
   return picked?.path || null;
 }
 
@@ -108,7 +129,7 @@ function pickBrowserFiles(options: {
   accept: string;
   multiple?: boolean;
 }): Promise<Array<{ name: string; data: string }> | null> {
-  return new Promise((resolve) => {
+  return withExternalScreen(() => new Promise((resolve) => {
     const input = document.createElement("input");
     input.type = "file";
     input.accept = options.accept;
@@ -156,7 +177,7 @@ function pickBrowserFiles(options: {
     });
 
     input.click();
-  });
+  }));
 }
 
 export function installTauriBridge() {

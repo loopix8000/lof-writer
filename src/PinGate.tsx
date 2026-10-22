@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { LockKeyhole, Minus, X } from "lucide-react";
 import App from "./App";
 import { pinDigits, type PinStatus } from "./PinSettings";
+import { isAndroidApp } from "./tauri-bridge";
 import { call } from "./types";
 
 export default function PinGate() {
@@ -61,7 +62,8 @@ export default function PinGate() {
     <div hidden={locked} inert={locked} aria-hidden={locked}><App /></div>
     {(status?.locked || (!status && error)) && <div className={`app pin-screen ${status?.theme === "dark" ? "dark" : ""} ${status?.colorTheme === "bakery" ? "bakery" : ""}`}
       onKeyDown={(e) => e.stopPropagation()}>
-      <header className="pin-titlebar" data-tauri-drag-region onMouseDown={(e) => {
+      {/* Android는 시스템이 창을 관리하므로 PC 창 제목 막대를 두지 않는다. */}
+      {!isAndroidApp() && <header className="pin-titlebar" data-tauri-drag-region onMouseDown={(e) => {
         if (e.button === 0 && !(e.target as HTMLElement).closest("button")) void window.lof.windowStartDragging?.();
       }}>
         <span data-tauri-drag-region>Lof Writer</span>
@@ -69,7 +71,7 @@ export default function PinGate() {
           <button className="window-control" type="button" aria-label="최소화" onClick={() => void window.lof.windowMinimize?.()}><Minus size={14} /></button>
           <button className="window-control close" type="button" aria-label="트레이로 숨기기" onClick={() => void window.lof.windowClose?.()}><X size={14} /></button>
         </div>
-      </header>
+      </header>}
       <main className="pin-screen-main">
         <form className="pin-card" onSubmit={(e) => { e.preventDefault(); void unlock(); }} aria-labelledby="pin-heading">
           {status?.locked && <div className="pin-symbol"><LockKeyhole size={28} /></div>}
