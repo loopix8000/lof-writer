@@ -1,7 +1,6 @@
 import {
   BookOpen,
   ChevronRight,
-  Download,
   Feather,
   FolderOpen,
   Plus
@@ -170,13 +169,6 @@ export default function LibraryPage({
           다른 서재 열기
         </button>
         <span title={lib.root}>{lib.root}</span>
-        <button
-          disabled={busy}
-          onClick={() => setDialog({ type: "export" })}
-        >
-          <Download size={15} />
-          서재 내보내기
-        </button>
         <button onClick={attempt(() => call("reveal"))}>
           폴더에서 보기 <ChevronRight size={13} />
         </button>
