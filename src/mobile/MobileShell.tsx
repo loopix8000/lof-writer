@@ -570,7 +570,7 @@ export default function MobileShell({
 
         {mobileTab === "bookmarks" && (
           <div className="m-screen m-bookmarks-screen">
-            <header className="m-topbar">
+            <header className="m-topbar m-topbar-centered">
               <div className="m-topbar-title">
                 <h1>북마크</h1>
               </div>
@@ -656,7 +656,7 @@ export default function MobileShell({
 
         {mobileTab === "settings" && (
           <div className="m-screen m-settings-screen">
-            <header className="m-topbar">
+            <header className="m-topbar m-topbar-centered">
               {settingsDetailOpen && (
                 <button
                   type="button"
@@ -822,7 +822,7 @@ export default function MobileShell({
       {/* 모바일 전용 전체 화면 서브 다이얼로그 (새 작품, 소설 관리, 변경 이력, 내보내기 등) */}
       {dialog && !["settings", "serverSync"].includes(dialog.type) && (
         <div className="m-dialog-page" role="dialog" aria-modal="true">
-          <header className={`m-topbar ${dialog.type === "editProject" ? "m-dialog-centered-header" : ""}`}>
+          <header className="m-topbar m-topbar-centered">
             {dialog.type !== "setup" ? (
               <button
                 type="button"

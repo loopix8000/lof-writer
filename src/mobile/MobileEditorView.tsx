@@ -25,6 +25,7 @@ import {
   Search,
   SlidersHorizontal,
   StickyNote,
+  TextCursorInput,
   Trash2,
   X,
 } from "lucide-react";
@@ -316,14 +317,14 @@ export default function MobileEditorView({
       align: "center",
       drawer: true,
       items: [
-        ...(target.kind === "episode"
-          ? [...statusMenuItems(target), "separator" as const]
-          : []),
         {
           label: "이름 변경",
-          icon: <Pencil size={16} />,
+          icon: <TextCursorInput size={16} />,
           action: () => setRenamingDoc(target),
         },
+        ...(target.kind === "episode"
+          ? ["separator" as const, ...statusMenuItems(target), "separator" as const]
+          : []),
         ...(target.kind !== "episode"
           ? [{
               label: "폴더 이동",

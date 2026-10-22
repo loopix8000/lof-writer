@@ -85,6 +85,29 @@
   text-box: trim-both cap alphabetic;
 }
 
+.m-topbar-centered {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1fr);
+}
+
+.m-topbar-centered > .m-topbar-title {
+  grid-column: 2;
+  grid-row: 1;
+  justify-content: center;
+}
+
+.m-topbar-centered > .m-back-btn {
+  grid-column: 1;
+  grid-row: 1;
+  justify-self: start;
+}
+
+.m-topbar-centered > .m-topbar-actions {
+  grid-column: 3;
+  grid-row: 1;
+  justify-self: end;
+}
+
 .m-badge {
   display: block;
   flex-shrink: 0;
@@ -3064,13 +3087,8 @@
   padding: 16px 16px 32px;
 }
 
-.m-dialog-centered-header {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-}
-
-.m-dialog-centered-header > .m-back-btn {
-  justify-self: start;
+.mobile-app .confirm-backdrop {
+  z-index: 320;
 }
 
 .m-project-save-confirm {
@@ -3345,14 +3363,18 @@
   color: var(--ink);
 }
 
-/* 드로어 문서와 관리 메뉴에서는 길게 눌러도 글자 선택이나 시스템 메뉴가 뜨지 않는다. */
-.m-slide-drawer .m-episode-row .m-tree-row-main,
-.m-slide-drawer .m-episode-row .m-tree-row-main *,
-.m-slide-drawer .m-doc-tree-item .m-tree-row-main,
-.m-slide-drawer .m-doc-tree-item .m-tree-row-main *,
+/* 사이드바와 관리 메뉴에서는 길게 눌러도 글자 선택이나 시스템 메뉴가 뜨지 않는다. */
+.m-slide-drawer,
+.m-slide-drawer *,
 .m-drawer-document-menu,
 .m-drawer-document-menu * {
   -webkit-user-select: none;
   user-select: none;
   -webkit-touch-callout: none;
+}
+
+.m-slide-drawer :is(input, textarea, [contenteditable="true"], [contenteditable="true"] *) {
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
 }
