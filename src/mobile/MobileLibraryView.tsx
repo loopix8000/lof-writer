@@ -120,7 +120,7 @@ export default function MobileLibraryView({
                       <h3>{p.title || "제목 없는 작품"}</h3>
                       <div className="m-project-stats">
                         <span>회차 {epCount}편</span>
-                        {docCount > 0 && <span>· 설정/메모 {docCount}개</span>}
+                        {docCount > 0 && <span>· 플롯/메모 {docCount}개</span>}
                       </div>
                       {totalChars > 0 && (
                         <div className="m-project-chars">
