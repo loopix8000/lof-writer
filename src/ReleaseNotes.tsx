@@ -4,6 +4,7 @@ import { ChevronDown, RefreshCw, Sparkles, X } from "lucide-react";
 import { fetchRelease, fetchReleases, type Release } from "./github-releases";
 
 const SEEN_KEY = "lof.releaseNotesSeenVersion";
+const SHOW_UPDATE_NOTICE = import.meta.env.VITE_SHOW_UPDATE_NOTICE === "true";
 
 // 릴리즈 본문을 HTML로 넣지 않고 토큰을 React 요소로 그려 스크립트나 외부 리소스가 실행되지 않게 한다.
 function inline(tokens: Token[] | undefined): ReactNode {
@@ -96,7 +97,7 @@ export function ReleaseNotesDialog({ version, onClose }: { version: string; onCl
   </div>;
 }
 
-// 버전이 바뀐 뒤 처음 실행했을 때 한 번만 알린다. 새로 설치했다면 첫 설정이 끝나지 않았으므로 알리지 않는다.
+// 릴리즈 빌드에서 알림을 켠 버전만 첫 실행에 한 번 알린다. 새로 설치했다면 알리지 않는다.
 export function useReleaseNotice(version: string, ready: boolean, existingUser: boolean) {
   const [visible, setVisible] = useState(false);
   useEffect(() => {
@@ -105,7 +106,7 @@ export function useReleaseNotice(version: string, ready: boolean, existingUser: 
     try { seen = localStorage.getItem(SEEN_KEY); } catch { return; }
     if (seen === version) return;
     try { localStorage.setItem(SEEN_KEY, version); } catch {}
-    if (seen ? seen !== version : existingUser) setVisible(true);
+    if (SHOW_UPDATE_NOTICE && (seen ? seen !== version : existingUser)) setVisible(true);
   }, [ready, version, existingUser]);
   return { visible, dismiss: useCallback(() => setVisible(false), []) };
 }

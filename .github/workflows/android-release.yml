@@ -7,6 +7,10 @@ on:
         description: Publish the signed APK release and Android beta channel
         type: boolean
         default: false
+      show_update_notice:
+        description: Show the update completion popup on first launch after updating
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -51,6 +55,8 @@ jobs:
       - name: Initialize Android project
         run: npm run tauri -- android init --ci --skip-targets-install
       - name: Build ARM64 release APK
+        env:
+          VITE_SHOW_UPDATE_NOTICE: ${{ inputs.show_update_notice }}
         run: npm run android:build -- --release --target=aarch64
       - name: Sign and verify APK
         id: apk

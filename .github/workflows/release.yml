@@ -7,6 +7,10 @@ on:
         description: Publish the release and update the beta channel after building
         type: boolean
         default: false
+      show_update_notice:
+        description: Show the update completion popup on first launch after updating
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -39,6 +43,7 @@ jobs:
       - name: Build and upload draft release
         uses: tauri-apps/tauri-action@v1
         env:
+          VITE_SHOW_UPDATE_NOTICE: ${{ inputs.show_update_notice }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
