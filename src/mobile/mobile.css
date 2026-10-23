@@ -689,8 +689,11 @@
   right: 0;
   z-index: 3;
   background: var(--surface);
-  transition: transform 0.28s ease;
   will-change: transform;
+}
+
+.m-project-screen.hero-animating .m-project-head {
+  transition: transform 0.28s ease;
 }
 
 .m-project-head.collapsed {
@@ -699,6 +702,9 @@
 
 .m-project-hero-wrap {
   padding: 6px 14px 0;
+}
+
+.m-project-screen.hero-animating .m-project-hero-wrap {
   transition:
     opacity 0.22s ease,
     transform 0.28s ease;
@@ -740,8 +746,11 @@
 
 .m-project-list > .m-tree-container {
   transform: translateY(var(--project-hero-height));
-  transition: transform 0.28s ease;
   will-change: transform;
+}
+
+.m-project-screen.hero-animating .m-project-list > .m-tree-container {
+  transition: transform 0.28s ease;
 }
 
 .m-project-screen.hero-collapsed .m-project-list > .m-tree-container {
@@ -786,6 +795,9 @@
   opacity: 0;
   transform: translateY(4px);
   pointer-events: none;
+}
+
+.m-project-screen.hero-animating .m-project-compact-title {
   transition:
     opacity 0.2s ease,
     transform 0.28s ease;

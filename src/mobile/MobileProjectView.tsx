@@ -155,6 +155,7 @@ export default function MobileProjectView({
   const lastTop = useRef(0);
   const intent = useRef({ down: 0, up: 0 });
   const toggleLockUntil = useRef(0);
+  const animTimer = useRef<number | undefined>(undefined);
   const touchY = useRef<number | null>(null);
   const headTouch = useRef<{ x: number; y: number } | null>(null);
   const listThumbRef = useOverlayScrollbar(
@@ -189,6 +190,11 @@ export default function MobileProjectView({
     intent.current = { down: 0, up: 0 };
     // 애니메이션 동안에는 상태만 다시 바꾸지 않는다. 목록 스크롤은 그대로 이어진다.
     toggleLockUntil.current = Date.now() + 320;
+    screenRef.current?.classList.add("hero-animating");
+    window.clearTimeout(animTimer.current);
+    animTimer.current = window.setTimeout(() => {
+      screenRef.current?.classList.remove("hero-animating");
+    }, 320);
     setHeroCollapsed(next);
   };
 
@@ -197,8 +203,10 @@ export default function MobileProjectView({
     setCollapsed(true);
   };
 
-  // 탭·작품·보관함을 바꾸면 목록을 맨 위로 돌리고 작품 정보를 다시 펼친다
-  useEffect(() => {
+  // 탭·작품·보관함을 바꾸면 애니메이션 없이 첫 프레임부터 제자리에서 보이도록 즉시 초기화한다
+  useLayoutEffect(() => {
+    window.clearTimeout(animTimer.current);
+    screenRef.current?.classList.remove("hero-animating");
     const list = listScrollRef.current;
     if (list) list.scrollTop = 0;
     lastTop.current = 0;
@@ -206,6 +214,8 @@ export default function MobileProjectView({
     intent.current = { down: 0, up: 0 };
     setHeroCollapsed(false);
   }, [activeTab, archive, project.id]);
+
+  useEffect(() => () => window.clearTimeout(animTimer.current), []);
 
   useEffect(() => {
     setClosedFolders(new Set());
