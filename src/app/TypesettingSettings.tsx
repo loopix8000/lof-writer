@@ -57,6 +57,7 @@ export default function TypesettingSettings({
   const [systemFonts, setSystemFonts] = useState<SystemFontOption[] | null>(null);
   const [loadingSystemFonts, setLoadingSystemFonts] = useState(false);
   const [systemQuery, setSystemQuery] = useState("");
+  const [lineHeightDraft, setLineHeightDraft] = useState<{ kind: Props["targetKind"]; value: string } | null>(null);
 
   const targetKindInfo =
     TYPESETTING_KINDS.find((k) => k.id === targetKind) || TYPESETTING_KINDS[0];
@@ -357,17 +358,29 @@ export default function TypesettingSettings({
           <label>
             줄 간격 (행간)
             <input
-              type="number"
-              min={1.2}
-              max={3.5}
-              step={0.05}
+              key={targetKind}
+              type="text"
+              inputMode="decimal"
               aria-label="조판 줄 간격"
-              value={kindEditorStyle.lineHeight}
-              onChange={(e) =>
-                updateTargetPrefs({
-                  lineHeight: Number(e.target.value) || 2,
-                })
-              }
+              value={lineHeightDraft?.kind === targetKind ? lineHeightDraft.value : kindEditorStyle.lineHeight}
+              onChange={(e) => {
+                const value = e.target.value;
+                // 빈칸이나 소수점까지 입력한 상태를 저장값으로 덮어쓰지 않는다.
+                setLineHeightDraft({ kind: targetKind, value });
+                const lineHeight = Number(value.replace(",", "."));
+                if (/^\d+(?:[.,]\d+)?$/.test(value) && lineHeight >= 1 && lineHeight <= 2.5 && lineHeight !== kindEditorStyle.lineHeight)
+                  updateTargetPrefs({ lineHeight });
+              }}
+              onBlur={(e) => {
+                const value = e.currentTarget.value.trim().replace(",", ".");
+                const number = Number(value);
+                if (value && Number.isFinite(number)) {
+                  const lineHeight = Math.round(Math.min(2.5, Math.max(1, number)) * 100) / 100;
+                  if (lineHeight !== kindEditorStyle.lineHeight) updateTargetPrefs({ lineHeight });
+                }
+                setLineHeightDraft(null);
+              }}
+              onKeyDown={(e) => { if (e.key === "Enter" && !e.nativeEvent.isComposing) e.currentTarget.blur(); }}
             />
           </label>
           <label>
