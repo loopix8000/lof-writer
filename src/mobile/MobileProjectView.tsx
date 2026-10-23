@@ -1210,7 +1210,7 @@ export default function MobileProjectView({
 
       {/* 옵시디언 / 노션 스타일 트리 & 리스트 본문 (구분선 없음) */}
       <div
-        className="m-scroll-body m-tree-scroll"
+        className="m-scroll-body m-tree-scroll m-project-list"
         ref={listScrollRef}
         onScroll={onListScroll}
         onTouchStart={onListTouchStart}

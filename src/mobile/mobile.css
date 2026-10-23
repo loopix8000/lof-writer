@@ -696,6 +696,11 @@
   pointer-events: none;
 }
 
+/* 접히는 동안 목록 스크롤을 멈춰도 스크롤바 자리를 비워 두어 목록 폭이 흔들리지 않게 한다 */
+.m-project-list {
+  scrollbar-gutter: stable;
+}
+
 .m-project-compact-title {
   flex: 1 1 auto;
   min-width: 0;
