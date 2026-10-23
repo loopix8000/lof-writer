@@ -196,7 +196,7 @@ if (!runOnly || !fs.existsSync(apkPath)) {
 
   // 3. Assemble APK via Gradle
   console.log(`[3/3] Gradle APK 패키징 중 (assemble${gradleVariant})...`);
-  const gradlew = process.platform === "win32" ? "gradlew.bat" : "./gradlew";
+  const gradlew = process.platform === "win32" ? path.join(androidDir, "gradlew.bat") : "./gradlew";
   if (run(gradlew, ["--no-daemon", `assemble${gradleVariant}`], androidDir) !== 0) {
     process.exit(1);
   }
