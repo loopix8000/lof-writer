@@ -14,7 +14,6 @@ import type { WritingRules } from "./types";
 import type { FindRange } from "./EditorFind";
 import { readEditorSelection, saveEditorSelection, type EditorSession } from "./workspace-state";
 import type { UndoState } from "./useUndoState";
-import { useEditorComposition } from "./useEditorComposition";
 
 type Image = { src: string; alt: string };
 const externalChange = Annotation.define<boolean>();
@@ -196,7 +195,6 @@ type Props = {
 
 const SourceEditor = forwardRef<SourceEditorHandle, Props>(function SourceEditor(props, ref) {
   const host = useRef<HTMLDivElement>(null), viewRef = useRef<EditorView | null>(null);
-  const composition = useEditorComposition(host);
   const latest = useRef(props); latest.current = props;
   const lastBody = useRef(props.body);
   const handle = useRef<SourceEditorHandle>({
@@ -305,7 +303,7 @@ const SourceEditor = forwardRef<SourceEditorHandle, Props>(function SourceEditor
         Prec.high(EditorView.domEventHandlers({
           paste(event) { return latest.current.editable && latest.current.onPasteImage(event, image => handle.current.insertImage(image)); },
           keydown(event, view) {
-            if (!latest.current.editable || view.composing || composition.composing.current || event.isComposing || event.keyCode === 229 || event.ctrlKey || event.metaKey || event.altKey ||
+            if (!latest.current.editable || view.composing || event.ctrlKey || event.metaKey || event.altKey ||
                 (event.key.length !== 1 && event.key !== "Backspace" && event.key !== "Enter")) return false;
             const { from, to } = view.state.selection.main, doc = view.state.doc;
             const beforeLine = doc.lineAt(from), afterLine = doc.lineAt(to);
@@ -345,8 +343,7 @@ const SourceEditor = forwardRef<SourceEditorHandle, Props>(function SourceEditor
   useLayoutEffect(() => {
     const view = viewRef.current;
     if (!view || props.body === lastBody.current) return;
-    // 외부 수정만 반영한다. 로컬 입력 때는 트리·실행 취소·한글 조합 상태를 유지한다.
-    if (view.composing || composition.composing.current) return;
+    // 외부 수정만 반영한다. 로컬 입력은 이미 편집기에 있으므로 다시 넣지 않는다.
     const old = view.state.doc.toString(), next = props.body;
     let start = 0, endA = old.length, endB = next.length;
     while (start < endA && start < endB && old[start] === next[start]) start++;
@@ -356,7 +353,7 @@ const SourceEditor = forwardRef<SourceEditorHandle, Props>(function SourceEditor
       changes: { from: start, to: endA, insert: next.slice(start, endB) },
       annotations: [externalChange.of(true), Transaction.addToHistory.of(false)],
     });
-  }, [props.body, composition.settled]);
+  }, [props.body]);
   useLayoutEffect(() => {
     viewRef.current?.dispatch({ effects: [editableConfig.reconfigure(editable()), contentConfig.reconfigure(attributes())] });
   }, [props.editable, props.inactive]);

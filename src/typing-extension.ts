@@ -221,7 +221,6 @@ export const TypingAssist = Extension.create<{
             const inComment = hasUnclosedCommentBefore(view.state.doc, from);
             const opts: Record<string, any> = {
               ...getOptions(),
-              composing: view.composing,
               inComment,
               inCode:
                 !!resolved.parent.type.spec.code ||
@@ -249,7 +248,6 @@ export const TypingAssist = Extension.create<{
             const candidateLine = before + text;
             if (
               opts.autoDividerReplacement !== false &&
-              !opts.composing &&
               !opts.inCode &&
               !inComment &&
               from === to &&
@@ -279,7 +277,7 @@ export const TypingAssist = Extension.create<{
             const plan = typingPlan(before, selected, after, text, opts);
             if (!plan) {
               // 주석에서는 Markdown 목록·구분선 입력 규칙도 실행하지 않는다.
-              if (!inComment || opts.composing || opts.inCode) return false;
+              if (!inComment || opts.inCode) return false;
               view.dispatch(view.state.tr.insertText(text, from, to).scrollIntoView());
               return true;
             }
@@ -309,7 +307,7 @@ export const TypingAssist = Extension.create<{
             return true;
           },
           handleKeyDown(view, event) {
-            if (view.composing || event.isComposing || event.keyCode === 229) return false;
+            if (view.composing) return false;
             if (
               (event.ctrlKey || event.metaKey) &&
               !event.altKey &&
@@ -334,7 +332,6 @@ export const TypingAssist = Extension.create<{
               position = $from.pos;
             const opts = {
               ...getOptions(),
-              composing: view.composing || event.isComposing,
               inCode:
                 !!$from.parent.type.spec.code ||
                 $from.marks().some((m) => m.type.name === "code"),

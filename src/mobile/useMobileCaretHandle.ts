@@ -5,7 +5,6 @@ export function useMobileCaretHandle(rootRef: RefObject<HTMLElement | null>) {
   useEffect(() => {
     const root = rootRef.current;
     if (!root) return;
-    let composing = false;
     let touch: { x: number; y: number; time: number; scrolling: boolean } | null = null;
     let scrollPending = false;
     let frame: number | undefined;
@@ -16,7 +15,7 @@ export function useMobileCaretHandle(rootRef: RefObject<HTMLElement | null>) {
     };
     const editorSelector = ".m-manuscript-sheet .tiptap, .m-manuscript-sheet .cm-content";
     const hideHandle = () => {
-      if (composing || performance.now() < quietUntil) return;
+      if (performance.now() < quietUntil) return;
       const focused = document.activeElement;
       if (!(focused instanceof HTMLElement) || !root.contains(focused) || !focused.matches(editorSelector)) return;
       const selection = window.getSelection();
@@ -65,8 +64,6 @@ export function useMobileCaretHandle(rootRef: RefObject<HTMLElement | null>) {
       cancelPending();
       quietUntil = performance.now() + 250;
     };
-    const compositionStart = () => { composing = true; input(); };
-    const compositionEnd = () => { composing = false; input(); };
     root.addEventListener("scroll", scroll, true);
     root.addEventListener("touchstart", start, { capture: true, passive: true });
     root.addEventListener("touchmove", move, { capture: true, passive: true });
@@ -75,8 +72,6 @@ export function useMobileCaretHandle(rootRef: RefObject<HTMLElement | null>) {
     root.addEventListener("wheel", wheel, { capture: true, passive: true });
     root.addEventListener("pointerdown", otherAction, true);
     root.addEventListener("click", otherAction, true);
-    root.addEventListener("compositionstart", compositionStart, true);
-    root.addEventListener("compositionend", compositionEnd, true);
     root.addEventListener("beforeinput", input, true);
     root.addEventListener("input", input, true);
     root.addEventListener("keydown", input, true);
@@ -91,8 +86,6 @@ export function useMobileCaretHandle(rootRef: RefObject<HTMLElement | null>) {
       root.removeEventListener("wheel", wheel, true);
       root.removeEventListener("pointerdown", otherAction, true);
       root.removeEventListener("click", otherAction, true);
-      root.removeEventListener("compositionstart", compositionStart, true);
-      root.removeEventListener("compositionend", compositionEnd, true);
       root.removeEventListener("beforeinput", input, true);
       root.removeEventListener("input", input, true);
       root.removeEventListener("keydown", input, true);

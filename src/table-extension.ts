@@ -62,7 +62,7 @@ export const MarkdownTables = Extension.create({
         },
         handleKeyDown(view, event) {
           if (event.key !== "Enter" || event.shiftKey || event.ctrlKey || event.metaKey ||
-            event.altKey || event.isComposing || view.composing || !editor.isEditable) return false;
+            event.altKey || view.composing || !editor.isEditable) return false;
           const { $from, empty } = view.state.selection;
           // 제목 행 다음에 구분 행을 입력하고 Enter를 누르면 표로 전환한다.
           if (!empty || $from.depth !== 1 || $from.parent.type.name !== "paragraph" ||

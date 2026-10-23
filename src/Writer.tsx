@@ -55,7 +55,6 @@ import { createCachedMarkdown } from "./cached-markdown";
 import EditorFind, { FindHighlights } from "./EditorFind";
 import { readEditorSelection, saveEditorSelection, type EditorSession } from "./workspace-state";
 import type { UndoState } from "./useUndoState";
-import { useEditorComposition } from "./useEditorComposition";
 
 const SourceEditor = lazy(() => import("./SourceEditor"));
 
@@ -518,7 +517,6 @@ export default function Writer({
   const protectedSource = protection.current!.required;
   // 원문으로 연 문서는 필요해질 때 서식 편집기를 준비한다. 로컬 입력을 다시 읽지는 않는다.
   const loadedBody = useRef<string | null>(source || protectedSource ? null : body);
-  const pendingContent = useRef(false);
   function notifyChange(nextBody: string, delta?: ManuscriptCounts | null, markdownCopy = true) {
     if (protection.current) protection.current.body = nextBody;
     onChangeRef.current(nextBody, delta, markdownCopy);
@@ -678,7 +676,6 @@ export default function Writer({
     },
     [id, tables, links, hasImages],
   );
-  const composition = useEditorComposition(editor && !editor.isDestroyed ? editor.view.dom : null);
   // 이 원고를 인용한 메모 목록이 바뀌면 메모 표시를 다시 단다.
   useEffect(() => {
     if (!editor || editor.isDestroyed) return;
@@ -740,11 +737,10 @@ export default function Writer({
       });
     }
   }, [editor, manualLineBreak, copyWithBlankLines]);
-  const reconcileContent = () => {
-    if (!editor || editor.isDestroyed || source || protectedSource) { pendingContent.current = false; return; }
-    if (body === loadedBody.current || markdown.serialize(editor) === body) { pendingContent.current = false; return; }
-    if (editor.view.composing || composition.composing.current) return;
-    pendingContent.current = false;
+  // 로컬 입력을 되비추지 않고 저장 버전·편집 모드 변경만 반영한다.
+  useEffect(() => {
+    if (!editor || editor.isDestroyed || source || protectedSource) return;
+    if (body === loadedBody.current || markdown.serialize(editor) === body) return;
     loadedBody.current = body;
     editor.commands.setContent(splitSoftBreaks(body, !manualLineBreak), {
       contentType: "markdown",
@@ -753,16 +749,7 @@ export default function Writer({
     // 본문을 통째로 바꾸면 붙어 있던 북마크가 사라지므로 저장된 목록으로 다시 깐다.
     bookmarkKey.current = { editor, key: JSON.stringify(bookmarksRef.current || []) };
     loadBookmarks(editor, bookmarksRef.current);
-  };
-  useEffect(() => {
-    pendingContent.current = true;
-    reconcileContent();
-    // 로컬 입력을 되비추지 않고 저장 버전·편집 모드 변경만 반영한다.
   }, [revision, source, protectedSource, editor, id]);
-  useEffect(() => {
-    // 조합 때문에 보류한 갱신만 최신 본문으로 다시 처리한다.
-    if (pendingContent.current) reconcileContent();
-  }, [composition.settled]);
   useEffect(() => {
     if (!session || !editor || editor.isDestroyed || source || protectedSource) return;
     const saved = readEditorSelection(session, "rich", editor.state.doc.content.size);

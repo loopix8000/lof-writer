@@ -6,11 +6,12 @@ import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import { closeHistory } from "@tiptap/pm/history";
 import { ArrowDown, ArrowUp, Replace, ReplaceAll, Search, TextSelect, X } from "lucide-react";
 import type { SourceEditorHandle } from "./SourceEditor";
-import { useEditorComposition } from "./useEditorComposition";
 
 export type FindRange = { from: number; to: number };
 type FindMarks = { hits: FindRange[]; active: number };
 const findKey = new PluginKey<DecorationSet>("lofFind");
+// 찾기를 닫아 두었을 때는 입력마다 강조를 다시 보내지 않도록 같은 빈 목록을 쓴다.
+const NO_HITS: FindRange[] = [];
 
 // 정규식 문자는 그대로 찾고, 대소문자 비교로 글자 길이가 바뀌어도 원래 위치를 쓴다.
 export function findText(text: string, query: string, caseSensitive: boolean, offset = 0): FindRange[] {
@@ -66,8 +67,6 @@ export default function EditorFind({ editor, sourceRef, body, enabled, editable 
   const [active, setActive] = useState(0);
   const [revision, setRevision] = useState(0);
   const [navigation, setNavigation] = useState(0);
-  const sourceView = sourceRef?.current?.view;
-  const composition = useEditorComposition(sourceView?.contentDOM ?? (editor && !editor.isDestroyed ? editor.view.dom : null));
   const revealRequested = useRef(false);
   const input = useRef<HTMLInputElement>(null);
   const bar = useRef<HTMLDivElement>(null);
@@ -88,7 +87,7 @@ export default function EditorFind({ editor, sourceRef, body, enabled, editable 
     return () => { editor.off("transaction", update); };
   }, [editor, open, enabled]);
   const hits = useMemo(() => {
-    if (!open || !enabled || !query) return [];
+    if (!open || !enabled || !query) return NO_HITS;
     if (sourceRef) return findText(sourceRef.current?.view?.state.doc.toString() ?? body ?? "", query, caseSensitive);
     return editor && !editor.isDestroyed ? findInEditor(editor, query, caseSensitive) : [];
   }, [open, enabled, query, caseSensitive, sourceRef, editor, body, revision]);
@@ -116,7 +115,6 @@ export default function EditorFind({ editor, sourceRef, body, enabled, editable 
     if (!enabled || !editable || !query) return;
     const view = sourceRef?.current?.view;
     if (sourceRef ? !view || view.state.readOnly : !editor || editor.isDestroyed || !editor.isEditable) return;
-    if (composition.composing.current || view?.composing || editor?.view.composing) return;
     // 편집 직전의 본문에서 위치를 다시 계산한다.
     const fresh = view ? findText(view.state.doc.toString(), query, caseSensitive) : findInEditor(editor!, query, caseSensitive);
     if (!fresh.length) return;
@@ -139,7 +137,6 @@ export default function EditorFind({ editor, sourceRef, body, enabled, editable 
     requestReveal();
   };
   useEffect(() => {
-    if (composition.composing.current || sourceRef?.current?.view?.composing || (editor && !editor.isDestroyed && editor.view.composing)) return;
     if (sourceRef) sourceRef.current?.highlight(hits, current);
     else if (editor && !editor.isDestroyed)
       editor.view.dispatch(editor.state.tr.setMeta(findKey, { hits, active: current }).setMeta("addToHistory", false));
@@ -159,7 +156,7 @@ export default function EditorFind({ editor, sourceRef, body, enabled, editable 
         scroll.scrollTop += editor.view.coordsAtPos(hit.from).top - (top + bounds.bottom) / 2;
       }
     }
-  }, [hits, current, editor, sourceRef, navigation, composition.settled]);
+  }, [hits, current, editor, sourceRef, navigation]);
   useEffect(() => () => {
     if (sourceRef) sourceRef.current?.highlight([], -1);
     else if (editor && !editor.isDestroyed)
