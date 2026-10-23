@@ -42,6 +42,7 @@ import {
   type WritingRules,
 } from "../types";
 import { isAndroidApp } from "../tauri-bridge";
+import { useMobileCaretHandle } from "./useMobileCaretHandle";
 import type { useProjectReorder } from "../useProjectReorder";
 import { UpdateLock, UpdateNotice } from "../Updater";
 import MobileEditorView from "./MobileEditorView";
@@ -473,6 +474,7 @@ export default function MobileShell({
 
   // 상태 표시줄·내비게이션 바도 상단 앱바·하단 탭과 같은 색과 아이콘 밝기로 맞춘다.
   const shellRef = useRef<HTMLDivElement>(null);
+  useMobileCaretHandle(shellRef);
   const dark = prefs.theme === "dark";
   useEffect(() => {
     if (!isAndroidApp() || !shellRef.current) return;
