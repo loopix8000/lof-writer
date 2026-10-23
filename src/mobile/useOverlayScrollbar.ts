@@ -6,6 +6,8 @@ const MIN_THUMB = 32;
 type Options = {
   // 이 요소의 아래 끝부터 막대를 움직인다(목록 위에 떠 있는 머리 영역).
   startRef?: RefObject<HTMLElement | null>;
+  // 막대 길이를 잴 실제 본문. 없으면 목록의 첫 자식을 쓴다.
+  bodyRef?: RefObject<HTMLElement | null>;
   // 막대 길이를 잴 때 위에서 뺄 높이. 머리 영역이 접히고 펼쳐져도 막대 길이가 바뀌지 않게 고정값을 준다.
   reservedTop?: () => number;
 };
@@ -15,7 +17,7 @@ type Options = {
 export function useOverlayScrollbar(
   scrollRef: RefObject<HTMLElement | null>,
   deps: DependencyList,
-  { startRef, reservedTop }: Options = {},
+  { startRef, bodyRef, reservedTop }: Options = {},
 ) {
   const thumbRef = useRef<HTMLDivElement>(null);
   const fadeTimer = useRef<number | undefined>(undefined);
@@ -26,7 +28,7 @@ export function useOverlayScrollbar(
     const el = scrollRef.current, thumb = thumbRef.current;
     if (!el || !thumb) return;
     const { scrollTop, scrollHeight, clientHeight } = el;
-    const child = el.firstElementChild as HTMLElement | null;
+    const child = bodyRef?.current ?? (el.firstElementChild as HTMLElement | null);
     // 펼쳐진 동안 목록 본문에 걸린 translateY 때문에 scrollHeight가 일시적으로 커져도,
     // 막대 길이와 진행률은 실제 본문 높이 기준으로 계산해 접힐 때 막대 길이가 늘어나지 않게 한다.
     const baseScrollHeight =
@@ -52,7 +54,7 @@ export function useOverlayScrollbar(
     thumb.classList.add("visible");
     window.clearTimeout(fadeTimer.current);
     fadeTimer.current = window.setTimeout(() => thumb.classList.remove("visible"), 900);
-  }, [scrollRef, startRef]);
+  }, [scrollRef, startRef, bodyRef]);
 
   useEffect(() => {
     const el = scrollRef.current;

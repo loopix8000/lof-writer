@@ -676,6 +676,9 @@
 .m-project-screen {
   --project-tools-height: 0px;
   --project-hero-height: 0px;
+  /* 접고 펼칠 때 레이어·목록·여백이 같은 시간과 곡선으로 움직인다. 빠르게 출발해 끝에서 부드럽게 멈춘다. */
+  --hero-duration: 0.38s;
+  --hero-ease: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .m-project-page-header {
@@ -693,7 +696,7 @@
 }
 
 .m-project-screen.hero-animating .m-project-head {
-  transition: transform 0.28s ease;
+  transition: transform var(--hero-duration) var(--hero-ease);
 }
 
 .m-project-head.collapsed {
@@ -702,17 +705,25 @@
 
 .m-project-hero-wrap {
   padding: 6px 14px 0;
+  transform-origin: 50% 0;
 }
 
+/* 펼칠 때는 작품 정보가 내려오는 동안 살짝 늦게 떠오르고, 접을 때는 올라가기 시작하면서 먼저 흐려진다 */
 .m-project-screen.hero-animating .m-project-hero-wrap {
   transition:
-    opacity 0.22s ease,
-    transform 0.28s ease;
+    opacity 0.28s ease-out 0.06s,
+    transform var(--hero-duration) var(--hero-ease);
+}
+
+.m-project-screen.hero-animating .m-project-head.collapsed .m-project-hero-wrap {
+  transition:
+    opacity 0.2s ease-in,
+    transform var(--hero-duration) var(--hero-ease);
 }
 
 .m-project-head.collapsed .m-project-hero-wrap {
   opacity: 0;
-  transform: translateY(10px) scale(0.97);
+  transform: translateY(12px) scale(0.96);
   pointer-events: none;
 }
 
@@ -744,16 +755,34 @@
   padding-top: calc(var(--project-tools-height) + 4px) !important;
 }
 
-.m-project-list > .m-tree-container {
+/* 목록 끝은 본문의 transform이 아니라 이 감싸개의 높이로 정한다. 펼쳐진 동안에만 아래에 작품 정보 높이만큼
+   여백을 두고, 밀려 내려간 본문이 감싸개 밖으로 넘친 부분은 스크롤 범위에 섞이지 않게 잘라 낸다.
+   그래서 접힌 뒤에 목록 맨 아래에 빈 공간이 남지 않는다. 여백도 본문과 같이 줄어들어 목록 끝에서 접어도
+   마지막 항목이 잘려 보이지 않는다. */
+.m-project-list-body {
+  flex: none;
+  padding-bottom: var(--project-hero-height);
+  overflow-y: clip;
+}
+
+.m-project-screen.hero-animating .m-project-list-body {
+  transition: padding-bottom var(--hero-duration) var(--hero-ease);
+}
+
+.m-project-screen.hero-collapsed .m-project-list-body {
+  padding-bottom: 0;
+}
+
+.m-project-list-body > .m-tree-container {
   transform: translateY(var(--project-hero-height));
   will-change: transform;
 }
 
-.m-project-screen.hero-animating .m-project-list > .m-tree-container {
-  transition: transform 0.28s ease;
+.m-project-screen.hero-animating .m-project-list-body > .m-tree-container {
+  transition: transform var(--hero-duration) var(--hero-ease);
 }
 
-.m-project-screen.hero-collapsed .m-project-list > .m-tree-container {
+.m-project-screen.hero-collapsed .m-project-list-body > .m-tree-container {
   transform: translateY(0);
 }
 
@@ -797,10 +826,17 @@
   pointer-events: none;
 }
 
+/* 접힐 때는 작품 정보가 거의 올라간 뒤에 상단 제목이 떠오르고, 펼칠 때는 바로 사라진다 */
 .m-project-screen.hero-animating .m-project-compact-title {
   transition:
-    opacity 0.2s ease,
-    transform 0.28s ease;
+    opacity 0.16s ease-in,
+    transform var(--hero-duration) var(--hero-ease);
+}
+
+.m-project-screen.hero-animating .m-project-page-header.hero-collapsed .m-project-compact-title {
+  transition:
+    opacity 0.24s ease-out 0.12s,
+    transform var(--hero-duration) var(--hero-ease);
 }
 
 .m-project-page-header.hero-collapsed .m-project-compact-title {
@@ -810,10 +846,13 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .m-project-head,
-  .m-project-hero-wrap,
-  .m-project-compact-title,
-  .m-project-list > .m-tree-container {
+  .m-project-screen.hero-animating .m-project-head,
+  .m-project-screen.hero-animating .m-project-hero-wrap,
+  .m-project-screen.hero-animating .m-project-head.collapsed .m-project-hero-wrap,
+  .m-project-screen.hero-animating .m-project-compact-title,
+  .m-project-screen.hero-animating .m-project-page-header.hero-collapsed .m-project-compact-title,
+  .m-project-screen.hero-animating .m-project-list-body,
+  .m-project-screen.hero-animating .m-project-list-body > .m-tree-container {
     transition: none;
   }
 }
