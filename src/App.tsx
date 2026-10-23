@@ -689,11 +689,32 @@ export default function App() {
   async function duplicateDoc(doc: Doc) {
     await flush();
     const source = await call<Doc>("readDocument", { id: doc.id });
-    const copy = await call<Doc>("createDocument", {
+    const copy = await createCopy(source, source.title + " 사본", source.body);
+    showCreatedDocument(copy);
+    await openDoc(copy.id, true);
+  }
+  // 이력의 제목과 본문으로 새 문서를 만들고, 나머지 설정은 지금 문서를 따른다.
+  async function saveHistoryCopy(id: string, version: { title?: string; body: string; savedAt: string }) {
+    const source = await call<Doc>("readDocument", { id });
+    const saved = new Date(version.savedAt);
+    const pad = (value: number) => String(value).padStart(2, "0");
+    const stamp = `${saved.getFullYear()}.${pad(saved.getMonth() + 1)}.${pad(saved.getDate())} ${pad(saved.getHours())}시 ${pad(saved.getMinutes())}분`;
+    const copy = await createCopy(source, `${version.title || source.title} 사본 (${stamp})`, version.body);
+    showCreatedDocument(copy);
+    message("이전 원고를 사본으로 저장했습니다.", {
+      label: "열기",
+      run: () => {
+        setDialog(null);
+        void openDoc(copy.id, true).catch(report);
+      },
+    });
+  }
+  function createCopy(source: Doc, title: string, body: string) {
+    return call<Doc>("createDocument", {
       projectId: source.projectId,
       kind: source.kind,
-      title: source.title + " 사본",
-      body: source.body,
+      title,
+      body,
       tags: source.tags,
       manualLineBreak: !!source.manualLineBreak,
       episodeId: source.kind !== "episode" ? source.episodeId || undefined : undefined,
@@ -706,8 +727,6 @@ export default function App() {
           }
         : {}),
     });
-    showCreatedDocument(copy);
-    await openDoc(copy.id, true);
   }
   async function copyPath(doc: Doc) {
     const meta = libraryRef.current.documents.find((d) => d.id === doc.id);
@@ -1918,6 +1937,7 @@ export default function App() {
         deleteProject={deleteProject}
         askDeleteProject={askDeleteProject}
         duplicateDoc={duplicateDoc}
+        saveHistoryCopy={saveHistoryCopy}
         copyDocManuscript={copyDocManuscript}
         openBinding={openBinding}
         bindDocument={bindDocument}
@@ -2661,7 +2681,7 @@ export default function App() {
                 const restored = await session.restoreHistory(id, name, () => setDialog(null));
                 message(restored.historyWarning ?? "이전 원고를 복원했습니다. 복원 전 원고와 복원 결과를 모두 이력에 남겼습니다.");
                 void refresh().catch(report);
-              }} />
+              }} onSaveCopy={saveHistoryCopy} />
             )}
             {dialog.type === "deleteDoc" &&
               (() => {

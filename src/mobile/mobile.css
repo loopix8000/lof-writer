@@ -3604,6 +3604,40 @@
   padding-bottom: 10px !important;
 }
 
+.mobile-app .history-mode {
+  display: flex;
+}
+
+.mobile-app .history-mode button {
+  flex: 1;
+  min-height: 36px;
+}
+
+/* 복원·사본 저장은 나란히 같은 너비로, 삭제는 끝의 아이콘 단추로 둔다. */
+.mobile-app .history-actions {
+  flex-wrap: nowrap;
+}
+
+.mobile-app .history-actions button {
+  min-height: 44px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.mobile-app .history-actions button:not(.history-delete) {
+  flex: 1;
+  min-width: 0;
+  padding: 0 10px;
+}
+
+.mobile-app .history-actions .history-delete {
+  flex: none;
+  min-width: 44px;
+  padding: 0 12px;
+  background: transparent;
+}
+
 /* 집필 에디터 내부 데스크톱 여백 제거 및 터치 컨트롤 가시성 보장 */
 .mobile-app .editor-scroll {
   padding: 0 !important;

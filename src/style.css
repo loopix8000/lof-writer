@@ -3131,15 +3131,28 @@ body.sidebar-resizing * {
 .history-list button small {
   color: var(--muted);
 }
+/* 비교·원고 보기를 한 묶음의 전환 단추로 보여 준다. */
 .history-mode {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 12px;
+  display: inline-flex;
+  gap: 2px;
+  margin: 12px 0 10px;
+  padding: 3px;
+  border-radius: 9px;
+  background: var(--soft);
+}
+.history-mode button {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  padding: 6px 12px;
+  border-radius: 7px;
+  font-size: 13px;
 }
 .history-mode button[aria-pressed="true"] {
-  background: var(--soft);
+  background: var(--surface);
   color: var(--text);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
 }
 .history-diff-added {
   background: color-mix(in srgb, #30975c 18%, transparent);
@@ -3169,10 +3182,16 @@ body.sidebar-resizing * {
   max-height: 180px;
   overflow: auto;
 }
-/* 이력 복원 및 백업 단추. */
+/* 이력 복원·사본 저장 단추. 삭제는 오른쪽 끝에 따로 둔다. */
 .history-actions {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
+  margin-top: 14px;
+}
+.history-actions .history-delete {
+  margin-left: auto;
 }
 .history-preview {
   flex: 1;

@@ -150,6 +150,7 @@ export default function MobileShell({
   deleteProject,
   askDeleteProject,
   duplicateDoc,
+  saveHistoryCopy,
   copyDocManuscript,
   openBinding,
   bindDocument,
@@ -294,6 +295,7 @@ export default function MobileShell({
   deleteProject: (id: string) => Promise<void>;
   askDeleteProject: (id: string) => void;
   duplicateDoc: (doc: Doc) => Promise<void>;
+  saveHistoryCopy: (id: string, version: { title?: string; body: string; savedAt: string }) => Promise<void>;
   copyDocManuscript: (doc: Doc, rawMarkdown?: boolean, notify?: boolean) => Promise<void>;
   openBinding: (id: string) => Promise<void>;
   bindDocument: (id: string, episodeId: string | null) => Promise<void>;
@@ -1046,6 +1048,7 @@ export default function MobileShell({
                   );
                   void refresh().catch(report);
                 }}
+                onSaveCopy={saveHistoryCopy}
               />
             )}
 

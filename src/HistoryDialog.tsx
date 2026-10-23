@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Trash2 } from "lucide-react";
+import { CopyPlus, RotateCcw, Trash2 } from "lucide-react";
 import { useConfirm } from "./ConfirmDialog";
 import { call } from "./types";
 
@@ -24,10 +24,12 @@ function metadataValue(change: MetadataChange, value: unknown, exists: boolean):
   return JSON.stringify(value, null, 2);
 }
 
-export default function HistoryDialog({ documentId, memoContext, onRestore, report }: {
+export default function HistoryDialog({ documentId, memoContext, onRestore, onSaveCopy, report }: {
   documentId: string;
   memoContext?: { space: string; path: string };
   onRestore: (id: string, name: string) => Promise<void>;
+  // 고른 이력의 원고를 새 문서로 저장한다. 없으면 사본 저장 단추를 숨긴다.
+  onSaveCopy?: (id: string, version: { title?: string; body: string; savedAt: string }) => Promise<void>;
   report: (error: any) => void;
 }) {
   const [entries, setEntries] = useState<Entry[]>([]);
@@ -38,6 +40,7 @@ export default function HistoryDialog({ documentId, memoContext, onRestore, repo
   const [reading, setReading] = useState(false);
   const [restoring, setRestoring] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [copying, setCopying] = useState(false);
   const [confirm, confirmDialog] = useConfirm();
   const sequence = useRef(0);
   const alive = useRef(true);
@@ -94,7 +97,7 @@ export default function HistoryDialog({ documentId, memoContext, onRestore, repo
     finally { if (alive.current && currentId.current === requestKey) setDeleting(false); }
   }
   const comparison = preview?.comparison;
-  const busy = restoring || deleting;
+  const busy = restoring || deleting || copying;
   return <div className="history-layout">
     <div className="history-list" aria-label="문서 변경 이력">
       {page?.migrating && <p className="muted" role="status">기존 이력을 Git으로 옮기는 중입니다. 먼저 기존 기록을 표시합니다.</p>}
@@ -133,10 +136,23 @@ export default function HistoryDialog({ documentId, memoContext, onRestore, repo
             try { await onRestore(documentId, preview.name); }
             catch (error) { if (alive.current) report(error); }
             finally { if (alive.current) setRestoring(false); }
-          }}>{restoring ? "복원 중…" : "이 버전으로 복원"}</button>
-          <button className="danger-outline" disabled={busy} onClick={() => void remove(preview)}>
+          }}>
+            <RotateCcw size={16} />
+            {restoring ? "복원 중…" : "이 버전으로 복원"}
+          </button>
+          {onSaveCopy && <button disabled={busy} onClick={async () => {
+            setCopying(true);
+            try { await onSaveCopy(documentId, { title: preview.title, body: preview.body ?? "", savedAt: preview.savedAt }); }
+            catch (error) { if (alive.current) report(error); }
+            finally { if (alive.current) setCopying(false); }
+          }}>
+            <CopyPlus size={16} />
+            {copying ? "저장 중…" : "사본으로 저장"}
+          </button>}
+          <button className="history-delete danger-outline" disabled={busy} onClick={() => void remove(preview)}
+            aria-label="이 이력 삭제" title="이 이력 삭제">
             <Trash2 size={16} />
-            {deleting ? "삭제 중…" : "이 이력 삭제"}
+            {deleting && <span>삭제 중…</span>}
           </button>
         </div>
       </> : <p>왼쪽에서 변경 이력을 선택하세요.</p>}
