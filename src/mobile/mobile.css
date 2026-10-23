@@ -2102,7 +2102,7 @@
 }
 
 .m-drawer-backdrop {
-  --drawer-duration: 0.5s;
+  --drawer-duration: 0.25s;
   --drawer-ease: cubic-bezier(0.22, 0.61, 0.36, 1);
   position: fixed;
   inset: 0;
