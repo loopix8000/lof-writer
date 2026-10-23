@@ -27,6 +27,8 @@
     "package:dir": "node scripts/package-tauri.mjs dir",
     "licenses": "node scripts/generate-licenses.mjs",
     "package:msi": "node scripts/package-tauri.mjs msi",
+    "release:local": "node scripts/release-local.mjs",
+    "android:release:local": "node scripts/release-local.mjs --android",
     "updater:prepare": "node scripts/prepare-updater.mjs",
     "updater:keygen": "node scripts/generate-updater-key.mjs",
     "smoke:chrome": "node scripts/chrome-smoke.mjs"

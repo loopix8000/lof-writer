@@ -29,6 +29,11 @@ jobs:
           node-version: '24'
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: windows-x64-release
+          cache-on-failure: true
       - run: npm ci
       - name: Prepare updater configuration
         id: updater
