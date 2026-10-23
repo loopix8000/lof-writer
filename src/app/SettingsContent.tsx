@@ -31,7 +31,7 @@ import {
   type Library
 } from "../types";
 import type { useAppUpdater } from "../Updater";
-import { UpdateSettings } from "../Updater";
+import { UpdateSettings, updateChannel } from "../Updater";
 import { ReleaseHistory } from "../ReleaseNotes";
 import AutocompleteSettings from "./AutocompleteSettings";
 import { settingPages, type SettingsPage } from "./settings-pages";
@@ -170,6 +170,8 @@ export default function SettingsContent({
           </div>
           <section id="settings-updates" className="settings-section" hidden={settingsPage !== "updates"}>
             <UpdateSettings updater={updater} version={lib.version}
+              channel={updateChannel(prefs.updateChannel)}
+              onChannelChange={(channel) => savePrefs({ updateChannel: channel }).catch(report)}
               autoCheck={prefs.checkUpdatesOnStartup !== false}
               onAutoCheck={(checked) => savePrefs({ checkUpdatesOnStartup: checked }).catch(report)} />
             <ReleaseHistory version={lib.version} />

@@ -1,4 +1,4 @@
-import { Cloud, CloudUpload, FolderSync } from "lucide-react";
+import { Cloud, CloudDownload, CloudUpload, FileSearch, FolderSync, RefreshCw } from "lucide-react";
 import type { AutoSyncStatus } from "./types";
 
 const fileLabels = {
@@ -15,22 +15,31 @@ const realtimeLabels = {
   error: "연결된 장치 없음",
 };
 
+const realtimeActivities = {
+  comparing: { icon: FileSearch, label: "파일 비교 중" },
+  uploading: { icon: CloudUpload, label: "파일 보내는 중" },
+  downloading: { icon: CloudDownload, label: "파일 받는 중" },
+};
+
 export default function SyncStatus({
   status,
   checking,
   available,
   editing = false,
+  activeOnly = false,
 }: {
   status: AutoSyncStatus;
   checking: boolean;
   available: boolean;
   editing?: boolean;
+  activeOnly?: boolean;
 }) {
   const realtime = status.channels?.realtime;
   const files = status.channels ? status.channels.files : available ? status : undefined;
-  const showRealtime = Boolean(realtime?.hasConnections);
+  const showRealtime = Boolean(realtime?.hasConnections && (!activeOnly || realtime.phase === "syncing"));
   const showFiles = Boolean(
-    files && files.hasConnections !== false && (status.channels ? files.hasConnections : available),
+    files && files.hasConnections !== false && (status.channels ? files.hasConnections : available)
+      && (!activeOnly || files.phase === "syncing" || (checking && files.phase === "idle")),
   );
   if (!showRealtime && !showFiles) return null;
 
@@ -39,8 +48,9 @@ export default function SyncStatus({
   const detail = (progress: { phase: AutoSyncStatus["phase"]; message: string }) =>
     progress.phase !== "error" && progress.message ? ` · ${progress.message}` : "";
 
-  const RealtimeIcon = realtime?.phase === "syncing" ? CloudUpload : Cloud;
-  const realtimeLabel = realtime ? realtimeLabels[realtime.phase] : "";
+  const activity = realtime?.phase === "syncing" && realtime.activity ? realtimeActivities[realtime.activity] : undefined;
+  const RealtimeIcon = activity?.icon ?? (realtime?.phase === "syncing" ? RefreshCw : Cloud);
+  const realtimeLabel = activity?.label ?? (realtime ? realtimeLabels[realtime.phase] : "");
   const realtimeDesc = realtime ? `실시간 동기화 · ${realtimeLabel}${detail(realtime)}` : "";
 
   const fileLabel =

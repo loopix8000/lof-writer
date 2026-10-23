@@ -120,7 +120,7 @@ import {
   type SyncConnection,
   type WritingRules
 } from "./types";
-import { UpdateLock, UpdateNotice, useAppUpdater } from "./Updater";
+import { UpdateLock, UpdateNotice, useAppUpdater, updateChannel } from "./Updater";
 import { useManuscriptCounts } from "./useManuscriptCounts";
 import { useProjectReorder } from "./useProjectReorder";
 import { useProjectSyncUpdates } from "./useSyncFileUpdates";
@@ -398,6 +398,7 @@ export default function App() {
   const projectReorder = useProjectReorder(libraryRef, lib.root, loaded && view === "library", busy, optimistic, report);
   const updater = useAppUpdater({
     loaded,
+    channel: updateChannel(prefs.updateChannel),
     autoCheck: prefs.checkUpdatesOnStartup !== false,
     beforeInstall: async () => {
       if (busy) throw Error("진행 중인 작업이 끝난 뒤 다시 시도해 주세요.");
@@ -1360,19 +1361,19 @@ export default function App() {
           </div>
           <div className="editor-action-buttons" aria-hidden={!focused}>
             <button
+              aria-label="저장"
+              title="저장 (Ctrl+S)"
+              onClick={attempt(manualSave)}
+            >
+              <Check size={17} />
+            </button>
+            <button
               type="button"
               aria-label="문자 검색 및 치환"
               title="문자 검색 및 치환 (F3)"
               onClick={() => window.dispatchEvent(new CustomEvent("lof:editor-find", { detail: { replace: true } }))}
             >
               <Search size={18} />
-            </button>
-            <button
-              aria-label="저장"
-              title="저장 (Ctrl+S)"
-              onClick={attempt(manualSave)}
-            >
-              <Check size={17} />
             </button>
             <button
               aria-label="변경 이력"

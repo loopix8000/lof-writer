@@ -4,7 +4,11 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const publicKey = process.env.TAURI_UPDATER_PUBLIC_KEY?.trim();
-const endpoint = process.env.TAURI_UPDATER_ENDPOINT?.trim();
+const stableEndpoint = "https://github.com/loopix8000/lof-writer/releases/download/stable/latest.json";
+// 기존 Actions의 베타 주소 변수도 새 앱에서는 정식 기본값으로 바꾼다.
+const configuredEndpoint = process.env.TAURI_UPDATER_ENDPOINT?.trim();
+const endpoint = !configuredEndpoint || /^https:\/\/github\.com\/loopix8000\/lof-writer\/releases\/download\/(?:beta|rc)\/latest\.json$/.test(configuredEndpoint)
+  ? stableEndpoint : configuredEndpoint;
 if (!publicKey || !endpoint) {
   throw new Error("TAURI_UPDATER_PUBLIC_KEY와 TAURI_UPDATER_ENDPOINT를 설정하세요.");
 }

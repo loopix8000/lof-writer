@@ -13,7 +13,8 @@ import {
   Redo2,
   Replace,
   Save,
-  Sparkles,
+  Search,
+  ArrowRightLeft,
   StickyNote,
   Strikethrough,
   Table2,
@@ -133,7 +134,7 @@ export default function MobileEditorToolbar({
             onPointerDown={(event) => event.preventDefault()}
             onClick={onReplaceSymbols}
           >
-            <Sparkles size={17} strokeWidth={2} />
+            <ArrowRightLeft size={17} strokeWidth={2} />
           </button>
         </div>
         <span className="m-pill-divider" aria-hidden="true" />
@@ -174,6 +175,19 @@ export function MobileEditorMenuActions({
         type="button"
         className="m-floating-popup-item"
         role="menuitem"
+        onPointerDown={(event) => event.preventDefault()}
+        onClick={() => {
+          onClose();
+          window.dispatchEvent(new CustomEvent("lof:editor-find", { detail: { replace: false } }));
+        }}
+      >
+        <Search size={16} />
+        <span>찾기</span>
+      </button>
+      <button
+        type="button"
+        className="m-floating-popup-item"
+        role="menuitem"
         disabled={disabled}
         onPointerDown={(event) => event.preventDefault()}
         onClick={() => {
@@ -182,7 +196,7 @@ export function MobileEditorMenuActions({
         }}
       >
         <Replace size={16} />
-        <span>문자 치환</span>
+        <span>바꾸기</span>
       </button>
       {actions.map(({ action, label, icon: Icon }) => (
         <button

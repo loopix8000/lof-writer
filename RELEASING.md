@@ -1,8 +1,18 @@
-# Windows 설치형 릴리즈와 업데이트
+# PC·Android 릴리즈와 업데이트
 
-Android APK는 별도 워크플로 **Build Android APK release**로 배포한다. 버전과 내부 버전 번호는 `src-tauri/tauri.android.conf.json`에서 관리하고, 배포용 APK는 ARM64 release 빌드에 `ANDROID_KEY_BASE64`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`로 서명한다. Android 채널은 `android-beta/latest.json`이며 PC의 `beta/latest.json`과 분리한다. 0.0.2 알파 버전까지 설치한 앱은 `android-alpha/latest.json`을 확인하므로, 워크플로는 두 채널에 같은 배포 정보를 올린다. 앱은 시작 시 새 버전을 확인하고, 사용자가 다운로드·설치를 누르면 APK의 해시·패키지·버전·서명을 확인한 뒤 원고를 저장하고 Android 설치 화면을 연다. APK에 쓰인 서명 키는 이후 릴리즈에서도 유지하고 `versionCode`를 매번 올린다. Android 릴리즈 노트는 `ANDROID_RELEASE_NOTES.md`를 사용한다. Android 앱 아이콘은 `src-tauri/android/app/src/main/res`의 적응형 아이콘 벡터와, `node scripts/make-icon.mjs`로 만드는 Android 7.x용 PNG를 사용한다.
+Android APK는 별도 워크플로 **Build Android APK release**로 배포한다. 버전과 내부 버전 번호는 `src-tauri/tauri.android.conf.json`에서 관리하고, ARM64 APK는 기존 `ANDROID_KEY_BASE64`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`로 서명한다. 앱은 APK의 해시·패키지·버전·서명을 확인한 뒤 원고를 저장하고 Android 설치 화면을 연다. 서명 키는 유지하고 `versionCode`를 매번 올린다. 릴리즈 노트는 `ANDROID_RELEASE_NOTES.md`, 아이콘 원본은 `src-tauri/android/app/src/main/res`에 있다.
 
-공개 배포 저장소는 `loopix8000/lof-writer`이다. 베타 업데이트 주소는 `https://github.com/loopix8000/lof-writer/releases/download/beta/latest.json`이다. Actions가 등록된 공개키와 이 주소를 빌드에 포함한다. 기본 개발 설정에는 업데이트 주소와 공개키가 비어 있으며, 앱의 설정 > 앱 업데이트에서 준비 상태를 확인할 수 있다.
+공개 배포 저장소는 `loopix8000/lof-writer`이다. 설정 > 앱 업데이트에서 채널을 선택하며 기본값은 **정식**이다. 정식은 확정 버전만, RC는 정식·RC 중 최신 버전, 베타는 정식·RC·베타 중 최신 버전을 받는다. 채널을 바꿔도 이전 버전으로 내려가지 않는다.
+
+| 선택 | PC 채널 태그 | Android 채널 태그 |
+| --- | --- | --- |
+| 정식 | `stable` | `android-stable` |
+| RC | `rc` | `android-rc` |
+| 베타 | `beta` | `android-beta` |
+
+채널 주소는 `https://github.com/loopix8000/lof-writer/releases/download/<채널 태그>/latest.json`이다. 확정 정식은 세 채널에, `-rc.N`은 RC·베타 채널에, 그 밖의 시험 버전은 베타 채널에 배포 정보를 올린다. 이미 더 최신인 채널은 덮어쓰지 않는다. 구버전 Android의 `android-alpha` 주소도 유지한다. 기존 베타 앱은 기존 주소를 통해 RC로 업데이트할 수 있다.
+
+RC도 GitHub에서는 prerelease로 게시한다. GitHub Latest는 PC 확정 정식만 사용하며, 앱 내 업데이트는 위 채널을 사용한다. 채널 릴리즈가 아직 없으면 업데이트 없음으로 처리한다. 기본 개발 설정에는 서명 공개키가 비어 있으므로 PC 업데이트는 배포 설정을 포함한 빌드에서 확인한다.
 
 ## 앱의 동작
 
@@ -36,12 +46,12 @@ PC·Android 릴리즈 모두 수동 실행 시 `show_update_notice`로 업데이
    | Secret | `TAURI_SIGNING_PRIVATE_KEY` | 비밀키 파일 내용 |
    | Secret | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | 비밀키에 암호를 설정했다면 그 암호 |
 
-3. `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`의 버전을 함께 올리고 두 잠금 파일의 앱 버전도 맞춘다. 준비 스크립트는 버전이 다르면 빌드를 중단한다. MSI 내부 버전인 `bundle.windows.wix.version`은 앱 버전과 별도로 매 릴리즈마다 증가시킨다. 현재 앱 버전 `1.0.6-beta.1`의 MSI 내부 버전은 `1.0.43`이다. [Windows Installer는 버전의 앞 세 자리만 비교](https://learn.microsoft.com/en-us/windows/win32/msi/productversion)하므로 네 번째 자리만 올리면 업그레이드를 구분할 수 없다. 기존 MSI의 UpgradeCode는 유지한다.
-4. GitHub Actions의 **Build Windows MSI release**를 `main`에서 수동 실행한다. **Publish the release and update the beta channel after building**을 선택하면 MSI·서명·`latest.json`을 업로드한 뒤 공개하고 베타 채널을 갱신한다. 선택하지 않으면 초안으로 남는다.
+3. `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`의 버전을 함께 올리고 두 잠금 파일의 앱 버전도 맞춘다. 준비 스크립트는 버전이 다르면 빌드를 중단한다. MSI 내부 버전인 `bundle.windows.wix.version`은 앱 버전과 별도로 매 릴리즈마다 증가시킨다. 현재 앱 버전 `1.0.6-rc.1`의 MSI 내부 버전은 `1.0.44`이다. [Windows Installer는 버전의 앞 세 자리만 비교](https://learn.microsoft.com/en-us/windows/win32/msi/productversion)하므로 네 번째 자리만 올리면 업그레이드를 구분할 수 없다. 기존 MSI의 UpgradeCode는 유지한다.
+4. GitHub Actions의 **Build Windows MSI release**를 `main`에서 수동 실행한다. **Publish the release and matching update channels after building**을 선택하면 MSI·서명·`latest.json`을 업로드한 뒤 공개하고 버전에 맞는 업데이트 채널을 갱신한다. 선택하지 않으면 초안으로 남는다.
 
-`beta` 릴리즈의 `latest.json`은 버전별 릴리즈의 MSI 주소를 가리킨다. 버전별 설치 파일은 유지하고, 새 베타 버전을 공개할 때 고정 채널의 JSON만 갱신한다. 공개 스크립트는 버전·MSI 존재 여부·서명을 확인하고 설치 파일을 먼저 공개한다. 공개 단계만 재시도할 때는 해당 버전의 소스를 체크아웃하고 `GITHUB_REPOSITORY=loopix8000/lof-writer` 환경 변수를 설정한 뒤 `node scripts/publish-release.mjs`를 실행한다.
+채널의 `latest.json`은 버전별 릴리즈의 설치 파일을 가리킨다. 버전별 설치 파일은 유지하고 채널의 JSON만 갱신한다. PC 공개 스크립트는 버전·MSI 존재 여부·서명을 확인하고 설치 파일을 먼저 공개한다. 공개 단계만 재시도할 때는 해당 버전의 소스를 체크아웃하고 `GITHUB_REPOSITORY=loopix8000/lof-writer` 환경 변수를 설정한 뒤 `node scripts/publish-release.mjs`를 실행한다.
 
-정식 배포로 전환할 때는 업데이트 주소를 `https://github.com/loopix8000/lof-writer/releases/latest/download/latest.json`으로 변경한다. GitHub의 Latest에는 prerelease가 포함되지 않는다.
+PC·Android 업데이트 주소는 플랫폼별 고정 채널을 유지한다. GitHub의 Latest에는 prerelease가 포함되지 않으므로 RC 업데이트 주소로 사용하지 않는다.
 
 소스 저장소와 공개 배포 저장소를 분리할 경우에는 워크플로의 업로드 대상과 해당 저장소에 접근할 토큰도 함께 설정한다. 기본 워크플로의 대상은 실행 중인 저장소다.
 

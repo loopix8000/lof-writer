@@ -14,11 +14,13 @@ use subtle::ConstantTimeEq;
 
 const ITERATIONS: u32 = 600_000;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct PinConfig {
     version: u8,
     salt: String,
     hash: String,
+    #[serde(default)]
+    biometric: bool,
 }
 
 struct PinInner {
@@ -30,7 +32,10 @@ struct PinInner {
 pub struct PinState {
     file: PathBuf,
     inner: Mutex<PinInner>,
+    // PIN 해시 계산은 잠금 전환을 막지 않고, 저장 확정과 잠금 전환만 순서대로 처리한다.
+    transition: Mutex<()>,
     enabled: AtomicBool,
+    biometric: AtomicBool,
     generation: AtomicU64,
     unlocked_generation: AtomicU64,
     show_requested: AtomicBool,
@@ -96,6 +101,7 @@ impl PinState {
             Err(error) => return Err(error.into()),
         };
         let enabled = config.is_some();
+        let biometric = config.as_ref().is_some_and(|config| config.biometric);
         Ok(Self {
             file,
             inner: Mutex::new(PinInner {
@@ -103,7 +109,9 @@ impl PinState {
                 failures: 0,
                 retry_at: None,
             }),
+            transition: Mutex::new(()),
             enabled: AtomicBool::new(enabled),
+            biometric: AtomicBool::new(biometric),
             generation: AtomicU64::new(1),
             unlocked_generation: AtomicU64::new(0),
             show_requested: AtomicBool::new(false),
@@ -111,28 +119,31 @@ impl PinState {
     }
 
     pub fn is_locked(&self) -> bool {
+        let _transition = self.transition.lock().unwrap();
+        self.locked()
+    }
+
+    // transition을 잡은 코드에서만 사용해 중간 상태를 읽지 않는다.
+    fn locked(&self) -> bool {
         self.enabled.load(Ordering::SeqCst)
             && self.generation.load(Ordering::SeqCst)
                 != self.unlocked_generation.load(Ordering::SeqCst)
     }
 
     pub fn status(&self) -> Value {
-        loop {
-            let generation = self.generation.load(Ordering::SeqCst);
-            let enabled = self.enabled.load(Ordering::SeqCst);
-            let unlocked = self.unlocked_generation.load(Ordering::SeqCst);
-            if generation == self.generation.load(Ordering::SeqCst) {
-                return json!({ "enabled": enabled, "locked": enabled && generation != unlocked,
-                    "generation": generation });
-            }
-        }
+        let _transition = self.transition.lock().unwrap();
+        let generation = self.generation.load(Ordering::SeqCst);
+        let enabled = self.enabled.load(Ordering::SeqCst);
+        let unlocked = self.unlocked_generation.load(Ordering::SeqCst);
+        json!({ "enabled": enabled, "locked": enabled && generation != unlocked,
+            "generation": generation, "biometricEnabled": self.biometric.load(Ordering::SeqCst) })
     }
 
     pub fn lock_for_tray(&self) {
+        let _transition = self.transition.lock().unwrap();
         self.show_requested.store(false, Ordering::SeqCst);
-        if self.enabled.load(Ordering::SeqCst) {
-            self.generation.fetch_add(1, Ordering::SeqCst);
-        }
+        // 첫 PIN을 저장하는 도중에도 앱을 벗어나면 이전 요청을 무효화한다.
+        self.generation.fetch_add(1, Ordering::SeqCst);
     }
 
     pub fn request_show(&self) {
@@ -148,6 +159,11 @@ impl PinState {
         let generation = self.generation.load(Ordering::SeqCst);
         let mut inner = self.inner.lock().unwrap();
         inner.verify(pin)?;
+        self.finish_unlock(generation)
+    }
+
+    fn finish_unlock(&self, generation: u64) -> Result<(), LofError> {
+        let _transition = self.transition.lock().unwrap();
         let next = generation + 1;
         self.generation
             .compare_exchange(generation, next, Ordering::SeqCst, Ordering::SeqCst)
@@ -158,12 +174,58 @@ impl PinState {
                 )
             })?;
         self.unlocked_generation.store(next, Ordering::SeqCst);
-        if self.is_locked() {
+        if self.locked() {
             return Err(fail(
                 "창이 다시 잠겼습니다. PIN을 다시 입력해 주세요.",
                 "PIN_LOCKED",
             ));
         }
+        Ok(())
+    }
+
+    #[cfg(target_os = "android")]
+    pub fn biometric_generation(&self, unlocking: bool) -> Result<u64, LofError> {
+        let _transition = self.transition.lock().unwrap();
+        if !self.enabled.load(Ordering::SeqCst) {
+            return Err(fail_invalid("먼저 PIN을 설정해 주세요."));
+        }
+        if unlocking && !self.biometric.load(Ordering::SeqCst) {
+            return Err(fail_invalid("지문 잠금 해제를 사용하도록 설정해 주세요."));
+        }
+        if unlocking && !self.locked() {
+            return Err(fail_invalid("이미 잠금이 해제되어 있습니다."));
+        }
+        if !unlocking && self.locked() {
+            return Err(fail("먼저 PIN으로 잠금을 해제해 주세요.", "PIN_LOCKED"));
+        }
+        Ok(self.generation.load(Ordering::SeqCst))
+    }
+
+    #[cfg(target_os = "android")]
+    pub fn unlock_biometric(&self, generation: u64) -> Result<(), LofError> {
+        let inner = self.inner.lock().unwrap();
+        if !inner.config.as_ref().is_some_and(|config| config.biometric) {
+            return Err(fail_invalid("지문 잠금 해제를 사용할 수 없습니다."));
+        }
+        self.finish_unlock(generation)
+    }
+
+    #[cfg(target_os = "android")]
+    pub fn set_biometric(&self, enabled: bool, generation: u64) -> Result<(), LofError> {
+        let mut inner = self.inner.lock().unwrap();
+        let _transition = self.transition.lock().unwrap();
+        if self.locked() || self.generation.load(Ordering::SeqCst) != generation {
+            return Err(fail("창이 잠겼습니다. 잠금을 해제한 뒤 다시 시도해 주세요.", "PIN_LOCKED"));
+        }
+        let mut config = inner.config.clone().ok_or_else(|| fail_invalid("먼저 PIN을 설정해 주세요."))?;
+        config.biometric = enabled;
+        let raw = serde_json::to_string(&config).map_err(|_| fail_invalid("지문 설정을 저장하지 못했습니다."))?;
+        atomic_write_str(&self.file, &raw)?;
+        inner.config = Some(config);
+        self.biometric.store(enabled, Ordering::SeqCst);
+        // 진행 중이던 인증은 이전 설정의 결과이므로 더 이상 잠금을 해제할 수 없다.
+        let next = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        self.unlocked_generation.store(next, Ordering::SeqCst);
         Ok(())
     }
 
@@ -186,10 +248,12 @@ impl PinState {
                 version: 1,
                 salt: hex::encode(salt),
                 hash: hex::encode(hash),
+                biometric: inner.config.as_ref().is_some_and(|config| config.biometric),
             })
         } else {
             None
         };
+        let _transition = self.transition.lock().unwrap();
         if self.generation.load(Ordering::SeqCst) != generation {
             return Err(fail(
                 "창이 잠겼습니다. 잠금을 해제한 뒤 다시 시도해 주세요.",
@@ -210,6 +274,7 @@ impl PinState {
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         self.unlocked_generation.store(generation, Ordering::SeqCst);
         self.enabled.store(config.is_some(), Ordering::SeqCst);
+        self.biometric.store(config.as_ref().is_some_and(|config| config.biometric), Ordering::SeqCst);
         inner.config = config;
         inner.failures = 0;
         inner.retry_at = None;

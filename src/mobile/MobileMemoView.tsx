@@ -658,6 +658,7 @@ export default function MobileMemoView({
               checking={syncChecking}
               available={syncAvailable}
               editing={status !== "저장됨"}
+              activeOnly
             />
           </div>
           <div className="m-topbar-actions">

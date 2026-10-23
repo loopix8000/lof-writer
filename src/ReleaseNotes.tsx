@@ -170,7 +170,7 @@ export function ReleaseHistory({ version }: { version: string }) {
           <summary>
             <ChevronDown size={14} className="release-chevron" />
             <span className="release-version">{r.version}</span>
-            {r.prerelease && <span className="release-badge">{/-alpha/i.test(r.version) ? "알파" : "베타"}</span>}
+            {r.prerelease && <span className="release-badge">{/-rc(?:\.|$)/i.test(r.version) ? "RC" : /-alpha/i.test(r.version) ? "알파" : "베타"}</span>}
             {r.version === version && <span className="release-badge current">현재 버전</span>}
             <span className="release-date">{formatDate(r.date)}</span>
           </summary>

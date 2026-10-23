@@ -3,9 +3,11 @@ pub mod assets;
 mod auto_sync;
 mod android_library;
 mod android_scanner;
+mod android_biometric;
 mod android_storage;
 mod android_system_bars;
 mod android_updater;
+mod desktop_updater;
 mod background_sync;
 pub mod database;
 mod common_memo_history;
@@ -593,19 +595,18 @@ fn dispatch_method(
                 .get("foreground")
                 .and_then(Value::as_bool)
                 .unwrap_or(true);
-            // 실시간 유지 시간을 먼저 정해야 이어지는 동기화가 단계를 바로 읽는다.
-            background_sync::set_background(app, !foreground);
-            realtime::set_background(app, !foreground);
-            auto_sync::set_background(app, !foreground);
             // Android는 백그라운드로 갈 때 잠가 다시 열면 PIN을 묻는다.
             // 파일 선택기처럼 앱이 연 화면으로 잠시 나갈 때는 화면에서 lock을 보내지 않는다.
             if !foreground && args.get("lock").and_then(Value::as_bool).unwrap_or(false) {
                 let pin = app.state::<pin::PinState>();
-                if !pin.is_locked() {
-                    pin.lock_for_tray();
-                    let _ = app.emit("lof:pin-state", pin_status(app));
-                }
+                // 이미 잠긴 상태여도 진행 중인 PIN·지문 인증 결과를 무효화한다.
+                pin.lock_for_tray();
+                let _ = app.emit("lof:pin-state", pin_status(app));
             }
+            // 실시간 유지 시간을 먼저 정해야 이어지는 동기화가 단계를 바로 읽는다.
+            background_sync::set_background(app, !foreground);
+            realtime::set_background(app, !foreground);
+            auto_sync::set_background(app, !foreground);
             Ok(json!(true))
         }
         "backgroundNotifications" => {
@@ -2369,6 +2370,7 @@ pub fn run() {
         .plugin(android_updater::init())
         .plugin(android_storage::init())
         .plugin(android_scanner::init())
+        .plugin(android_biometric::init())
         .plugin(android_system_bars::init())
         .plugin(background_sync::init());
     #[cfg(not(target_os = "android"))]
@@ -2392,6 +2394,7 @@ pub fn run() {
             window_close,
             window_start_dragging,
             updater_status,
+            desktop_updater::desktop_update_check,
             android_updater::android_update_check,
             android_updater::android_update_download,
             android_updater::android_update_install,
@@ -2399,6 +2402,9 @@ pub fn run() {
             android_storage::android_storage_access,
             android_storage::android_pick_image,
             android_scanner::android_scan_qr,
+            android_biometric::android_biometric_status,
+            android_biometric::android_biometric_set_enabled,
+            android_biometric::android_biometric_unlock,
             android_system_bars::android_set_system_bars,
         ])
         .setup(move |app| {

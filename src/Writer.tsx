@@ -13,7 +13,7 @@ import {
   Redo2,
   Heading2,
   Minus,
-  Sparkles,
+  ArrowRightLeft,
   Table2,
   BetweenHorizontalStart,
   BetweenHorizontalEnd,
@@ -1159,7 +1159,7 @@ export default function Writer({
       ? [
           {
             label: "기호 일괄 대치 (따옴표·말줄임표 교정)",
-            icon: Sparkles,
+            icon: ArrowRightLeft,
             active: false,
             action: onReplaceSymbols,
           },

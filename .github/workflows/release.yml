@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: Publish the release and update the beta channel after building
+        description: Publish the release and matching update channels after building
         type: boolean
         default: false
       show_update_notice:

@@ -438,6 +438,26 @@ fn peers(app: &AppHandle) -> Vec<Value> {
         .map(|member| peer_value(member, &current, &aliases))
         .collect()
 }
+// 전송 규격은 유지하고, 이 장치에서 수행하는 파일 작업만 화면에 알린다.
+fn sync_activity(app: &AppHandle, peer: &str, activity: &str) {
+    let rt = app.state::<Realtime>();
+    let changed = {
+        let mut statuses = rt.statuses.lock().unwrap();
+        let status = statuses.entry(peer.to_string()).or_insert_with(|| json!({}));
+        if status["phase"] == "syncing" && status["activity"] == activity {
+            false
+        } else {
+            status["phase"] = json!("syncing");
+            status["activity"] = json!(activity);
+            status["message"] = Value::Null;
+            true
+        }
+    };
+    if changed {
+        crate::auto_sync::refresh_realtime(app);
+    }
+}
+
 pub fn progress(app: &AppHandle) -> Value {
     let list = peers(app);
     if list.is_empty() {
@@ -450,6 +470,7 @@ pub fn progress(app: &AppHandle) -> Value {
     }
     let statuses = rt.statuses.lock().unwrap();
     let mut syncing = false;
+    let mut activity = None;
     let mut pending = false;
     let mut reached = false;
     let mut unreached = Vec::new();
@@ -457,7 +478,12 @@ pub fn progress(app: &AppHandle) -> Value {
         let id = peer["id"].as_str().unwrap_or("");
         let name = peer["name"].as_str().unwrap_or("다른 장치");
         match statuses.get(id).and_then(|s| s["phase"].as_str()) {
-            Some("syncing") => syncing = true,
+            Some("syncing") => {
+                syncing = true;
+                if activity.is_none() {
+                    activity = statuses.get(id).and_then(|s| s["activity"].as_str());
+                }
+            }
             Some("pending") => pending = true,
             Some("connected") => reached = true,
             Some("offline" | "error") => unreached.push(name.to_string()),
@@ -480,11 +506,15 @@ pub fn progress(app: &AppHandle) -> Value {
     } else {
         format!("연결되지 않은 장치: {}", unreached.join(", "))
     };
-    json!({
+    let mut progress = json!({
         "phase": phase,
         "message": message,
         "hasConnections": true,
-    })
+    });
+    if let Some(activity) = activity {
+        progress["activity"] = json!(activity);
+    }
+    progress
 }
 fn members(app: &AppHandle) -> Vec<Member> {
     with_group(app, |group| {
@@ -839,14 +869,9 @@ impl WriterHost {
             *lease = Some((
                 session.into(),
                 current,
-                {
-                    rt.statuses.lock().unwrap().insert(
-                        peer_config["id"].as_str().unwrap_or("").into(),
-                        json!({"phase":"syncing"}),
-                    );
-                    Instant::now() + Duration::from_secs(180)
-                },
+                Instant::now() + Duration::from_secs(180),
             ));
+            sync_activity(app, peer_config["id"].as_str().unwrap_or(""), "comparing");
             return Ok(Message::json(json!(true)));
         }
         if !lease
@@ -877,6 +902,7 @@ impl WriterHost {
             return Ok(Message::json(json!(true)));
         }
         if op == "inventory" {
+            sync_activity(app, peer_config["id"].as_str().unwrap_or(""), "comparing");
             let mut inventory = files::inventory(&state.store, &current, true)?;
             // 이전 클라이언트가 보류 표시를 삭제로 오인하지 않도록 지원 여부를 확인한다.
             if request["deferredPaths"] != true && inventory.values().any(|info| info.unavailable) {
@@ -904,16 +930,20 @@ impl WriterHost {
             return Err(fail_invalid("공유할 수 없는 파일 경로입니다."));
         }
         match op {
-            "read" => Ok(Message {
-                meta: json!(null),
-                data: files::read_local(&current, path)?
-                    .ok_or_else(|| fail_invalid("파일이 변경되었습니다."))?,
-            }),
+            "read" => {
+                sync_activity(app, peer_config["id"].as_str().unwrap_or(""), "uploading");
+                Ok(Message {
+                    meta: json!(null),
+                    data: files::read_local(&current, path)?
+                        .ok_or_else(|| fail_invalid("파일이 변경되었습니다."))?,
+                })
+            }
             "exists" => Ok(Message::json(json!(file_remote::safe_path(
                 &current, path
             )?
             .try_exists()?))),
             "write" | "remove" => {
+                sync_activity(app, peer_config["id"].as_str().unwrap_or(""), "downloading");
                 let expected = request["expected"].as_str();
                 files::apply_local(
                     &state.store,
@@ -936,6 +966,8 @@ impl WriterHost {
 }
 
 struct PeerRemote {
+    app: AppHandle,
+    peer: String,
     connection: Connection,
     handle: tokio::runtime::Handle,
     local_vault: String,
@@ -944,6 +976,15 @@ struct PeerRemote {
 }
 impl PeerRemote {
     fn rpc(&self, mut meta: Value, data: Vec<u8>) -> Result<Message, LofError> {
+        let activity = match meta["op"].as_str() {
+            Some("begin" | "inventory") => Some("comparing"),
+            Some("read") if meta["path"] != ID_FILE => Some("downloading"),
+            Some("write" | "remove") if meta["path"] != ID_FILE => Some("uploading"),
+            _ => None,
+        };
+        if let Some(activity) = activity {
+            sync_activity(&self.app, &self.peer, activity);
+        }
         meta["vault"] = json!(self.local_vault);
         meta["target"] = json!(self.remote_vault);
         self.handle
@@ -1029,6 +1070,8 @@ fn sync(
         return Err(fail_invalid("서재가 변경되었습니다."));
     }
     let mut remote = PeerRemote {
+        app: app.clone(),
+        peer: peer["id"].as_str().unwrap_or("").into(),
         connection: connection.clone(),
         handle: handle.clone(),
         local_vault: vault(app)?,
@@ -1407,13 +1450,7 @@ pub fn start(app: &AppHandle) {
                             || own < peer["endpoint"].as_str().unwrap_or("").to_string();
                         if leader {
                             // 변경 알림만 보내는 경우는 비교가 아니므로 동기화 중으로 표시하지 않는다.
-                            {
-                                let mut statuses = rt.statuses.lock().unwrap();
-                                let status = statuses.entry(id.clone()).or_insert_with(|| json!({}));
-                                status["phase"] = json!("syncing");
-                                status["message"] = Value::Null;
-                            }
-                            crate::auto_sync::refresh_realtime(&app);
+                            sync_activity(&app, &id, "comparing");
                             let outcome = sync(&app, &peer, conn, runtime.handle())?;
                             rt.statuses.lock().unwrap().insert(id.clone(),json!({"phase":"connected","lastSync":chrono::Utc::now().to_rfc3339(),"conflicts":outcome["fileConflicts"]}));
                             crate::auto_sync::refresh_realtime(&app);

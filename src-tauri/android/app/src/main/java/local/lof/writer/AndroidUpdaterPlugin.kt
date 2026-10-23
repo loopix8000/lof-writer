@@ -11,6 +11,7 @@ import android.provider.Settings
 import androidx.annotation.Keep
 import androidx.core.content.FileProvider
 import app.tauri.annotation.Command
+import app.tauri.annotation.InvokeArg
 import app.tauri.annotation.TauriPlugin
 import app.tauri.plugin.Invoke
 import app.tauri.plugin.JSObject
@@ -22,16 +23,47 @@ import java.security.MessageDigest
 import java.util.concurrent.Executors
 import javax.net.ssl.HttpsURLConnection
 
+@InvokeArg
+class UpdateArgs {
+  var channel: String = "stable"
+  var version: String = ""
+}
+
 @Keep
 @TauriPlugin
 class AndroidUpdaterPlugin(private val activity: Activity) : Plugin(activity) {
-  private data class Update(val version: String, val code: Long, val url: String, val sha256: String, val certificate: String)
+  private data class Update(val version: String, val code: Long, val url: String, val sha256: String, val certificate: String, val channel: String)
   private val worker = Executors.newSingleThreadExecutor()
-  private val endpoint = "https://github.com/loopix8000/lof-writer/releases/download/android-beta/latest.json"
   private var available: Update? = null
   private val updatesDir get() = File(activity.cacheDir, "updates")
   private val downloaded get() = File(updatesDir, "update.apk")
   private val maxApkBytes = 512L * 1024 * 1024
+  private val versionPattern = Regex("([0-9]+)\\.([0-9]+)\\.([0-9]+)(?:-([A-Za-z0-9.-]+))?")
+
+  private fun compareVersions(left: String, right: String): Int? {
+    val a = versionPattern.matchEntire(left) ?: return null
+    val b = versionPattern.matchEntire(right) ?: return null
+    for (i in 1..3) {
+      val result = a.groupValues[i].toBigInteger().compareTo(b.groupValues[i].toBigInteger())
+      if (result != 0) return result
+    }
+    val ap = a.groupValues[4].split('.').filter { it.isNotEmpty() }
+    val bp = b.groupValues[4].split('.').filter { it.isNotEmpty() }
+    if (ap.isEmpty() || bp.isEmpty()) return if (ap.isEmpty()) if (bp.isEmpty()) 0 else 1 else -1
+    for (i in 0 until maxOf(ap.size, bp.size)) {
+      val x = ap.getOrNull(i) ?: return -1
+      val y = bp.getOrNull(i) ?: return 1
+      if (x == y) continue
+      val nx = x.all { it.isDigit() }
+      val ny = y.all { it.isDigit() }
+      if (nx && ny) {
+        val result = x.toBigInteger().compareTo(y.toBigInteger())
+        if (result != 0) return result
+      } else if (nx != ny) return if (nx) -1 else 1
+      else return x.compareTo(y)
+    }
+    return 0
+  }
 
   private fun perform(invoke: Invoke, task: () -> Unit) {
     worker.execute {
@@ -96,6 +128,9 @@ class AndroidUpdaterPlugin(private val activity: Activity) : Plugin(activity) {
   @Command
   fun check(invoke: Invoke) = perform(invoke) {
     available = null
+    val channel = invoke.parseArgs(UpdateArgs::class.java).channel
+    check(channel in setOf("stable", "rc", "beta")) { "업데이트 채널을 확인해 주세요." }
+    val endpoint = "https://github.com/loopix8000/lof-writer/releases/download/android-$channel/latest.json"
     val conn = connection(endpoint)
     try {
       if (conn.responseCode == 404) {
@@ -111,18 +146,25 @@ class AndroidUpdaterPlugin(private val activity: Activity) : Plugin(activity) {
       val certificate = manifest.getString("certificateSha256").lowercase()
       val url = manifest.getString("url")
       check(manifest.getString("platform") == "android" && manifest.getString("arch") == "aarch64" &&
-        Regex("[0-9]+\\.[0-9]+\\.[0-9]+(?:-[A-Za-z0-9.-]+)?").matches(version) &&
+        versionPattern.matches(version) &&
         Regex("[a-f0-9]{64}").matches(sha256) && Regex("[a-f0-9]{64}").matches(certificate) &&
         url == "https://github.com/loopix8000/lof-writer/releases/download/v$version/Lof.Writer_${version}_arm64.apk") {
         "새 버전 정보가 올바르지 않습니다."
       }
-      if (nextCode <= code(installed())) {
+      val kind = version.substringAfter('-', "").substringBefore('.')
+      val allowed = when (channel) {
+        "stable" -> kind.isEmpty()
+        "rc" -> kind.isEmpty() || kind == "rc"
+        else -> true
+      }
+      val current = installed()
+      if (!allowed || nextCode <= code(current) || compareVersions(version, current.versionName.orEmpty())?.let { it <= 0 } == true) {
         invoke.resolve(JSObject().apply { put("available", false) })
         return@perform
       }
       check(Build.VERSION.SDK_INT >= manifest.getInt("minSdk")) { "이 업데이트는 더 최신 Android 버전이 필요합니다." }
       check(certificates(installed()) == setOf(certificate)) { "업데이트의 서명이 현재 앱과 다릅니다." }
-      available = Update(version, nextCode, url, sha256, certificate)
+      available = Update(version, nextCode, url, sha256, certificate, channel)
       invoke.resolve(JSObject().apply { put("available", true); put("version", version) })
     } finally { conn.disconnect() }
   }
@@ -153,6 +195,8 @@ class AndroidUpdaterPlugin(private val activity: Activity) : Plugin(activity) {
   @Command
   fun download(invoke: Invoke) = perform(invoke) {
     val update = checkNotNull(available) { "먼저 새 버전을 확인해 주세요." }
+    val args = invoke.parseArgs(UpdateArgs::class.java)
+    check(update.version == args.version && update.channel == args.channel) { "업데이트 채널이 변경되었습니다. 다시 확인해 주세요." }
     if (downloaded.isFile && hash(downloaded) == update.sha256) {
       verify(downloaded, update)
       invoke.resolve()
@@ -186,6 +230,8 @@ class AndroidUpdaterPlugin(private val activity: Activity) : Plugin(activity) {
   @Command
   fun install(invoke: Invoke) = perform(invoke) {
     val update = checkNotNull(available) { "먼저 새 버전을 확인해 주세요." }
+    val args = invoke.parseArgs(UpdateArgs::class.java)
+    check(update.version == args.version && update.channel == args.channel) { "업데이트 채널이 변경되었습니다. 다시 확인해 주세요." }
     verify(downloaded, update)
     activity.runOnUiThread {
       try {

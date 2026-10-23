@@ -47,6 +47,8 @@
 .pin-error, .pin-card > .pin-error { color: var(--danger-text); font-size: 13px; line-height: 1.6; margin: 0; }
 .pin-settings-form { max-width: 360px; display: flex; flex-direction: column; gap: 16px; }
 .pin-settings-form > label { display: flex; flex-direction: column; gap: 7px; font-size: 13px; }
+.pin-biometric-settings { margin-top: 24px; max-width: 480px; }
+.pin-biometric-settings .settings-toggle > span { display: inline-flex; align-items: center; gap: 6px; }
 .auto-sync-status { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); white-space: nowrap; }
 .auto-sync-status.idle { color: var(--sync-done, #0078d4); }
 .auto-sync-status.idle.editing, .save-status-group:has(.pending) .auto-sync-status.idle { color: var(--muted); }
@@ -5729,6 +5731,8 @@ input.property-text {
   }
 }
 
+.update-channel-select { display: flex; align-items: center; gap: 12px; margin-top: 18px; font-size: 13px; }
+.update-channel-select select { min-width: 120px; }
 .updater-actions {
   display: flex;
   flex-wrap: wrap;

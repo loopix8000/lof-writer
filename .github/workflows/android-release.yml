@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: Publish the signed APK release and Android beta channel
+        description: Publish the signed APK release and matching Android update channels
         type: boolean
         default: false
       show_update_notice:
@@ -76,33 +76,4 @@ jobs:
         if: inputs.publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_VERSION: ${{ steps.apk.outputs.version }}
-          APK_ASSET: ${{ steps.apk.outputs.asset }}
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $tag = "v$env:RELEASE_VERSION"
-          gh release create $tag "release/$env:APK_ASSET" "release/$env:APK_ASSET.sha256" release/android-latest.json --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --draft --prerelease --title "Lof Writer Android $tag" --notes-file ANDROID_RELEASE_NOTES.md
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          gh release edit $tag --repo $env:GITHUB_REPOSITORY --draft=false --latest=false
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          # 앱은 android-beta 채널을 확인한다. 0.0.2 알파 버전까지 설치한 앱은 android-alpha 채널을 확인하므로
-          # 두 채널에 같은 배포 정보를 올려 기존 알파 사용자도 베타로 업데이트되게 한다.
-          $channelDir = Join-Path $env:RUNNER_TEMP 'android-channel'
-          New-Item -ItemType Directory -Force -Path $channelDir | Out-Null
-          Copy-Item -LiteralPath release/android-latest.json -Destination (Join-Path $channelDir 'latest.json')
-          $channels = @(
-            @{ Tag = 'android-beta'; Title = 'Android beta update channel'; Notes = 'Android 베타 버전의 배포 정보를 제공합니다. APK는 버전별 릴리즈에서 다운로드하세요.' },
-            @{ Tag = 'android-alpha'; Title = 'Android alpha update channel'; Notes = 'Android 알파 버전의 배포 정보를 제공합니다. APK는 버전별 릴리즈에서 다운로드하세요.' }
-          )
-          foreach ($channel in $channels) {
-            gh release view $channel.Tag --repo $env:GITHUB_REPOSITORY *> $null
-            if ($LASTEXITCODE -ne 0) {
-              gh release create $channel.Tag --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --draft --prerelease --title $channel.Title --notes $channel.Notes
-              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            }
-            gh release upload $channel.Tag (Join-Path $channelDir 'latest.json') --repo $env:GITHUB_REPOSITORY --clobber
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            gh release edit $channel.Tag --repo $env:GITHUB_REPOSITORY --draft=false --prerelease --latest=false
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          }
+        run: node scripts/publish-android-release.mjs

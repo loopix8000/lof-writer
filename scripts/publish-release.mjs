@@ -4,6 +4,7 @@ import path from "node:path";
 import { createHash, createPublicKey, verify } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { publishChannels, releaseChannel } from "./update-channels.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const { version } = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
@@ -82,26 +83,9 @@ try {
 
   // Publish installers before moving the channel so the manifest always has a public download.
   if (release.isDraft) gh("release", "edit", tag, "--draft=false", "--latest=false");
-  if (version.includes("-")) {
-    let channel;
-    try {
-      channel = JSON.parse(gh("release", "view", "beta", "--json", "isDraft,isPrerelease"));
-    } catch (error) {
-      if (!/release not found|HTTP 404/i.test(String(error.stderr))) throw error;
-    }
-    if (!channel) {
-      gh("release", "create", "beta", "--target", process.env.GITHUB_SHA || release.targetCommitish,
-        "--draft", "--prerelease", "--title", "Beta update channel",
-        "--notes", "베타 앱의 업데이트 정보를 제공합니다. 설치 파일은 버전별 릴리즈에서 다운로드하세요.");
-    } else if (!channel.isPrerelease) {
-      throw new Error("The beta channel must be a prerelease.");
-    }
-    gh("release", "upload", "beta", manifestPath, "--clobber");
-    gh("release", "edit", "beta", "--draft=false", "--prerelease", "--latest=false");
-  } else {
-    gh("release", "edit", tag, "--latest");
-  }
-  console.log(`Published ${tag}${version.includes("-") ? " and updated the beta channel" : ""}.`);
+  publishChannels({ repo, version, manifestPath, target: process.env.GITHUB_SHA || release.targetCommitish, temporary });
+  if (releaseChannel(version) === "stable") gh("release", "edit", tag, "--latest");
+  console.log(`Published ${tag} and updated release channels.`);
 } finally {
   fs.rmSync(temporary, { recursive: true, force: true });
 }

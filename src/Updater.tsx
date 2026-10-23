@@ -1,27 +1,30 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
-import { check, type Update } from "@tauri-apps/plugin-updater";
+import { Update } from "@tauri-apps/plugin-updater";
 import { Download, RefreshCw, X } from "lucide-react";
 import { ReleaseNotesForVersion } from "./ReleaseNotes";
 
 type Phase = "idle" | "checking" | "current" | "available" | "downloading" | "saving" | "installing" | "error";
 type UpdateHandle = Pick<Update, "version" | "download" | "install" | "close">;
+export type UpdateChannel = "stable" | "rc" | "beta";
+export const updateChannel = (value: unknown): UpdateChannel => value === "rc" || value === "beta" ? value : "stable";
 
-async function checkAndroidUpdate(): Promise<UpdateHandle | null> {
-  const result = await invoke<{ available: boolean; version?: string }>("android_update_check");
+async function checkAndroidUpdate(channel: UpdateChannel): Promise<UpdateHandle | null> {
+  const result = await invoke<{ available: boolean; version?: string }>("android_update_check", { channel });
   if (!result.available || !result.version) return null;
   return {
     version: result.version,
-    download: async () => { await invoke("android_update_download"); },
-    install: async () => { await invoke("android_update_install"); },
+    download: async () => { await invoke("android_update_download", { channel, version: result.version }); },
+    install: async () => { await invoke("android_update_install", { channel, version: result.version }); },
     close: async () => {},
   };
 }
 
-export function useAppUpdater({ loaded, autoCheck, beforeInstall }: {
+export function useAppUpdater({ loaded, autoCheck, channel, beforeInstall }: {
   loaded: boolean;
   autoCheck: boolean;
+  channel: UpdateChannel;
   beforeInstall: () => Promise<void>;
 }) {
   const [configured, setConfigured] = useState<boolean | null>(null);
@@ -33,15 +36,22 @@ export function useAppUpdater({ loaded, autoCheck, beforeInstall }: {
   const [progress, setProgress] = useState<number | null>(null);
   const [dismissed, setDismissed] = useState(false);
   const updateRef = useRef<UpdateHandle | null>(null);
-  const running = useRef(false);
+  const selectedChannel = useRef(channel);
+  selectedChannel.current = channel;
+  const candidateChannel = useRef<UpdateChannel | null>(null);
+  const running = useRef<number | null>(null);
   const generation = useRef(0);
   const autoChecked = useRef(false);
   const lockRef = useRef(false);
+  const lockOwner = useRef<number | null>(null);
   const prepareRef = useRef(beforeInstall);
   prepareRef.current = beforeInstall;
 
   useEffect(() => {
     const current = ++generation.current;
+    running.current = null;
+    autoChecked.current = false;
+    setAvailable(null); setError(""); setPhase("idle"); setProgress(null);
     if (loaded) {
       invoke<{ configured: boolean; supported: boolean; platform?: string }>("updater_status")
         .then((status) => {
@@ -59,15 +69,17 @@ export function useAppUpdater({ loaded, autoCheck, beforeInstall }: {
       generation.current++;
       const update = updateRef.current;
       updateRef.current = null;
+      candidateChannel.current = null;
       void update?.close().catch(() => {});
     };
-  }, [loaded]);
+  }, [loaded, channel]);
 
   // 설정 화면에서 직접 확인하면 결과가 그 화면에 표시되므로 오른쪽 아래 알림은 띄우지 않는다.
   const checkNow = useCallback(async (manual = false) => {
-    if (!configured || running.current) return;
-    running.current = true;
+    if (!configured || running.current !== null) return;
     const current = generation.current;
+    running.current = current;
+    autoChecked.current = true;
     setPhase("checking");
     setError("");
     setAvailable(null);
@@ -76,12 +88,18 @@ export function useAppUpdater({ loaded, autoCheck, beforeInstall }: {
     updateRef.current = null;
     try {
       await previous?.close();
-      const update = platformRef.current === "android" ? await checkAndroidUpdate() : await check({ timeout: 15000 });
-      if (current !== generation.current) {
+      let update: UpdateHandle | null;
+      if (platformRef.current === "android") update = await checkAndroidUpdate(channel);
+      else {
+        const metadata = await invoke<ConstructorParameters<typeof Update>[0] | null>("desktop_update_check", { channel });
+        update = metadata ? new Update(metadata) : null;
+      }
+      if (current !== generation.current || channel !== selectedChannel.current) {
         await update?.close();
         return;
       }
       updateRef.current = update;
+      candidateChannel.current = update ? channel : null;
       setAvailable(update ? { version: update.version } : null);
       setPhase(update ? "available" : "current");
     } catch (e) {
@@ -90,22 +108,22 @@ export function useAppUpdater({ loaded, autoCheck, beforeInstall }: {
         setPhase("error");
       }
     } finally {
-      running.current = false;
+      if (running.current === current) running.current = null;
     }
-  }, [configured]);
+  }, [configured, channel]);
 
   useEffect(() => {
     if (loaded && configured && autoCheck && !autoChecked.current) {
-      autoChecked.current = true;
       void checkNow();
     }
-  }, [loaded, configured, autoCheck, checkNow]);
+  }, [loaded, configured, autoCheck, checkNow, channel]);
 
   const install = useCallback(async () => {
     const update = updateRef.current;
-    if (!update || running.current) return;
-    running.current = true;
+    const channel = candidateChannel.current;
+    if (!update || !channel || channel !== selectedChannel.current || running.current !== null) return;
     const current = generation.current;
+    running.current = current;
     setError("");
     setProgress(null);
     setPhase("downloading");
@@ -118,11 +136,13 @@ export function useAppUpdater({ loaded, autoCheck, beforeInstall }: {
         if (event.event === "Progress") received += event.data.chunkLength;
         setProgress(total > 0 ? Math.min(100, Math.round(received / total * 100)) : null);
       }, { timeout: 120000 });
-      if (current !== generation.current) return;
+      if (current !== generation.current || channel !== selectedChannel.current) return;
       // 다운로드 중에는 집필을 허용하고, 저장부터 설치 종료까지 입력을 잠근다.
       lockRef.current = true;
+      lockOwner.current = current;
       flushSync(() => setPhase("saving"));
       await prepareRef.current();
+      if (current !== generation.current || channel !== selectedChannel.current) return;
       setPhase("installing");
       await update.install({ restartAfterInstall: true });
       if (current === generation.current && platformRef.current === "android") setPhase("available");
@@ -132,8 +152,9 @@ export function useAppUpdater({ loaded, autoCheck, beforeInstall }: {
         setPhase("error");
       }
     } finally {
-      lockRef.current = false;
-      running.current = false;
+      if (lockOwner.current === current) { lockRef.current = false; lockOwner.current = null; }
+      if (running.current === current) running.current = null;
+      if (current !== generation.current) await update.close().catch(() => {});
     }
   }, []);
 
@@ -147,11 +168,13 @@ export function useAppUpdater({ loaded, autoCheck, beforeInstall }: {
 
 type Updater = ReturnType<typeof useAppUpdater>;
 
-export function UpdateSettings({ updater, version, autoCheck, onAutoCheck }: {
+export function UpdateSettings({ updater, version, autoCheck, onAutoCheck, channel, onChannelChange }: {
   updater: Updater;
   version: string;
   autoCheck: boolean;
   onAutoCheck: (checked: boolean) => void;
+  channel: UpdateChannel;
+  onChannelChange: (channel: UpdateChannel) => void;
 }) {
   return <>
     <h3>앱 업데이트</h3>
@@ -163,6 +186,14 @@ export function UpdateSettings({ updater, version, autoCheck, onAutoCheck }: {
           checked={autoCheck} onChange={(e) => onAutoCheck(e.target.checked)} />
       </label>
     </div>
+    <label className="update-channel-select">업데이트 채널
+      <select value={channel} disabled={updater.busy} onChange={(event) => onChannelChange(updateChannel(event.target.value))}>
+        <option value="stable">정식</option>
+        <option value="rc">RC</option>
+        <option value="beta">베타</option>
+      </select>
+    </label>
+    <p className="settings-description">{channel === "stable" ? "확정 정식 버전만 받습니다." : channel === "rc" ? "정식과 RC(출시 후보) 중 최신 버전을 받습니다." : "정식·RC·베타 중 최신 버전을 받습니다."} 채널을 바꿔도 이전 버전으로 내려가지 않습니다.</p>
     <div className="updater-actions">
       <button type="button" disabled={!updater.configured || updater.busy} onClick={() => void updater.checkNow(true)}>
         <RefreshCw size={14} />업데이트 확인
