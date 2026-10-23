@@ -1,5 +1,5 @@
 import { requiresSource } from "../../core/text.mjs";
-import type { Doc, Kind, WritingRules } from "../types";
+import type { Doc, Kind, Library, WritingRules } from "../types";
 
 // 특정 작품에 매이지 않는 화면(서재, 전체 북마크). 이동해도 보던 작품은 그대로 둔다.
 export const globalView = (view: string) => view === "library" || view === "bookmarks";
@@ -22,6 +22,21 @@ function sameValue(a: unknown, b: unknown): boolean {
     return a.length === b.length && a.every((value, index) => sameValue(value, b[index]));
   const left = a as Record<string, unknown>, right = b as Record<string, unknown>;
   return [...new Set([...Object.keys(left), ...Object.keys(right)])].every(key => sameValue(left[key], right[key]));
+}
+const documentMetadataKeys = [
+  "title", "kind", "status", "episodeType", "description", "authorComment", "tags",
+  "manualLineBreak", "archived", "episodeId", "properties", "bookmarks",
+] as const satisfies readonly (keyof Doc)[];
+// 목록에는 편집 중인 속성을 표시하되 파일 위치·저장 버전과 본문은 저장된 값을 유지한다.
+export function withDocumentDraft(library: Library, active: Doc | null): Library {
+  if (!active) return library;
+  const saved = library.documents.find(doc => doc.id === active.id);
+  if (!saved || documentMetadataKeys.every(key => sameValue(saved[key], active[key]))) return library;
+  const metadata = Object.fromEntries(documentMetadataKeys.map(key => [key, active[key]]));
+  return {
+    ...library,
+    documents: library.documents.map(doc => doc.id === active.id ? { ...doc, ...metadata } : doc),
+  };
 }
 export function sameDocumentContent(a: Doc, b: Doc): boolean {
   return [...new Set([...Object.keys(a), ...Object.keys(b)])]

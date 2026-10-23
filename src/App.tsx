@@ -77,7 +77,7 @@ import {
   migrateTypingPreferences,
   normalizeTextReplacements
 } from "../core/typing.mjs";
-import { globalView, initialNavigation, requiresDocumentSource, sameDocumentContent, type Destination, type Dialog, type EditorTab, type Navigation, type Side } from "./app/model";
+import { globalView, initialNavigation, requiresDocumentSource, sameDocumentContent, withDocumentDraft, type Destination, type Dialog, type EditorTab, type Navigation, type Side } from "./app/model";
 import { useConfirm } from "./ConfirmDialog";
 import ContextMenu, { type MenuItem } from "./ContextMenu";
 import { ImageViewer } from "./CoverImage";
@@ -307,8 +307,9 @@ export default function App() {
     report,
   });
   const dragSide = useRef<Side>("left");
+  const shownLibrary = useMemo(() => withDocumentDraft(lib, active), [lib, active]);
   const fileTree = useFileTree({
-    library: lib, active, projectId, view, archive, menuTarget: menu?.target,
+    library: shownLibrary, active, projectId, view, archive, menuTarget: menu?.target,
     getLibrary: () => libraryRef.current,
     currentProjectId: () => projectRef.current,
     currentDocument: session.currentDocument,
@@ -1778,7 +1779,7 @@ export default function App() {
   if (isMobile) {
     return (
       <MobileShell
-        lib={lib}
+        lib={shownLibrary}
         loaded={loaded}
         view={view}
         projectId={projectId}
@@ -2114,7 +2115,7 @@ export default function App() {
           setMenu={setMenu}
           projectMenu={projectMenu}
           project={project}
-          lib={lib}
+          lib={shownLibrary}
           projectId={projectId}
           archive={archive}
           setArchive={setArchive}
@@ -2428,7 +2429,7 @@ export default function App() {
             </section>
             {<DocumentLinksWidget
               active={active}
-              lib={lib}
+              lib={shownLibrary}
               tree={fileTree}
               attempt={attempt}
               menu={menu}
