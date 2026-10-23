@@ -1083,9 +1083,9 @@ impl PeerRemote {
             ))
             .map_err(|error| {
                 // 이전 앱도 오류 문구만 전송하므로 수신 시 대기 사유를 복원한다.
-                if error == SYNC_BUSY_MESSAGE {
+                if matches!(error.as_str(), SYNC_BUSY_MESSAGE | "다른 기기가 동기화 중입니다.") {
                     fail(error, "SYNC_BUSY")
-                } else if error == crate::store::SYNC_HOLD_MESSAGE {
+                } else if error == crate::store::SYNC_HOLD_MESSAGE || error.contains("다시 비교합니다") {
                     fail(error, "SYNC_RETRY")
                 } else {
                     net(error)
