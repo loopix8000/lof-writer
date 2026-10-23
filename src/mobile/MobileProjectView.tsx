@@ -55,7 +55,7 @@ import { useEpisodeGroups } from "./useEpisodeGroups";
 import { useOverlayScrollbar } from "./useOverlayScrollbar";
 
 // 작품 정보 접힘·펼침 전환 시간. mobile.css의 가장 긴 전환(--hero-duration)보다 조금 길게 둔다.
-const HERO_ANIM_MS = 420;
+const HERO_ANIM_MS = 340;
 
 export default function MobileProjectView({
   lib,
@@ -148,6 +148,7 @@ export default function MobileProjectView({
   } | null>(null);
   const [moveFolderDoc, setMoveFolderDoc] = useState<Doc | null>(null);
   const [heroCollapsed, setHeroCollapsed] = useState(false);
+  const [heroAnimating, setHeroAnimating] = useState(false);
   const collapsedRef = useRef(false);
   const screenRef = useRef<HTMLDivElement>(null);
   const listScrollRef = useRef<HTMLDivElement>(null);
@@ -194,10 +195,10 @@ export default function MobileProjectView({
     intent.current = { down: 0, up: 0 };
     // 애니메이션 동안에는 상태만 다시 바꾸지 않는다. 목록 스크롤은 그대로 이어진다.
     toggleLockUntil.current = Date.now() + HERO_ANIM_MS;
-    screenRef.current?.classList.add("hero-animating");
+    setHeroAnimating(true);
     window.clearTimeout(animTimer.current);
     animTimer.current = window.setTimeout(() => {
-      screenRef.current?.classList.remove("hero-animating");
+      setHeroAnimating(false);
     }, HERO_ANIM_MS);
     setHeroCollapsed(next);
   };
@@ -210,7 +211,7 @@ export default function MobileProjectView({
   // 탭·작품·보관함을 바꾸면 애니메이션 없이 첫 프레임부터 제자리에서 보이도록 즉시 초기화한다
   useLayoutEffect(() => {
     window.clearTimeout(animTimer.current);
-    screenRef.current?.classList.remove("hero-animating");
+    setHeroAnimating(false);
     const list = listScrollRef.current;
     if (list) list.scrollTop = 0;
     lastTop.current = 0;
@@ -987,7 +988,7 @@ export default function MobileProjectView({
   return (
     <div
       ref={screenRef}
-      className={`m-screen m-modern-workspace m-project-screen ${heroCollapsed ? "hero-collapsed" : ""}`}
+      className={`m-screen m-modern-workspace m-project-screen ${heroCollapsed ? "hero-collapsed" : ""} ${heroAnimating ? "hero-animating" : ""}`}
     >
       {/* 상단 내 서재 이동 및 작품 영웅(Hero) 헤더 */}
       <header
