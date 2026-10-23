@@ -29,6 +29,9 @@ import { call, type AutoSyncStatus } from "../types";
 import { autoSaveCondition } from "../app/auto-save";
 import { memoImageScope, useImages } from "../app/useDocumentImages";
 import { clearMemoDraft, readMemoDraft, saveMemoDraft } from "../memo-drafts";
+import { notifyRemoteUpdate, resolveSyncedFile, saveRecoveryCopy } from "../sync-recovery";
+import SyncIssueBanner from "../SyncIssueBanner";
+import { useSyncFileUpdates } from "../useSyncFileUpdates";
 import Writer from "../Writer";
 import MobileEditorToolbar, { MobileEditorMenuActions } from "./MobileEditorToolbar";
 import {
@@ -64,6 +67,9 @@ type Memo = {
 const COMMON = "common";
 const parentOf = (p: string) => p.slice(0, Math.max(0, p.lastIndexOf("/")));
 const tabName = (path: string) => path.slice(path.lastIndexOf("/") + 1).replace(/\.md$/i, "");
+const memoKey = (m: { space: string; path: string }) => `${m.space}\n${m.path}`;
+const sameMemo = (a: { space: string; path: string }, b: { space: string; path: string } | null) =>
+  !!b && a.space === b.space && a.path === b.path;
 
 export default function MobileMemoView({
   active,
@@ -144,6 +150,94 @@ export default function MobileMemoView({
     setTitleInput(m?.title ?? "");
   };
 
+  // 다른 기기에서 바뀐 메모를 받아 정리하는 상태. 정리하지 못한 메모는 복구 사본으로만 저장한다.
+  const [conflict, setConflict] = useState(false);
+  const conflictRef = useRef(false);
+  const [syncIssues, setSyncIssues] = useState<Record<string, string>>({});
+  const issueRef = useRef<Record<string, string>>({});
+  const syncTokens = useRef(new Map<string, string>());
+  const activeRef = useRef(active);
+  activeRef.current = active;
+  const messageRef = useRef(message);
+  messageRef.current = message;
+  const entriesRef = useRef(entries);
+  entriesRef.current = entries;
+  const setConflictState = (value: boolean) => {
+    conflictRef.current = value;
+    setConflict(value);
+  };
+  function memoSyncIssue(key: string, text?: string) {
+    const next = { ...issueRef.current };
+    if (text) next[key] = text;
+    else delete next[key];
+    issueRef.current = next;
+    setSyncIssues(next);
+  }
+  const recoveryDocument = (m: Memo) => ({
+    ...m,
+    kind: entriesRef.current.find((e) => e.path === m.path)?.kind ?? "memo",
+    projectId: m.space === COMMON ? undefined : m.space,
+  });
+  async function adoptSyncedMemo(m: Memo, discard = false) {
+    const before = sameMemo(m, memoRef.current) ? memoRef.current : null;
+    const key = memoKey(m);
+    const syncToken = syncTokens.current.get(key) ?? crypto.randomUUID();
+    syncTokens.current.set(key, syncToken);
+    let preserved = false;
+    const result = await resolveSyncedFile({
+      current: () => {
+        const now = memoRef.current;
+        if (!now || !sameMemo(m, now)) return null;
+        const stored = readMemoDraft(m.space, m.path);
+        return { memo: now, seq: dirty.current.seq, body: dirty.current.seq !== dirty.current.saved ? now.body : stored?.body };
+      },
+      unchanged: ({ memo: snapshot, seq }) => memoRef.current === snapshot && dirty.current.seq === seq,
+      adopt: async ({ memo: snapshot, body }, drop) => {
+        clearTimeout(timer.current);
+        clearTimeout(draftTimer.current);
+        // 공용 메모는 최신본을 그대로 쓰고, 이 기기의 저장 전 입력은 복구 사본으로 남긴다.
+        if (m.space === COMMON) {
+          const fresh = await call<Memo>("memoRead", { space: m.space, path: m.path });
+          if (!drop && body !== undefined && body !== fresh.body) {
+            await saveRecoveryCopy(recoveryDocument({ ...snapshot, body }));
+            preserved = true;
+          }
+          return fresh;
+        }
+        return call<Memo>("adoptMemo", {
+          space: m.space, path: m.path, syncToken, discardDraft: drop,
+          ...(body !== undefined ? { draftBody: body } : {}),
+        });
+      },
+      apply: async (fresh) => {
+        dirty.current = { seq: 0, saved: 0 };
+        markSaved(fresh.body);
+        clearMemoDraft(m.space, m.path);
+        setConflictState(false);
+        setStatus("저장됨");
+        setCurrentMemo(fresh);
+        if (m.space === COMMON || !fresh.id) return true;
+        return call<boolean>("finishDocumentSync", { id: fresh.id, revision: fresh.revision, syncToken });
+      },
+      preserve: ({ memo: snapshot, body }) => saveRecoveryCopy(recoveryDocument({ ...snapshot, body: body ?? snapshot.body })),
+    }, discard);
+    if (result.status === "resolved") {
+      memoSyncIssue(key);
+      if (activeRef.current && sameMemo(m, memoRef.current)) notifyRemoteUpdate(before, memoRef.current, messageRef.current);
+      if (preserved || result.recoverySaved)
+        messageRef.current("이 기기의 저장 전 입력은 복구 사본으로 보관했습니다.");
+    } else if (result.status === "failed") {
+      const error = result.error;
+      memoSyncIssue(key, error instanceof Error ? error.message : "충돌 정리를 완료하지 못했습니다.");
+      if (sameMemo(m, memoRef.current)) setStatus("이 문서 확인 필요");
+    }
+  }
+  const adoptInChain = (m: Memo, discard = false) => {
+    const task = chain.current.then(() => adoptSyncedMemo(m, discard));
+    chain.current = task.catch(() => {});
+    return task;
+  };
+
   const loadSpaces = useCallback(async () => {
     const list = await call<Space[]>("memoSpaces");
     setSpaces(list);
@@ -184,7 +278,15 @@ export default function MobileMemoView({
     const run = async () => {
       const m = memoRef.current;
       if (!m) return;
+      if (issueRef.current[memoKey(m)]) {
+        if (dirty.current.seq !== dirty.current.saved) {
+          await saveRecoveryCopy(recoveryDocument(m));
+          setStatus("복구 사본 보관됨");
+        }
+        return;
+      }
       if (dirty.current.seq === dirty.current.saved) return;
+      if (auto && conflictRef.current) return;
       if (auto) {
         const cond = autoSaveCondition(prefsRef.current, lastSaved.current.body, m.body, lastSaved.current.at);
         if (!cond.met) {
@@ -220,6 +322,8 @@ export default function MobileMemoView({
         if (saved.historyWarning) report(Error(saved.historyWarning));
         if (!auto) void call("requestSyncNow").catch(() => {});
       } catch (e: any) {
+        // 다른 곳에서 먼저 바뀐 메모는 최신본과 정리한다.
+        if (e.code === "CONFLICT") { await adoptSyncedMemo(m); return; }
         setStatus("저장 안 됨");
         throw e;
       }
@@ -254,6 +358,7 @@ export default function MobileMemoView({
       const loaded = await call<Memo>("memoRead", { space: targetSpace, path });
       dirty.current = { seq: 0, saved: 0 };
       markSaved(loaded.body);
+      setConflictState(false);
       setStatus("저장됨");
       setCurrentMemo(loaded);
       restoreDraft(loaded);
@@ -275,6 +380,7 @@ export default function MobileMemoView({
   const closeMemoEditor = useCallback(async () => {
     await flush().catch(report);
     setCurrentMemo(null);
+    setConflictState(false);
     await loadTree().catch(report);
   }, [flush, loadTree, report]);
 
@@ -287,6 +393,38 @@ export default function MobileMemoView({
       void closeMemoEditor();
     });
   }, [memo, historyTarget, closeMemoEditor, onDetailStateChange]);
+
+  // 열린 메모가 다른 곳에서 바뀌면 최신본을 반영한다. 공용 메모를 고치던 중이면 정리 안내만 띄운다.
+  const checkOpenMemo = useSyncFileUpdates({
+    fileKey: memo ? memoKey(memo) : "",
+    enabled: !!memo,
+    automatic: true,
+    canCheck: () => activeRef.current && !(memoRef.current && issueRef.current[memoKey(memoRef.current)]),
+    current: () => {
+      const m = memoRef.current;
+      return m ? { doc: m, version: `${dirty.current.seq}:${m.revision}` } : null;
+    },
+    beforeRead: () => chain.current,
+    read: (m: Memo) => call<Memo>("memoRead", { space: m.space, path: m.path }),
+    apply: (fresh) => {
+      const now = memoRef.current;
+      if (now && now.space === COMMON && sameMemo(fresh, now) && dirty.current.seq !== dirty.current.saved) {
+        clearTimeout(timer.current);
+        setConflictState(true);
+        setStatus("외부 변경 있음");
+        return;
+      }
+      return adoptInChain(fresh);
+    },
+    report,
+  });
+  // 다른 화면에 있는 동안 들어온 변경은 메모 화면으로 돌아왔을 때 확인한다.
+  useEffect(() => {
+    if (!active || !memoRef.current) return;
+    void checkOpenMemo().catch((e) => {
+      if (!["ENOENT", "NOT_FOUND", "VAULT_CHANGED", "SYNC_BUSY", "FILE_BUSY"].includes(e?.code)) report(e);
+    });
+  }, [active, checkOpenMemo, report]);
 
   // 설정한 최소 글자 수를 채우면 남은 주기 뒤 자동 저장을 확인한다.
   function schedule() {
@@ -302,9 +440,9 @@ export default function MobileMemoView({
   function restoreDraft(m: Memo) {
     const draft = readMemoDraft(m.space, m.path);
     if (!draft) return;
+    // 다른 곳에서 바뀐 메모면 남은 입력을 버리지 않고 최신본과 정리한다.
     if (draft.revision !== m.revision) {
-      clearMemoDraft(m.space, m.path);
-      if (draft.body !== m.body) report(Error("다른 곳에서 바뀐 메모라 이 기기에 남아 있던 저장 전 입력은 불러오지 않았습니다."));
+      void adoptInChain(m).catch(report);
       return;
     }
     if (draft.body === m.body) return clearMemoDraft(m.space, m.path);
@@ -692,6 +830,13 @@ export default function MobileMemoView({
           </div>
         </header>
 
+        {(syncIssues[memoKey(memo)] || conflict) && (
+          <SyncIssueBanner
+            issue={syncIssues[memoKey(memo)] || "다른 곳에서 바뀐 메모와 이 기기의 임시본을 정리합니다."}
+            retry={(discard) => adoptInChain(memo, discard)}
+          />
+        )}
+
         <EditorScroll
           key={`${memo.space}:${memo.path}`}
           documentId={`${memo.space}:${memo.path}`}
@@ -926,6 +1071,7 @@ export default function MobileMemoView({
                   dirty.current = { seq: 0, saved: 0 };
                   markSaved(fresh.body);
                   setCurrentMemo(fresh);
+                  setConflictState(false);
                   setStatus("저장됨");
                   setHistoryTarget(null);
                   await loadTree(current.space);
