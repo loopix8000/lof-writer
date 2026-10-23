@@ -143,78 +143,26 @@ export default function MobileProjectView({
   } | null>(null);
   const [moveFolderDoc, setMoveFolderDoc] = useState<Doc | null>(null);
   const [heroCollapsed, setHeroCollapsed] = useState(false);
-  const collapsedRef = useRef(false);
   const listScrollRef = useRef<HTMLDivElement>(null);
-  const scrollIntent = useRef({ direction: 0, distance: 0 });
-  const listPosition = useRef({ top: 0, height: 0 });
-  const touchScroll = useRef({ active: false, startX: 0, startY: 0, y: 0 });
+  const heroRef = useRef<HTMLDivElement>(null);
 
-  // 탭·작품·보관함을 바꾸면 목록을 맨 위로 돌리고 작품 정보를 다시 펼친다
+  // 탭·작품·보관함을 바꾸면 목록을 맨 위로 돌려 작품 정보를 다시 보인다
   useEffect(() => {
     setHeroCollapsed(false);
-    collapsedRef.current = false;
-    scrollIntent.current = { direction: 0, distance: 0 };
-    touchScroll.current.active = false;
     const list = listScrollRef.current;
-    if (list) {
-      list.scrollTop = 0;
-      listPosition.current = { top: 0, height: list.clientHeight };
-    }
+    if (list) list.scrollTop = 0;
   }, [activeTab, archive, project.id]);
 
   useEffect(() => {
     setClosedFolders(new Set());
   }, [project.id]);
 
-  const followScrollIntent = (delta: number, el: HTMLDivElement) => {
-    if (!delta) return;
-    const direction = Math.sign(delta);
-    const intent = scrollIntent.current;
-    intent.distance = intent.direction === direction ? intent.distance + Math.abs(delta) : Math.abs(delta);
-    intent.direction = direction;
-    // 아래로 12px면 접고, 위로 8px면 현재 목록 위치에서 바로 펼친다.
-    const next = direction > 0;
-    if (next === collapsedRef.current || intent.distance < (next ? 12 : 8)) return;
-    if (next && el.scrollHeight <= el.clientHeight + 1) return;
-    collapsedRef.current = next;
-    intent.distance = 0;
-    setHeroCollapsed(next);
-  };
-
-  const onListTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
-    const touch = e.touches[0];
-    touchScroll.current = {
-      active: e.touches.length === 1,
-      startX: touch.clientX,
-      startY: touch.clientY,
-      y: touch.clientY,
-    };
-    scrollIntent.current = { direction: 0, distance: 0 };
-  };
-
-  const onListTouchMove = (e: React.TouchEvent<HTMLDivElement>) => {
-    const gesture = touchScroll.current;
-    if (!gesture.active) return;
-    if (e.touches.length !== 1) {
-      gesture.active = false;
-      return;
-    }
-    const touch = e.touches[0];
-    const delta = gesture.y - touch.clientY;
-    gesture.y = touch.clientY;
-    if (Math.abs(touch.clientY - gesture.startY) <= Math.abs(touch.clientX - gesture.startX)) return;
-    followScrollIntent(delta, e.currentTarget);
-  };
-
+  // 작품 정보는 목록과 같은 스크롤 안에 있어 다 올라간 뒤에 목록이 움직인다.
+  // 작품 정보가 다 가려지면 상단에 작품 제목을 보인다.
   const onListScroll = (e: React.UIEvent<HTMLDivElement>) => {
-    const el = e.currentTarget;
-    const previous = listPosition.current;
-    const top = Math.max(0, el.scrollTop);
-    const height = el.clientHeight;
-    listPosition.current = { top, height };
-    // 터치는 손가락 방향으로 판정하고, 높이 전환에 따른 스크롤 보정은 무시한다.
-    if (touchScroll.current.active || height !== previous.height) return;
-    followScrollIntent(top - previous.top, el);
+    const hero = heroRef.current;
+    const collapsed = !!hero && e.currentTarget.scrollTop >= hero.offsetTop + hero.offsetHeight - 8;
+    setHeroCollapsed((previous) => (previous === collapsed ? previous : collapsed));
   };
 
   const episodes = useMemo(
@@ -976,9 +924,16 @@ export default function MobileProjectView({
             </button>
           </div>
         </div>
+      </header>
 
+      {/* 옵시디언 / 노션 스타일 트리 & 리스트 본문 (구분선 없음) */}
+      <div
+        className="m-scroll-body m-tree-scroll m-project-scroll"
+        ref={listScrollRef}
+        onScroll={onListScroll}
+      >
         {/* 작품 표지(좌측) + 작품 정보·태그·관리 버튼(우측) */}
-        <div className="m-project-hero-wrap" aria-hidden={heroCollapsed}>
+        <div className="m-project-hero-wrap" ref={heroRef} aria-hidden={heroCollapsed}>
           <div className="m-project-hero">
             <button
               type="button"
@@ -1036,176 +991,168 @@ export default function MobileProjectView({
           </div>
         </div>
 
-        {/* 작품 화면 3탭 구조: 에피소드 / 플롯 / 메모 */}
-        <div
-          className="m-pill-tabs three-cols"
-          role="tablist"
-          aria-label="작품 문서 분류"
-        >
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeTab === "episode"}
-            className={`m-pill-tab ${activeTab === "episode" ? "active" : ""}`}
-            onClick={() => {
-              setTab("episode");
-              setFilterQuery("");
-            }}
+        {/* 탭과 검색줄은 작품 정보가 올라가면 목록 위에 고정된다 */}
+        <div className="m-project-sticky-tools">
+          {/* 작품 화면 3탭 구조: 에피소드 / 플롯 / 메모 */}
+          <div
+            className="m-pill-tabs three-cols"
+            role="tablist"
+            aria-label="작품 문서 분류"
           >
-            <BookOpen size={15} />
-            <span>에피소드</span>
-            <small>{episodes.length}</small>
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeTab === "plot"}
-            className={`m-pill-tab ${activeTab === "plot" ? "active" : ""}`}
-            onClick={() => {
-              setTab("plot");
-              setFilterQuery("");
-            }}
-          >
-            <FileText size={15} />
-            <span>플롯</span>
-            <small>{plots.length}</small>
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeTab === "memo"}
-            className={`m-pill-tab ${activeTab === "memo" ? "active" : ""}`}
-            onClick={() => {
-              setTab("memo");
-              setFilterQuery("");
-            }}
-          >
-            <StickyNote size={15} />
-            <span>메모</span>
-            <small>{memos.length}</small>
-          </button>
-        </div>
-
-        {/* 검색 및 빠른 생성 바 */}
-        <div className="m-modern-toolbar">
-          <div className="m-soft-search">
-            <Search size={15} className="m-filter-icon" />
-            <input
-              type="text"
-              className="m-filter-input"
-              placeholder={
-                activeTab === "episode"
-                  ? "에피소드 제목·번호·#태그 검색..."
-                  : activeTab === "plot"
-                    ? "플롯 제목·폴더·#태그 검색..."
-                    : "메모 제목·폴더·#태그 검색..."
-              }
-              value={filterQuery}
-              onChange={(e) => setFilterQuery(e.target.value)}
-            />
-            {filterQuery && (
-              <button
-                type="button"
-                className="m-filter-clear"
-                aria-label="필터 지우기"
-                onClick={() => setFilterQuery("")}
-              >
-                <X size={14} />
-              </button>
-            )}
-          </div>
-
-          {activeTab === "episode" && (
             <button
               type="button"
-              className="m-sort-btn"
-              aria-label={episodeSort === "asc" ? "오름차순 정렬" : "내림차순 정렬"}
-              title={episodeSort === "asc" ? "오름차순 정렬" : "내림차순 정렬"}
-              onClick={changeEpisodeSort}
+              role="tab"
+              aria-selected={activeTab === "episode"}
+              className={`m-pill-tab ${activeTab === "episode" ? "active" : ""}`}
+              onClick={() => {
+                setTab("episode");
+                setFilterQuery("");
+              }}
             >
-              {episodeSort === "asc" ? <ArrowDown01 size={16} /> : <ArrowDown10 size={16} />}
+              <BookOpen size={15} />
+              <span>에피소드</span>
+              <small>{episodes.length}</small>
             </button>
-          )}
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === "plot"}
+              className={`m-pill-tab ${activeTab === "plot" ? "active" : ""}`}
+              onClick={() => {
+                setTab("plot");
+                setFilterQuery("");
+              }}
+            >
+              <FileText size={15} />
+              <span>플롯</span>
+              <small>{plots.length}</small>
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === "memo"}
+              className={`m-pill-tab ${activeTab === "memo" ? "active" : ""}`}
+              onClick={() => {
+                setTab("memo");
+                setFilterQuery("");
+              }}
+            >
+              <StickyNote size={15} />
+              <span>메모</span>
+              <small>{memos.length}</small>
+            </button>
+          </div>
 
-          {!archive && (
-            <div className="m-toolbar-create-btns">
-              {activeTab === "episode" ? (
+          {/* 검색 및 빠른 생성 바 */}
+          <div className="m-modern-toolbar">
+            <div className="m-soft-search">
+              <Search size={15} className="m-filter-icon" />
+              <input
+                type="text"
+                className="m-filter-input"
+                placeholder={
+                  activeTab === "episode"
+                    ? "에피소드 제목·번호·#태그 검색..."
+                    : activeTab === "plot"
+                      ? "플롯 제목·폴더·#태그 검색..."
+                      : "메모 제목·폴더·#태그 검색..."
+                }
+                value={filterQuery}
+                onChange={(e) => setFilterQuery(e.target.value)}
+              />
+              {filterQuery && (
                 <button
                   type="button"
-                  className="m-btn-primary m-btn-sm"
-                  onClick={attempt(() => createDoc("episode"))}
+                  className="m-filter-clear"
+                  aria-label="필터 지우기"
+                  onClick={() => setFilterQuery("")}
                 >
-                  <Plus size={15} />
-                  <span>새 에피소드</span>
+                  <X size={14} />
                 </button>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    className="m-btn-secondary m-btn-sm"
-                    aria-label="새 폴더 만들기"
-                    onClick={() =>
-                      setRenameTarget({
-                        type: "newFolder",
-                        idOrPath: "",
-                        initialValue: "새 폴더",
-                      })
-                    }
-                  >
-                    <FolderPlus size={15} />
-                  </button>
+              )}
+            </div>
+
+            {activeTab === "episode" && (
+              <button
+                type="button"
+                className="m-sort-btn"
+                aria-label={episodeSort === "asc" ? "오름차순 정렬" : "내림차순 정렬"}
+                title={episodeSort === "asc" ? "오름차순 정렬" : "내림차순 정렬"}
+                onClick={changeEpisodeSort}
+              >
+                {episodeSort === "asc" ? <ArrowDown01 size={16} /> : <ArrowDown10 size={16} />}
+              </button>
+            )}
+
+            {!archive && (
+              <div className="m-toolbar-create-btns">
+                {activeTab === "episode" ? (
                   <button
                     type="button"
                     className="m-btn-primary m-btn-sm"
-                    onClick={() =>
-                      setRenameTarget({
-                        type: "newDoc",
-                        idOrPath: "",
-                        initialValue: activeTab === "plot" ? "새 플롯" : "새 메모",
-                        kind: activeTab,
-                      })
-                    }
+                    onClick={attempt(() => createDoc("episode"))}
                   >
                     <Plus size={15} />
-                    <span>{activeTab === "plot" ? "새 플롯" : "새 메모"}</span>
+                    <span>새 에피소드</span>
                   </button>
-                </>
-              )}
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      className="m-btn-secondary m-btn-sm"
+                      aria-label="새 폴더 만들기"
+                      onClick={() =>
+                        setRenameTarget({
+                          type: "newFolder",
+                          idOrPath: "",
+                          initialValue: "새 폴더",
+                        })
+                      }
+                    >
+                      <FolderPlus size={15} />
+                    </button>
+                    <button
+                      type="button"
+                      className="m-btn-primary m-btn-sm"
+                      onClick={() =>
+                        setRenameTarget({
+                          type: "newDoc",
+                          idOrPath: "",
+                          initialValue: activeTab === "plot" ? "새 플롯" : "새 메모",
+                          kind: activeTab,
+                        })
+                      }
+                    >
+                      <Plus size={15} />
+                      <span>{activeTab === "plot" ? "새 플롯" : "새 메모"}</span>
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* 플롯/메모 탭 보기 방식 전환 (전체 트리 / 회차별 연결 문서) */}
+          {activeTab !== "episode" && currentKindDocs.some((d) => !!d.episodeId) && (
+            <div className="m-doc-scope-bar">
+              <button
+                type="button"
+                className={`m-scope-chip ${docScope === "all" ? "active" : ""}`}
+                onClick={() => setDocScope("all")}
+              >
+                전체 폴더 트리
+              </button>
+              <button
+                type="button"
+                className={`m-scope-chip ${docScope === "byEpisode" ? "active" : ""}`}
+                onClick={() => setDocScope("byEpisode")}
+              >
+                회차별 연결 {labels[activeTab]}
+              </button>
             </div>
           )}
         </div>
 
-        {/* 플롯/메모 탭 보기 방식 전환 (전체 트리 / 회차별 연결 문서) */}
-        {activeTab !== "episode" && currentKindDocs.some((d) => !!d.episodeId) && (
-          <div className="m-doc-scope-bar">
-            <button
-              type="button"
-              className={`m-scope-chip ${docScope === "all" ? "active" : ""}`}
-              onClick={() => setDocScope("all")}
-            >
-              전체 폴더 트리
-            </button>
-            <button
-              type="button"
-              className={`m-scope-chip ${docScope === "byEpisode" ? "active" : ""}`}
-              onClick={() => setDocScope("byEpisode")}
-            >
-              회차별 연결 {labels[activeTab]}
-            </button>
-          </div>
-        )}
-      </header>
-
-      {/* 옵시디언 / 노션 스타일 트리 & 리스트 본문 (구분선 없음) */}
-      <div
-        className="m-scroll-body m-tree-scroll"
-        ref={listScrollRef}
-        onScroll={onListScroll}
-        onTouchStart={onListTouchStart}
-        onTouchMove={onListTouchMove}
-        onTouchEnd={() => { touchScroll.current.active = false; }}
-        onTouchCancel={() => { touchScroll.current.active = false; }}
-      >
         {activeTab === "episode" ? (
           <div className="m-tree-container">
             {!filterQuery.trim() && filteredEpisodes.length > EPISODE_GROUP
