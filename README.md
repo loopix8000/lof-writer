@@ -122,8 +122,6 @@ npm start
 - Windows MSI: `npm run package:msi`
 - Android APK: `npm run android:build` (Android SDK·NDK·JDK 필요)
 
-배포와 업데이트 설정은 [RELEASING.md](RELEASING.md)를 참고하세요.
-
 ## 라이선스
 
 [MIT License](LICENSE)
