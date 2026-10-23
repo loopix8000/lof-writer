@@ -987,19 +987,33 @@
 
 /* 2026 스타일 소프트 필 탭 (2탭 / 3탭) */
 .m-pill-tabs {
+  position: relative;
+  isolation: isolate;
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(var(--pill-count, 2), minmax(0, 1fr));
   gap: 4px;
   padding: 3px;
   border-radius: 12px;
   background: var(--panel);
 }
 
-.m-pill-tabs.three-cols {
-  grid-template-columns: 1fr 1fr 1fr;
+.m-pill-tab-indicator {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  width: calc((100% - 6px - (var(--pill-count) - 1) * 4px) / var(--pill-count));
+  border-radius: 9px;
+  background: var(--surface);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  transform: translateX(calc(var(--pill-index) * (100% + 4px)));
+  transition: transform 0.25s cubic-bezier(0.22, 0.61, 0.36, 1);
+  pointer-events: none;
 }
 
 .m-pill-tab {
+  position: relative;
+  min-width: 0;
   min-height: 34px;
   border-radius: 9px;
   border: none;
@@ -1012,7 +1026,7 @@
   font-size: 13px;
   font-weight: 650;
   padding: 0 6px;
-  transition: background 0.15s ease, color 0.15s ease;
+  transition: color 0.25s ease;
   white-space: nowrap;
 }
 
@@ -1025,17 +1039,20 @@
   color: inherit;
 }
 
-.m-pill-tab.selected,
 .m-pill-tab.active {
-  background: var(--surface);
   color: var(--ink);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
 }
 
-.m-pill-tab.selected small,
 .m-pill-tab.active small {
   background: var(--accent-soft);
   color: var(--accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .m-pill-tab-indicator,
+  .m-pill-tab {
+    transition: none;
+  }
 }
 
 /* 검색 및 생성 툴바 (구분선 없는 소프트 스타일) */
@@ -2195,10 +2212,6 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-}
-
-.m-pill-tabs.three-cols {
-  grid-template-columns: repeat(3, 1fr);
 }
 
 .m-drawer-body {

@@ -75,6 +75,7 @@ import {
 } from "./MobileActionSheet";
 import { compareNames, useDocumentSort, useEpisodeSort } from "./useEpisodeSort";
 import { useEpisodeGroups } from "./useEpisodeGroups";
+import MobilePillTabs from "./MobilePillTabs";
 
 type TreeTab = "episode" | "document";
 
@@ -1341,30 +1342,15 @@ export default function MobileEditorView({
             </div>
 
             <div className="m-drawer-controls">
-              <div className="m-pill-tabs" role="tablist">
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={treeTab === "episode"}
-                  className={`m-pill-tab ${treeTab === "episode" ? "selected" : ""}`}
-                  onClick={() => setTreeTab("episode")}
-                >
-                  <BookOpen size={14} />
-                  <span>에피소드</span>
-                  <small>{episodes.length}</small>
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={treeTab === "document"}
-                  className={`m-pill-tab ${treeTab === "document" ? "selected" : ""}`}
-                  onClick={() => setTreeTab("document")}
-                >
-                  <FileText size={14} />
-                  <span>문서</span>
-                  <small>{docItems.length}</small>
-                </button>
-              </div>
+              <MobilePillTabs<TreeTab>
+                value={treeTab}
+                label="파일 트리 분류"
+                onChange={setTreeTab}
+                items={[
+                  { value: "episode", label: "에피소드", icon: <BookOpen size={14} />, count: episodes.length },
+                  { value: "document", label: "문서", icon: <FileText size={14} />, count: docItems.length },
+                ]}
+              />
 
               <div className="m-modern-toolbar">
                 <div className="m-soft-search">
@@ -1554,38 +1540,16 @@ export default function MobileEditorView({
             </div>
 
             <div className="m-drawer-controls">
-              <div className="m-pill-tabs three-cols" role="tablist">
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={rightTab === "widgets"}
-                  className={`m-pill-tab ${rightTab === "widgets" ? "selected" : ""}`}
-                  onClick={() => setRightTab("widgets")}
-                >
-                  <SlidersHorizontal size={14} />
-                  <span>위젯</span>
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={rightTab === "typesetting"}
-                  className={`m-pill-tab ${rightTab === "typesetting" ? "selected" : ""}`}
-                  onClick={() => setRightTab("typesetting")}
-                >
-                  <Pilcrow size={14} />
-                  <span>조판</span>
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={rightTab === "bookmarks"}
-                  className={`m-pill-tab ${rightTab === "bookmarks" ? "selected" : ""}`}
-                  onClick={() => setRightTab("bookmarks")}
-                >
-                  <BookmarkIcon size={14} />
-                  <span>북마크</span>
-                </button>
-              </div>
+              <MobilePillTabs<RightWidgetTab>
+                value={rightTab}
+                label="위젯 보드 보기"
+                onChange={setRightTab}
+                items={[
+                  { value: "widgets", label: "위젯", icon: <SlidersHorizontal size={14} /> },
+                  { value: "typesetting", label: "조판", icon: <Pilcrow size={14} /> },
+                  { value: "bookmarks", label: "북마크", icon: <BookmarkIcon size={14} /> },
+                ]}
+              />
             </div>
 
             <div className="m-drawer-body m-widget-drawer-scroll">

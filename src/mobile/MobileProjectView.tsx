@@ -53,6 +53,7 @@ import {
 import { compareNames, useDocumentSort, useEpisodeSort } from "./useEpisodeSort";
 import { useEpisodeGroups } from "./useEpisodeGroups";
 import { useOverlayScrollbar } from "./useOverlayScrollbar";
+import MobilePillTabs from "./MobilePillTabs";
 
 // 작품 정보 접힘·펼침 전환 시간. mobile.css의 가장 긴 전환(--hero-duration)보다 조금 길게 둔다.
 const HERO_ANIM_MS = 340;
@@ -1266,54 +1267,19 @@ export default function MobileProjectView({
 
           <div className="m-project-tools">
             {/* 작품 화면 3탭 구조: 에피소드 / 플롯 / 메모 */}
-            <div
-              className="m-pill-tabs three-cols"
-              role="tablist"
-              aria-label="작품 문서 분류"
-            >
-              <button
-                type="button"
-                role="tab"
-                aria-selected={activeTab === "episode"}
-                className={`m-pill-tab ${activeTab === "episode" ? "active" : ""}`}
-                onClick={() => {
-                  setTab("episode");
-                  setFilterQuery("");
-                }}
-              >
-                <BookOpen size={15} />
-                <span>에피소드</span>
-                <small>{episodes.length}</small>
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={activeTab === "plot"}
-                className={`m-pill-tab ${activeTab === "plot" ? "active" : ""}`}
-                onClick={() => {
-                  setTab("plot");
-                  setFilterQuery("");
-                }}
-              >
-                <FileText size={15} />
-                <span>플롯</span>
-                <small>{plots.length}</small>
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={activeTab === "memo"}
-                className={`m-pill-tab ${activeTab === "memo" ? "active" : ""}`}
-                onClick={() => {
-                  setTab("memo");
-                  setFilterQuery("");
-                }}
-              >
-                <StickyNote size={15} />
-                <span>메모</span>
-                <small>{memos.length}</small>
-              </button>
-            </div>
+            <MobilePillTabs<Kind>
+              value={activeTab}
+              label="작품 문서 분류"
+              items={[
+                { value: "episode", label: "에피소드", icon: <BookOpen size={15} />, count: episodes.length },
+                { value: "plot", label: "플롯", icon: <FileText size={15} />, count: plots.length },
+                { value: "memo", label: "메모", icon: <StickyNote size={15} />, count: memos.length },
+              ]}
+              onChange={kind => {
+                setTab(kind);
+                setFilterQuery("");
+              }}
+            />
 
             {/* 검색 및 빠른 생성 바 */}
             <div className="m-modern-toolbar">
