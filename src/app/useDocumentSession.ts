@@ -499,7 +499,14 @@ export function useDocumentSession(options: Options) {
   }
 
   function discardDraft(id?: string) {
-    if (id !== undefined && draft.current?.doc.id !== id) return;
+    if (id !== undefined) {
+      if (draft.current?.doc.id !== id) return;
+      setSyncIssue(id);
+      if (activeId.current === id) {
+        commitDocument(draft.current.base, false);
+        return;
+      }
+    }
     if (timer.current) clearTimeout(timer.current);
     if (draftTimer.current) clearTimeout(draftTimer.current);
     draft.current = null;

@@ -1772,9 +1772,38 @@ export default function App() {
 
   // 충돌이나 저장 실패로 남은 임시본은 그대로 알린다.
   const saving = !conflict && !session.syncIssue && saveStatus !== "저장 실패",
-    recoverable = (lib.drafts || []).filter(
-      (d: any) => !(saving && d.id === active?.id && Date.parse(d.savedAt) >= appStartedAt),
-    ).length;
+    isRecoverableDraft = (d: any) =>
+      !(saving && d.id === active?.id && Date.parse(d.savedAt) >= appStartedAt),
+    recoverableDrafts = (lib.drafts || []).filter(isRecoverableDraft),
+    recoverable = recoverableDrafts.length;
+  async function deleteDraft(d: Partial<Doc>) {
+    if (!d.id) return;
+    if (
+      !(await confirm({
+        title: "임시 원고 삭제",
+        message: (
+          <>
+            <b>{d.title || "제목 없음"}</b> 임시 원고를 삭제할까요?
+          </>
+        ),
+        detail: "삭제한 임시 원고는 다시 복구할 수 없습니다. 저장된 원고는 유지됩니다.",
+        confirmLabel: "삭제",
+        danger: true,
+        icon: <Trash2 size={15} />,
+      }))
+    )
+      return;
+    await call("clearDraft", { id: d.id });
+    const nextDrafts = libraryRef.current.drafts.filter((x) => x.id !== d.id);
+    updateLibrary((data) => ({
+      ...data,
+      drafts: data.drafts.filter((x) => x.id !== d.id),
+    }));
+    void refresh().catch(report);
+    session.discardDraft(d.id);
+    if (!nextDrafts.some(isRecoverableDraft)) setDialog(null);
+    message("임시 원고를 삭제했습니다.");
+  }
   if (isMobile) {
     return (
       <MobileShell
@@ -1842,6 +1871,8 @@ export default function App() {
         setConfirmTitle={setConfirmTitle}
         confirmDialog={confirmDialog}
         recoverable={recoverable}
+        recoverableDrafts={recoverableDrafts}
+        deleteDraft={deleteDraft}
         updater={updater}
         releaseNotice={releaseNotice}
         releaseNotesOpen={releaseNotesOpen}
@@ -2718,31 +2749,40 @@ export default function App() {
               })()}
             {dialog.type === "recovery" && (
               <div className="recovery-list">
-                {lib.drafts.map((d: any) => (
+                {recoverableDrafts.map((d: any) => (
                   <div key={d.id}>
                     <b>{d.title}</b>
                     <p>{String(d.body || "").slice(0, 120)}</p>
-                    <button
-                      onClick={attempt(async () => {
-                        const copy = await call<Doc>("createDocument", {
-                          projectId: d.projectId,
-                          kind: d.kind,
-                          title: d.title + " (복구 사본)",
-                          body: d.body,
-                        });
-                        await call("clearDraft", { id: d.id });
-                        updateLibrary((data) => ({
-                          ...insertDocument(copy)(data),
-                          drafts: data.drafts.filter((x) => x.id !== d.id),
-                        }));
-                        void refresh().catch(report);
-                        session.discardDraft(d.id);
-                        await openDoc(copy.id, true);
-                        message("임시 원고를 새 문서로 복구했습니다.");
-                      })}
-                    >
-                      사본으로 복구
-                    </button>
+                    <div className="recovery-actions">
+                      <button
+                        onClick={attempt(async () => {
+                          const copy = await call<Doc>("createDocument", {
+                            projectId: d.projectId,
+                            kind: d.kind,
+                            title: d.title + " (복구 사본)",
+                            body: d.body,
+                          });
+                          await call("clearDraft", { id: d.id });
+                          updateLibrary((data) => ({
+                            ...insertDocument(copy)(data),
+                            drafts: data.drafts.filter((x) => x.id !== d.id),
+                          }));
+                          void refresh().catch(report);
+                          session.discardDraft(d.id);
+                          await openDoc(copy.id, true);
+                          message("임시 원고를 새 문서로 복구했습니다.");
+                        })}
+                      >
+                        사본으로 복구
+                      </button>
+                      <button
+                        className="danger-outline"
+                        onClick={attempt(() => deleteDraft(d))}
+                      >
+                        <Trash2 size={15} />
+                        삭제
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>

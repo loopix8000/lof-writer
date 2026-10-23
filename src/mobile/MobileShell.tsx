@@ -119,6 +119,8 @@ export default function MobileShell({
   setConfirmTitle,
   confirmDialog,
   recoverable,
+  recoverableDrafts,
+  deleteDraft,
   updater,
   releaseNotice,
   releaseNotesOpen,
@@ -248,6 +250,8 @@ export default function MobileShell({
   setConfirmTitle: React.Dispatch<React.SetStateAction<string>>;
   confirmDialog: React.ReactNode;
   recoverable: number;
+  recoverableDrafts: Partial<Doc>[];
+  deleteDraft: (d: Partial<Doc>) => Promise<void>;
   updater: any;
   releaseNotice: any;
   releaseNotesOpen: boolean;
@@ -1107,31 +1111,41 @@ export default function MobileShell({
 
             {dialog.type === "recovery" && (
               <div className="recovery-list">
-                {lib.drafts.map((d: any) => (
+                {recoverableDrafts.map((d: any) => (
                   <div key={d.id}>
                     <b>{d.title}</b>
                     <p>{String(d.body || "").slice(0, 120)}</p>
-                    <button
-                      type="button"
-                      className="m-btn-primary"
-                      onClick={attempt(async () => {
-                        const copy = await call<Doc>("createDocument", {
-                          projectId: d.projectId,
-                          kind: d.kind,
-                          title: d.title + " (복구 사본)",
-                          body: d.body,
-                        });
-                        await call("clearDraft", { id: d.id });
-                        showCreatedDocument(copy);
-                        discardDraft(d.id);
-                        setDialog(null);
-                        setMobileTab("library");
-                        await openDoc(copy.id, true);
-                        message("임시 원고를 새 문서로 복구했습니다.");
-                      })}
-                    >
-                      사본으로 복구
-                    </button>
+                    <div className="recovery-actions">
+                      <button
+                        type="button"
+                        className="m-btn-primary"
+                        onClick={attempt(async () => {
+                          const copy = await call<Doc>("createDocument", {
+                            projectId: d.projectId,
+                            kind: d.kind,
+                            title: d.title + " (복구 사본)",
+                            body: d.body,
+                          });
+                          await call("clearDraft", { id: d.id });
+                          showCreatedDocument(copy);
+                          discardDraft(d.id);
+                          setDialog(null);
+                          setMobileTab("library");
+                          await openDoc(copy.id, true);
+                          message("임시 원고를 새 문서로 복구했습니다.");
+                        })}
+                      >
+                        사본으로 복구
+                      </button>
+                      <button
+                        type="button"
+                        className="m-btn-danger"
+                        onClick={attempt(() => deleteDraft(d))}
+                      >
+                        <Trash2 size={16} />
+                        <span>삭제</span>
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>

@@ -3236,6 +3236,11 @@ body.sidebar-resizing * {
   overflow: auto;
   white-space: pre-wrap;
 }
+.recovery-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
 .danger-outline {
   color: var(--danger-text);
   border-color: var(--danger-border);
