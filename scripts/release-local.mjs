@@ -1,7 +1,10 @@
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash, createPublicKey, verify } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { publishChannels, releaseChannel } from "./update-channels.mjs";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = new Set(process.argv.slice(2));
@@ -98,6 +101,39 @@ function loadWindowsSigningEnv() {
       process.env.TAURI_UPDATER_ENDPOINT?.trim() ||
       "https://github.com/loopix8000/lof-writer/releases/download/stable/latest.json",
   };
+}
+
+function verifyWindowsMsiSignature({ msiPath, signatureBase64, publicKeyBase64 }) {
+  const decode = (value) => Buffer.from(value, "base64").toString("utf8").trim().split(/\r?\n/);
+  const publicPacket = Buffer.from(decode(publicKeyBase64)[1] ?? "", "base64");
+  const signatureLines = decode(signatureBase64.trim());
+  const signaturePacket = Buffer.from(signatureLines[1] ?? "", "base64");
+  if (
+    publicPacket.length !== 42 ||
+    signaturePacket.length !== 74 ||
+    signaturePacket.subarray(0, 2).toString() !== "ED" ||
+    !signatureLines[2]?.startsWith("trusted comment: ")
+  ) {
+    throw new Error("업데이트 공개키 또는 서명 형식이 올바르지 않습니다.");
+  }
+  if (!publicPacket.subarray(2, 10).equals(signaturePacket.subarray(2, 10))) {
+    throw new Error("비밀키와 앱 공개키가 다릅니다. 기존 Writer 비밀키를 확인해 주세요.");
+  }
+  const key = createPublicKey({
+    key: Buffer.concat([Buffer.from("302a300506032b6570032100", "hex"), publicPacket.subarray(10)]),
+    format: "der",
+    type: "spki",
+  });
+  const payload = fs.readFileSync(msiPath);
+  const digest = createHash("blake2b512").update(payload).digest();
+  const signature = signaturePacket.subarray(10);
+  const trusted = Buffer.concat([signature, Buffer.from(signatureLines[2].slice(17))]);
+  if (
+    !verify(null, digest, key, signature) ||
+    !verify(null, trusted, key, Buffer.from(signatureLines[3] ?? "", "base64"))
+  ) {
+    throw new Error("설치 파일의 업데이트 서명 검증에 실패했습니다.");
+  }
 }
 
 function loadAndroidSigningEnv() {
@@ -200,6 +236,13 @@ function releaseWindows({ repo, target }) {
   fs.copyFileSync(builtSigPath, stagedSigPath);
 
   const signature = fs.readFileSync(stagedSigPath, "utf8").trim();
+  // 업로드 전에 로컬에서 Ed25519 서명과 공개키 일치를 바로 검증한다.
+  verifyWindowsMsiSignature({
+    msiPath: stagedMsiPath,
+    signatureBase64: signature,
+    publicKeyBase64: signingEnv.TAURI_UPDATER_PUBLIC_KEY,
+  });
+
   const downloadUrl = `https://github.com/${repo}/releases/download/${tag}/${encodeURIComponent(normalizedMsiName)}`;
   const manifestPath = path.join(releaseDir, "latest.json");
   const manifest = {
@@ -212,6 +255,7 @@ function releaseWindows({ repo, target }) {
     },
   };
   fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
+  console.log(`서명과 버전 검증 완료: ${normalizedMsiName}`);
 
   const gh = (...ghArgs) =>
     execFileSync("gh", [...ghArgs, "--repo", repo], {
@@ -220,46 +264,52 @@ function releaseWindows({ repo, target }) {
       windowsHide: true,
     }).trim();
 
-  let releaseExists = false;
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "lof-win-publish-"));
   try {
-    gh("release", "view", tag, "--json", "tagName");
-    releaseExists = true;
-  } catch {
-    releaseExists = false;
-  }
+    let releaseExists = false;
+    try {
+      gh("release", "view", tag, "--json", "tagName");
+      releaseExists = true;
+    } catch {
+      releaseExists = false;
+    }
 
-  if (!releaseExists) {
-    gh(
-      "release",
-      "create",
-      tag,
-      stagedMsiPath,
-      stagedSigPath,
-      manifestPath,
-      "--target",
-      target,
-      "--draft",
-      ...(version.includes("-") ? ["--prerelease"] : []),
-      "--title",
-      `Lof Writer ${tag}`,
-      "--notes-file",
-      "RELEASE_NOTES.md",
-    );
-  } else {
-    gh("release", "upload", tag, stagedMsiPath, stagedSigPath, manifestPath, "--clobber");
-    gh("release", "edit", tag, "--notes-file", "RELEASE_NOTES.md");
-  }
+    if (!releaseExists) {
+      gh(
+        "release",
+        "create",
+        tag,
+        stagedMsiPath,
+        stagedSigPath,
+        manifestPath,
+        "--target",
+        target,
+        "--draft",
+        ...(version.includes("-") ? ["--prerelease"] : []),
+        "--title",
+        `Lof Writer ${tag}`,
+        "--notes-file",
+        "RELEASE_NOTES.md",
+      );
+    } else {
+      gh("release", "upload", tag, stagedMsiPath, stagedSigPath, manifestPath, "--clobber");
+      gh("release", "edit", tag, "--notes-file", "RELEASE_NOTES.md");
+    }
 
-  if (isDraftOnly) {
-    console.log(`초안(draft) 릴리즈 업로드 완료: ${tag}`);
-    return;
-  }
+    if (isDraftOnly) {
+      console.log(`초안(draft) 릴리즈 업로드 완료: ${tag}`);
+      return;
+    }
 
-  runNodeScript("scripts/publish-release.mjs", [], {
-    ...signingEnv,
-    GITHUB_REPOSITORY: repo,
-    GITHUB_SHA: target,
-  });
+    gh("release", "edit", tag, "--draft=false", "--latest=false");
+    publishChannels({ repo, version, manifestPath, target, temporary });
+    if (releaseChannel(version) === "stable") {
+      gh("release", "edit", tag, "--latest");
+    }
+    console.log(`Published ${tag} and updated release channels.`);
+  } finally {
+    fs.rmSync(temporary, { recursive: true, force: true });
+  }
 }
 
 function releaseAndroid({ repo, target }) {
