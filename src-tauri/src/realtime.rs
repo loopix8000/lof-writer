@@ -646,6 +646,15 @@ fn wake(app: &AppHandle) {
     signal(&rt);
     crate::auto_sync::refresh_realtime(app);
 }
+// 연결이 닫히면 대기 중인 동기화 루프를 깨워 바로 재접속을 시도하게 한다.
+fn watch_close(runtime: &tokio::runtime::Runtime, app: &AppHandle, conn: &Connection) {
+    let conn = conn.clone();
+    let app = app.clone();
+    runtime.spawn(async move {
+        conn.closed().await;
+        wake(&app);
+    });
+}
 fn remote_changed(app: &AppHandle) {
     // 상대의 알림은 재전파하지 않고, 실제로 받아 저장한 변경만 다른 장치에 알린다.
     app.state::<Realtime>().requested.fetch_add(1, Ordering::SeqCst);
@@ -1314,6 +1323,7 @@ pub fn start(app: &AppHandle) {
                     let accepted = rt.live.lock().unwrap().get(&id).cloned();
                     if let Some(conn) = accepted {
                         if connected.get(&id).is_none_or(|(old, _)| old.stable_id() != conn.stable_id()) {
+                            watch_close(&runtime, &app, &conn);
                             connected.insert(id.clone(), (conn, (u64::MAX, u64::MAX, u64::MAX)));
                             retry.remove(&id);
                             let mut statuses = rt.statuses.lock().unwrap();
@@ -1357,6 +1367,7 @@ pub fn start(app: &AppHandle) {
                                 }
                                 if !connected.contains_key(&id) {
                                     rt.live.lock().unwrap().insert(id.clone(), conn.clone());
+                                    watch_close(&runtime, &app, &conn);
                                     connected.insert(id.clone(), (conn, (u64::MAX, u64::MAX, u64::MAX)));
                                 }
                                 Ok(())
