@@ -27,7 +27,7 @@ RC도 GitHub에서는 prerelease로 게시한다. GitHub Latest는 PC 확정 정
 
 ## 서명 설정
 
-PC·Android 릴리즈 모두 수동 실행 시 `show_update_notice`로 업데이트 완료 팝업을 지정할 수 있다. 현재 준비 중인 PC `1.0.6-rc.1`과 Android `0.0.3-rc.1`은 기본값을 `true`로 설정했다. 사용자 설정과는 별개이며, 릴리즈할 때 표시하지 않으려면 이 옵션을 끈다. 로컬 빌드에서 켜려면 빌드 전에 PowerShell에서 `$env:VITE_SHOW_UPDATE_NOTICE = 'true'`를 설정한다. 끄려면 해당 환경 변수를 제거하거나 `'false'`로 설정한다.
+PC·Android 릴리즈 모두 수동 실행 시 `show_update_notice`로 업데이트 완료 팝업을 지정할 수 있다. 기본값은 `false`이며, 팝업이 필요한 릴리즈에서만 실행할 때 켠다. 사용자 설정과는 별개다. 로컬 빌드에서 켜려면 빌드 전에 PowerShell에서 `$env:VITE_SHOW_UPDATE_NOTICE = 'true'`를 설정한다. 끄려면 해당 환경 변수를 제거하거나 `'false'`로 설정한다.
 
 1. Tauri 서명 키를 만든다. 비밀키는 소스에 넣지 않고 별도로 백업한다. `.private/`는 Git에서 제외되어 있다.
 
