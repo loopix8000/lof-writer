@@ -493,6 +493,19 @@ export default function MobileShell({
     void invoke("android_set_system_bars", { color, dark }).catch(() => {});
   }, [dark, prefs.colorTheme]);
 
+  // 키보드를 내리면 본문 편집 영역의 포커스를 풀어 커서와 삽입 핸들이 남지 않게 한다.
+  useEffect(() => {
+    (window as any).__lofKeyboardHidden = () => {
+      const focused = document.activeElement;
+      if (focused instanceof HTMLElement && focused.isContentEditable && shellRef.current?.contains(focused)) {
+        focused.blur();
+      }
+    };
+    return () => {
+      delete (window as any).__lofKeyboardHidden;
+    };
+  }, []);
+
   return (
     <div
       ref={shellRef}

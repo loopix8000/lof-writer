@@ -9,6 +9,8 @@ import androidx.core.view.WindowInsetsCompat
 
 class MainActivity : TauriActivity() {
   override val handleBackNavigation: Boolean = false
+  private var webView: WebView? = null
+  private var imeVisible = false
 
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
@@ -19,6 +21,15 @@ class MainActivity : TauriActivity() {
         WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout() or WindowInsetsCompat.Type.ime()
       )
       view.setPadding(insets.left, insets.top, insets.right, insets.bottom)
+      val visible = windowInsets.isVisible(WindowInsetsCompat.Type.ime())
+      // 키보드를 내리면 편집 영역 포커스도 함께 해제해 커서와 삽입 핸들을 정리한다.
+      if (imeVisible && !visible) {
+        webView?.evaluateJavascript(
+          "(function(){ try { if (typeof window.__lofKeyboardHidden === 'function') window.__lofKeyboardHidden(); } catch(e) {} })()",
+          null
+        )
+      }
+      imeVisible = visible
       WindowInsetsCompat.CONSUMED
     }
   }
@@ -36,6 +47,7 @@ class MainActivity : TauriActivity() {
 
   override fun onWebViewCreate(webView: WebView) {
     super.onWebViewCreate(webView)
+    this.webView = webView
     val callback = object : OnBackPressedCallback(true) {
       override fun handleOnBackPressed() {
         webView.evaluateJavascript(
