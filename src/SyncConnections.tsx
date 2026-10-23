@@ -12,7 +12,7 @@ export default function SyncConnections({
   intervalSeconds,
   onIntervalChange,
   backgroundEnabled = true,
-  backgroundIntervalSeconds = 900,
+  backgroundIntervalSeconds = 1800,
   onBackgroundSyncChange,
   busy,
   setBusy,
@@ -68,8 +68,8 @@ export default function SyncConnections({
             }}
           >
             <option value="off">끄기 (사용 안 함)</option>
-            <option value="900">15분 (기본)</option>
-            <option value="1800">30분</option>
+            <option value="900">15분</option>
+            <option value="1800">30분 (기본)</option>
             <option value="3600">1시간 (60분)</option>
             {hasCustomBgInterval && (
               <option value={String(backgroundIntervalSeconds)}>{bgMinutes}분 (직접 설정)</option>

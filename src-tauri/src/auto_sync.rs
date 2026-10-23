@@ -14,7 +14,7 @@ use tauri::{AppHandle, Emitter, Manager};
 
 const DEFAULT_INTERVAL: Duration = Duration::from_secs(300);
 const MIN_BACKGROUND_INTERVAL: u64 = 900;
-const DEFAULT_BACKGROUND_INTERVAL: Duration = Duration::from_secs(900);
+const DEFAULT_BACKGROUND_INTERVAL: Duration = Duration::from_secs(1800);
 const LOCAL_CHECK_INTERVAL: Duration = Duration::from_secs(5);
 const RETRY_DELAY: Duration = Duration::from_secs(30);
 

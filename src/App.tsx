@@ -1018,7 +1018,7 @@ export default function App() {
       autoSync={autoSync} intervalSeconds={prefs.syncIntervalSeconds ?? 300}
       onIntervalChange={(seconds) => savePrefs({ syncIntervalSeconds: seconds })}
       backgroundEnabled={prefs.backgroundSyncEnabled !== false}
-      backgroundIntervalSeconds={prefs.backgroundSyncIntervalSeconds ?? 900}
+      backgroundIntervalSeconds={prefs.backgroundSyncIntervalSeconds ?? 1800}
       onBackgroundSyncChange={(patch) => savePrefs(patch)}
       busy={busy} setBusy={setBusy} onSync={doSync} message={message} report={report} />;
   }

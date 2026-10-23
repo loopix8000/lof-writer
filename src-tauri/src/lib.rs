@@ -2239,7 +2239,7 @@ pub fn run() {
         show_startup_error(format!("파일 동기화 연결을 초기화하지 못했습니다: {}", error.message));
         return;
     }
-    // 허용 범위 밖의 기존 백그라운드 주기는 기본 15분으로 바꾸고 범위 안의 설정은 유지한다.
+    // 허용 범위 밖의 기존 백그라운드 주기는 기본 30분으로 바꾸고 범위 안의 설정은 유지한다.
     let sync_interval = auto_sync::interval_seconds(&settings);
     let bg_sync_enabled = auto_sync::background_enabled(&settings);
     let bg_sync_interval = auto_sync::background_interval_seconds(&settings);
