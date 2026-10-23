@@ -10,7 +10,7 @@ on:
       show_update_notice:
         description: Show the update completion popup on first launch after updating
         type: boolean
-        default: false
+        default: true
 
 permissions:
   contents: write

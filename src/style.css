@@ -68,6 +68,15 @@
 * {
   box-sizing: border-box;
 }
+/* 스크롤은 각 패널에서 처리하고, 바깥 문서의 터치 스크롤과 경계 반동을 막는다. */
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
 body {
   margin: 0;
 }
@@ -187,6 +196,7 @@ button:focus-visible {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  overflow: hidden;
   color: var(--text);
   background: var(--bg);
 }

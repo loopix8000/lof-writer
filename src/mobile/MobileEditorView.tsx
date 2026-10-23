@@ -45,7 +45,7 @@ import {
 } from "../../core/typesetting.mjs";
 import BookmarkList from "../app/BookmarkList";
 import { icons, labels } from "../app/document-ui";
-import { parentOfRel } from "../app/file-tree-model";
+import { EPISODE_GROUP, parentOfRel } from "../app/file-tree-model";
 import { type Dialog } from "../app/model";
 import TypesettingSettings from "../app/TypesettingSettings";
 import type { FileTreeController } from "../app/useFileTree";
@@ -73,7 +73,8 @@ import {
   MobilePromptSheet,
   type MobileActionItem,
 } from "./MobileActionSheet";
-import { useEpisodeSort } from "./useEpisodeSort";
+import { compareNames, useDocumentSort, useEpisodeSort } from "./useEpisodeSort";
+import { useEpisodeGroups } from "./useEpisodeGroups";
 
 type TreeTab = "episode" | "document";
 
@@ -113,6 +114,7 @@ export default function MobileEditorView({
   checkOpenDocument,
   replaceActiveSymbols,
   openDoc,
+  openLinkedDocument,
   createDoc,
   patchDoc,
   archiveDoc,
@@ -174,6 +176,7 @@ export default function MobileEditorView({
   checkOpenDocument: (apply?: boolean) => Promise<void>;
   replaceActiveSymbols: () => void;
   openDoc: (id: string, pinned?: boolean) => Promise<void>;
+  openLinkedDocument: (id: string) => Promise<void>;
   createDoc: (
     kind: Kind,
     opts?: { title?: string; episodeId?: string },
@@ -206,6 +209,7 @@ export default function MobileEditorView({
   );
   const [treeFilter, setTreeFilter] = useState("");
   const { sort: episodeSort, toggleSort: toggleEpisodeSort } = useEpisodeSort();
+  const { sort: documentSort, toggleSort: toggleDocumentSort } = useDocumentSort();
   const [collapsedPaths, setCollapsedPaths] = useState<Record<string, boolean>>({});
   const [createMenuFolder, setCreateMenuFolder] = useState<string | null>(null);
   const [newFolderParent, setNewFolderParent] = useState<string | null>(null);
@@ -597,9 +601,19 @@ export default function MobileEditorView({
     [projectDocs],
   );
   const docItems = useMemo(
-    () => projectDocs.filter((d) => d.kind === "plot" || d.kind === "memo"),
-    [projectDocs],
+    () => projectDocs.filter((d) => d.kind === "plot" || d.kind === "memo")
+      .sort((a, b) => compareNames(a.title || "제목 없음", b.title || "제목 없음", documentSort)),
+    [projectDocs, documentSort],
   );
+  const currentEpisodeIndex = episodes.findIndex((ep) =>
+    ep.id === (active.kind === "episode" ? active.id : active.episodeId),
+  );
+  const defaultGroupStart = currentEpisodeIndex >= 0
+    ? Math.floor(currentEpisodeIndex / EPISODE_GROUP) * EPISODE_GROUP
+    : episodeSort === "desc" ? Math.max(0, Math.ceil(episodes.length / EPISODE_GROUP) - 1) * EPISODE_GROUP : 0;
+  const { isGroupOpen, toggleGroup } = useEpisodeGroups(lib.root, active.projectId, defaultGroupStart);
+  const filteredEpisodes = (episodeSort === "desc" ? [...episodes].reverse() : episodes)
+    .filter((ep) => !treeFilter.trim() || (ep.title || "").toLowerCase().includes(treeFilter.trim().toLowerCase()));
 
   // 상단 제목 표시줄의 < > 버튼과 좌우 슬라이드로 이전·다음 회차를 연다.
   const episodeIndex = episodes.findIndex((ep) => ep.id === active.id);
@@ -648,8 +662,8 @@ export default function MobileEditorView({
         }
       }
     }
-    return Array.from(set).sort((a, b) => a.localeCompare(b, "ko"));
-  }, [tree.memoEntries, docItems]);
+    return Array.from(set).sort((a, b) => compareNames(a, b, documentSort));
+  }, [tree.memoEntries, docItems, documentSort]);
 
   const moveDrawerDocument = async (doc: Doc, folder: string) => {
     if (!doc.relPath?.startsWith("doc/") || docFolderOf(doc) === folder) return;
@@ -838,6 +852,37 @@ export default function MobileEditorView({
           );
         })}
       </>
+    );
+  };
+
+  const renderDrawerEpisode = (ep: Doc) => {
+    const isCur = ep.id === active.id;
+    const n = numberOf(ep);
+    const st = normalizeStatus(isCur ? active.status : ep.status);
+    return (
+      <div key={ep.id} className={`m-tree-row m-episode-row ${isCur ? "active" : ""}`}>
+        <button
+          type="button"
+          className="m-tree-row-main"
+          {...drawerLongPress(ep)}
+          onClick={() => {
+            if (consumeLongPress()) return;
+            setLeftDrawerOpen(false);
+            if (!isCur) attempt(() => openDoc(ep.id, false))();
+          }}
+        >
+          <span className={`m-ep-pill ${/^\d/.test(String(n)) ? "" : "named"}`}>{n}</span>
+          <span className="m-tree-label">{ep.title || "제목 없음"}</span>
+          {st !== "in_progress" && (
+            <span className={`m-status-dot-badge ${st === "completed" ? "completed" : ""}`}>
+              {STATUS_SHORT[st]}
+            </span>
+          )}
+          <span className="m-tree-meta">
+            {(ep.platformCharacters ?? ep.characters ?? 0).toLocaleString()}자
+          </span>
+        </button>
+      </div>
     );
   };
 
@@ -1049,7 +1094,7 @@ export default function MobileEditorView({
             onUnbind={attempt(() => bindDocument(active.id, null))}
             onOpenBound={
               active.episodeId
-                ? attempt(() => openDoc(active.episodeId!))
+                ? attempt(() => openLinkedDocument(active.episodeId!))
                 : undefined
             }
           />
@@ -1345,81 +1390,57 @@ export default function MobileEditorView({
                     </button>
                   )}
                 </div>
-                {treeTab === "episode" && (
-                  <button
+                <button
                     type="button"
                     className="m-sort-btn"
-                    aria-label={episodeSort === "asc" ? "오름차순 정렬" : "내림차순 정렬"}
-                    title={episodeSort === "asc" ? "오름차순 정렬" : "내림차순 정렬"}
-                    onClick={toggleEpisodeSort}
+                    aria-label={(treeTab === "episode" ? episodeSort : documentSort) === "asc" ? "오름차순 정렬" : "내림차순 정렬"}
+                    title={(treeTab === "episode" ? episodeSort : documentSort) === "asc" ? "오름차순 정렬" : "내림차순 정렬"}
+                    onClick={treeTab === "episode" ? toggleEpisodeSort : toggleDocumentSort}
                   >
-                    {episodeSort === "asc" ? (
+                    {(treeTab === "episode" ? episodeSort : documentSort) === "asc" ? (
                       <ArrowDown01 size={16} />
                     ) : (
                       <ArrowDown10 size={16} />
                     )}
-                  </button>
-                )}
+                </button>
               </div>
             </div>
 
             <div className="m-drawer-body m-tree-scroll">
               {treeTab === "episode" ? (
                 <div className="m-tree-container">
-                  {(episodeSort === "desc" ? [...episodes].reverse() : episodes)
-                    .filter(
-                      (ep) =>
-                        !treeFilter.trim() ||
-                        (ep.title || "")
-                          .toLowerCase()
-                          .includes(treeFilter.trim().toLowerCase()),
-                    )
-                    .map((ep) => {
-                      const isCur = ep.id === active.id;
-                      const n = numberOf(ep);
-                      const st = normalizeStatus(isCur ? active.status : ep.status);
-                      return (
-                        <div
-                          key={ep.id}
-                          className={`m-tree-row m-episode-row ${isCur ? "active" : ""}`}
-                        >
-                          <button
-                            type="button"
-                            className="m-tree-row-main"
-                            {...drawerLongPress(ep)}
-                            onClick={() => {
-                              if (consumeLongPress()) return;
-                              setLeftDrawerOpen(false);
-                              if (!isCur) attempt(() => openDoc(ep.id, false))();
-                            }}
-                          >
-                            <span
-                              className={`m-ep-pill ${/^\d/.test(String(n)) ? "" : "named"}`}
-                            >
-                              {n}
-                            </span>
-                            <span className="m-tree-label">
-                              {ep.title || "제목 없음"}
-                            </span>
-                            {st !== "in_progress" && (
-                              <span
-                                className={`m-status-dot-badge ${st === "completed" ? "completed" : ""}`}
+                  {!treeFilter.trim() && episodes.length > EPISODE_GROUP
+                    ? Array.from({ length: Math.ceil(episodes.length / EPISODE_GROUP) }, (_, group) => group * EPISODE_GROUP)
+                      .sort((a, b) => episodeSort === "desc" ? b - a : a - b)
+                      .map((start) => {
+                        const group = episodes.slice(start, start + EPISODE_GROUP);
+                        const items = episodeSort === "desc" ? [...group].reverse() : group;
+                        const isOpen = isGroupOpen(start);
+                        return (
+                          <div key={start} className="m-tree-node">
+                            <div className="m-tree-row m-tree-folder">
+                              <button
+                                type="button"
+                                className="m-tree-row-main"
+                                aria-expanded={isOpen}
+                                onClick={() => toggleGroup(start)}
                               >
-                                {STATUS_SHORT[st]}
-                              </span>
-                            )}
-                            <span className="m-tree-meta">
-                              {(
-                                ep.platformCharacters ??
-                                ep.characters ??
-                                0
-                              ).toLocaleString()}
-                              자
-                            </span>
-                          </button>
-                        </div>
-                      );
-                    })}
+                                <span className="m-tree-chevron">
+                                  {isOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+                                </span>
+                                <span className="m-tree-label">
+                                  {episodeSort === "desc"
+                                    ? `${start + items.length} – ${start + 1}화`
+                                    : `${start + 1} – ${start + items.length}화`}
+                                </span>
+                                <span className="m-tree-count">{items.length}</span>
+                              </button>
+                            </div>
+                            {isOpen && <div className="m-tree-children">{items.map(renderDrawerEpisode)}</div>}
+                          </div>
+                        );
+                      })
+                    : filteredEpisodes.map(renderDrawerEpisode)}
                 </div>
               ) : (
                 <div className="m-tree-container">
@@ -1618,7 +1639,7 @@ export default function MobileEditorView({
                           className="memo-card"
                           onClick={() => {
                             setRightDrawerOpen(false);
-                            attempt(() => openDoc(d.id, false))();
+                            attempt(() => openLinkedDocument(d.id))();
                           }}
                         >
                           <FileText size={15} />
@@ -1656,7 +1677,7 @@ export default function MobileEditorView({
                           className="memo-card"
                           onClick={() => {
                             setRightDrawerOpen(false);
-                            attempt(() => openDoc(d.id, false))();
+                            attempt(() => openLinkedDocument(d.id))();
                           }}
                         >
                           <StickyNote size={15} />
@@ -1692,7 +1713,7 @@ export default function MobileEditorView({
                           className="memo-card"
                           onClick={() => {
                             setRightDrawerOpen(false);
-                            attempt(() => openDoc(boundEpisode.id, false))();
+                            attempt(() => openLinkedDocument(boundEpisode.id))();
                           }}
                         >
                           <BookOpen size={15} />

@@ -511,7 +511,8 @@ export default function App() {
     const keepOlder = !!(fresh && retained && retained.revision !== fresh.revision && !sameDocumentContent(retained, fresh));
     const doc = keepOlder ? retained! : fresh;
     const next: Destination = doc
-      ? { view: "workspace", projectId: doc.projectId, documentId: doc.id, tab: doc.kind, archive: doc.archived }
+      ? { view: "workspace", projectId: doc.projectId, documentId: doc.id, tab: doc.kind, archive: doc.archived,
+          linkedDocument: destination.linkedDocument }
       : { ...destination, projectId: globalView(destination.view) ? "" : destination.projectId };
     if (!globalView(next.view) && !libraryRef.current.projects.some(p => p.id === next.projectId))
       throw Error("작품을 찾을 수 없습니다.");
@@ -897,6 +898,21 @@ export default function App() {
     const index = current.index + direction;
     if (index < 0 || index >= current.entries.length) return;
     await navigate(current.entries[index], index);
+  }
+  async function openMobileLinkedDocument(id: string) {
+    if (id === session.currentId()) return;
+    await navigate({ view: "workspace", projectId: "", documentId: id, linkedDocument: true });
+  }
+  async function backFromLinkedDocument(): Promise<boolean> {
+    const nav = navigationRef.current;
+    const current = nav.entries[nav.index];
+    const previous = nav.entries[nav.index - 1];
+    if (!current.linkedDocument || current.view !== "workspace" ||
+        current.documentId !== session.currentId() || previous?.view !== "workspace" ||
+        previous.projectId !== current.projectId ||
+        !libraryRef.current.documents.some((doc) => doc.id === previous.documentId)) return false;
+    await navigate(previous, nav.index - 1);
+    return true;
   }
   function resetNavigation() {
     ++navigationSeq.current;
@@ -1855,6 +1871,8 @@ export default function App() {
         openLibraryProject={openLibraryProject}
         projectMenu={projectMenu}
         openDoc={openDoc}
+        openLinkedDocument={openMobileLinkedDocument}
+        backFromLinkedDocument={backFromLinkedDocument}
         createDoc={createDoc}
         patchDoc={patchDoc}
         archiveDoc={archiveDoc}

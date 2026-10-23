@@ -72,6 +72,7 @@ export type Destination = {
   tab?: Kind;
   archive?: boolean;
   pinned?: boolean;
+  linkedDocument?: boolean;
 };
 export type Navigation = { entries: Destination[]; index: number };
 // 편집기 탭. VS Code처럼 고정되지 않은 탭(미리보기)은 다음 문서를 열 때 재사용된다.

@@ -50,7 +50,8 @@ import {
   MobilePromptSheet,
   type MobileActionItem,
 } from "./MobileActionSheet";
-import { useEpisodeSort } from "./useEpisodeSort";
+import { compareNames, useDocumentSort, useEpisodeSort } from "./useEpisodeSort";
+import { useEpisodeGroups } from "./useEpisodeGroups";
 
 export default function MobileProjectView({
   lib,
@@ -120,15 +121,15 @@ export default function MobileProjectView({
   const [docScope, setDocScope] = useState<"all" | "byEpisode">("all");
   const [closedFolders, setClosedFolders] = useState<Set<string>>(() => new Set());
   const { sort: episodeSort, toggleSort: toggleEpisodeSort } = useEpisodeSort();
+  const { sort: documentSort, toggleSort: toggleDocumentSort } = useDocumentSort();
   // 내림차순이면 최신 회차 묶음을 먼저 펼친다.
   const lastEpGroupStart = (count: number) =>
     Math.max(0, Math.ceil(count / EPISODE_GROUP) - 1) * EPISODE_GROUP;
-  const [openEpGroups, setOpenEpGroups] = useState<Set<number>>(() =>
-    new Set([
-      episodeSort === "desc"
-        ? lastEpGroupStart(docs.filter((d) => d.kind === "episode").length)
-        : 0,
-    ]),
+  const { isGroupOpen, toggleGroup: toggleEpGroup } = useEpisodeGroups(
+    lib.root,
+    project.id,
+    episodeSort === "desc" ? lastEpGroupStart(docs.filter((d) => d.kind === "episode").length) : 0,
+    archive,
   );
   const [activeDocSheet, setActiveDocSheet] = useState<Doc | null>(null);
   const [activeFolderSheet, setActiveFolderSheet] = useState<FolderEntry | null>(null);
@@ -206,23 +207,16 @@ export default function MobileProjectView({
     [filteredEpisodes, episodeSort],
   );
 
-  const changeEpisodeSort = () => {
-    setOpenEpGroups(
-      new Set([episodeSort === "asc" ? lastEpGroupStart(filteredEpisodes.length) : 0]),
-    );
-    toggleEpisodeSort();
-  };
-
   const filteredKindDocs = useMemo(() => {
     const q = filterQuery.trim().toLowerCase();
-    if (!q) return currentKindDocs;
     return currentKindDocs.filter((d) => {
+      if (!q) return true;
       const title = (d.title || "").toLowerCase();
       const rel = (d.relPath || "").toLowerCase();
       const tags = (d.tags || []).join(" ").toLowerCase();
       return title.includes(q) || rel.includes(q) || tags.includes(q);
-    });
-  }, [currentKindDocs, filterQuery]);
+    }).sort((a, b) => compareNames(a.title || "제목 없음", b.title || "제목 없음", documentSort));
+  }, [currentKindDocs, filterQuery, documentSort]);
 
   const unlinkedKindDocs = useMemo(() => {
     const episodeIds = new Set(projectEpisodes.map((ep) => ep.id));
@@ -233,8 +227,8 @@ export default function MobileProjectView({
     () =>
       tree.memoEntries
         .filter((e) => e.type === "folder")
-        .sort((a, b) => a.name.localeCompare(b.name, "ko", { numeric: true })),
-    [tree.memoEntries],
+        .sort((a, b) => compareNames(a.name, b.name, documentSort)),
+    [tree.memoEntries, documentSort],
   );
 
   const allFolderPaths = useMemo(
@@ -264,15 +258,6 @@ export default function MobileProjectView({
       for (let folder = path; folder; folder = parentOfRel(folder)) {
         next.delete(folder);
       }
-      return next;
-    });
-  };
-
-  const toggleEpGroup = (start: number) => {
-    setOpenEpGroups((prev) => {
-      const next = new Set(prev);
-      if (next.has(start)) next.delete(start);
-      else next.add(start);
       return next;
     });
   };
@@ -1072,17 +1057,15 @@ export default function MobileProjectView({
               )}
             </div>
 
-            {activeTab === "episode" && (
-              <button
+            <button
                 type="button"
                 className="m-sort-btn"
-                aria-label={episodeSort === "asc" ? "오름차순 정렬" : "내림차순 정렬"}
-                title={episodeSort === "asc" ? "오름차순 정렬" : "내림차순 정렬"}
-                onClick={changeEpisodeSort}
+                aria-label={(activeTab === "episode" ? episodeSort : documentSort) === "asc" ? "오름차순 정렬" : "내림차순 정렬"}
+                title={(activeTab === "episode" ? episodeSort : documentSort) === "asc" ? "오름차순 정렬" : "내림차순 정렬"}
+                onClick={activeTab === "episode" ? toggleEpisodeSort : toggleDocumentSort}
               >
-                {episodeSort === "asc" ? <ArrowDown01 size={16} /> : <ArrowDown10 size={16} />}
-              </button>
-            )}
+                {(activeTab === "episode" ? episodeSort : documentSort) === "asc" ? <ArrowDown01 size={16} /> : <ArrowDown10 size={16} />}
+            </button>
 
             {!archive && (
               <div className="m-toolbar-create-btns">
@@ -1164,13 +1147,14 @@ export default function MobileProjectView({
                   .map((start) => {
                     const group = filteredEpisodes.slice(start, start + EPISODE_GROUP);
                     const items = episodeSort === "desc" ? [...group].reverse() : group;
-                    const isOpen = openEpGroups.has(start);
+                    const isOpen = isGroupOpen(start);
                     return (
                       <div key={start} className="m-tree-node">
                         <div className="m-tree-row m-tree-folder">
                           <button
                             type="button"
                             className="m-tree-row-main"
+                            aria-expanded={isOpen}
                             onClick={() => toggleEpGroup(start)}
                           >
                             <span className="m-tree-chevron">

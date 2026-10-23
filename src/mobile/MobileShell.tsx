@@ -134,6 +134,8 @@ export default function MobileShell({
   openLibraryProject,
   projectMenu,
   openDoc,
+  openLinkedDocument,
+  backFromLinkedDocument,
   createDoc,
   patchDoc,
   archiveDoc,
@@ -269,6 +271,8 @@ export default function MobileShell({
   openLibraryProject: (id: string, target?: "workspace" | "project") => Promise<void>;
   projectMenu: () => MenuItem[];
   openDoc: (id: string, pinned?: boolean) => Promise<void>;
+  openLinkedDocument: (id: string) => Promise<void>;
+  backFromLinkedDocument: () => Promise<boolean>;
   createDoc: (
     kind: Kind,
     opts?: { title?: string; episodeId?: string },
@@ -390,7 +394,9 @@ export default function MobileShell({
         return true;
       }
       if (isWritingEditor && active) {
-        attempt(() => goView("project", active.projectId))();
+        attempt(async () => {
+          if (!await backFromLinkedDocument()) await goView("project", active.projectId);
+        })();
         return true;
       }
       if (mobileTab === "library" && view === "project") {
@@ -421,6 +427,7 @@ export default function MobileShell({
     view,
     attempt,
     goView,
+    backFromLinkedDocument,
   ]);
 
   const switchMainTab = async (next: MobileTab) => {
@@ -519,6 +526,7 @@ export default function MobileShell({
                 checkOpenDocument={checkOpenDocument}
                 replaceActiveSymbols={replaceActiveSymbols}
                 openDoc={openDoc}
+                openLinkedDocument={openLinkedDocument}
                 createDoc={createDoc}
                 patchDoc={patchDoc}
                 archiveDoc={archiveDoc}

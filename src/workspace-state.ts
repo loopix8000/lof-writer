@@ -7,6 +7,7 @@ type WorkspaceState = {
   layout?: unknown;
   scroll?: Record<string, unknown>;
   selections?: Record<string, Partial<Record<SelectionMode, EditorSelection>>>;
+  mobileEpisodeGroups?: Partial<Record<"current" | "archive", Record<string, boolean>>>;
 };
 let states: Record<string, WorkspaceState> = {};
 let initialized = false;
