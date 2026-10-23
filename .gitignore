@@ -25,10 +25,3 @@ SNAPSHOTS.md
 scripts/snapshot.mjs
 scripts/snapshots/
 assets/screenshots/
-
-# 개발 중 참고용 설명 문서 (로컬에만 보관)
-/RELEASING.md
-/IROH_DIAGNOSTICS.md
-/LOCAL_GIT.md
-/src/app/README.md
-/tests/rich-editor-lab/README.md
