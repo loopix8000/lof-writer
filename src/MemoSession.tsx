@@ -402,8 +402,15 @@ export default function MemoSession({
     keepTab(m);
     setCurrent({ ...m, body });
     dirty.current.seq++;
-    setStatus("저장 대기");
     clearTimeout(draftTimer.current);
+    // 마지막 저장 내용으로 되돌아왔다면 저장할 것이 없으므로 저장됨으로 두고 임시본도 지운다.
+    if (!conflictRef.current && body === lastSaved.current.body) {
+      dirty.current.saved = dirty.current.seq;
+      clearMemoDraft(m.space, m.path);
+      setStatus("저장됨");
+      return;
+    }
+    setStatus("저장 대기");
     draftTimer.current = window.setTimeout(() => {
       const now = memoRef.current;
       if (now && dirty.current.seq !== dirty.current.saved) saveMemoDraft(now.space, now.path, now.body, now.revision);

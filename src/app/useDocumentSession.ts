@@ -351,6 +351,19 @@ export function useDocumentSession(options: Options) {
     const bodyOnly = Object.keys(patch).every((key) => key === "body");
     if (bodyOnly) setActiveSoon(cloneDocument(d.doc));
     else setActive(cloneDocument(d.doc));
+    // 마지막 저장 내용으로 되돌아왔다면 저장할 것이 없으므로 저장됨으로 두고 임시본도 지운다.
+    if (!conflictRef.current && sameDocumentContent(d.base, d.doc)) {
+      d.saved = d.seq;
+      d.draftSaved = d.seq;
+      d.edited = false;
+      if (draftTimer.current) {
+        clearTimeout(draftTimer.current);
+        draftTimer.current = null;
+      }
+      setSaveStatus("저장됨");
+      void call("clearDraft", { id: d.doc.id }).catch(report);
+      return;
+    }
     setSaveStatus("편집 중");
     scheduleDraftSave();
     scheduleAutoSave();
