@@ -19,3 +19,9 @@ src-tauri/tauri.updater.generated.json
 # Android Gradle 빌드 캐시
 src-tauri/android/**/.gradle/
 src-tauri/android/buildSrc/build/
+
+# 데모 스냅샷 도구와 생성 이미지
+SNAPSHOTS.md
+scripts/snapshot.mjs
+scripts/snapshots/
+assets/screenshots/
