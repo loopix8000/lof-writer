@@ -613,11 +613,7 @@ export default function Writer({
         attributes: {
           "aria-label": inactive ? "다른 그룹 원고 본문" : "원고 본문",
           "data-testid": visible ? (editable ? "manuscript" : "manuscript-readonly") : "",
-          // 삼성 키보드가 단어 추천 조합을 쓰면 한글 조합이 어긋나므로 원문 편집기처럼 자동 고침·추천을 끈다.
           spellcheck: "false",
-          autocorrect: "off",
-          autocapitalize: "off",
-          writingsuggestions: "false",
         },
         handleDOMEvents: {
           // 본문 안의 링크를 눌러도 앱 화면이 그 주소로 넘어가지 않게 막고, 문서 링크면 그 문서로 간다.
