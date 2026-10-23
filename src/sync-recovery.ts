@@ -2,6 +2,14 @@ import { call } from "./types";
 
 export const saveRecoveryCopy = (document: { body: string }) => call<void>("saveRecoveryCopy", { document });
 
+export type SyncMessage = (text: string, action?: { label: string; run: () => void }, duration?: number) => void;
+
+export function notifyRemoteUpdate(before: { body: string; title: string } | null | undefined,
+  after: { body: string; title: string } | null | undefined, message: SyncMessage) {
+  if (before && after && (before.body !== after.body || before.title !== after.title))
+    message("다른 기기의 최신본을 반영했습니다.", undefined, 1500);
+}
+
 type Resolution = {
   status: "resolved" | "cancelled" | "failed";
   recoverySaved: boolean;

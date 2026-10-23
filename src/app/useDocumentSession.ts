@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { EditorScrollPositions } from "../EditorScroll";
 import { call, type Doc } from "../types";
-import { resolveSyncedFile, saveRecoveryCopy } from "../sync-recovery";
+import { notifyRemoteUpdate, resolveSyncedFile, saveRecoveryCopy, type SyncMessage } from "../sync-recovery";
 import { useGitActivity } from "../useGitActivity";
 import { readFileForClose, useSyncFileUpdates } from "../useSyncFileUpdates";
 import { autoSaveCondition as checkAutoSave } from "./auto-save";
@@ -21,7 +21,7 @@ type Options = {
   clearRetainedDocuments: () => void;
   pinTab: (id: string) => void;
   onDocumentIdChanged: (oldId: string, newId: string, location?: Doc) => void;
-  message: (text: string) => void;
+  message: SyncMessage;
   report: (error: any) => void;
 };
 
@@ -139,6 +139,7 @@ export function useDocumentSession(options: Options) {
   }, [autoSaveCondition, report]);
 
   const applySyncedDocument = useCallback(async (doc: Doc, discard = false) => {
+    const before = draft.current?.doc.id === doc.id ? draft.current.doc : null;
     const syncToken = `${syncClient.current}:${doc.id}`;
     const result = await resolveSyncedFile({
       current: () => {
@@ -165,7 +166,11 @@ export function useDocumentSession(options: Options) {
       preserve: ({ doc: snapshot }) => saveRecoveryCopy(snapshot),
     }, discard);
     if (result.recoverySaved) message("편집 내용을 보관함의 복구 사본에 저장했습니다.");
-    if (result.status === "resolved") setSyncIssue(doc.id);
+    if (result.status === "resolved") {
+      setSyncIssue(doc.id);
+      if (!result.recoverySaved && latest.current.visible && draft.current?.doc.id === doc.id)
+        notifyRemoteUpdate(before, draft.current.doc, latest.current.message);
+    }
     else if (result.status === "failed") {
       const error = result.error;
       setSyncIssue(doc.id, error instanceof Error ? error.message : "충돌 정리를 완료하지 못했습니다.");

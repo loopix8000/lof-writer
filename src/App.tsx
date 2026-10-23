@@ -306,6 +306,7 @@ export default function App() {
     navigate: (id, pinned, beforeCommit) =>
       navigate({ view: "workspace", projectId: "", documentId: id, pinned }, undefined, beforeCommit),
     closeLastDocument,
+    message,
     report,
   });
   const dragSide = useRef<Side>("left");
@@ -2053,6 +2054,7 @@ export default function App() {
             onSidebarResize={(width) => savePrefs({ leftSidebarWidth: width }).catch(report)}
             flushRef={memoFlush}
             manualSaveRef={memoManualSave}
+            message={message}
             report={report}
             onOpenLink={(href, quote) =>
               attempt(async () => {

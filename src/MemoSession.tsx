@@ -1,4 +1,4 @@
-import { resolveSyncedFile, saveRecoveryCopy } from "./sync-recovery";
+import { notifyRemoteUpdate, resolveSyncedFile, saveRecoveryCopy, type SyncMessage } from "./sync-recovery";
 import SyncIssueBanner from "./SyncIssueBanner";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -136,6 +136,7 @@ export default function MemoSession({
   onSidebarResize,
   flushRef,
   manualSaveRef,
+  message,
   report,
   onOpenLink,
 }: {
@@ -156,6 +157,7 @@ export default function MemoSession({
   onSidebarResize: (width: number) => void;
   flushRef: React.MutableRefObject<((options?: { closing?: boolean }) => Promise<void>) | null>;
   manualSaveRef: React.MutableRefObject<(() => Promise<void>) | null>;
+  message: SyncMessage;
   report: (e: any) => void;
   // 메모의 문서 링크(퀵 노트 출처)를 누르면 집필 창에서 그 문서를 열고 인용한 문장으로 간다.
   onOpenLink: (href: string, quote: string) => void;
@@ -241,6 +243,7 @@ export default function MemoSession({
   const syncTokens = useRef(new Map<string, string>());
   useEffect(() => { issueRef.current = {}; setSyncIssues({}); syncTokens.current.clear(); }, [workspaceRoot]);
   async function adoptSyncedMemo(m: Memo, discard = false) {
+    const before = sameTab(m, memoRef.current) ? memoRef.current : null;
     const key = tabKey(m);
     const syncToken = syncTokens.current.get(key) ?? crypto.randomUUID();
     syncTokens.current.set(key, syncToken);
@@ -276,7 +279,10 @@ export default function MemoSession({
       },
       preserve: ({ memo, body }) => saveRecoveryCopy(recoveryDocument({ ...memo, body: body ?? memo.body })),
     }, discard);
-    if (result.status === "resolved") memoSyncIssue(key);
+    if (result.status === "resolved") {
+      memoSyncIssue(key);
+      if (active && sameTab(m, memoRef.current)) notifyRemoteUpdate(before, memoRef.current, message);
+    }
     else if (result.status === "failed") {
       const error = result.error;
       memoSyncIssue(key, error instanceof Error ? error.message : "충돌 정리를 완료하지 못했습니다.");
@@ -683,7 +689,11 @@ export default function MemoSession({
       current: () => { const doc = retainedMemos.current.get(key); return doc ? { doc, version: doc.revision } : null; },
       read: (m: Memo) => readItem(m.space, m.path),
       pending: () => setSideSyncKeys(keys => ({ ...keys, [side]: `${key}\n${shown?.revision}` })),
-      apply: fresh => { setSideMemo(fresh); setSideSyncKeys(keys => ({ ...keys, [side]: undefined })); },
+      apply: fresh => {
+        const before = retainedMemos.current.get(key);
+        setSideMemo(fresh); setSideSyncKeys(keys => ({ ...keys, [side]: undefined }));
+        if (active) notifyRemoteUpdate(before, fresh, message);
+      },
       report,
     });
     useEffect(() => {

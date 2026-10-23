@@ -4,6 +4,7 @@ import type { SplitGroups } from "../split/controller";
 import { useSplitGroups } from "../split/useSplitGroups";
 import { call, type Doc } from "../types";
 import { useSyncFileUpdates } from "../useSyncFileUpdates";
+import { notifyRemoteUpdate, type SyncMessage } from "../sync-recovery";
 import { copyWorkspaceScroll, readWorkspaceState, saveWorkspaceState, workspaceKey } from "../workspace-state";
 import { placeTab, relocateDocument, sameDocumentContent, type EditorTab, type Side } from "./model";
 
@@ -20,6 +21,7 @@ type Options = {
   navigate: (id: string, pinned: boolean, beforeCommit?: () => boolean | void) => Promise<void>;
   closeLastDocument: (commit: () => boolean | void) => Promise<void>;
   report: (error: unknown) => void;
+  message: SyncMessage;
 };
 // 작품별로 저장하는 배치. 예전 버전과 같게 그룹의 현재 문서를 docId로 둔다.
 type SavedGroup = { tabs: EditorTab[]; docId: string };
@@ -162,7 +164,11 @@ export function useEditorGroups(options: Options) {
         if (!current || !sameDocumentContent(current, fresh)) return false;
         setSideDoc(fresh); return true;
       },
-      apply: setSideDoc,
+      apply: fresh => {
+        const before = getRetainedDocument(id);
+        setSideDoc(fresh);
+        if (latest.current.visible) notifyRemoteUpdate(before, fresh, latest.current.message);
+      },
       report: options.report,
     });
     useEffect(() => {
