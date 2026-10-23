@@ -52,6 +52,7 @@ import {
 } from "./MobileActionSheet";
 import { compareNames, useDocumentSort, useEpisodeSort } from "./useEpisodeSort";
 import { useEpisodeGroups } from "./useEpisodeGroups";
+import { useOverlayScrollbar } from "./useOverlayScrollbar";
 
 export default function MobileProjectView({
   lib,
@@ -150,6 +151,7 @@ export default function MobileProjectView({
   const listPosition = useRef({ top: 0, height: 0 });
   const touchScroll = useRef({ active: false, startX: 0, startY: 0, y: 0 });
   const listHold = useRef<number | undefined>(undefined);
+  const listThumbRef = useOverlayScrollbar(listScrollRef, [activeTab, archive, project.id, docs, filterQuery, docScope]);
 
   const releaseList = (el: HTMLDivElement | null) => {
     window.clearTimeout(listHold.current);
@@ -1208,164 +1210,168 @@ export default function MobileProjectView({
         )}
       </header>
 
-      {/* 옵시디언 / 노션 스타일 트리 & 리스트 본문 (구분선 없음) */}
-      <div
-        className="m-scroll-body m-tree-scroll m-project-list"
-        ref={listScrollRef}
-        onScroll={onListScroll}
-        onTouchStart={onListTouchStart}
-        onTouchMove={onListTouchMove}
-        onTouchEnd={() => { touchScroll.current.active = false; }}
-        onTouchCancel={() => { touchScroll.current.active = false; }}
-      >
-        {activeTab === "episode" ? (
-          <div className="m-tree-container">
-            {!filterQuery.trim() && filteredEpisodes.length > EPISODE_GROUP
-              ? Array.from(
-                  { length: Math.ceil(filteredEpisodes.length / EPISODE_GROUP) },
-                  (_, g) => g * EPISODE_GROUP,
-                )
-                  .sort((a, b) => (episodeSort === "desc" ? b - a : a - b))
-                  .map((start) => {
-                    const group = filteredEpisodes.slice(start, start + EPISODE_GROUP);
-                    const items = episodeSort === "desc" ? [...group].reverse() : group;
-                    const isOpen = isGroupOpen(start);
-                    return (
-                      <div key={start} className="m-tree-node">
-                        <div className="m-tree-row m-tree-folder">
-                          <button
-                            type="button"
-                            className="m-tree-row-main"
-                            aria-expanded={isOpen}
-                            onClick={() => toggleEpGroup(start)}
-                          >
-                            <span className="m-tree-chevron">
-                              {isOpen ? (
-                                <ChevronDown size={15} />
-                              ) : (
-                                <ChevronRight size={15} />
-                              )}
-                            </span>
-                            <span className="m-tree-label">
-                              {episodeSort === "desc"
-                                ? `${start + items.length} – ${start + 1}화`
-                                : `${start + 1} – ${start + items.length}화`}
-                            </span>
-                            <span className="m-tree-count">{items.length}</span>
-                          </button>
-                        </div>
-                        {isOpen && (
-                          <div className="m-tree-children">
-                            {items.map((d) => renderEpisodeRow(d))}
+      {/* 기본 스크롤바 대신 접히는 동안에도 그대로 남는 스크롤바를 덧씌운다 */}
+      <div className="m-project-list-wrap">
+        {/* 옵시디언 / 노션 스타일 트리 & 리스트 본문 (구분선 없음) */}
+        <div
+          className="m-scroll-body m-tree-scroll m-project-list"
+          ref={listScrollRef}
+          onScroll={onListScroll}
+          onTouchStart={onListTouchStart}
+          onTouchMove={onListTouchMove}
+          onTouchEnd={() => { touchScroll.current.active = false; }}
+          onTouchCancel={() => { touchScroll.current.active = false; }}
+        >
+          {activeTab === "episode" ? (
+            <div className="m-tree-container">
+              {!filterQuery.trim() && filteredEpisodes.length > EPISODE_GROUP
+                ? Array.from(
+                    { length: Math.ceil(filteredEpisodes.length / EPISODE_GROUP) },
+                    (_, g) => g * EPISODE_GROUP,
+                  )
+                    .sort((a, b) => (episodeSort === "desc" ? b - a : a - b))
+                    .map((start) => {
+                      const group = filteredEpisodes.slice(start, start + EPISODE_GROUP);
+                      const items = episodeSort === "desc" ? [...group].reverse() : group;
+                      const isOpen = isGroupOpen(start);
+                      return (
+                        <div key={start} className="m-tree-node">
+                          <div className="m-tree-row m-tree-folder">
+                            <button
+                              type="button"
+                              className="m-tree-row-main"
+                              aria-expanded={isOpen}
+                              onClick={() => toggleEpGroup(start)}
+                            >
+                              <span className="m-tree-chevron">
+                                {isOpen ? (
+                                  <ChevronDown size={15} />
+                                ) : (
+                                  <ChevronRight size={15} />
+                                )}
+                              </span>
+                              <span className="m-tree-label">
+                                {episodeSort === "desc"
+                                  ? `${start + items.length} – ${start + 1}화`
+                                  : `${start + 1} – ${start + items.length}화`}
+                              </span>
+                              <span className="m-tree-count">{items.length}</span>
+                            </button>
                           </div>
-                        )}
-                      </div>
-                    );
-                  })
-              : sortedEpisodes.map((d) => renderEpisodeRow(d))}
+                          {isOpen && (
+                            <div className="m-tree-children">
+                              {items.map((d) => renderEpisodeRow(d))}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })
+                : sortedEpisodes.map((d) => renderEpisodeRow(d))}
 
-            {filteredEpisodes.length === 0 && (
-              <div className="m-empty-state">
-                <BookOpen size={30} />
-                <h3>
-                  {filterQuery.trim()
-                    ? "일치하는 에피소드가 없습니다"
-                    : archive
-                      ? "보관된 에피소드가 없습니다"
-                      : "아직 에피소드가 없습니다"}
-                </h3>
-                <p>
-                  {archive
-                    ? "보관함으로 옮긴 회차가 여기에 표시됩니다."
-                    : "새 에피소드 버튼을 눌러 첫 에피소드를 시작해 보세요."}
-                </p>
-                {!archive && !filterQuery.trim() && (
-                  <button
-                    type="button"
-                    className="m-btn-primary"
-                    onClick={attempt(() => createDoc("episode"))}
-                  >
-                    <Plus size={17} />
-                    <span>새 에피소드 쓰기</span>
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
-        ) : docScope === "byEpisode" ? (
-          <div className="m-tree-container">
-            {projectEpisodes.map((ep) => {
-              const bound = filteredKindDocs.filter((d) => d.episodeId === ep.id);
-              if (bound.length === 0) return null;
-              return (
-                <div key={ep.id} className="m-tree-node">
+              {filteredEpisodes.length === 0 && (
+                <div className="m-empty-state">
+                  <BookOpen size={30} />
+                  <h3>
+                    {filterQuery.trim()
+                      ? "일치하는 에피소드가 없습니다"
+                      : archive
+                        ? "보관된 에피소드가 없습니다"
+                        : "아직 에피소드가 없습니다"}
+                  </h3>
+                  <p>
+                    {archive
+                      ? "보관함으로 옮긴 회차가 여기에 표시됩니다."
+                      : "새 에피소드 버튼을 눌러 첫 에피소드를 시작해 보세요."}
+                  </p>
+                  {!archive && !filterQuery.trim() && (
+                    <button
+                      type="button"
+                      className="m-btn-primary"
+                      onClick={attempt(() => createDoc("episode"))}
+                    >
+                      <Plus size={17} />
+                      <span>새 에피소드 쓰기</span>
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          ) : docScope === "byEpisode" ? (
+            <div className="m-tree-container">
+              {projectEpisodes.map((ep) => {
+                const bound = filteredKindDocs.filter((d) => d.episodeId === ep.id);
+                if (bound.length === 0) return null;
+                return (
+                  <div key={ep.id} className="m-tree-node">
+                    <div className="m-tree-group-header">
+                      <BookOpen size={14} />
+                      <span>
+                        {numberOf(ep)} · {ep.title || "제목 없음"}
+                      </span>
+                      <small>{bound.length}</small>
+                    </div>
+                    <div className="m-tree-children">
+                      {bound.map((d) => renderDocRow(d))}
+                    </div>
+                  </div>
+                );
+              })}
+              {unlinkedKindDocs.length > 0 && (
+                <div className="m-tree-node">
                   <div className="m-tree-group-header">
-                    <BookOpen size={14} />
-                    <span>
-                      {numberOf(ep)} · {ep.title || "제목 없음"}
-                    </span>
-                    <small>{bound.length}</small>
+                    <Folder size={14} />
+                    <span>독립 {labels[activeTab]} (회차 미연결)</span>
                   </div>
                   <div className="m-tree-children">
-                    {bound.map((d) => renderDocRow(d))}
+                    {unlinkedKindDocs.map((d) => renderDocRow(d))}
                   </div>
                 </div>
-              );
-            })}
-            {unlinkedKindDocs.length > 0 && (
-              <div className="m-tree-node">
-                <div className="m-tree-group-header">
-                  <Folder size={14} />
-                  <span>독립 {labels[activeTab]} (회차 미연결)</span>
-                </div>
-                <div className="m-tree-children">
-                  {unlinkedKindDocs.map((d) => renderDocRow(d))}
-                </div>
-              </div>
-            )}
-          </div>
-        ) : (
-          <div className="m-tree-container">
-            {renderDocTreeLevel("", 0)}
+              )}
+            </div>
+          ) : (
+            <div className="m-tree-container">
+              {renderDocTreeLevel("", 0)}
 
-            {filteredKindDocs.length === 0 && (
-              <div className="m-empty-state">
-                {activeTab === "plot" ? <FileText size={30} /> : <StickyNote size={30} />}
-                <h3>
-                  {filterQuery.trim()
-                    ? `일치하는 ${labels[activeTab]}가 없습니다`
-                    : archive
-                      ? `보관된 ${labels[activeTab]}가 없습니다`
-                      : `아직 ${labels[activeTab]}가 없습니다`}
-                </h3>
-                <p>
-                  {archive
-                    ? `보관함으로 옮긴 ${labels[activeTab]} 문서가 여기에 표시됩니다.`
-                    : activeTab === "plot"
-                      ? "회차별 플롯이나 전체 스토리 구성안을 작성해 보세요."
-                      : "캐릭터 설정, 세계관, 아이디어 메모를 자유롭게 정리해 보세요."}
-                </p>
-                {!archive && !filterQuery.trim() && (
-                  <button
-                    type="button"
-                    className="m-btn-primary"
-                    onClick={() =>
-                      setRenameTarget({
-                        type: "newDoc",
-                        idOrPath: "",
-                        initialValue: activeTab === "plot" ? "새 플롯" : "새 메모",
-                        kind: activeTab,
-                      })
-                    }
-                  >
-                    <Plus size={17} />
-                    <span>첫 {labels[activeTab]} 만들기</span>
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
-        )}
+              {filteredKindDocs.length === 0 && (
+                <div className="m-empty-state">
+                  {activeTab === "plot" ? <FileText size={30} /> : <StickyNote size={30} />}
+                  <h3>
+                    {filterQuery.trim()
+                      ? `일치하는 ${labels[activeTab]}가 없습니다`
+                      : archive
+                        ? `보관된 ${labels[activeTab]}가 없습니다`
+                        : `아직 ${labels[activeTab]}가 없습니다`}
+                  </h3>
+                  <p>
+                    {archive
+                      ? `보관함으로 옮긴 ${labels[activeTab]} 문서가 여기에 표시됩니다.`
+                      : activeTab === "plot"
+                        ? "회차별 플롯이나 전체 스토리 구성안을 작성해 보세요."
+                        : "캐릭터 설정, 세계관, 아이디어 메모를 자유롭게 정리해 보세요."}
+                  </p>
+                  {!archive && !filterQuery.trim() && (
+                    <button
+                      type="button"
+                      className="m-btn-primary"
+                      onClick={() =>
+                        setRenameTarget({
+                          type: "newDoc",
+                          idOrPath: "",
+                          initialValue: activeTab === "plot" ? "새 플롯" : "새 메모",
+                          kind: activeTab,
+                        })
+                      }
+                    >
+                      <Plus size={17} />
+                      <span>첫 {labels[activeTab]} 만들기</span>
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+        <div ref={listThumbRef} className="m-overlay-scrollbar" aria-hidden="true" hidden />
       </div>
 
       <MobileActionSheet
