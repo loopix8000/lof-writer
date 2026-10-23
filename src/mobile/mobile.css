@@ -670,34 +670,40 @@
   color: var(--ink);
 }
 
-/* 목록을 내리면 작품 정보 영역을 높이·투명도 전환으로 접는다 */
+/* 작품 정보는 목록과 같은 스크롤 안에 두고, 접히는 정도(--hero-progress, 0~1)와
+   올라간 거리(--hero-offset)를 스크롤 위치에서 받아 흐려지고 천천히 밀려 올라가게 한다. */
+.m-project-screen {
+  --hero-progress: 0;
+  --hero-offset: 0px;
+}
+
+.m-project-page-header {
+  padding-bottom: 4px;
+}
+
 .m-project-hero-wrap {
-  display: grid;
-  grid-template-rows: 1fr;
-  opacity: 1;
-  transform: translateY(0);
-  transition:
-    grid-template-rows 0.28s ease,
-    opacity 0.2s ease,
-    transform 0.28s ease,
-    margin-top 0.28s ease;
+  margin: 0 -8px;
+  padding: 6px 14px 0;
+  opacity: calc(1 - var(--hero-progress) * 1.15);
+  transform: translateY(calc(var(--hero-offset) * 0.35)) scale(calc(1 - var(--hero-progress) * 0.03));
+  transform-origin: top center;
+  will-change: transform, opacity;
 }
 
-.m-project-hero-wrap > .m-project-hero {
-  min-height: 0;
-  overflow: hidden;
+/* 탭과 검색줄은 작품 정보가 다 접히면 틈 없이 상단에 붙는다 */
+.m-project-sticky-tools {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0 -8px 4px;
+  padding: 10px 14px 8px;
+  background: var(--surface);
 }
 
-.m-project-page-header.hero-collapsed .m-project-hero-wrap {
-  grid-template-rows: 0fr;
-  opacity: 0;
-  transform: translateY(-8px);
-  margin-top: -10px;
-  pointer-events: none;
-}
-
-/* 작품 화면 목록은 기본 스크롤바를 숨기고 덧씌운 스크롤바를 쓴다.
-   접히는 동안 목록 스크롤을 멈춰도 막대가 사라지거나 목록 폭이 바뀌지 않는다. */
+/* 작품 화면 목록은 기본 스크롤바를 숨기고 탭·검색줄 아래 구간에만 막대를 덧씌운다. */
 .m-project-list-wrap {
   position: relative;
   flex: 1 1 auto;
@@ -708,6 +714,11 @@
 
 .m-project-list {
   scrollbar-width: none;
+}
+
+/* 위쪽 여백이 있으면 고정된 탭 위로 목록이 비쳐 보이므로 없앤다 */
+.m-tree-scroll.m-project-list {
+  padding-top: 0 !important;
 }
 
 .m-project-list::-webkit-scrollbar {
@@ -745,25 +756,13 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  opacity: 0;
-  transform: translateY(4px);
+  opacity: clamp(0, calc((var(--hero-progress, 1) - 0.55) / 0.45), 1);
+  transform: translateY(calc((1 - var(--hero-progress, 1)) * 4px));
   pointer-events: none;
-  transition:
-    opacity 0.2s ease,
-    transform 0.28s ease;
 }
 
 .m-project-page-header.hero-collapsed .m-project-compact-title {
-  opacity: 1;
-  transform: translateY(0);
   pointer-events: auto;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .m-project-hero-wrap,
-  .m-project-compact-title {
-    transition: none;
-  }
 }
 
 .m-project-hero {

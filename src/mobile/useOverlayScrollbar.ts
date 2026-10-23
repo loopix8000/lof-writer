@@ -4,8 +4,12 @@ const INSET = 3;
 const MIN_THUMB = 32;
 
 // 목록 위에 덧씌우는 스크롤바. 목록 스크롤을 잠시 멈춰도 사라지거나 목록 폭을 바꾸지 않는다.
-// 스크롤하는 동안 보이고, 멈추면 흐려진다.
-export function useOverlayScrollbar(scrollRef: RefObject<HTMLElement | null>, deps: DependencyList) {
+// 스크롤하는 동안 보이고, 멈추면 흐려진다. startRef를 주면 그 요소 아래에서부터 막대를 움직인다.
+export function useOverlayScrollbar(
+  scrollRef: RefObject<HTMLElement | null>,
+  deps: DependencyList,
+  startRef?: RefObject<HTMLElement | null>,
+) {
   const thumbRef = useRef<HTMLDivElement>(null);
   const fadeTimer = useRef<number | undefined>(undefined);
 
@@ -13,7 +17,11 @@ export function useOverlayScrollbar(scrollRef: RefObject<HTMLElement | null>, de
     const el = scrollRef.current, thumb = thumbRef.current;
     if (!el || !thumb) return;
     const { scrollTop, scrollHeight, clientHeight } = el;
-    const track = clientHeight - INSET * 2;
+    const start = startRef?.current;
+    const offset = start
+      ? Math.min(clientHeight, Math.max(0, start.getBoundingClientRect().bottom - el.getBoundingClientRect().top))
+      : 0;
+    const track = clientHeight - offset - INSET * 2;
     if (scrollHeight <= clientHeight + 1 || track <= MIN_THUMB) {
       thumb.hidden = true;
       return;
@@ -22,12 +30,12 @@ export function useOverlayScrollbar(scrollRef: RefObject<HTMLElement | null>, de
     const height = Math.max(MIN_THUMB, (track * clientHeight) / scrollHeight);
     const progress = Math.min(1, Math.max(0, scrollTop / (scrollHeight - clientHeight)));
     thumb.style.height = `${height}px`;
-    thumb.style.transform = `translateY(${INSET + progress * (track - height)}px)`;
+    thumb.style.transform = `translateY(${offset + INSET + progress * (track - height)}px)`;
     if (!show) return;
     thumb.classList.add("visible");
     window.clearTimeout(fadeTimer.current);
     fadeTimer.current = window.setTimeout(() => thumb.classList.remove("visible"), 900);
-  }, [scrollRef]);
+  }, [scrollRef, startRef]);
 
   useEffect(() => {
     const el = scrollRef.current;
