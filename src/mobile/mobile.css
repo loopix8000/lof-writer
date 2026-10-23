@@ -670,31 +670,30 @@
   color: var(--ink);
 }
 
-/* 작품 정보는 목록과 같은 스크롤 안에 두어 다 올라간 뒤에 목록이 움직인다 */
-.m-project-page-header {
-  padding-bottom: 0;
-}
-
-.m-project-scroll {
-  position: relative;
-}
-
-/* 목록의 좌우 여백을 넘어 헤더와 같은 폭으로 맞춘다 */
+/* 목록을 내리면 작품 정보 영역을 높이·투명도 전환으로 접는다 */
 .m-project-hero-wrap {
-  margin: 0 -8px;
-  padding: 6px 14px 0;
+  display: grid;
+  grid-template-rows: 1fr;
+  opacity: 1;
+  transform: translateY(0);
+  transition:
+    grid-template-rows 0.28s ease,
+    opacity 0.2s ease,
+    transform 0.28s ease,
+    margin-top 0.28s ease;
 }
 
-.m-project-sticky-tools {
-  position: sticky;
-  top: 0;
-  z-index: 3;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  margin: 0 -8px 4px;
-  padding: 10px 14px 8px;
-  background: var(--surface);
+.m-project-hero-wrap > .m-project-hero {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.m-project-page-header.hero-collapsed .m-project-hero-wrap {
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transform: translateY(-8px);
+  margin-top: -10px;
+  pointer-events: none;
 }
 
 .m-project-compact-title {
@@ -726,6 +725,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .m-project-hero-wrap,
   .m-project-compact-title {
     transition: none;
   }
