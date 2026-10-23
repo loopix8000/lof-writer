@@ -25,6 +25,7 @@ import { settingPages, type SettingsPage } from "../app/settings-pages";
 import SettingsContent from "../app/SettingsContent";
 import type { FileTreeController } from "../app/useFileTree";
 import { ImageViewer } from "../CoverImage";
+import { ConfirmBox } from "../ConfirmDialog";
 import type { EditorScrollPositions } from "../EditorScroll";
 import type { MenuItem } from "../ContextMenu";
 import EpisodeBindingPicker from "../EpisodeBindingPicker";
@@ -864,8 +865,31 @@ export default function MobileShell({
 
       {confirmDialog}
 
+      {dialog?.type === "deleteDoc" && (() => {
+        const ids = dialog.ids ?? [dialog.value];
+        const targets = lib.documents.filter(doc => ids.includes(doc.id));
+        return <ConfirmBox
+          title="영구 삭제"
+          message={targets.length ? <>
+            <b>{targets.length > 1 ? `문서 ${targets.length}개` : targets[0].title || "제목 없음"}</b>
+            {targets.length > 1 ? "를" : " 문서를"} 영구 삭제할까요?
+          </> : "이미 삭제된 문서입니다."}
+          detail={targets.length ? "문서 목록과 임시 원고에서 제거됩니다. 동기화를 사용 중이면 다른 기기에서도 삭제됩니다." : undefined}
+          danger={targets.length > 0}
+          confirmLabel={targets.length ? "영구 삭제" : "닫기"}
+          icon={targets.length ? <Trash2 size={16} /> : undefined}
+          onClose={confirmed => {
+            setDialog(null);
+            if (confirmed && targets.length) attempt(async () => {
+              tree.clearSelection();
+              await deleteDocs(targets);
+            })();
+          }}
+        />;
+      })()}
+
       {/* 모바일 전용 전체 화면 서브 다이얼로그 (새 작품, 소설 관리, 변경 이력, 내보내기 등) */}
-      {dialog && !["settings", "serverSync"].includes(dialog.type) && (
+      {dialog && !["settings", "serverSync", "deleteDoc"].includes(dialog.type) && (
         <div className="m-dialog-page" role="dialog" aria-modal="true">
           <header className="m-topbar m-topbar-centered">
             {dialog.type !== "setup" ? (
@@ -888,7 +912,6 @@ export default function MobileShell({
                     editProject: "소설 관리",
                     history: "변경 이력",
                     document: "문서 관리",
-                    deleteDoc: "영구 삭제",
                     deleteProject: "작품 삭제",
                     linkEpisode: "회차에 연결",
                     recovery: "임시 원고 복구",
@@ -992,52 +1015,6 @@ export default function MobileShell({
                 }}
               />
             )}
-
-            {dialog.type === "deleteDoc" &&
-              (() => {
-                const ids = dialog.ids ?? [dialog.value];
-                const targets = lib.documents.filter((d) => ids.includes(d.id));
-                if (!targets.length) return <p>이미 삭제된 문서입니다.</p>;
-                return (
-                  <div className="m-confirm-box">
-                    <p>
-                      {targets.length > 1 ? (
-                        <>
-                          <b>문서 {targets.length}개</b>를 영구 삭제할까요?
-                        </>
-                      ) : (
-                        <>
-                          <b>{targets[0].title || "제목 없음"}</b> 문서를 영구 삭제할까요?
-                        </>
-                      )}
-                    </p>
-                    <p className="muted">
-                      문서 목록과 임시 원고에서 제거됩니다. 동기화를 사용 중이면 다른 기기에서도 삭제됩니다.
-                    </p>
-                    <div className="m-prompt-footer">
-                      <button
-                        type="button"
-                        className="m-btn-secondary"
-                        onClick={() => setDialog(null)}
-                      >
-                        취소
-                      </button>
-                      <button
-                        type="button"
-                        className="m-btn-danger"
-                        onClick={attempt(async () => {
-                          setDialog(null);
-                          tree.clearSelection();
-                          await deleteDocs(targets);
-                        })}
-                      >
-                        <Trash2 size={16} />
-                        <span>영구 삭제</span>
-                      </button>
-                    </div>
-                  </div>
-                );
-              })()}
 
             {dialog.type === "linkEpisode" &&
               (() => {

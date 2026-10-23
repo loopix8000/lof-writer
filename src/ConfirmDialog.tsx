@@ -41,7 +41,7 @@ export function useConfirm() {
   return [confirm, element] as const;
 }
 
-function ConfirmBox({
+export function ConfirmBox({
   title,
   message,
   detail,
