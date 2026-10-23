@@ -13,7 +13,7 @@ import {
   Sparkles,
   StickyNote
 } from "lucide-react";
-import { useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import type * as React from "react";
 import {
   lineBreakLabel
@@ -132,6 +132,9 @@ export default function SettingsContent({
     onMobileDetailChange?.(open);
   };
   const currentSetting = settingPages.find((item) => item.id === settingsPage);
+  // 설정 영역을 다시 만들지 않고 메뉴를 바꿀 때 스크롤만 처음으로 되돌린다.
+  const contentRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => { if (contentRef.current) contentRef.current.scrollTop = 0; }, [settingsPage]);
 
   return (
     <>
@@ -158,7 +161,7 @@ export default function SettingsContent({
           ))}
           <p>변경한 설정은<br />바로 저장됩니다.</p>
         </nav>
-        <div className="settings-content" key={settingsPage}>
+        <div className="settings-content" ref={contentRef}>
           <div className="mobile-settings-subhead">
             <button
               type="button"

@@ -2098,34 +2098,35 @@ impl Store {
         if !valid_id(id) {
             return Err(fail_invalid("잘못된 문서 ID"));
         }
-        let cat = self.scan()?;
-        let mut matches = Vec::new();
-        for p in cat.projects {
-            let mut entries: Vec<Value> = p
-                .project
-                .get("documents")
-                .and_then(|v| v.as_array())
-                .cloned()
-                .unwrap_or_default();
-            entries.extend(self.doc_files(&p));
-            for entry in entries {
-                if entry.get("id").and_then(|v| v.as_str()) == Some(id) {
-                    let rel = entry.get("path").and_then(|v| v.as_str()).unwrap_or("");
-                    let file = abs(&p.dir, rel);
-                    matches.push((p.clone(), entry, file));
+        // 색인을 쓰면 카탈로그 전체를 복제하지 않고 찾은 작품만 복제한다.
+        if !self.index_enabled || self.catalog.is_none() {
+            let cat = self.scan_disk()?;
+            return self.find_doc_in(&cat.projects, id);
+        }
+        self.refresh_index(false)?;
+        let cat = self.catalog.as_ref().unwrap();
+        self.find_doc_in(&cat.projects, id)
+    }
+
+    fn find_doc_in(&self, projects: &[CatalogProject], id: &str) -> Result<(CatalogProject, Value, PathBuf), LofError> {
+        let mut found: Option<(&CatalogProject, Value)> = None;
+        for p in projects {
+            let same = |entry: &Value| entry.get("id").and_then(|v| v.as_str()) == Some(id);
+            let listed = p.project.get("documents").and_then(|v| v.as_array()).into_iter().flatten()
+                .filter(|entry| same(entry)).cloned();
+            for entry in listed.chain(self.doc_files(p).into_iter().filter(|entry| same(entry))) {
+                if found.is_some() {
+                    return Err(fail(
+                        "같은 문서 ID를 가진 파일이 여러 개 있습니다. 사본에는 새 ID를 지정해 주세요.",
+                        "DUPLICATE",
+                    ));
                 }
+                found = Some((p, entry));
             }
         }
-        if matches.len() > 1 {
-            return Err(fail(
-                "같은 문서 ID를 가진 파일이 여러 개 있습니다. 사본에는 새 ID를 지정해 주세요.",
-                "DUPLICATE",
-            ));
-        }
-        matches
-            .into_iter()
-            .next()
-            .ok_or_else(|| fail("문서를 찾을 수 없습니다.", "NOT_FOUND"))
+        let (p, entry) = found.ok_or_else(|| fail("문서를 찾을 수 없습니다.", "NOT_FOUND"))?;
+        let file = abs(&p.dir, entry.get("path").and_then(|v| v.as_str()).unwrap_or(""));
+        Ok((p.clone(), entry, file))
     }
 
     pub fn write_project(&self, p: &CatalogProject) -> Result<(), LofError> {
@@ -2173,8 +2174,13 @@ impl Store {
             }
         }
         let data = serde_json::to_string_pretty(&project).unwrap_or_default();
-        atomic_write_str(&p.dir.join("project.json"), &data)?;
-        atomic_write_str(&p.dir.join("project.backup.json"), &data)?;
+        // 회차 본문만 바뀐 저장에서는 작품 파일 내용이 그대로라 다시 만들지 않는다.
+        for name in ["project.json", "project.backup.json"] {
+            let file = p.dir.join(name);
+            if fs::read_to_string(&file).ok().as_deref() != Some(data.as_str()) {
+                atomic_write_str(&file, &data)?;
+            }
+        }
         Ok(())
     }
 

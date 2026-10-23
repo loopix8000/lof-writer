@@ -810,8 +810,12 @@ export default function Writer({
     };
     report();
     if (!editor || editor.isDestroyed) return;
-    editor.on("transaction", report);
-    return () => { editor.off("transaction", report); };
+    // 되돌리기 가능 여부는 본문이 바뀔 때만 달라진다. 여백 표시 같은 꾸밈 전용 갱신은 건너뛴다.
+    const onTransaction = ({ transaction }: { transaction: { docChanged: boolean } }) => {
+      if (transaction.docChanged) report();
+    };
+    editor.on("transaction", onTransaction);
+    return () => { editor.off("transaction", onTransaction); };
   }, [editor, source, protectedSource, visible, inactive, editable, Boolean(onUndoStateChange)]);
   // 편집 중인 원고가 되거나 원문 편집으로 바뀌면 지금 줄을 알리고, 편집기에서는 바뀔 때마다 다시 알린다.
   useEffect(() => {
@@ -826,9 +830,12 @@ export default function Writer({
       if (!editor.isDestroyed) cursorLineRef.current?.(cursorLineAt(editor.state.doc, editor.state.selection.head));
     };
     report();
-    editor.on("transaction", report);
+    const onTransaction = ({ transaction }: { transaction: { docChanged: boolean; selectionSet: boolean } }) => {
+      if (transaction.docChanged || transaction.selectionSet) report();
+    };
+    editor.on("transaction", onTransaction);
     return () => {
-      editor.off("transaction", report);
+      editor.off("transaction", onTransaction);
     };
   }, [editor, reportsCursor, source, protectedSource]);
   useEffect(() => {
