@@ -514,10 +514,15 @@ export default function App() {
   }
   async function navigateNow(destination: Destination, historyIndex?: number, beforeCommit?: () => boolean | void) {
     const seq = ++navigationSeq.current;
+    // 다른 문서로 갈 때는 지금 문서의 저장을 기다리지 않고 바로 읽기 시작한다.
+    // 같은 문서를 다시 열 때는 저장된 뒤의 내용을 읽어야 하므로 저장을 마친 뒤 읽는다.
+    const early = destination.view === "workspace" && destination.documentId !== session.currentId()
+      ? call<Doc>("readDocument", { id: destination.documentId }) : null;
+    early?.catch(() => {});
     await flush();
     if (seq !== navigationSeq.current) return;
     const fresh = destination.view === "workspace"
-      ? await call<Doc>("readDocument", { id: destination.documentId }) : null;
+      ? await (early ?? call<Doc>("readDocument", { id: destination.documentId })) : null;
     if (seq !== navigationSeq.current) return;
     const retained = fresh ? getRetainedDocument(fresh.id) : undefined;
     // 이미 열어 둔 탭의 본문은 유지하고, 안내줄에서 새 내용을 불러온다.

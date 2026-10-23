@@ -961,6 +961,19 @@ impl Store {
             crate::project_order::load(&self.root, db)?;
         }
         let files = disk_inventory(&self.root)?;
+        self.apply_disk_inventory(files)
+    }
+
+    // 디스크 목록은 잠금 밖에서 미리 만들어 넘길 수 있다. 공유 저장소에서는 목록 작성이 오래 걸린다.
+    // 그 사이 바뀐 파일은 다음 확인에서 다시 잡힌다.
+    pub fn poll_disk_with(&mut self, files: DiskInventory) -> Result<bool, LofError> {
+        if let Some(db) = &self.index.database {
+            crate::project_order::load(&self.root, db)?;
+        }
+        self.apply_disk_inventory(files)
+    }
+
+    fn apply_disk_inventory(&mut self, files: DiskInventory) -> Result<bool, LofError> {
         let changed = self.disk_inventory.as_ref() != Some(&files);
         let revision = self.sync_revision();
         let pending_deletions = self.has_pending_disk_changes()? || self.has_busy_files();

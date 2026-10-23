@@ -70,45 +70,55 @@ fn can_defer_file(error: &LofError) -> bool {
 pub(crate) fn inventory(
     store: &Mutex<Option<Store>>, root: &Path, hashes: bool,
 ) -> Result<BTreeMap<String, Info>, LofError> {
-    with_store(store, root, |st| {
+    // 서재 전체를 훑는 동안 잠금을 계속 쥐면 저장과 문서 열기가 기다린다.
+    // 목록만 잠근 채 받고, 원고 확인은 문서마다 잠금을 잡았다 놓으며, 디스크 목록과 해시는 잠금 밖에서 계산한다.
+    // 이후 전송 단계가 잠금 안에서 해시를 다시 확인하므로 그 사이에 바뀐 파일은 다음 주기에 다시 맞춘다.
+    let disk = crate::store::disk_inventory(root)?;
+    let (deferred_paths, documents) = with_store(store, root, |st| {
         st.require_database()?;
-        st.poll_disk()?;
-        let mut files = file_remote::local_inventory(root)?;
-        let mut deferred = DeferredPaths::default();
-        for path in st.sync_deferred_paths()? {
-            deferred.insert(&path);
-            files.insert(path, Info::unavailable());
-        }
-        // 덮어쓰기 전에 읽을 수 있는 원고만 로컬 이력에 기록한다.
+        st.poll_disk_with(disk)?;
+        let deferred = st.sync_deferred_paths()?;
         let list = st.list()?;
-        for document in list["documents"].as_array().into_iter().flatten() {
-            let (Some(id), Some(path)) = (document["id"].as_str(), document["path"].as_str()) else { continue };
-            let Ok(relative) = Path::new(path).strip_prefix(root) else { continue };
-            let relative = relative.to_string_lossy().replace('\\', "/");
-            if deferred.contains(&relative) { continue; }
-            if let Err(error) = st.read(id) {
-                if !can_defer_file(&error) { return Err(error); }
-                deferred.insert(&relative);
-                files.insert(relative, Info::unavailable());
+        let documents: Vec<(String, String)> = list["documents"].as_array().into_iter().flatten()
+            .filter_map(|document| {
+                let (id, path) = (document["id"].as_str()?, document["path"].as_str()?);
+                let relative = Path::new(path).strip_prefix(root).ok()?;
+                Some((id.to_string(), relative.to_string_lossy().replace('\\', "/")))
+            })
+            .collect();
+        Ok((deferred, documents))
+    })?;
+    let mut files = file_remote::local_inventory(root)?;
+    let mut deferred = DeferredPaths::default();
+    for path in deferred_paths {
+        deferred.insert(&path);
+        files.insert(path, Info::unavailable());
+    }
+    // 덮어쓰기 전에 읽을 수 있는 원고만 로컬 이력에 기록한다.
+    for (id, relative) in documents {
+        if deferred.contains(&relative) { continue; }
+        if let Err(error) = with_store(store, root, |st| st.read(&id).map(|_| ())) {
+            if !can_defer_file(&error) { return Err(error); }
+            deferred.insert(&relative);
+            files.insert(relative, Info::unavailable());
+        }
+    }
+    if hashes {
+        for (path, info) in &mut files {
+            if info.unavailable || deferred.contains(path) { continue; }
+            let checked = read_local(root, path).and_then(|bytes| {
+                let bytes = bytes.ok_or_else(retry)?;
+                original(path, &bytes)?;
+                Ok(hash_bytes(&bytes))
+            });
+            match checked {
+                Ok(hash) => info.etag = Some(hash),
+                Err(error) if can_defer_file(&error) => { info.unavailable = true; deferred.insert(path); }
+                Err(error) => return Err(error),
             }
         }
-        if hashes {
-            for (path, info) in &mut files {
-                if info.unavailable || deferred.contains(path) { continue; }
-                let checked = read_local(root, path).and_then(|bytes| {
-                    let bytes = bytes.ok_or_else(retry)?;
-                    original(path, &bytes)?;
-                    Ok(hash_bytes(&bytes))
-                });
-                match checked {
-                    Ok(hash) => info.etag = Some(hash),
-                    Err(error) if can_defer_file(&error) => { info.unavailable = true; deferred.insert(path); }
-                    Err(error) => return Err(error),
-                }
-            }
-        }
-        Ok(files)
-    })
+    }
+    Ok(files)
 }
 
 // 이름 변경과 동시 편집이 겹쳐도 같은 ID의 문서를 두 경로에 만들지 않는다.
@@ -419,13 +429,16 @@ pub(super) fn sync(
     );
     remote.close();
     // 일부 파일만 반영된 뒤 통신에 실패해도 열린 서재와 로컬 이력을 갱신한다.
-    let refreshed = with_store(store, root, |st| {
-        st.poll_disk()?;
-        Ok(())
-    });
+    let refreshed = refresh_disk(store, root);
     result?;
     refreshed?;
     Ok(total)
+}
+
+// 서재 파일 목록은 잠금 밖에서 만들고, 열린 서재에 반영할 때만 잠근다.
+fn refresh_disk(store: &Mutex<Option<Store>>, root: &Path) -> Result<bool, LofError> {
+    let files = crate::store::disk_inventory(root)?;
+    with_store(store, root, |st| st.poll_disk_with(files))
 }
 
 /// 실시간 피어도 파일 저장소와 같은 충돌·삭제·이름 변경 규칙을 사용한다.
@@ -441,7 +454,7 @@ pub(crate) fn sync_peer(
     })?;
     let mut total=json!({"downloaded":0,"uploaded":0,"removed":0,"fileConflicts":0,"conflicts":0,"protocol":"realtime-files-v1"});
     let result=run(store,root,&key,&mut state,remote,false,&mut total);
-    let refreshed=with_store(store,root,|st| {st.poll_disk()?; Ok(())});
+    let refreshed=refresh_disk(store,root);
     result?; refreshed?;
     Ok(total)
 }

@@ -243,7 +243,8 @@ export function useDocumentSession(options: Options) {
           forceHistory: true,
           ...(manual ? { manualHistory: true } : {}),
         };
-      try { await call("saveDraft", { ...d.doc, expectedRevision: d.doc.revision }); }
+      // 입력 직후 이미 같은 내용을 임시본으로 보관했다면 다시 쓰지 않는다.
+      try { if (d.draftSaved !== seq) await call("saveDraft", { ...d.doc, expectedRevision: d.doc.revision }); }
       catch (error: any) {
         await saveRecoveryCopy(d.doc);
         setSyncIssue(d.doc.id, error.message || "임시 저장을 완료하지 못했습니다.");
@@ -298,8 +299,8 @@ export function useDocumentSession(options: Options) {
           });
           setActive(cloneDocument(d.doc));
           setSaveStatus(d.seq === seq ? "저장됨" : "편집 중");
-          if (d.seq === seq) await call("clearDraft", { id: d.doc.id });
-          else {
+          // 임시본은 saveDocument가 저장하면서 지운다.
+          if (d.seq !== seq) {
             scheduleDraftSave();
             scheduleAutoSave();
           }

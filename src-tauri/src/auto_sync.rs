@@ -587,14 +587,18 @@ fn poll_local(
     common_files: &mut Option<(PathBuf, DiskInventory)>,
 ) -> Result<(bool, bool), crate::error::LofError> {
     let state = app.state::<AppState>();
-    let (root, vault_changed, recheck) = {
+    let Some(root) = state.store.lock().unwrap().as_ref().map(|store| store.root.clone()) else {
+        return Ok((false, false));
+    };
+    // 서재 파일 목록은 잠금 밖에서 만들어 저장·문서 열기를 막지 않는다.
+    let files = crate::store::disk_inventory(&root)?;
+    let (vault_changed, recheck) = {
         let mut guard = state.store.lock().unwrap();
-        let Some(store) = guard.as_mut() else {
+        let Some(store) = guard.as_mut().filter(|store| store.root == root) else {
             return Ok((false, false));
         };
         (
-            store.root.clone(),
-            store.poll_disk()?,
+            store.poll_disk_with(files)?,
             store.has_pending_disk_changes()? || store.has_busy_files(),
         )
     };

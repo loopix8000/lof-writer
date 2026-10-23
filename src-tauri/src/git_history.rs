@@ -1,5 +1,5 @@
 use crate::error::{fail, fail_invalid, valid_id, LofError};
-use crate::local_git::{flatten, put_document, read_document, read_json, tree, LocalHistory};
+use crate::local_git::{put_document, read_document, read_json, update_tree, LocalHistory};
 use git2::{Commit, Oid, Repository, Signature, Sort};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashSet};
@@ -247,13 +247,13 @@ impl LocalHistory {
         }
         let repo = self.repository()?;
         let previous = latest(&repo)?;
+        // 이 문서의 본문과 속성만 바꿔 넣는다. 다른 문서의 기록은 읽거나 다시 쓰지 않는다.
         let mut files = BTreeMap::new();
         let previous_tree = previous.tree()?;
-        flatten(&repo, &previous_tree, "", &mut files)?;
         if !put_document(&repo, &mut files, Some(&previous_tree), id, document)? {
             return Ok(false);
         }
-        let next = tree(&repo, &files)?;
+        let next = update_tree(&repo, Some(&previous_tree), &files)?;
         if previous.tree_id() != next {
             let sig = Signature::now("Lof Writer", "local@lof-writer.invalid")?;
             self.head = repo

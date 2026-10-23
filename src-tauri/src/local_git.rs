@@ -548,7 +548,7 @@ struct Directory {
     directories: BTreeMap<String, Directory>,
 }
 
-pub(crate) fn tree(repo: &Repository, files: &BTreeMap<String, Oid>) -> Result<Oid, LofError> {
+fn directory_of(files: &BTreeMap<String, Oid>) -> Result<Directory, LofError> {
     let mut root = Directory::default();
     for (path, oid) in files {
         let parts: Vec<_> = path.split('/').collect();
@@ -568,17 +568,36 @@ pub(crate) fn tree(repo: &Repository, files: &BTreeMap<String, Oid>) -> Result<O
             .files
             .insert(parts.last().unwrap().to_string(), *oid);
     }
-    fn write(repo: &Repository, directory: Directory) -> Result<Oid, LofError> {
-        let mut builder = repo.treebuilder(None)?;
+    Ok(root)
+}
+
+pub(crate) fn tree(repo: &Repository, files: &BTreeMap<String, Oid>) -> Result<Oid, LofError> {
+    update_tree(repo, None, files)
+}
+
+// base 트리에 files만 바꿔 넣는다. 바뀐 경로의 하위 트리만 새로 쓰고, 나머지는 기존 트리를 그대로 가리킨다.
+// 공유 저장소처럼 파일 접근이 느린 곳에서도 문서 수와 관계없이 몇 개의 개체만 읽고 쓴다.
+pub(crate) fn update_tree(
+    repo: &Repository,
+    base: Option<&git2::Tree<'_>>,
+    files: &BTreeMap<String, Oid>,
+) -> Result<Oid, LofError> {
+    fn write(repo: &Repository, base: Option<&git2::Tree<'_>>, directory: Directory) -> Result<Oid, LofError> {
+        let mut builder = repo.treebuilder(base)?;
         for (name, oid) in directory.files {
             builder.insert(name, oid, 0o100644)?;
         }
         for (name, child) in directory.directories {
-            builder.insert(name, write(repo, child)?, 0o040000)?;
+            let previous = match base.and_then(|tree| tree.get_name(&name)) {
+                Some(entry) if entry.kind() == Some(git2::ObjectType::Tree) => Some(repo.find_tree(entry.id())?),
+                _ => None,
+            };
+            let oid = write(repo, previous.as_ref(), child)?;
+            builder.insert(name, oid, 0o040000)?;
         }
         Ok(builder.write()?)
     }
-    write(repo, root)
+    write(repo, base, directory_of(files)?)
 }
 
 pub(crate) fn flatten(
