@@ -511,6 +511,10 @@ impl LibraryDb {
             })?
             .collect::<Result<Vec<_>, _>>()?;
         drop(query);
+        // 저장할 때마다 부르므로 남은 기록이 없으면 트랜잭션을 열지 않는다.
+        if pending.is_empty() {
+            return Ok(());
+        }
         let transaction = self.connection.unchecked_transaction()?;
         for (id, bytes, at) in pending {
             let doc = decode(&bytes)?;
@@ -679,6 +683,22 @@ impl LibraryDb {
             })),
             None => Ok(None),
         }
+    }
+
+    // skip이 고른 문서는 빼고 관찰 기록을 푼다. 색인에 있는 문서까지 매번 압축을 풀지 않도록 ID부터 확인한다.
+    pub fn observations_except(&self, skip: impl Fn(&str) -> bool) -> Result<Vec<Value>, LofError> {
+        let mut ids = self.connection.prepare("SELECT doc_id FROM observations")?;
+        let ids = ids
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut query = self.connection.prepare("SELECT doc FROM observations WHERE doc_id=?1")?;
+        let mut out = Vec::new();
+        for id in ids.iter().filter(|id| !skip(id)) {
+            if let Some(bytes) = query.query_row([id], |row| row.get::<_, Vec<u8>>(0)).optional()? {
+                out.push(decode(&bytes)?);
+            }
+        }
+        Ok(out)
     }
 
     pub fn observations(&self) -> Result<Vec<Value>, LofError> {

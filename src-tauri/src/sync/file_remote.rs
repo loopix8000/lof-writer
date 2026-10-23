@@ -131,12 +131,9 @@ pub(super) fn seconds(time: SystemTime) -> Option<i64> {
 }
 
 pub(crate) fn local_inventory(root: &Path) -> Result<BTreeMap<String, Info>, LofError> {
-    fn walk(root: &Path, dir: &str, files: &mut BTreeMap<String, Info>) -> Result<(), LofError> {
-        let directory = if dir.is_empty() {
-            root.to_path_buf()
-        } else {
-            safe_path(root, dir)?
-        };
+    // 상위 폴더는 내려오면서 이미 링크가 아님을 확인했으므로 항목마다 자기 자신만 확인한다.
+    // 항목마다 모든 상위 경로를 다시 조회하면 파일 접근이 느린 저장소에서 목록 작성이 몇 배로 늘어난다.
+    fn walk(dir: &str, directory: &Path, files: &mut BTreeMap<String, Info>) -> Result<(), LofError> {
         for entry in fs::read_dir(directory)? {
             let entry = entry?;
             let name = entry
@@ -147,10 +144,18 @@ pub(crate) fn local_inventory(root: &Path) -> Result<BTreeMap<String, Info>, Lof
             if !included(&path) {
                 continue;
             }
-            let full = safe_path(root, &path)?;
+            if !path_ok(&path) {
+                return Err(fail_invalid("동기화 파일 경로가 올바르지 않습니다."));
+            }
+            let full = entry.path();
             let metadata = fs::symlink_metadata(&full)?;
+            if linked(&metadata) {
+                return Err(fail_invalid(
+                    "동기화 경로에 심볼릭 링크나 연결 폴더를 사용할 수 없습니다.",
+                ));
+            }
             if metadata.is_dir() {
-                walk(root, &path, files)?;
+                walk(&path, &full, files)?;
             } else if metadata.is_file() {
                 insert(
                     files,
@@ -174,7 +179,7 @@ pub(crate) fn local_inventory(root: &Path) -> Result<BTreeMap<String, Info>, Lof
         return Err(fail_invalid("서재 루트에 연결 폴더를 사용할 수 없습니다."));
     }
     let mut files = BTreeMap::new();
-    walk(root, "", &mut files)?;
+    walk("", root, &mut files)?;
     let mut folded = HashSet::new();
     if files.keys().any(|path| !folded.insert(path.to_lowercase())) {
         return Err(fail_invalid("대소문자만 다른 동기화 파일 경로가 있습니다."));

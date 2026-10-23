@@ -170,6 +170,10 @@ impl LocalHistory {
         let Ok(head) = latest(&repo) else {
             return Ok(None);
         };
+        // 최신 기록에 없는 문서(새 문서 등)는 처음 커밋까지 거슬러 찾지 않는다.
+        if document_tree(&head, id)?.is_none() {
+            return Ok(None);
+        }
         for oid in walk(&repo, head.id())? {
             let commit = repo.find_commit(oid?)?;
             if !changed(&commit, id)? {

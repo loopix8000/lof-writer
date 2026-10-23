@@ -456,6 +456,10 @@ pub fn match_lines(
         return (Vec::new(), false);
     }
     let hay = norm(body);
+    // 검색어가 없는 문서는 위치 계산용 UTF-16 변환을 하지 않는다.
+    if !hay.contains(needle.as_str()) {
+        return (Vec::new(), false);
+    }
     let body_u16: Vec<u16> = body.encode_utf16().collect();
     let hay_u16: Vec<u16> = hay.encode_utf16().collect();
     let needle_u16: Vec<u16> = needle.encode_utf16().collect();
@@ -895,6 +899,8 @@ pub struct Store {
     pub migration_warning: String,
     pub local_git: crate::local_git::LocalHistory,
     last_snapshot: HashMap<String, Option<SnapshotEntry>>,
+    // 목록을 새로 그릴 때마다 표지를 다시 읽어 인코딩하지 않도록 크기·수정 시각이 같으면 재사용한다.
+    cover_cache: HashMap<PathBuf, (u64, Option<SystemTime>, Value)>,
     pub history_policy: HistoryPolicy,
     pub default_manual_line_break: bool,
 }
@@ -992,7 +998,30 @@ impl Store {
             }
         }
         // 삭제 유예 기간을 유지하며, 파일 목록이 그대로여도 다음 주기에 삭제 여부와 저장 중이던 원고를 재확인한다.
-        if changed || pending_deletions { self.refresh_index(true)?; }
+        // 그 밖에는 이전 목록과 비교해 추가·수정·삭제된 경로만 다시 확인한다. 폴더는 생기거나 없어질 때만 본다.
+        // 폴더 안의 파일 변화는 파일 경로로 따로 잡힌다.
+        let partial = match self.disk_inventory.as_ref() {
+            Some(previous) if changed && !pending_deletions => Some(
+                files.iter()
+                    .filter(|(path, stamp)| match previous.get(*path) {
+                        Some(before) => !stamp.3 && before != *stamp,
+                        None => true,
+                    })
+                    .map(|(path, _)| path)
+                    .chain(previous.keys().filter(|path| !files.contains_key(*path)))
+                    .map(|path| path.to_string_lossy().to_string())
+                    .collect::<Vec<_>>(),
+            ),
+            _ => None,
+        };
+        match partial {
+            Some(paths) => {
+                for path in paths { self.invalidate_path(&path); }
+                self.refresh_index(false)?;
+            }
+            None if changed || pending_deletions => self.refresh_index(true)?,
+            None => {}
+        }
         self.disk_inventory = Some(files);
         Ok(changed || revision != self.sync_revision())
     }
@@ -1111,6 +1140,7 @@ impl Store {
             disk_inventory: None,
             migration_warning: String::new(),
             last_snapshot: HashMap::new(),
+            cover_cache: HashMap::new(),
             history_policy,
             default_manual_line_break,
         };
@@ -1736,7 +1766,8 @@ impl Store {
         let deleted=self.deleted()?;
         let mut pending=db.get("missingFiles")?.and_then(|v|v.as_object().cloned()).unwrap_or_default();
         let now=chrono::Utc::now().timestamp_millis();
-        for doc in db.observations()?{
+        // 색인에 있거나 이미 삭제 표시한 문서는 아래 확인에서 대기 목록에서 빠진다.
+        for doc in db.observations_except(|id|present.contains(id)||deleted.contains_key(id))?{
             let (Some(id),Some(pid),Some(path))=(doc["id"].as_str(),doc["projectId"].as_str(),doc["path"].as_str()) else{continue};
             if present.contains(id)||deleted.contains_key(id){pending.remove(id);continue;}
             if !Path::new(path).starts_with(&self.root){continue;}
@@ -3554,7 +3585,7 @@ impl Store {
         self.update_project(&json!({ "id": id, "cover": filename }))
     }
 
-    pub fn cover_data(&self, project: &Value) -> Result<Value, LofError> {
+    pub fn cover_data(&mut self, project: &Value) -> Result<Value, LofError> {
         let cover = project.get("cover").and_then(|v| v.as_str());
         let folder = project.get("folder").and_then(|v| v.as_str());
         if !valid_cover(cover) || folder.is_none() {
@@ -3570,11 +3601,22 @@ impl Store {
                 if m.len() > 8_000_000 {
                     return Err(fail_invalid("표지 용량 초과"));
                 }
+                let modified = m.modified().ok();
+                if let Some((len, at, data)) = self.cover_cache.get(&file) {
+                    if *len == m.len() && *at == modified && modified.is_some() {
+                        return Ok(data.clone());
+                    }
+                }
                 let bytes = fs::read(&file)?;
                 let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
-                Ok(json!(format!("data:image/png;base64,{}", b64)))
+                let data = json!(format!("data:image/png;base64,{}", b64));
+                self.cover_cache.insert(file, (m.len(), modified, data.clone()));
+                Ok(data)
             }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Value::Null),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                self.cover_cache.remove(&file);
+                Ok(Value::Null)
+            }
             Err(e) => Err(LofError::from(e)),
         }
     }

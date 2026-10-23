@@ -306,7 +306,7 @@ impl FileIndex {
             );
         }
 
-        let payload = serde_json::to_string(&json!({
+        let payload = json!({
             "version": 1,
             "vaultId": vault_id,
             "projects": projects_json,
@@ -315,11 +315,11 @@ impl FileIndex {
                 "files": common_files,
             },
             "warnings": catalog.warnings,
-        }))
-        .unwrap_or_default();
+        });
 
-        if let Some(db) = &self.database { db.set("catalog", &serde_json::from_str(&payload).map_err(|e|fail_invalid(e.to_string()))?) }
-        else if self.database_error.is_empty() { crate::store::atomic_write_str(&self.file, &payload) }
+        // 관리 DB는 내용이 같으면 다시 쓰지 않는다. 문자열로 바꿨다가 다시 해석하지 않고 그대로 넘긴다.
+        if let Some(db) = &self.database { db.set("catalog", &payload) }
+        else if self.database_error.is_empty() { crate::store::atomic_write_str(&self.file, &payload.to_string()) }
         else { Ok(()) }
     }
 
