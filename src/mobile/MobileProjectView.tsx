@@ -1336,7 +1336,7 @@ export default function MobileProjectView({
                     aria-label="새 폴더 만들기"
                     aria-hidden={activeTab === "episode"}
                     disabled={activeTab === "episode"}
-                    style={{ visibility: activeTab === "episode" ? "hidden" : undefined }}
+                    hidden={activeTab === "episode"}
                     onClick={() => setRenameTarget({
                       type: "newFolder", idOrPath: "", initialValue: "새 폴더",
                     })}
