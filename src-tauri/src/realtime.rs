@@ -31,6 +31,12 @@ use uuid::Uuid;
 
 const SYNC_BUSY_MESSAGE: &str = "다른 동기화가 진행 중입니다.";
 const CONTROL_TIMEOUT: Duration = Duration::from_secs(8);
+// 파일 목록을 바뀐 항목만 주고받는 응답 형식. 이전 앱은 이 표시 없이 전체 목록을 보낸다.
+const INVENTORY_DELTA: &str = "inventory-delta-v1";
+
+fn inventory_digest(files: &BTreeMap<String, Info>) -> Result<String, LofError> {
+    Ok(crate::error::hash_bytes(&serde_json::to_vec(files).map_err(net)?))
+}
 
 struct Session {
     root: PathBuf,
@@ -85,6 +91,9 @@ pub struct Realtime {
     reconnect: Mutex<HashSet<String>>,
     backgrounded: AtomicBool,
     clear_retries: AtomicBool,
+    // 상대마다 마지막으로 보낸 파일 목록과 받은 파일 목록. 요약값이 맞으면 바뀐 항목만 주고받는다.
+    sent_inventories: Mutex<HashMap<String, (String, BTreeMap<String, Info>)>>,
+    received_inventories: Mutex<HashMap<String, (String, BTreeMap<String, Info>)>>,
     wake: Condvar,
 }
 struct Invitation {
@@ -923,7 +932,27 @@ impl WriterHost {
                     ..Info::default()
                 },
             );
-            return Ok(Message::json(serde_json::to_value(inventory).map_err(net)?));
+            if request["delta"] != true {
+                return Ok(Message::json(serde_json::to_value(inventory).map_err(net)?));
+            }
+            // 상대가 마지막으로 받은 목록을 가지고 있으면 바뀐 항목과 지워진 경로만 보낸다.
+            let digest = inventory_digest(&inventory)?;
+            let key = format!("{peer}\n{}", current.to_string_lossy());
+            let mut sent = rt.sent_inventories.lock().unwrap();
+            let reply = match sent.get(&key) {
+                Some((base, previous)) if request["known"].as_str() == Some(base.as_str()) => {
+                    let changed: BTreeMap<&String, &Info> = inventory
+                        .iter()
+                        .filter(|(path, info)| previous.get(*path) != Some(*info))
+                        .collect();
+                    let removed: Vec<&String> =
+                        previous.keys().filter(|path| !inventory.contains_key(*path)).collect();
+                    json!({"format":INVENTORY_DELTA,"digest":digest,"base":base,"changed":changed,"removed":removed})
+                }
+                _ => json!({"format":INVENTORY_DELTA,"digest":digest,"files":inventory}),
+            };
+            sent.insert(key, (digest, inventory));
+            return Ok(Message::json(reply));
         }
         let path = request["path"]
             .as_str()
@@ -1012,7 +1041,46 @@ impl PeerRemote {
 }
 impl FileRemote for PeerRemote {
     fn inventory(&mut self) -> Result<BTreeMap<String, Info>, LofError> {
-        serde_json::from_value(self.rpc(json!({"op":"inventory","deferredPaths":true}), vec![])?.meta).map_err(net)
+        let key = format!("{}\n{}\n{}", self.peer, self.local_vault, self.remote_vault);
+        let app = self.app.clone();
+        let rt = app.state::<Realtime>();
+        // 지난번에 받은 목록의 요약값을 보내 바뀐 항목만 받는다.
+        let mut cached = rt.received_inventories.lock().unwrap().remove(&key);
+        loop {
+            let known = cached.as_ref().map(|(digest, _)| digest.clone());
+            let mut reply = self
+                .rpc(json!({"op":"inventory","deferredPaths":true,"delta":true,"known":known}), vec![])?
+                .meta;
+            if reply["format"].as_str() != Some(INVENTORY_DELTA) {
+                // 이전 앱은 요약값을 모르고 항상 전체 목록을 보낸다.
+                return serde_json::from_value(reply).map_err(net);
+            }
+            let digest = reply["digest"].as_str().unwrap_or_default().to_string();
+            let full = reply["files"].is_object();
+            let files = if full {
+                serde_json::from_value::<BTreeMap<String, Info>>(reply["files"].take()).map_err(net)?
+            } else {
+                let Some((base, mut files)) = cached.take() else { continue };
+                if reply["base"].as_str() != Some(base.as_str()) {
+                    continue;
+                }
+                let changed: BTreeMap<String, Info> =
+                    serde_json::from_value(reply["changed"].take()).map_err(net)?;
+                files.extend(changed);
+                for path in reply["removed"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+                    files.remove(path);
+                }
+                files
+            };
+            if inventory_digest(&files)? == digest {
+                rt.received_inventories.lock().unwrap().insert(key, (digest, files.clone()));
+                return Ok(files);
+            }
+            if full {
+                return Ok(files);
+            }
+            // 합친 목록이 상대와 다르면 전체 목록을 다시 받는다.
+        }
     }
     fn read(&mut self, path: &str) -> Result<Vec<u8>, LofError> {
         Ok(self.rpc(json!({"op":"read","path":path}), vec![])?.data)

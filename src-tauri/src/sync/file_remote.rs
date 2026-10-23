@@ -20,7 +20,7 @@ pub(super) const DIRECTORY: &str = "lof-writer-files-v1";
 pub(crate) const ID_FILE: &str = ".lof-sync-id";
 const MAX_FILES: usize = 40_000;
 
-#[derive(Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Info {
     pub size: u64,
     pub modified: Option<i64>,
