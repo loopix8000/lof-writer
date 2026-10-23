@@ -2106,12 +2106,24 @@
   }
 }
 
+@keyframes mDrawerBackdropIn {
+  from {
+    background-color: transparent;
+  }
+  to {
+    background-color: rgba(0, 0, 0, 0.42);
+  }
+}
+
 .m-drawer-backdrop {
+  --drawer-duration: 0.5s;
+  --drawer-ease: cubic-bezier(0.22, 0.61, 0.36, 1);
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.42);
   z-index: 280;
   display: flex;
+  animation: mDrawerBackdropIn var(--drawer-duration) var(--drawer-ease) both;
 }
 
 .m-slide-drawer {
@@ -2127,7 +2139,7 @@
   width: min(86vw, 340px);
   border-radius: 0 !important;
   border-right: 1px solid var(--line);
-  animation: mSlideInLeft 0.2s cubic-bezier(0.2, 0.9, 0.3, 1);
+  animation: mSlideInLeft var(--drawer-duration) var(--drawer-ease) both;
 }
 
 .m-slide-drawer.right {
@@ -2135,7 +2147,15 @@
   width: min(88vw, 360px);
   border-radius: 0 !important;
   border-left: 1px solid var(--line);
-  animation: mSlideInRight 0.2s cubic-bezier(0.2, 0.9, 0.3, 1);
+  animation: mSlideInRight var(--drawer-duration) var(--drawer-ease) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .m-drawer-backdrop,
+  .m-slide-drawer.left,
+  .m-slide-drawer.right {
+    animation: none;
+  }
 }
 
 .m-drawer-header {
