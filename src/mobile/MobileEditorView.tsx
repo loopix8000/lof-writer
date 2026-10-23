@@ -277,7 +277,7 @@ export default function MobileEditorView({
       setSyncShown(true);
       return;
     }
-    const timer = window.setTimeout(() => setSyncShown(false), 1800);
+    const timer = window.setTimeout(() => setSyncShown(false), 2400);
     return () => window.clearTimeout(timer);
   }, [syncBusy]);
 

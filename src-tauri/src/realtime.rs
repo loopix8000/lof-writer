@@ -97,6 +97,8 @@ pub struct Realtime {
     peer_requests: Mutex<HashMap<String, u64>>,
     subscription_lost: AtomicBool,
     statuses: Mutex<HashMap<String, Value>>,
+    // 그룹 동기화 도중 파일 전송이 시작되면 모든 구성원 작업이 끝날 때까지 전송 방향 표시를 유지한다.
+    transfer_activity: Mutex<Option<String>>,
     invite: Mutex<Option<Invitation>>,
     pairing: Mutex<Option<PairingJob>>,
     leases: Mutex<HashMap<String, InboundSync>>,
@@ -505,6 +507,9 @@ fn daemon_updates(app: &AppHandle, list: &[Value]) -> Vec<Value> {
 // 이 장치에서 수행하는 파일 작업을 화면에 알린다.
 fn sync_activity(app: &AppHandle, peer: &str, activity: &str) {
     let rt = app.state::<Realtime>();
+    if matches!(activity, "uploading" | "downloading") {
+        *rt.transfer_activity.lock().unwrap() = Some(activity.to_string());
+    }
     let changed = {
         let mut statuses = rt.statuses.lock().unwrap();
         let status = statuses.entry(peer.to_string()).or_insert_with(|| json!({}));
@@ -535,7 +540,7 @@ pub fn progress(app: &AppHandle) -> Value {
     }
     let statuses = rt.statuses.lock().unwrap();
     let mut syncing = false;
-    let mut activity = None;
+    let mut activity: Option<String> = None;
     let mut pending = false;
     let mut reached = false;
     let mut unreached = Vec::new();
@@ -545,8 +550,13 @@ pub fn progress(app: &AppHandle) -> Value {
         match statuses.get(id).and_then(|s| s["phase"].as_str()) {
             Some("syncing") => {
                 syncing = true;
-                if activity.is_none() {
-                    activity = statuses.get(id).and_then(|s| s["activity"].as_str());
+                let current = statuses.get(id).and_then(|s| s["activity"].as_str());
+                if matches!(current, Some("uploading" | "downloading"))
+                    && !matches!(activity.as_deref(), Some("uploading" | "downloading"))
+                {
+                    activity = current.map(str::to_string);
+                } else if activity.is_none() {
+                    activity = current.map(str::to_string);
                 }
             }
             Some("pending") => pending = true,
@@ -555,6 +565,18 @@ pub fn progress(app: &AppHandle) -> Value {
             _ => {}
         }
     }
+    drop(statuses);
+    let mut last_transfer = rt.transfer_activity.lock().unwrap();
+    if syncing {
+        if matches!(activity.as_deref(), Some("uploading" | "downloading")) {
+            *last_transfer = activity.clone();
+        } else if last_transfer.is_some() {
+            activity = last_transfer.clone();
+        }
+    } else {
+        *last_transfer = None;
+    }
+    drop(last_transfer);
     // 진행 중인 작업과 대기를 우선하고, 나머지는 연결된 장치가 있으면 완료로 본다.
     let phase = if syncing {
         "syncing"
@@ -1349,6 +1371,7 @@ pub fn start(app: &AppHandle) {
                     connected.clear();
                     retry.clear();
                     offline.clear();
+                    *rt.transfer_activity.lock().unwrap() = None;
                     subscription_retry = None;
                     previous_root = current.clone();
                     // 다른 서재에 있을 때 바꾼 장치 이름은 연결 확인 요청으로 전한다.
@@ -1652,6 +1675,15 @@ pub fn start(app: &AppHandle) {
                     if *seen == revision { continue; }
                     let leader = peer["storage"].as_bool().unwrap_or(false)
                         || own < peer["endpoint"].as_str().unwrap_or("").to_string();
+                    if leader {
+                        let mut statuses = rt.statuses.lock().unwrap();
+                        let status = statuses.entry(id.clone()).or_insert_with(|| json!({}));
+                        if status["phase"] != "syncing" {
+                            status["phase"] = json!("syncing");
+                            status["activity"] = json!("comparing");
+                            status["message"] = Value::Null;
+                        }
+                    }
                     let connection = conn.stable_id();
                     let conn = conn.clone();
                     let events = app.clone();

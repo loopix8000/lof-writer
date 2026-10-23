@@ -748,12 +748,14 @@ fn run(
                 if bytes.as_deref().map(hash_bytes).as_deref() != local {
                     return Err(retry());
                 }
-                if other.is_some() {
-                    if Some(hash_bytes(&remote.read(&path)?)).as_deref() != other {
+                if !remote.hash_etag() {
+                    if other.is_some() {
+                        if Some(hash_bytes(&remote.read(&path)?)).as_deref() != other {
+                            return Err(retry());
+                        }
+                    } else if remote.exists(&path)? {
                         return Err(retry());
                     }
-                } else if remote.exists(&path)? {
-                    return Err(retry());
                 }
                 // 전송 직전에 서재가 바뀌거나 닫히지 않았는지도 확인한다.
                 with_store(store, root, |st| { st.require_database()?; st.ensure_sync_ready(&path) })?;

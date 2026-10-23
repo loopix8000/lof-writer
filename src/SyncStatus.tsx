@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { Cloud, CloudDownload, CloudUpload, FolderSync, RefreshCw } from "lucide-react";
 import type { AutoSyncStatus } from "./types";
 
@@ -21,6 +22,9 @@ const realtimeActivities = {
   downloading: { icon: CloudDownload, label: "파일 받는 중" },
 };
 
+// 그룹 내 여러 구성원과 연속으로 동기화할 때 아이콘이 깜빡이지 않도록 완료 전환을 잠깐 늦춘다.
+const SETTLE_MS = 650;
+
 export default function SyncStatus({
   status,
   checking,
@@ -37,10 +41,95 @@ export default function SyncStatus({
   const realtime = status.channels?.realtime;
   const files = status.channels ? status.channels.files : available ? status : undefined;
   const comparing = realtime?.phase === "syncing" && realtime.activity === "comparing";
-  const showRealtime = Boolean(realtime?.hasConnections && !comparing && (!activeOnly || realtime.phase === "syncing"));
+  const realtimeTransferring = Boolean(
+    realtime?.hasConnections && realtime.phase === "syncing" && !comparing,
+  );
+  const currentTransferActivity =
+    realtimeTransferring &&
+    (realtime?.activity === "uploading" || realtime?.activity === "downloading")
+      ? realtime.activity
+      : undefined;
+
+  const [heldRealtimeActivity, setHeldRealtimeActivity] = useState<
+    "uploading" | "downloading" | null
+  >(currentTransferActivity ?? null);
+  const [holdingRealtime, setHoldingRealtime] = useState(realtimeTransferring);
+
+  useEffect(() => {
+    if (!realtime?.hasConnections || realtime.phase === "pending" || realtime.phase === "error") {
+      setHoldingRealtime(false);
+      setHeldRealtimeActivity(null);
+      return;
+    }
+    if (realtimeTransferring) {
+      setHoldingRealtime(true);
+      if (currentTransferActivity) {
+        setHeldRealtimeActivity(currentTransferActivity);
+      }
+      return;
+    }
+    if (!holdingRealtime) return;
+    const timer = window.setTimeout(() => {
+      setHoldingRealtime(false);
+      setHeldRealtimeActivity(null);
+    }, SETTLE_MS);
+    return () => window.clearTimeout(timer);
+  }, [
+    realtime?.hasConnections,
+    realtime?.phase,
+    realtimeTransferring,
+    currentTransferActivity,
+    holdingRealtime,
+  ]);
+
+  const filesSyncing = Boolean(
+    files &&
+      files.hasConnections !== false &&
+      (status.channels ? files.hasConnections : available) &&
+      (files.phase === "syncing" || (checking && files.phase === "idle")),
+  );
+  const [holdingFiles, setHoldingFiles] = useState(filesSyncing);
+
+  useEffect(() => {
+    if (!files || files.hasConnections === false || files.phase === "pending" || files.phase === "error") {
+      setHoldingFiles(false);
+      return;
+    }
+    if (filesSyncing) {
+      setHoldingFiles(true);
+      return;
+    }
+    if (!holdingFiles) return;
+    const timer = window.setTimeout(() => setHoldingFiles(false), SETTLE_MS);
+    return () => window.clearTimeout(timer);
+  }, [files?.hasConnections, files?.phase, filesSyncing, holdingFiles]);
+
+  const effectiveRealtimeSyncing = realtimeTransferring || holdingRealtime;
+  const effectiveRealtimePhase: AutoSyncStatus["phase"] | undefined = realtime
+    ? effectiveRealtimeSyncing
+      ? "syncing"
+      : comparing
+        ? "idle"
+        : realtime.phase
+    : undefined;
+  const effectiveRealtimeActivity = effectiveRealtimeSyncing
+    ? currentTransferActivity ?? heldRealtimeActivity ?? undefined
+    : undefined;
+
+  const effectiveFilesPhase: AutoSyncStatus["phase"] | undefined = files
+    ? filesSyncing || holdingFiles
+      ? "syncing"
+      : files.phase
+    : undefined;
+
+  const showRealtime = Boolean(
+    realtime?.hasConnections && (!activeOnly || effectiveRealtimePhase === "syncing"),
+  );
   const showFiles = Boolean(
-    files && files.hasConnections !== false && (status.channels ? files.hasConnections : available)
-      && (!activeOnly || files.phase === "syncing" || (checking && files.phase === "idle")),
+    files &&
+      files.hasConnections !== false &&
+      (status.channels ? files.hasConnections : available) &&
+      (!activeOnly || effectiveFilesPhase === "syncing"),
   );
   if (!showRealtime && !showFiles) return null;
 
@@ -49,24 +138,33 @@ export default function SyncStatus({
   const detail = (progress: { phase: AutoSyncStatus["phase"]; message: string }) =>
     progress.phase !== "error" && progress.message ? ` · ${progress.message}` : "";
 
-  const activity = realtime?.phase === "syncing" && realtime.activity && realtime.activity !== "comparing" ? realtimeActivities[realtime.activity] : undefined;
-  const RealtimeIcon = activity?.icon ?? (realtime?.phase === "syncing" ? RefreshCw : Cloud);
-  const realtimeLabel = activity?.label ?? (realtime ? realtimeLabels[realtime.phase] : "");
-  const realtimeDesc = realtime ? `실시간 동기화 · ${realtimeLabel}${detail(realtime)}` : "";
+  const activity = effectiveRealtimeActivity
+    ? realtimeActivities[effectiveRealtimeActivity]
+    : undefined;
+  const RealtimeIcon = activity?.icon ?? (effectiveRealtimePhase === "syncing" ? RefreshCw : Cloud);
+  const realtimeLabel =
+    activity?.label ?? (effectiveRealtimePhase ? realtimeLabels[effectiveRealtimePhase] : "");
+  const realtimeDesc =
+    realtime && effectiveRealtimePhase
+      ? `실시간 동기화 · ${realtimeLabel}${detail({ phase: effectiveRealtimePhase, message: realtime.message })}`
+      : "";
 
   const fileLabel =
-    files && checking && files.phase === "idle"
+    files && checking && files.phase === "idle" && !filesSyncing
       ? "동기화 확인 중"
-      : files
-        ? fileLabels[files.phase]
+      : effectiveFilesPhase
+        ? fileLabels[effectiveFilesPhase]
         : "";
-  const fileDesc = files ? `파일 동기화 · ${fileLabel}${detail(files)}` : "";
+  const fileDesc =
+    files && effectiveFilesPhase
+      ? `파일 동기화 · ${fileLabel}${detail({ phase: effectiveFilesPhase, message: files.message })}`
+      : "";
 
   return (
     <>
-      {showRealtime && realtime && (
+      {showRealtime && realtime && effectiveRealtimePhase && (
         <span
-          className={`auto-sync-status realtime ${realtime.phase === "idle" || realtime.phase === "syncing" ? realtime.phase : "disconnected"}${editing ? " editing" : ""}`}
+          className={`auto-sync-status realtime ${effectiveRealtimePhase === "idle" || effectiveRealtimePhase === "syncing" ? effectiveRealtimePhase : "disconnected"}${editing ? " editing" : ""}`}
           role="status"
           aria-live="off"
           aria-label={realtimeDesc}
@@ -75,9 +173,9 @@ export default function SyncStatus({
           <RealtimeIcon size={14} aria-hidden="true" />
         </span>
       )}
-      {showFiles && files && (
+      {showFiles && files && effectiveFilesPhase && (
         <span
-          className={`auto-sync-status files ${visible(files.phase)}${editing ? " editing" : ""}`}
+          className={`auto-sync-status files ${visible(effectiveFilesPhase)}${editing ? " editing" : ""}`}
           role="status"
           aria-live="off"
           aria-label={fileDesc}
