@@ -349,6 +349,19 @@ export default function MobileShell({
   const isWritingEditor =
     mobileTab === "library" && view === "workspace" && !!active;
   const hideBottomNav = isWritingEditor || (mobileTab === "memo" && inMemoEditor);
+  const inLibrary = mobileTab === "library" && view === "library" && !dialog && !viewer;
+  const checkInLibrary = updater.checkInLibrary;
+  useEffect(() => {
+    if (!inLibrary) return;
+    const check = () => { void checkInLibrary(); };
+    check();
+    document.addEventListener("visibilitychange", check);
+    window.addEventListener("focus", check);
+    return () => {
+      document.removeEventListener("visibilitychange", check);
+      window.removeEventListener("focus", check);
+    };
+  }, [inLibrary, checkInLibrary]);
 
   const handleMemoDetailState = useCallback(
     (inEditor: boolean, closeFn: () => void) => {

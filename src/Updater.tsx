@@ -9,6 +9,8 @@ type Phase = "idle" | "checking" | "current" | "available" | "downloading" | "sa
 type UpdateHandle = Pick<Update, "version" | "download" | "install" | "close">;
 export type UpdateChannel = "stable" | "rc" | "beta";
 export const updateChannel = (value: unknown): UpdateChannel => value === "rc" || value === "beta" ? value : "stable";
+const LIBRARY_CHECK_INTERVAL = 24 * 60 * 60 * 1000;
+const CHECK_RETRY_INTERVAL = 5 * 60 * 1000;
 
 async function checkAndroidUpdate(channel: UpdateChannel): Promise<UpdateHandle | null> {
   const result = await invoke<{ available: boolean; version?: string }>("android_update_check", { channel });
@@ -42,6 +44,8 @@ export function useAppUpdater({ loaded, autoCheck, channel, beforeInstall }: {
   const running = useRef<number | null>(null);
   const generation = useRef(0);
   const autoChecked = useRef(false);
+  const lastChecks = useRef<Record<string, number>>({});
+  const lastAttempts = useRef<Record<string, number>>({});
   const lockRef = useRef(false);
   const lockOwner = useRef<number | null>(null);
   const prepareRef = useRef(beforeInstall);
@@ -80,6 +84,8 @@ export function useAppUpdater({ loaded, autoCheck, channel, beforeInstall }: {
     const current = generation.current;
     running.current = current;
     autoChecked.current = true;
+    const checkKey = `lof.update.lastCheck.${platformRef.current}.${channel}`;
+    lastAttempts.current[checkKey] = Date.now();
     setPhase("checking");
     setError("");
     setAvailable(null);
@@ -98,6 +104,9 @@ export function useAppUpdater({ loaded, autoCheck, channel, beforeInstall }: {
         await update?.close();
         return;
       }
+      const checkedAt = Date.now();
+      lastChecks.current[checkKey] = checkedAt;
+      try { localStorage.setItem(checkKey, String(checkedAt)); } catch {}
       updateRef.current = update;
       candidateChannel.current = update ? channel : null;
       setAvailable(update ? { version: update.version } : null);
@@ -117,6 +126,19 @@ export function useAppUpdater({ loaded, autoCheck, channel, beforeInstall }: {
       void checkNow();
     }
   }, [loaded, configured, autoCheck, checkNow, channel]);
+
+  const checkInLibrary = useCallback(async () => {
+    if (!loaded || !configured || !autoCheck || document.visibilityState !== "visible") return;
+    const checkKey = `lof.update.lastCheck.${platformRef.current}.${channel}`;
+    let checkedAt = lastChecks.current[checkKey] ?? 0;
+    try { checkedAt = Number(localStorage.getItem(checkKey)) || checkedAt; } catch {}
+    const now = Date.now();
+    if (checkedAt > 0 && now >= checkedAt && now - checkedAt < LIBRARY_CHECK_INTERVAL) return;
+    const attemptedAt = lastAttempts.current[checkKey] ?? 0;
+    // 오프라인 복귀나 빠른 화면 전환으로 실패한 요청을 연속해서 보내지 않는다.
+    if (attemptedAt > 0 && now >= attemptedAt && now - attemptedAt < CHECK_RETRY_INTERVAL) return;
+    await checkNow();
+  }, [loaded, configured, autoCheck, channel, checkNow]);
 
   const install = useCallback(async () => {
     const update = updateRef.current;
@@ -162,7 +184,7 @@ export function useAppUpdater({ loaded, autoCheck, channel, beforeInstall }: {
     configured, platform, phase, available, error, progress, dismissed, lockRef,
     locked: phase === "saving" || phase === "installing",
     busy: ["checking", "downloading", "saving", "installing"].includes(phase),
-    checkNow, install, dismiss: () => setDismissed(true),
+    checkNow, checkInLibrary, install, dismiss: () => setDismissed(true),
   };
 }
 
@@ -181,8 +203,10 @@ export function UpdateSettings({ updater, version, autoCheck, onAutoCheck, chann
     <p className="settings-description">현재 버전 {version}</p>
     <div className="settings-toggles">
       <label className="settings-toggle">
-        <span>앱 시작 시 업데이트 확인<small>새 버전을 알려드립니다. 다운로드와 설치는 직접 시작할 수 있습니다.</small></span>
-        <input type="checkbox" role="switch" aria-label="앱 시작 시 업데이트 확인"
+        <span>{updater.platform === "android" ? "자동으로 업데이트 확인" : "앱 시작 시 업데이트 확인"}<small>{updater.platform === "android"
+          ? "앱 시작 시 확인하고, 서재에 들어오거나 복귀하면 하루 한 번 다시 확인합니다. 다운로드와 설치는 직접 시작합니다."
+          : "새 버전을 알려드립니다. 다운로드와 설치는 직접 시작할 수 있습니다."}</small></span>
+        <input type="checkbox" role="switch" aria-label={updater.platform === "android" ? "자동으로 업데이트 확인" : "앱 시작 시 업데이트 확인"}
           checked={autoCheck} onChange={(e) => onAutoCheck(e.target.checked)} />
       </label>
     </div>
