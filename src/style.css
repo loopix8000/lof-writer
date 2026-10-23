@@ -5129,6 +5129,19 @@ input.property-text {
   text-align: var(--editor-text-align, left);
 }
 
+.tiptap ul[data-type="taskList"] { list-style: none; padding-left: 0; }
+.tiptap li[data-type="taskItem"] { display: flex; align-items: flex-start; gap: 8px; }
+.tiptap li[data-type="taskItem"] > label { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; min-height: 1lh; cursor: pointer; user-select: none; }
+.tiptap li[data-type="taskItem"] > label input { width: 16px; height: 16px; min-height: 0; margin: 0; padding: 0; accent-color: var(--accent); cursor: inherit; }
+.tiptap li[data-type="taskItem"] > div { flex: 1; min-width: 0; }
+.editor-content .tiptap li[data-type="taskItem"] > div > p { text-indent: 0; }
+.tiptap li[data-type="taskItem"] > div > :last-child { margin-bottom: 0; }
+.tiptap li[data-type="taskItem"] + li[data-type="taskItem"] { margin-top: 0.35em; }
+.tiptap li[data-type="taskItem"] ul[data-type="taskList"] { margin: 0.35em 0 0; }
+.tiptap[contenteditable="false"] li[data-type="taskItem"] > label { cursor: default; }
+.mobile-app .tiptap li[data-type="taskItem"] > label { min-width: 28px; }
+.mobile-app .tiptap li[data-type="taskItem"] > label input { width: 20px; height: 20px; }
+
 /* 인용문의 시작·끝 여백이 세로선 높이에 포함되지 않도록 한다. */
 .editor-content .tiptap blockquote > :first-child {
   margin-top: 0;

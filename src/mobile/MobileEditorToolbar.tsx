@@ -7,6 +7,7 @@ import {
   History,
   ImagePlus,
   Italic,
+  ListTodo,
   MessageSquareCode,
   Minus,
   MoreVertical,
@@ -165,6 +166,7 @@ export function MobileEditorMenuActions({
   onClose: () => void;
 }) {
   const actions = [
+    { action: "taskList", label: "체크리스트", icon: ListTodo },
     { action: "image", label: "이미지 삽입", icon: ImagePlus },
     ...(tables ? [{ action: "table", label: "표 삽입", icon: Table2 }] : []),
     { action: "comment", label: "주석 추가", icon: MessageSquareCode },

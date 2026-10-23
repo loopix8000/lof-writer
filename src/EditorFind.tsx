@@ -6,6 +6,7 @@ import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import { closeHistory } from "@tiptap/pm/history";
 import { ArrowDown, ArrowUp, Replace, ReplaceAll, Search, TextSelect, X } from "lucide-react";
 import type { SourceEditorHandle } from "./SourceEditor";
+import { useEditorComposition } from "./useEditorComposition";
 
 export type FindRange = { from: number; to: number };
 type FindMarks = { hits: FindRange[]; active: number };
@@ -65,6 +66,8 @@ export default function EditorFind({ editor, sourceRef, body, enabled, editable 
   const [active, setActive] = useState(0);
   const [revision, setRevision] = useState(0);
   const [navigation, setNavigation] = useState(0);
+  const sourceView = sourceRef?.current?.view;
+  const composition = useEditorComposition(sourceView?.contentDOM ?? (editor && !editor.isDestroyed ? editor.view.dom : null));
   const revealRequested = useRef(false);
   const input = useRef<HTMLInputElement>(null);
   const bar = useRef<HTMLDivElement>(null);
@@ -113,6 +116,7 @@ export default function EditorFind({ editor, sourceRef, body, enabled, editable 
     if (!enabled || !editable || !query) return;
     const view = sourceRef?.current?.view;
     if (sourceRef ? !view || view.state.readOnly : !editor || editor.isDestroyed || !editor.isEditable) return;
+    if (composition.composing.current || view?.composing || editor?.view.composing) return;
     // 편집 직전의 본문에서 위치를 다시 계산한다.
     const fresh = view ? findText(view.state.doc.toString(), query, caseSensitive) : findInEditor(editor!, query, caseSensitive);
     if (!fresh.length) return;
@@ -135,6 +139,7 @@ export default function EditorFind({ editor, sourceRef, body, enabled, editable 
     requestReveal();
   };
   useEffect(() => {
+    if (composition.composing.current || sourceRef?.current?.view?.composing || (editor && !editor.isDestroyed && editor.view.composing)) return;
     if (sourceRef) sourceRef.current?.highlight(hits, current);
     else if (editor && !editor.isDestroyed)
       editor.view.dispatch(editor.state.tr.setMeta(findKey, { hits, active: current }).setMeta("addToHistory", false));
@@ -154,7 +159,7 @@ export default function EditorFind({ editor, sourceRef, body, enabled, editable 
         scroll.scrollTop += editor.view.coordsAtPos(hit.from).top - (top + bounds.bottom) / 2;
       }
     }
-  }, [hits, current, editor, sourceRef, navigation]);
+  }, [hits, current, editor, sourceRef, navigation, composition.settled]);
   useEffect(() => () => {
     if (sourceRef) sourceRef.current?.highlight([], -1);
     else if (editor && !editor.isDestroyed)

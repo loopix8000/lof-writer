@@ -8,6 +8,7 @@ import {
   Strikethrough,
   List,
   ListOrdered,
+  ListTodo,
   Quote,
   Undo2,
   Redo2,
@@ -39,6 +40,7 @@ import { blockAt, docIndex, docNeedsMarkdownCopy, nodeLineCount } from "./doc-in
 import { normalizeEditorStyle } from "../core/typesetting.mjs";
 import { TypingAssist, isInsideJsdocComment, toggleJsdocComment, typesettingPluginKey } from "./typing-extension";
 import { MarkdownTables } from "./table-extension";
+import { MarkdownTasks } from "./task-extension";
 import { Bookmarks, BOOKMARK_LOAD, bookmarkPluginKey, readBookmarks, resolveBookmarks } from "./bookmark-extension";
 import { call, type Bookmark, type WritingRules } from "./types";
 import { paragraphCountDelta, type ManuscriptCounts } from "./manuscript-counts";
@@ -53,6 +55,7 @@ import { createCachedMarkdown } from "./cached-markdown";
 import EditorFind, { FindHighlights } from "./EditorFind";
 import { readEditorSelection, saveEditorSelection, type EditorSession } from "./workspace-state";
 import type { UndoState } from "./useUndoState";
+import { useEditorComposition } from "./useEditorComposition";
 
 const SourceEditor = lazy(() => import("./SourceEditor"));
 
@@ -515,6 +518,7 @@ export default function Writer({
   const protectedSource = protection.current!.required;
   // 원문으로 연 문서는 필요해질 때 서식 편집기를 준비한다. 로컬 입력을 다시 읽지는 않는다.
   const loadedBody = useRef<string | null>(source || protectedSource ? null : body);
+  const pendingContent = useRef(false);
   function notifyChange(nextBody: string, delta?: ManuscriptCounts | null, markdownCopy = true) {
     if (protection.current) protection.current.body = nextBody;
     onChangeRef.current(nextBody, delta, markdownCopy);
@@ -559,6 +563,7 @@ export default function Writer({
         markdown.document,
         markdown.extension,
         FindHighlights,
+        MarkdownTasks,
         ...(tables ? [MarkdownTables] : []),
         ...(hasImages
           ? [MarkdownImage.configure({ resolve: (src) => imagesRef.current?.resolve(src) ?? Promise.resolve(null) })]
@@ -673,6 +678,7 @@ export default function Writer({
     },
     [id, tables, links, hasImages],
   );
+  const composition = useEditorComposition(editor && !editor.isDestroyed ? editor.view.dom : null);
   // 이 원고를 인용한 메모 목록이 바뀌면 메모 표시를 다시 단다.
   useEffect(() => {
     if (!editor || editor.isDestroyed) return;
@@ -734,28 +740,29 @@ export default function Writer({
       });
     }
   }, [editor, manualLineBreak, copyWithBlankLines]);
+  const reconcileContent = () => {
+    if (!editor || editor.isDestroyed || source || protectedSource) { pendingContent.current = false; return; }
+    if (body === loadedBody.current || markdown.serialize(editor) === body) { pendingContent.current = false; return; }
+    if (editor.view.composing || composition.composing.current) return;
+    pendingContent.current = false;
+    loadedBody.current = body;
+    editor.commands.setContent(splitSoftBreaks(body, !manualLineBreak), {
+      contentType: "markdown",
+      emitUpdate: false,
+    });
+    // 본문을 통째로 바꾸면 붙어 있던 북마크가 사라지므로 저장된 목록으로 다시 깐다.
+    bookmarkKey.current = { editor, key: JSON.stringify(bookmarksRef.current || []) };
+    loadBookmarks(editor, bookmarksRef.current);
+  };
   useEffect(() => {
-    if (
-      editor &&
-      !editor.isDestroyed &&
-      !source &&
-      !protectedSource &&
-      body !== loadedBody.current &&
-      markdown.serialize(editor) !== body &&
-      !editor.view.composing
-    ) {
-      loadedBody.current = body;
-      editor.commands.setContent(splitSoftBreaks(body, !manualLineBreak), {
-        contentType: "markdown",
-        emitUpdate: false,
-      });
-      // 본문을 통째로 바꾸면 붙어 있던 북마크가 사라지므로 저장된 목록으로 다시 깐다.
-      bookmarkKey.current = { editor, key: JSON.stringify(bookmarksRef.current || []) };
-      loadBookmarks(editor, bookmarksRef.current);
-    }
-    // Only replace editor content for a document revision or a mode transition.
-    // Mirroring every local keystroke can replay a stale React effect over newer input.
+    pendingContent.current = true;
+    reconcileContent();
+    // 로컬 입력을 되비추지 않고 저장 버전·편집 모드 변경만 반영한다.
   }, [revision, source, protectedSource, editor, id]);
+  useEffect(() => {
+    // 조합 때문에 보류한 갱신만 최신 본문으로 다시 처리한다.
+    if (pendingContent.current) reconcileContent();
+  }, [composition.settled]);
   useEffect(() => {
     if (!session || !editor || editor.isDestroyed || source || protectedSource) return;
     const saved = readEditorSelection(session, "rich", editor.state.doc.content.size);
@@ -901,6 +908,22 @@ export default function Writer({
           sourceRef.current?.replace(from, to, "\n");
           view.dispatch({ selection: { anchor: from + 1, head: from + 1 } });
         }
+        if (view && cmd === "taskList") {
+          const { from, to } = view.state.selection.main;
+          const first = view.state.doc.lineAt(from);
+          const last = view.state.doc.lineAt(to > from && view.state.doc.lineAt(to).from === to ? to - 1 : to);
+          const lines = view.state.doc.sliceString(first.from, last.to).split("\n");
+          const remove = lines.some((line) => line.trim()) &&
+            lines.every((line) => !line.trim() || /^\s*[-+*]\s+\[[ xX]\](?:\s|$)/.test(line));
+          const text = lines.map((line) => {
+            if (!line.trim() && lines.length > 1) return line;
+            if (remove) return line.replace(/^(\s*)[-+*]\s+\[[ xX]\]\s?/, "$1");
+            const indent = line.match(/^\s*/)?.[0] ?? "";
+            const content = line.slice(indent.length).replace(/^(?:[-+*]|\d+[.)])\s+(?:\[[ xX]\]\s*)?/, "");
+            return `${indent}- [ ] ${content}`;
+          }).join("\n");
+          sourceRef.current?.replace(first.from, last.to, text);
+        }
         view?.focus();
         return;
       }
@@ -916,6 +939,7 @@ export default function Writer({
       else if (cmd === "quote") editor.chain().focus().toggleBlockquote().run();
       else if (cmd === "bulletList") editor.chain().focus().toggleBulletList().run();
       else if (cmd === "orderedList") editor.chain().focus().toggleOrderedList().run();
+      else if (cmd === "taskList") editor.chain().focus().toggleTaskList().run();
       else if (cmd === "table" && tables) editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run();
       else if (cmd === "image") void pickImage();
       else if (cmd === "comment") toggleJsdocComment(editor.view);
@@ -1154,6 +1178,12 @@ export default function Writer({
       icon: ListOrdered,
       active: editor.isActive("orderedList"),
       action: () => editor.chain().focus().toggleOrderedList().run(),
+    },
+    {
+      label: "체크리스트 (Ctrl+Shift+9)",
+      icon: ListTodo,
+      active: editor.isActive("taskList"),
+      action: () => editor.chain().focus().toggleTaskList().run(),
     },
     {
       label: "장면 구분",

@@ -216,6 +216,7 @@ export const TypingAssist = Extension.create<{
             return this.getState(state);
           },
           handleTextInput(view, from, to, text) {
+            if (view.composing) return false;
             const resolved = view.state.doc.resolve(from);
             const inComment = hasUnclosedCommentBefore(view.state.doc, from);
             const opts: Record<string, any> = {
@@ -308,6 +309,7 @@ export const TypingAssist = Extension.create<{
             return true;
           },
           handleKeyDown(view, event) {
+            if (view.composing || event.isComposing || event.keyCode === 229) return false;
             if (
               (event.ctrlKey || event.metaKey) &&
               !event.altKey &&

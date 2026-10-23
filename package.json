@@ -44,6 +44,7 @@
     "@tauri-apps/api": "^2.0.0",
     "@tauri-apps/plugin-updater": "^2.14.0",
     "@tiptap/core": "^3.32.0",
+    "@tiptap/extension-list": "3.32.0",
     "@tiptap/extension-placeholder": "^3.0.0",
     "@tiptap/extension-table": "3.32.0",
     "@tiptap/markdown": "^3.0.0",

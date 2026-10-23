@@ -9,9 +9,14 @@ export function useMobileCaretHandle(rootRef: RefObject<HTMLElement | null>) {
     let touch: { x: number; y: number; time: number; scrolling: boolean } | null = null;
     let scrollPending = false;
     let frame: number | undefined;
+    let quietUntil = 0;
+    const cancelPending = () => {
+      scrollPending = false;
+      if (frame !== undefined) { cancelAnimationFrame(frame); frame = undefined; }
+    };
     const editorSelector = ".m-manuscript-sheet .tiptap, .m-manuscript-sheet .cm-content";
     const hideHandle = () => {
-      if (composing) return;
+      if (composing || performance.now() < quietUntil) return;
       const focused = document.activeElement;
       if (!(focused instanceof HTMLElement) || !root.contains(focused) || !focused.matches(editorSelector)) return;
       const selection = window.getSelection();
@@ -21,15 +26,19 @@ export function useMobileCaretHandle(rootRef: RefObject<HTMLElement | null>) {
     };
     const scroll = () => {
       if (!scrollPending || frame !== undefined) return;
+      const selection = window.getSelection();
+      const node = selection?.anchorNode, offset = selection?.anchorOffset;
       frame = requestAnimationFrame(() => {
         frame = undefined;
+        if (!scrollPending) return;
         scrollPending = false;
+        const current = window.getSelection();
+        if (current?.anchorNode !== node || current?.anchorOffset !== offset) return;
         hideHandle();
       });
     };
     const start = (event: TouchEvent) => {
-      scrollPending = false;
-      if (frame !== undefined) { cancelAnimationFrame(frame); frame = undefined; }
+      cancelPending();
       touch = event.touches.length === 1
         ? { x: event.touches[0].clientX, y: event.touches[0].clientY, time: performance.now(), scrolling: false }
         : null;
@@ -46,14 +55,18 @@ export function useMobileCaretHandle(rootRef: RefObject<HTMLElement | null>) {
       }
     };
     const end = () => { touch = null; };
-    const cancel = () => { touch = null; scrollPending = false; };
+    const cancel = () => { touch = null; cancelPending(); };
     const wheel = () => { scrollPending = true; };
     const otherAction = (event: Event) => {
       const target = event.target;
       if (target instanceof Element && !target.closest(editorSelector)) hideHandle();
     };
-    const compositionStart = () => { composing = true; scrollPending = false; };
-    const compositionEnd = () => { composing = false; };
+    const input = () => {
+      cancelPending();
+      quietUntil = performance.now() + 250;
+    };
+    const compositionStart = () => { composing = true; input(); };
+    const compositionEnd = () => { composing = false; input(); };
     root.addEventListener("scroll", scroll, true);
     root.addEventListener("touchstart", start, { capture: true, passive: true });
     root.addEventListener("touchmove", move, { capture: true, passive: true });
@@ -64,6 +77,10 @@ export function useMobileCaretHandle(rootRef: RefObject<HTMLElement | null>) {
     root.addEventListener("click", otherAction, true);
     root.addEventListener("compositionstart", compositionStart, true);
     root.addEventListener("compositionend", compositionEnd, true);
+    root.addEventListener("beforeinput", input, true);
+    root.addEventListener("input", input, true);
+    root.addEventListener("keydown", input, true);
+    root.addEventListener("focusin", input, true);
     return () => {
       if (frame !== undefined) cancelAnimationFrame(frame);
       root.removeEventListener("scroll", scroll, true);
@@ -76,6 +93,10 @@ export function useMobileCaretHandle(rootRef: RefObject<HTMLElement | null>) {
       root.removeEventListener("click", otherAction, true);
       root.removeEventListener("compositionstart", compositionStart, true);
       root.removeEventListener("compositionend", compositionEnd, true);
+      root.removeEventListener("beforeinput", input, true);
+      root.removeEventListener("input", input, true);
+      root.removeEventListener("keydown", input, true);
+      root.removeEventListener("focusin", input, true);
     };
   }, [rootRef]);
 }
