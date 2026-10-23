@@ -47,6 +47,7 @@ import BookmarkList from "../app/BookmarkList";
 import { icons, labels } from "../app/document-ui";
 import { EPISODE_GROUP, parentOfRel } from "../app/file-tree-model";
 import { type Dialog } from "../app/model";
+import type { LargeDocumentMode } from "../app/useLargeDocumentMode";
 import TypesettingSettings from "../app/TypesettingSettings";
 import type { FileTreeController } from "../app/useFileTree";
 import EditorScroll, { type EditorScrollPositions } from "../EditorScroll";
@@ -79,7 +80,6 @@ import MobilePillTabs from "./MobilePillTabs";
 
 type TreeTab = "episode" | "document";
 
-const LARGE_SOURCE_CHARS = 100_000;
 type RightWidgetTab = "widgets" | "typesetting" | "bookmarks";
 
 export default function MobileEditorView({
@@ -102,6 +102,7 @@ export default function MobileEditorView({
   sessionCount,
   source,
   setSource,
+  largeDocument,
   reveal,
   scrollPositions,
   tree,
@@ -156,6 +157,7 @@ export default function MobileEditorView({
   sessionCount: number;
   source: boolean;
   setSource: React.Dispatch<React.SetStateAction<boolean>>;
+  largeDocument: LargeDocumentMode;
   reveal: any;
   scrollPositions: EditorScrollPositions;
   tree: FileTreeController;
@@ -425,15 +427,8 @@ export default function MobileEditorView({
     longPressRef.current = null;
     return fired;
   };
-  // 10만 자 이상인 문서는 일반 편집기가 무거워 원문 편집으로 연다. 편집하다 기준을 넘거나 내려가도
-  // 편집기가 바뀌지 않게 문서를 열 때 한 번만 정하고, 더보기 메뉴에서 일반 편집으로 바꿀 수 있다.
-  const [largeSource, setLargeSource] = useState(() => ({
-    id: active.id,
-    on: active.body.length >= LARGE_SOURCE_CHARS,
-  }));
-  if (largeSource.id !== active.id)
-    setLargeSource({ id: active.id, on: active.body.length >= LARGE_SOURCE_CHARS });
-  const sourceMode = source || (largeSource.id === active.id && largeSource.on);
+  // 10만 자가 넘는 문서는 열 때 고른 편집 모드를 따른다.
+  const sourceMode = source || largeDocument.sourceFor(active);
   const { undoState, onUndoStateChange } = useUndoState(`${lib.root}\n${active.id}\n${sourceMode}`);
   const norm = normalizeEditorStyle(prefs, active.kind);
   const num = numberOf(active);
@@ -1225,7 +1220,7 @@ export default function MobileEditorView({
                   setMoreMenuOpen(false);
                   if (sourceMode) {
                     setSource(false);
-                    setLargeSource({ id: active.id, on: false });
+                    largeDocument.choose(active.id, false);
                   } else setSource(true);
                 }}
               >

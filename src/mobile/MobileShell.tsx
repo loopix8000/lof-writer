@@ -26,6 +26,7 @@ import SettingsContent from "../app/SettingsContent";
 import type { FileTreeController } from "../app/useFileTree";
 import { ImageViewer } from "../CoverImage";
 import { ConfirmBox } from "../ConfirmDialog";
+import type { LargeDocumentMode } from "../app/useLargeDocumentMode";
 import type { EditorScrollPositions } from "../EditorScroll";
 import type { MenuItem } from "../ContextMenu";
 import EpisodeBindingPicker from "../EpisodeBindingPicker";
@@ -82,6 +83,7 @@ export default function MobileShell({
   sessionCount,
   source,
   setSource,
+  largeDocument,
   reveal,
   scrollPositions,
   tree,
@@ -201,6 +203,7 @@ export default function MobileShell({
   sessionCount: number;
   source: boolean;
   setSource: React.Dispatch<React.SetStateAction<boolean>>;
+  largeDocument: LargeDocumentMode;
   reveal: any;
   scrollPositions: EditorScrollPositions;
   tree: FileTreeController;
@@ -529,6 +532,7 @@ export default function MobileShell({
                 sessionCount={sessionCount}
                 source={source}
                 setSource={setSource}
+                largeDocument={largeDocument}
                 reveal={reveal}
                 scrollPositions={scrollPositions}
                 tree={tree}

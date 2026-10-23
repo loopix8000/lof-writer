@@ -79,6 +79,7 @@ import {
 } from "../core/typing.mjs";
 import { globalView, initialNavigation, requiresDocumentSource, sameDocumentContent, withDocumentDraft, type Destination, type Dialog, type EditorTab, type Navigation, type Side } from "./app/model";
 import { useConfirm } from "./ConfirmDialog";
+import { useLargeDocumentMode } from "./app/useLargeDocumentMode";
 import ContextMenu, { type MenuItem } from "./ContextMenu";
 import { ImageViewer } from "./CoverImage";
 import EditorScroll from "./EditorScroll";
@@ -408,6 +409,9 @@ export default function App() {
   const releaseNotice = useReleaseNotice(lib.version, loaded, prefs.setupComplete === true);
   const [releaseNotesOpen, setReleaseNotesOpen] = useState(false);
   const [confirm, confirmDialog] = useConfirm();
+  const largeDocument = useLargeDocumentMode(active, confirm);
+  // 원문 편집 전환과 10만 자가 넘는 문서에서 고른 모드를 함께 본다.
+  const sourceFor = (doc: Doc) => source || largeDocument.sourceFor(doc);
   // 실시간 동기화가 그룹 방식으로 바뀌며 이전 장치 연결을 초기화했다면 서재를 연 뒤 한 번 안내한다.
   const resetNoticeShown = useRef(false);
   useEffect(() => {
@@ -694,7 +698,7 @@ export default function App() {
         : await call<Doc>("readDocument", { id: targetDoc.id });
     const copyAsMarkdown =
       rawMarkdown ??
-      (active?.id === latest.id && (source || requiresSource(latest.body)));
+      (active?.id === latest.id && (sourceFor(latest) || requiresSource(latest.body)));
     if (copyAsMarkdown) {
       await call("copyManuscript", { id: latest.id, text: stripJsdocComments(latest.body) });
       if (notify) message("Markdown 원문을 복사했습니다.");
@@ -773,7 +777,7 @@ export default function App() {
     else await goView("project", id);
   }
   function docMenu(d: Doc): MenuItem[] {
-    const rawCopy = active?.id === d.id && (source || requiresDocumentSource(active));
+    const rawCopy = active?.id === d.id && (sourceFor(active) || requiresDocumentSource(active));
     return [
       { label: "열기", action: attempt(() => openDoc(d.id, false)) },
       // 미리보기 탭을 바꾸지 않고 고정 탭으로 연다(더블클릭과 같다).
@@ -1394,12 +1398,12 @@ export default function App() {
             <button
               aria-label="본문 텍스트 복사"
               title={
-                source || requiresDocumentSource(active)
+                sourceFor(active) || requiresDocumentSource(active)
                   ? "Markdown 원문 복사"
                   : "본문 복사"
               }
               // 분할 화면에서는 이 칸의 문서가 전체 활성 문서와 다를 수 있으므로 표시한 방식 그대로 복사한다.
-              onClick={attempt(() => copyDocManuscript(active, source || requiresDocumentSource(active)))}
+              onClick={attempt(() => copyDocManuscript(active, sourceFor(active) || requiresDocumentSource(active)))}
             >
               <Copy size={18} />
             </button>
@@ -1529,8 +1533,11 @@ export default function App() {
               onChange={(body, delta, markdownCopy) => { if (focused) { counter.update(body, delta); edit({ body }, markdownCopy); } }}
               fontSize={activeBox.norm.fontSize}
               lineHeight={activeBox.norm.lineHeight}
-              source={source}
-              onToggleSource={() => setSource((value) => !value)}
+              source={sourceFor(active)}
+              onToggleSource={() => {
+                if (!sourceFor(active)) setSource(true);
+                else { setSource(false); largeDocument.choose(active.id, false); }
+              }}
               typingOptions={{
                 autoCloseQuotes: prefs.autoCloseQuotes,
                 autoCloseBrackets: prefs.autoCloseBrackets,
@@ -1805,6 +1812,7 @@ export default function App() {
         sessionCount={sessionCount}
         source={source}
         setSource={setSource}
+        largeDocument={largeDocument}
         reveal={reveal}
         scrollPositions={session.scrollPositions}
         tree={fileTree}
