@@ -9,6 +9,7 @@ use crate::{
         file_remote::{self, FileRemote, Info, ID_FILE},
         files,
     },
+    sync_activity::{SyncPermit, MAX_PEER_SYNCS},
     AppState,
 };
 use iroh::SecretKey;
@@ -22,7 +23,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
-        Arc, Condvar, Mutex,
+        mpsc, Arc, Condvar, Mutex,
     },
     time::{Duration, Instant},
 };
@@ -50,6 +51,20 @@ struct ConnectionProbe {
     connection: Option<usize>,
 }
 
+type Revision = (u64, u64, u64);
+struct PeerSyncJob {
+    task: tokio::task::JoinHandle<()>,
+    result: mpsc::Receiver<Result<Value, LofError>>,
+    connection: usize,
+    revision: Revision,
+}
+
+struct InboundSync {
+    root: PathBuf,
+    until: Instant,
+    permit: Arc<SyncPermit>,
+}
+
 async fn control(
     app: &AppHandle,
     connection: &Connection,
@@ -61,7 +76,7 @@ async fn control(
         match tokio::time::timeout(CONTROL_TIMEOUT, &mut request).await {
             Ok(result) => return result,
             // 파일 전송과 연결 확인이 겹치면 기존 전송 제한 시간 안에서 응답을 더 기다린다.
-            Err(_) if app.state::<AppState>().syncing.load(Ordering::SeqCst) => continue,
+            Err(_) if app.state::<AppState>().syncing.is_busy() => continue,
             Err(_) => return Err("장치의 연결 확인 응답이 없습니다.".into()),
         }
     }
@@ -84,7 +99,7 @@ pub struct Realtime {
     statuses: Mutex<HashMap<String, Value>>,
     invite: Mutex<Option<Invitation>>,
     pairing: Mutex<Option<PairingJob>>,
-    lease: Mutex<Option<(String, PathBuf, Instant)>>,
+    leases: Mutex<HashMap<String, InboundSync>>,
     error: Mutex<String>,
     urgent: Mutex<bool>,
     // 상대가 먼저 접속했거나 gossip으로 다시 보인 장치는 재시도 대기를 건너뛰고 바로 연결한다.
@@ -718,14 +733,7 @@ pub fn set_background(app: &AppHandle, background: bool) {
     }
 }
 fn release(app: &AppHandle, session: &str) {
-    let realtime = app.state::<Realtime>();
-    let mut lease = realtime.lease.lock().unwrap();
-    if lease.as_ref().is_some_and(|l| l.0 == session) {
-        *lease = None;
-        app.state::<AppState>()
-            .syncing
-            .store(false, Ordering::SeqCst);
-    }
+    app.state::<Realtime>().leases.lock().unwrap().remove(session);
 }
 struct WriterHost(AppHandle);
 impl Host for WriterHost {
@@ -912,43 +920,38 @@ impl WriterHost {
             ));
         }
         let current = root(app)?;
-        let mut lease = rt.lease.lock().unwrap();
-        if lease.as_ref().is_some_and(|l| Instant::now() > l.2) {
-            *lease = None;
-            state.syncing.store(false, Ordering::SeqCst);
-        }
+        let mut leases = rt.leases.lock().unwrap();
+        leases.retain(|_, lease| Instant::now() <= lease.until);
         if op == "begin" {
             // 양쪽에서 동시에 전체 비교를 실행하지 않도록 공개키 순서로 담당을 정한다.
             let own = own(app).unwrap_or_default();
             if peer >= own.as_str() && !peer_config["storage"].as_bool().unwrap_or(false) {
                 return Err(fail_invalid("다른 장치가 비교를 담당합니다."));
             }
-            if state
-                .syncing
-                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-                .is_err()
-            {
+            if leases.contains_key(session) {
                 return Err(fail(SYNC_BUSY_MESSAGE, "SYNC_BUSY"));
             }
-            *lease = Some((
-                session.into(),
-                current,
-                Instant::now() + Duration::from_secs(180),
-            ));
+            let permit = state.syncing.try_peer(peer_config["id"].as_str().unwrap_or(""))
+                .ok_or_else(|| fail(SYNC_BUSY_MESSAGE, "SYNC_BUSY"))?;
+            leases.insert(session.into(), InboundSync {
+                root: current,
+                until: Instant::now() + Duration::from_secs(180),
+                permit: Arc::new(permit),
+            });
+            drop(leases);
             sync_activity(app, peer_config["id"].as_str().unwrap_or(""), "comparing");
+            wake(app);
             return Ok(Message::json(json!(true)));
         }
-        if !lease
-            .as_ref()
-            .is_some_and(|l| l.0 == session && l.1 == current)
-        {
+        let Some(lease) = leases.get_mut(session).filter(|lease| lease.root == current) else {
             return Err(fail_invalid("동기화 세션을 다시 연결해 주세요."));
-        }
-        lease.as_mut().unwrap().2 = Instant::now() + Duration::from_secs(180);
+        };
+        lease.until = Instant::now() + Duration::from_secs(180);
+        // 세션 만료·연결 종료 중에도 진행 중인 파일 쓰기까지는 실행 권한을 유지한다.
+        let _permit = lease.permit.clone();
         if op == "end" {
-            *lease = None;
-            state.syncing.store(false, Ordering::SeqCst);
-            drop(lease);
+            leases.remove(session);
+            drop(leases);
             let mut store = state.store.lock().unwrap();
             if let Some(s) = store.as_mut() {
                 s.poll_disk()?;
@@ -962,6 +965,7 @@ impl WriterHost {
             wake(app);
             return Ok(Message::json(json!(true)));
         }
+        drop(leases);
         if op == "touch" {
             return Ok(Message::json(json!(true)));
         }
@@ -1191,14 +1195,8 @@ fn sync(
     handle: &tokio::runtime::Handle,
 ) -> Result<Value, LofError> {
     let state = app.state::<AppState>();
-    if state
-        .syncing
-        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-        .is_err()
-    {
-        return Err(fail(SYNC_BUSY_MESSAGE, "SYNC_BUSY"));
-    }
-    let _guard = crate::SyncGuard(&state.syncing);
+    let _guard = state.syncing.try_peer(peer["id"].as_str().unwrap_or(""))
+        .ok_or_else(|| fail(SYNC_BUSY_MESSAGE, "SYNC_BUSY"))?;
     let current = root(app)?;
     if peer["root"].as_str() != Some(current.to_string_lossy().as_ref()) {
         return Err(fail_invalid("서재가 변경되었습니다."));
@@ -1306,11 +1304,12 @@ pub fn start(app: &AppHandle) {
             *app.state::<Realtime>().runtime.lock().unwrap() =
                 Some((runtime.handle().clone(), node.clone()));
             let own = node.endpoint.id().to_string();
-            let mut connected: HashMap<String, (Connection, (u64, u64, u64))> = HashMap::new();
+            let mut connected: HashMap<String, (Connection, Revision)> = HashMap::new();
             let mut retry: HashMap<String, (Instant, u64)> = HashMap::new();
             // 접속에 실패한 상대. 재접속 알림이나 앱 복귀 같은 신호가 올 때까지 다시 시도하지 않는다.
             let mut offline: HashSet<String> = HashSet::new();
             let mut probes: HashMap<String, ConnectionProbe> = HashMap::new();
+            let mut jobs: HashMap<String, PeerSyncJob> = HashMap::new();
             let mut periodic_active = false;
             let mut periodic_attempted = HashSet::new();
             let mut previous_root = PathBuf::new();
@@ -1321,12 +1320,14 @@ pub fn start(app: &AppHandle) {
             let mut network_checked: Option<Instant> = None;
             while !crate::auto_sync::stopped(&app) {
                 let rt = app.state::<Realtime>();
+                rt.leases.lock().unwrap().retain(|_, lease| Instant::now() <= lease.until);
                 // Android는 저장공간 권한을 확인한 뒤 서재를 열므로 서재가 열릴 때까지 기다린다.
                 let Ok(current) = root(&app) else {
                     std::thread::sleep(Duration::from_millis(500));
                     continue;
                 };
                 if current != previous_root {
+                    for (_, job) in jobs.drain() { job.task.abort(); }
                     for (_, probe) in probes.drain() {
                         probe.task.abort();
                     }
@@ -1338,6 +1339,7 @@ pub fn start(app: &AppHandle) {
                         session.connection.close(0u8.into(), b"vault changed");
                         false
                     });
+                    rt.leases.lock().unwrap().retain(|_, lease| lease.root == current);
                     for (conn, _) in connected.values() {
                         conn.close(0u8.into(), b"vault changed");
                     }
@@ -1427,6 +1429,56 @@ pub fn start(app: &AppHandle) {
                     }
                     keep
                 });
+                jobs.retain(|id, job| {
+                    let keep = connected.get(id).is_some_and(|(conn, _)|
+                        conn.stable_id() == job.connection && conn.close_reason().is_none());
+                    if !keep { job.task.abort(); }
+                    keep
+                });
+                let completed: Vec<_> = jobs.iter().filter_map(|(id, job)| {
+                    match job.result.try_recv() {
+                        Ok(result) => Some((id.clone(), result)),
+                        Err(mpsc::TryRecvError::Disconnected) => Some((id.clone(), Err(fail(
+                            "장치 동기화 작업이 종료되었습니다.", "SYNC_CONNECTION")))),
+                        Err(mpsc::TryRecvError::Empty) => None,
+                    }
+                }).collect();
+                for (id, result) in completed {
+                    let job = jobs.remove(&id).unwrap();
+                    // 이미 교체된 연결의 완료 결과로 새 연결 상태를 바꾸지 않는다.
+                    let Some((conn, seen)) = connected.get_mut(&id)
+                        .filter(|(conn, _)| conn.stable_id() == job.connection) else { continue; };
+                    match result {
+                        Ok(outcome) => {
+                            *seen = job.revision;
+                            retry.remove(&id);
+                            offline.remove(&id);
+                            let mut statuses = rt.statuses.lock().unwrap();
+                            let status = statuses.entry(id).or_insert_with(|| json!({}));
+                            if !outcome.is_null() {
+                                *status = json!({"phase":"connected","lastSync":chrono::Utc::now().to_rfc3339(),"conflicts":outcome["fileConflicts"]});
+                            } else if !matches!(status["phase"].as_str(), Some("syncing" | "pending")) {
+                                status["phase"] = json!("connected");
+                                status["message"] = Value::Null;
+                            }
+                        }
+                        Err(error) if matches!(error.code.as_str(), "SYNC_BUSY" | "SYNC_RETRY") => {
+                            let mut statuses = rt.statuses.lock().unwrap();
+                            let status = statuses.entry(id.clone()).or_insert_with(|| json!({}));
+                            status["phase"] = json!("pending");
+                            status["message"] = Value::Null;
+                            retry.insert(id, (Instant::now() + Duration::from_secs(2), 2));
+                        }
+                        Err(error) => {
+                            rt.statuses.lock().unwrap().insert(id.clone(), json!({"phase":"error","message":error.message}));
+                            conn.close(1u8.into(), b"retry");
+                            connected.remove(&id);
+                            rt.live.lock().unwrap().retain(|key, conn|
+                                key != &id || conn.close_reason().is_none());
+                            offline.insert(id);
+                        }
+                    }
+                }
                 if rt.clear_retries.swap(false, Ordering::SeqCst) {
                     retry.clear();
                     offline.clear();
@@ -1589,63 +1641,40 @@ pub fn start(app: &AppHandle) {
                         probes.insert(id.clone(), ConnectionProbe { task, connection });
                         periodic_attempted.insert(id.clone());
                     }
-                    if !connected.contains_key(&id) || probes.contains_key(&id) {
+                    if !connected.contains_key(&id) || probes.contains_key(&id)
+                        || jobs.contains_key(&id) || jobs.len() >= MAX_PEER_SYNCS {
                         continue;
                     }
-                    let result = (|| -> Result<(), LofError> {
-                        let (conn, seen) = connected.get_mut(&id).unwrap();
-                        if *seen == revision {
-                            return Ok(());
-                        }
-                        let leader = peer["storage"].as_bool().unwrap_or(false)
-                            || own < peer["endpoint"].as_str().unwrap_or("").to_string();
-                        if leader {
-                            // 변경 알림만 보내는 경우는 비교가 아니므로 동기화 중으로 표시하지 않는다.
-                            sync_activity(&app, &id, "comparing");
-                            let outcome = sync(&app, &peer, conn, runtime.handle())?;
-                            if outcome["deferredFiles"].as_u64().unwrap_or(0) > 0 {
-                                return Err(fail("일부 문서의 정리를 기다리고 있습니다.", "SYNC_RETRY"));
+                    let (conn, seen) = connected.get(&id).unwrap();
+                    if *seen == revision { continue; }
+                    let leader = peer["storage"].as_bool().unwrap_or(false)
+                        || own < peer["endpoint"].as_str().unwrap_or("").to_string();
+                    let connection = conn.stable_id();
+                    let conn = conn.clone();
+                    let events = app.clone();
+                    let handle = runtime.handle().clone();
+                    let (sender, result) = mpsc::channel();
+                    let task = runtime.spawn(async move {
+                        let worker_app = events.clone();
+                        let outcome = tokio::task::spawn_blocking(move || {
+                            if leader {
+                                let outcome = sync(&worker_app, &peer, &conn, &handle)?;
+                                if outcome["deferredFiles"].as_u64().unwrap_or(0) > 0 {
+                                    return Err(fail("일부 문서의 정리를 기다리고 있습니다.", "SYNC_RETRY"));
+                                }
+                                Ok(outcome)
+                            } else {
+                                handle.block_on(control(&worker_app, &conn, Message::json(json!({
+                                    "op":"notify","vault":vault(&worker_app)?,"target":peer["remoteVault"]
+                                })))).map_err(net)?;
+                                Ok(Value::Null)
                             }
-                            rt.statuses.lock().unwrap().insert(id.clone(),json!({"phase":"connected","lastSync":chrono::Utc::now().to_rfc3339(),"conflicts":outcome["fileConflicts"]}));
-                            crate::auto_sync::refresh_realtime(&app);
-                        } else {
-                            runtime.block_on(control(&app,conn,Message::json(json!({"op":"notify","vault":vault(&app)?,"target":peer["remoteVault"]})))).map_err(net)?;
-                            let mut statuses = rt.statuses.lock().unwrap();
-                            let status = statuses.entry(id.clone()).or_insert_with(|| json!({}));
-                            status["phase"] = json!("connected");
-                            status["message"] = Value::Null;
-                            drop(statuses);
-                            crate::auto_sync::refresh_realtime(&app);
-                        }
-                        *seen = revision;
-                        Ok(())
-                    })();
-                    match result {
-                        Ok(()) => {
-                            retry.remove(&id);
-                            offline.remove(&id);
-                        }
-                        Err(error) if matches!(error.code.as_str(), "SYNC_BUSY" | "SYNC_RETRY") => {
-                            let mut statuses = rt.statuses.lock().unwrap();
-                            let status = statuses.entry(id.clone()).or_insert_with(|| json!({}));
-                            status["phase"] = json!("pending");
-                            status["message"] = Value::Null;
-                            // 연결과 미처리 변경분을 유지하고 짧은 간격으로 다시 시도한다.
-                            retry.insert(id, (Instant::now() + Duration::from_secs(2), 2));
-                        }
-                        Err(error) => {
-                            let mut statuses = rt.statuses.lock().unwrap();
-                            let status = json!({"phase":"error","message":error.message});
-                            statuses.insert(id.clone(), status);
-                            drop(statuses);
-                            if let Some((conn, _)) = connected.remove(&id) {
-                                conn.close(1u8.into(), b"retry");
-                            }
-                            rt.live.lock().unwrap().retain(|key, conn|
-                                key != &id || conn.close_reason().is_none());
-                            offline.insert(id);
-                        }
-                    }
+                        }).await.unwrap_or_else(|error| Err(net(error)));
+                        // 결과를 넣은 뒤 깨워 완료 알림과 대기 진입 사이의 누락을 막는다.
+                        let _ = sender.send(outcome);
+                        wake(&events);
+                    });
+                    jobs.insert(id, PeerSyncJob { task, result, connection, revision });
                 }
                 crate::auto_sync::refresh_realtime(&app);
                 // 연결이 끊긴 구성원도 변경 알림을 받으면 재시도 대기 없이 다시 접속한다.
@@ -1654,12 +1683,23 @@ pub fn start(app: &AppHandle) {
                     announced = generation;
                 }
                 if matches!(phase, Phase::Periodic | Phase::Paused) {
-                    if phase == Phase::Periodic && !probes.is_empty() {
-                        // 접속 확인은 기기별로 병렬 실행하되 주기 확인이 끝나기 전 결과를 받는다.
-                        let urgent = rt.urgent.lock().unwrap();
-                        drop(rt.wake.wait_timeout(urgent, Duration::from_millis(250)).unwrap());
+                    if phase == Phase::Periodic && (!probes.is_empty() || !jobs.is_empty() || !rt.leases.lock().unwrap().is_empty()) {
+                        // 전송을 마칠 때까지 기다리되, 진행 중에는 별도 상태 확인 패킷을 보내지 않는다.
+                        let mut urgent = rt.urgent.lock().unwrap();
+                        if *urgent {
+                            *urgent = false;
+                        } else {
+                            let probe = (!probes.is_empty()).then(|| Instant::now() + Duration::from_millis(250));
+                            let lease = rt.leases.lock().unwrap().values().map(|lease| lease.until).min();
+                            if let Some(deadline) = probe.into_iter().chain(lease).min() {
+                                drop(rt.wake.wait_timeout(urgent, deadline.saturating_duration_since(Instant::now())).unwrap());
+                            } else {
+                                drop(rt.wake.wait(urgent).unwrap());
+                            }
+                        }
                         continue;
                     }
+                    for (_, job) in jobs.drain() { job.task.abort(); }
                     // 확인을 마치면 연결을 닫아 다음 주기까지 배터리를 아낀다.
                     for (conn, _) in connected.values() {
                         conn.close(0u8.into(), b"background");
@@ -1673,29 +1713,33 @@ pub fn start(app: &AppHandle) {
                     for session in rt.sessions.lock().unwrap().values() {
                         session.connection.close(0u8.into(), b"background");
                     }
+                    rt.leases.lock().unwrap().clear();
                     periodic_active = false;
                     if phase == Phase::Periodic { crate::background_sync::realtime_done(&app); }
                 }
                 // 화면에 있거나 즉시 동기화를 유지하는 동안 저장·수신·접속 알림을 기다린다.
                 // 이후에는 알림을 미루고 주기 확인 시각에만 깨어난다.
                 loop {
-                    let phase = crate::background_sync::phase(&app);
+                    let current_phase = crate::background_sync::phase(&app);
+                    if current_phase != phase { break; }
                     let mut urgent = rt.urgent.lock().unwrap();
                     if crate::auto_sync::stopped(&app) {
                         break;
                     }
-                    let deadline = match phase {
+                    let deadline = match current_phase {
                         Phase::Foreground | Phase::Live => {
                             if *urgent {
                                 *urgent = false;
                                 break;
                             }
-                            let live = (phase == Phase::Live)
+                            let live = (current_phase == Phase::Live)
                                 .then(|| crate::background_sync::live_deadline(&app))
                                 .flatten();
                             let pending = (!probes.is_empty()).then(|| Instant::now() + Duration::from_millis(250));
-                            retry.iter().filter(|(id, _)| !probes.contains_key(*id)).map(|(_, (when, _))| *when)
-                                .chain(subscription_retry).chain(live).chain(pending).min()
+                            let lease = rt.leases.lock().unwrap().values().map(|lease| lease.until).min();
+                            retry.iter().filter(|(id, (when, _))|
+                                *when > Instant::now() && !probes.contains_key(*id) && !jobs.contains_key(*id)).map(|(_, (when, _))| *when)
+                                .chain(subscription_retry).chain(live).chain(pending).chain(lease).min()
                         }
                         Phase::Periodic => {
                             *urgent = false;
@@ -1725,8 +1769,10 @@ pub fn start(app: &AppHandle) {
                 }
             }
             for (_, probe) in probes { probe.task.abort(); }
+            for (_, job) in jobs { job.task.abort(); }
             drop(subscription);
             runtime.block_on(node.close());
+            app.state::<Realtime>().leases.lock().unwrap().clear();
             Ok(())
         })();
         *app.state::<Realtime>().runtime.lock().unwrap() = None;

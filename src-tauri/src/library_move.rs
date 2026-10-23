@@ -1,13 +1,12 @@
 use crate::error::{fail, fail_invalid, LofError};
 use crate::store::{strip_verbatim_prefix, Store};
-use crate::{persist_settings, schedule_notify, AppState, SyncGuard};
+use crate::{persist_settings, schedule_notify, AppState};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering;
 use tauri::AppHandle;
 use uuid::Uuid;
 
@@ -199,17 +198,10 @@ pub fn move_library(state: &AppState, app: &AppHandle, args: &Value) -> Result<V
     if !target.is_dir() {
         return Err(fail_invalid("이동할 위치가 폴더가 아닙니다."));
     }
-    if state
-        .syncing
-        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-        .is_err()
-    {
-        return Err(fail(
+    let _sync = state.syncing.try_exclusive().ok_or_else(|| fail(
             "동기화가 끝난 뒤 서재 이동을 다시 시도해 주세요.",
             "SYNC_BUSY",
-        ));
-    }
-    let _sync = SyncGuard(&state.syncing);
+        ))?;
     let mut guard = state.store.lock().unwrap();
     let store = guard
         .as_mut()

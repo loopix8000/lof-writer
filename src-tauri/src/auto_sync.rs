@@ -332,7 +332,7 @@ fn has_received_changes(result: &Value) -> bool {
 // 화면의 상태 확인은 서버 전송 대기열에 새 작업을 만들지 않는다.
 pub fn request_check(app: &AppHandle) -> Result<Value, crate::error::LofError> {
     let status = app.state::<AutoSyncState>().status();
-    let busy = app.state::<AppState>().syncing.load(Ordering::SeqCst);
+    let busy = app.state::<AppState>().syncing.is_busy();
     Ok(json!({ "changed": false, "busy": busy, "errors": [],
         "hasConnections": status["hasConnections"], "scheduled": true }))
 }

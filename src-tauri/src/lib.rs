@@ -36,6 +36,7 @@ mod skills;
 pub mod store;
 mod recovery;
 pub mod sync;
+mod sync_activity;
 pub mod text;
 
 use crate::api::{start_api, ApiServer};
@@ -70,7 +71,7 @@ pub struct AppState {
     pub config_file: PathBuf,
     pub user_dir: PathBuf,
     pub api: ApiServer,
-    pub syncing: Arc<AtomicBool>,
+    pub syncing: Arc<sync_activity::SyncActivity>,
     pub title_bar_dimmed: AtomicBool,
     /// 집중 모드에서 요청한 작은 창 허용 여부와 실제로 적용된 값.
     pub compact_window: AtomicBool,
@@ -421,19 +422,9 @@ fn set_clipboard_text(text: &str) -> Result<(), LofError> {
     }
 }
 
-struct SyncGuard<'a>(&'a AtomicBool);
-
-impl Drop for SyncGuard<'_> {
-    fn drop(&mut self) {
-        self.0.store(false, Ordering::SeqCst);
-    }
-}
-
 fn sync_connection(state: &AppState, id: &str, root: &Path) -> Result<Value, LofError> {
-    if state.syncing.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
-        return Err(fail("이미 동기화 중입니다.", "SYNC_BUSY"));
-    }
-    let _guard = SyncGuard(&state.syncing);
+    let _guard = state.syncing.try_exclusive()
+        .ok_or_else(|| fail("이미 동기화 중입니다.", "SYNC_BUSY"))?;
     let (conn, device_id) = {
         let settings = state.settings.lock().unwrap();
         let conn = settings.get("connections").and_then(Value::as_array)
@@ -475,7 +466,7 @@ fn api_sync_status(app: &AppHandle) -> Value {
         .map(|peer| json!({ "id": peer["id"], "name": peer["name"], "status": peer["status"] }))
         .collect();
     let mut status = app.state::<auto_sync::AutoSyncState>().status();
-    status["syncing"] = json!(state.syncing.load(Ordering::SeqCst));
+    status["syncing"] = json!(state.syncing.is_busy());
     status["connections"] = json!(connections);
     status["devices"] = json!(devices);
     status
@@ -1574,7 +1565,7 @@ fn dispatch_method(
                 "commonMemoPath": common_root.to_string_lossy().to_string(),
                 "apiPort": state.api.port,
                 "preferences": prefs,
-                "syncing": state.syncing.load(Ordering::SeqCst),
+                "syncing": state.syncing.is_busy(),
                 "autoSync": app.state::<auto_sync::AutoSyncState>().status(),
                 "storage": storage,
             }))
@@ -2398,7 +2389,7 @@ pub fn run() {
         config_file,
         user_dir: user_dir.clone(),
         api: api_server,
-        syncing: Arc::new(AtomicBool::new(false)),
+        syncing: Arc::new(sync_activity::SyncActivity::default()),
         title_bar_dimmed: AtomicBool::new(false),
         compact_window: AtomicBool::new(false),
         compact_applied: AtomicBool::new(false),
