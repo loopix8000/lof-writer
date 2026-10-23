@@ -1791,10 +1791,6 @@ body.sidebar-resizing * {
 .tiptap p {
   margin: 0 0 1.05em;
 }
-.tiptap::spelling-error,
-.tiptap *::spelling-error {
-  text-decoration: none;
-}
 .tiptap p.is-editor-empty:first-child::before {
   color: var(--placeholder);
   content: attr(data-placeholder);

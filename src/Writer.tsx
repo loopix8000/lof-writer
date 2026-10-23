@@ -55,7 +55,6 @@ import { createCachedMarkdown } from "./cached-markdown";
 import EditorFind, { FindHighlights } from "./EditorFind";
 import { readEditorSelection, saveEditorSelection, type EditorSession } from "./workspace-state";
 import type { UndoState } from "./useUndoState";
-import { isAndroidApp } from "./tauri-bridge";
 
 const SourceEditor = lazy(() => import("./SourceEditor"));
 
@@ -614,8 +613,7 @@ export default function Writer({
         attributes: {
           "aria-label": inactive ? "다른 그룹 원고 본문" : "원고 본문",
           "data-testid": visible ? (editable ? "manuscript" : "manuscript-readonly") : "",
-          // 삼성 키보드는 맞춤법 검사를 끈 입력란에서 한글 조합이 어긋나므로 Android에서는 켜 두고 밑줄만 숨긴다.
-          spellcheck: isAndroidApp() ? "true" : "false",
+          spellcheck: "false",
         },
         handleDOMEvents: {
           // 본문 안의 링크를 눌러도 앱 화면이 그 주소로 넘어가지 않게 막고, 문서 링크면 그 문서로 간다.

@@ -93,9 +93,6 @@ export default function EditorScroll({ documentId, positions, scope, visible = t
     element?.addEventListener("pointerdown", stopRestoring, { passive: true });
     element?.addEventListener("keydown", stopRestoring);
     element?.addEventListener("touchstart", stopRestoring, { passive: true });
-    // 삼성 키보드처럼 한글 입력 때 keydown을 보내지 않는 키보드도 있으므로 입력에서도 멈춘다.
-    element?.addEventListener("beforeinput", stopRestoring);
-    element?.addEventListener("compositionstart", stopRestoring);
     return () => {
       const wasRestoring = restoring.current;
       stopRestoring();
@@ -103,8 +100,6 @@ export default function EditorScroll({ documentId, positions, scope, visible = t
       element?.removeEventListener("pointerdown", stopRestoring);
       element?.removeEventListener("keydown", stopRestoring);
       element?.removeEventListener("touchstart", stopRestoring);
-      element?.removeEventListener("beforeinput", stopRestoring);
-      element?.removeEventListener("compositionstart", stopRestoring);
       if (!wasRestoring) remember();
     };
   }, [documentId, positions, scope, visible, remember]);
