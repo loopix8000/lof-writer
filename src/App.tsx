@@ -571,6 +571,17 @@ export default function App() {
     if (commit() === false) return;
     session.closeDocument();
   }
+  async function closeMobileDocument() {
+    if (!session.currentId()) return;
+    const seq = ++navigationSeq.current;
+    await flush({ closing: true, skipMemo: true });
+    if (seq !== navigationSeq.current) return;
+    // 저장하면서 메모 제목이 바뀌면 파일 경로에서 만든 문서 ID도 바뀔 수 있다.
+    const id = session.currentId();
+    // 다른 탭이나 분할 그룹으로 이동하지 않고 현재 문서만 닫는다.
+    area.updateTabs(tabs => tabs.filter(tab => tab.id !== id));
+    session.closeDocument();
+  }
   // 문서 ID가 바뀌었을 때(메모 이름 바꾸기) 탭·분할 보기·이동 기록이 새 ID를 가리키게 한다.
   function handleDocumentIdChange(oldId: string, newId: string, location?: Doc) {
     replaceGroupDocumentId(oldId, newId, location);
@@ -1872,6 +1883,7 @@ export default function App() {
         openDoc={openDoc}
         openLinkedDocument={openMobileLinkedDocument}
         backFromLinkedDocument={backFromLinkedDocument}
+        closeDocument={closeMobileDocument}
         createDoc={createDoc}
         patchDoc={patchDoc}
         archiveDoc={archiveDoc}

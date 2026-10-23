@@ -48,6 +48,7 @@ import { useMobileCaretHandle } from "./useMobileCaretHandle";
 import type { useProjectReorder } from "../useProjectReorder";
 import { UpdateLock, UpdateNotice } from "../Updater";
 import MobileEditorView from "./MobileEditorView";
+import MobileEmptyEditorView from "./MobileEmptyEditorView";
 import MobileLibraryView from "./MobileLibraryView";
 import MobileMemoView from "./MobileMemoView";
 import MobileProjectView from "./MobileProjectView";
@@ -140,6 +141,7 @@ export default function MobileShell({
   openDoc,
   openLinkedDocument,
   backFromLinkedDocument,
+  closeDocument,
   createDoc,
   patchDoc,
   archiveDoc,
@@ -278,6 +280,7 @@ export default function MobileShell({
   openDoc: (id: string, pinned?: boolean) => Promise<void>;
   openLinkedDocument: (id: string) => Promise<void>;
   backFromLinkedDocument: () => Promise<boolean>;
+  closeDocument: () => Promise<void>;
   createDoc: (
     kind: Kind,
     opts?: { title?: string; episodeId?: string },
@@ -352,7 +355,7 @@ export default function MobileShell({
   }, [view]);
 
   const isWritingEditor =
-    mobileTab === "library" && view === "workspace" && !!active;
+    mobileTab === "library" && view === "workspace";
   const hideBottomNav = isWritingEditor || (mobileTab === "memo" && inMemoEditor);
   const inLibrary = mobileTab === "library" && view === "library" && !dialog && !viewer;
   const checkInLibrary = updater.checkInLibrary;
@@ -411,9 +414,9 @@ export default function MobileShell({
         closeMemoEditorRef.current();
         return true;
       }
-      if (isWritingEditor && active) {
+      if (isWritingEditor) {
         attempt(async () => {
-          if (!await backFromLinkedDocument()) await goView("project", active.projectId);
+          if (!active || !await backFromLinkedDocument()) await goView("project", projectId);
         })();
         return true;
       }
@@ -442,6 +445,7 @@ export default function MobileShell({
     inMemoEditor,
     isWritingEditor,
     active,
+    projectId,
     view,
     attempt,
     goView,
@@ -547,6 +551,7 @@ export default function MobileShell({
                 replaceActiveSymbols={replaceActiveSymbols}
                 openDoc={openDoc}
                 openLinkedDocument={openLinkedDocument}
+                closeDocument={closeDocument}
                 createDoc={createDoc}
                 patchDoc={patchDoc}
                 archiveDoc={archiveDoc}
@@ -564,6 +569,15 @@ export default function MobileShell({
                 numberOf={tree.numberOf}
                 bookmarkJump={bookmarkJump}
                 setBookmarkJump={setBookmarkJump}
+              />
+            ) : isWritingEditor ? (
+              <MobileEmptyEditorView
+                root={lib.root}
+                project={project}
+                tree={tree}
+                openDoc={openDoc}
+                goProject={() => goView("project", projectId)}
+                report={report}
               />
             ) : view === "project" && project ? (
               <MobileProjectView

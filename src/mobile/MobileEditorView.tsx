@@ -117,6 +117,7 @@ export default function MobileEditorView({
   replaceActiveSymbols,
   openDoc,
   openLinkedDocument,
+  closeDocument,
   createDoc,
   patchDoc,
   archiveDoc,
@@ -180,6 +181,7 @@ export default function MobileEditorView({
   replaceActiveSymbols: () => void;
   openDoc: (id: string, pinned?: boolean) => Promise<void>;
   openLinkedDocument: (id: string) => Promise<void>;
+  closeDocument: () => Promise<void>;
   createDoc: (
     kind: Kind,
     opts?: { title?: string; episodeId?: string },
@@ -1246,6 +1248,19 @@ export default function MobileEditorView({
               >
                 <Download size={16} />
                 <span>Markdown 내보내기</span>
+              </button>
+              <button
+                type="button"
+                className="m-floating-popup-item"
+                role="menuitem"
+                onPointerDown={(event) => event.preventDefault()}
+                onClick={() => {
+                  setMoreMenuOpen(false);
+                  attempt(closeDocument)();
+                }}
+              >
+                <X size={16} />
+                <span>문서 닫기</span>
               </button>
             </div>
 
