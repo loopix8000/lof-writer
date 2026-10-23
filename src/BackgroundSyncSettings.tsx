@@ -43,8 +43,8 @@ export default function BackgroundSyncSettings({ prefs, savePrefs, report }: {
 }) {
   const enabled = prefs.backgroundSyncEnabled !== false;
   const always = prefs.backgroundLiveMode === "always";
-  const minutes = Number.isInteger(prefs.backgroundLiveMinutes) && prefs.backgroundLiveMinutes >= 1 && prefs.backgroundLiveMinutes <= 1440
-    ? prefs.backgroundLiveMinutes : 30;
+  const minutes = Number.isInteger(prefs.backgroundLiveMinutes) && prefs.backgroundLiveMinutes >= 1
+    ? Math.min(prefs.backgroundLiveMinutes, 120) : 30;
   const interval = Math.max(5, Math.min(60, Math.round((prefs.backgroundSyncIntervalSeconds ?? 300) / 60)));
   const notification = prefs.backgroundKeepAlive === "off" ? "off"
     : always || prefs.backgroundKeepAlive === "always" ? "always" : "live";
@@ -86,7 +86,7 @@ export default function BackgroundSyncSettings({ prefs, savePrefs, report }: {
       if (checked && mounted.current && !await query() && mounted.current) {
         const open = await confirm({ title: "배터리 절전 예외 설정",
           message: "백그라운드 동기화가 멈추지 않도록 Lof Writer를 배터리 절전 예외로 설정해 주세요.",
-          detail: "기기 설정에서 Lof Writer를 선택해 배터리 최적화를 사용하지 않도록 설정할 수 있습니다. 나중에 설정해도 동기화는 켜집니다.",
+          detail: "다음 시스템 화면에서 배터리 최적화 해제를 허용해 주세요. 앱 설정이 열리면 배터리 제한을 해제해 주세요. 나중에 설정해도 동기화는 켜집니다.",
           confirmLabel: "설정 열기", cancelLabel: "나중에", icon: <Battery size={20} /> });
         if (open && mounted.current) await openBattery();
       }
@@ -108,7 +108,7 @@ export default function BackgroundSyncSettings({ prefs, savePrefs, report }: {
         </select>
       </label>
       {!always && <div className="settings-grid">
-        <Minutes label="유지 시간" value={minutes} min={1} max={1440} hint="1~1440분 · 기본값 30분"
+        <Minutes label="유지 시간" value={minutes} min={1} max={120} hint="1~120분 · 기본값 30분"
           onSave={value => save({ backgroundLiveMinutes: value })} />
         <Minutes label="이후 확인 주기" value={interval} min={5} max={60} hint="5~60분 · 기본값 5분"
           onSave={value => save({ backgroundSyncIntervalSeconds: value * 60 })} />

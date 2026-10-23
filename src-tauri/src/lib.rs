@@ -1715,8 +1715,8 @@ fn dispatch_method(
                 }
             }
             if let Some(value) = args.get("backgroundLiveMinutes") {
-                if !value.as_u64().is_some_and(|minutes| (1..=1440).contains(&minutes)) {
-                    return Err(fail_invalid("유지 시간은 1분부터 1440분 사이로 지정해 주세요."));
+                if !value.as_u64().is_some_and(|minutes| (1..=120).contains(&minutes)) {
+                    return Err(fail_invalid("유지 시간은 1분부터 120분 사이로 지정해 주세요."));
                 }
             }
             let new_prefs = {

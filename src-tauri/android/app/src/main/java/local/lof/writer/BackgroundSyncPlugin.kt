@@ -57,7 +57,7 @@ object BackgroundSync {
 
   fun configure(context: Context, mode: String, active: Boolean, liveMillis: Long) {
     prefs(context).edit().putString("mode", mode).putBoolean("active", active)
-      .putLong("liveMillis", liveMillis.coerceIn(0L, 86_400_000L)).apply()
+      .putLong("liveMillis", liveMillis.coerceIn(0L, 7_200_000L)).apply()
     if (hiddenAt != null) updateService(context)
   }
 
@@ -259,16 +259,21 @@ class BackgroundSyncPlugin(private val activity: Activity) : Plugin(activity) {
     val power = activity.getSystemService(PowerManager::class.java)
     val exempt = power?.isIgnoringBatteryOptimizations(activity.packageName) == true
     if (invoke.getArgs().optBoolean("open", false)) {
-      try {
-        startActivityForResult(invoke, Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS), "batterySettingsReturned")
-      } catch (_: Exception) {
+      val appUri = Uri.parse("package:${activity.packageName}")
+      val intents = buildList {
+        if (!exempt) add(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, appUri))
+        add(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, appUri))
+        add(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+      }
+      for (intent in intents) {
         try {
-          startActivityForResult(invoke, Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${activity.packageName}")), "batterySettingsReturned")
-        } catch (_: Exception) {
-          invoke.reject("배터리 설정을 열지 못했습니다. 기기 설정에서 Lof Writer의 배터리 제한을 확인해 주세요.")
+          startActivityForResult(invoke, intent, "batterySettingsReturned")
           return
+        } catch (_: Exception) {
+          // 기기에서 제공하는 다음 설정 화면을 시도한다.
         }
       }
+      invoke.reject("배터리 설정을 열지 못했습니다. 기기 설정에서 Lof Writer의 배터리 제한을 확인해 주세요.")
       return
     }
     invoke.resolve(JSObject().apply { put("exempt", exempt) })

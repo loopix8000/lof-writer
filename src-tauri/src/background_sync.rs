@@ -12,7 +12,7 @@ fn live_window(settings: &Value) -> Option<Duration> {
     let prefs = &settings["preferences"];
     if prefs["backgroundLiveMode"].as_str() == Some("always") { return None; }
     let minutes = prefs["backgroundLiveMinutes"].as_u64()
-        .filter(|value| (1..=1440).contains(value)).unwrap_or(30);
+        .filter(|value| *value >= 1).unwrap_or(30).min(120);
     Some(Duration::from_secs(minutes * 60))
 }
 
