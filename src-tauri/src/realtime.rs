@@ -30,17 +30,7 @@ use tauri::{AppHandle, Manager};
 use uuid::Uuid;
 
 const SYNC_BUSY_MESSAGE: &str = "다른 동기화가 진행 중입니다.";
-const CONNECTION_CHECK_INTERVAL: Duration = Duration::from_secs(20);
-const BACKGROUND_CONNECTION_CHECK_INTERVAL: Duration = Duration::from_secs(120);
 const CONTROL_TIMEOUT: Duration = Duration::from_secs(8);
-
-fn connection_check_interval(phase: Phase) -> Duration {
-    if phase == Phase::Live {
-        BACKGROUND_CONNECTION_CHECK_INTERVAL
-    } else {
-        CONNECTION_CHECK_INTERVAL
-    }
-}
 
 fn reconnect_delay(previous: Option<u64>, phase: Phase) -> u64 {
     // 앱 복귀·네트워크 변경·상대 접속은 이 대기를 건너뛰므로 오프라인 장치를 계속 깨우지 않는다.
@@ -1189,7 +1179,6 @@ pub fn start(app: &AppHandle) {
             let mut connected: HashMap<String, (Connection, (u64, u64, u64))> = HashMap::new();
             let mut retry: HashMap<String, (Instant, u64)> = HashMap::new();
             let mut probes: HashMap<String, ConnectionProbe> = HashMap::new();
-            let mut checked: HashMap<String, Instant> = HashMap::new();
             let mut periodic_active = false;
             let mut periodic_attempted = HashSet::new();
             let mut previous_root = PathBuf::new();
@@ -1222,7 +1211,6 @@ pub fn start(app: &AppHandle) {
                     }
                     connected.clear();
                     retry.clear();
-                    checked.clear();
                     subscription_retry = None;
                     previous_root = current.clone();
                     // 다른 서재에 있을 때 바꾼 장치 이름은 연결 확인 요청으로 전한다.
@@ -1281,13 +1269,11 @@ pub fn start(app: &AppHandle) {
                 if phase == Phase::Periodic && !periodic_active {
                     // 주기 확인에서는 재시도 대기와 관계없이 모든 구성원을 확인한다.
                     retry.clear();
-                    checked.clear();
                     periodic_active = true;
                     periodic_attempted.clear();
                 }
                 if phase != Phase::Periodic { periodic_active = false; }
                 retry.retain(|id, _| wanted.iter().any(|peer| peer["id"].as_str() == Some(id.as_str())));
-                checked.retain(|id, _| wanted.iter().any(|peer| peer["id"].as_str() == Some(id.as_str())));
                 probes.retain(|id, probe| {
                     let keep = wanted.iter().any(|peer| peer["id"].as_str() == Some(id.as_str()));
                     if !keep { probe.task.abort(); }
@@ -1308,7 +1294,6 @@ pub fn start(app: &AppHandle) {
                 });
                 if rt.clear_retries.swap(false, Ordering::SeqCst) {
                     retry.clear();
-                    checked.clear();
                     probes.retain(|_, probe| {
                         if probe.connection.is_some() { return true; }
                         probe.task.abort();
@@ -1330,7 +1315,6 @@ pub fn start(app: &AppHandle) {
                     if let Some(conn) = accepted {
                         if connected.get(&id).is_none_or(|(old, _)| old.stable_id() != conn.stable_id()) {
                             connected.insert(id.clone(), (conn, (u64::MAX, u64::MAX, u64::MAX)));
-                            checked.insert(id.clone(), Instant::now());
                             retry.remove(&id);
                             let mut statuses = rt.statuses.lock().unwrap();
                             let status = statuses.entry(id.clone()).or_insert_with(|| json!({}));
@@ -1379,7 +1363,6 @@ pub fn start(app: &AppHandle) {
                             });
                             match result {
                                 Ok(()) => {
-                                    checked.insert(id.clone(), Instant::now());
                                     retry.remove(&id);
                                     let mut statuses = rt.statuses.lock().unwrap();
                                     let status = statuses.entry(id.clone()).or_insert_with(|| json!({}));
@@ -1424,10 +1407,8 @@ pub fn start(app: &AppHandle) {
                     {
                         continue;
                     }
-                    let needs_check = connected.contains_key(&id)
-                        && checked.get(&id).is_none_or(|at| at.elapsed() >= connection_check_interval(phase))
-                        && !app.state::<AppState>().syncing.load(Ordering::SeqCst);
-                    if (!connected.contains_key(&id) || needs_check) && !probes.contains_key(&id)
+                    // 연결된 뒤에는 라이브러리의 연결 유지 신호가 끊김을 감지하므로 별도 확인 요청을 보내지 않는다.
+                    if !connected.contains_key(&id) && !probes.contains_key(&id)
                         && (phase != Phase::Periodic || !periodic_attempted.contains(&id)) {
                         let existing = connected.get(&id).map(|(conn, _)| conn.clone());
                         let connection = existing.as_ref().map(Connection::stable_id);
@@ -1489,7 +1470,6 @@ pub fn start(app: &AppHandle) {
                             crate::auto_sync::refresh_realtime(&app);
                         }
                         *seen = revision;
-                        checked.insert(id.clone(), Instant::now());
                         Ok(())
                     })();
                     match result {
@@ -1565,12 +1545,9 @@ pub fn start(app: &AppHandle) {
                             let live = (phase == Phase::Live)
                                 .then(|| crate::background_sync::live_deadline(&app))
                                 .flatten();
-                            let health = connected.keys().filter(|id| !probes.contains_key(*id))
-                                .filter_map(|id| checked.get(id).map(|at| (*at + connection_check_interval(phase)).max(Instant::now() + Duration::from_secs(1))))
-                                .min();
                             let pending = (!probes.is_empty()).then(|| Instant::now() + Duration::from_millis(250));
                             retry.iter().filter(|(id, _)| !probes.contains_key(*id)).map(|(_, (when, _))| *when)
-                                .chain(subscription_retry).chain(live).chain(health).chain(pending).min()
+                                .chain(subscription_retry).chain(live).chain(pending).min()
                         }
                         Phase::Periodic => {
                             *urgent = false;
