@@ -31,7 +31,22 @@ use uuid::Uuid;
 
 const SYNC_BUSY_MESSAGE: &str = "다른 동기화가 진행 중입니다.";
 const CONNECTION_CHECK_INTERVAL: Duration = Duration::from_secs(20);
+const BACKGROUND_CONNECTION_CHECK_INTERVAL: Duration = Duration::from_secs(120);
 const CONTROL_TIMEOUT: Duration = Duration::from_secs(8);
+
+fn connection_check_interval(phase: Phase) -> Duration {
+    if phase == Phase::Live {
+        BACKGROUND_CONNECTION_CHECK_INTERVAL
+    } else {
+        CONNECTION_CHECK_INTERVAL
+    }
+}
+
+fn reconnect_delay(previous: Option<u64>, phase: Phase) -> u64 {
+    // 앱 복귀·네트워크 변경·상대 접속은 이 대기를 건너뛰므로 오프라인 장치를 계속 깨우지 않는다.
+    let (initial, maximum) = if phase == Phase::Live { (5, 300) } else { (1, 30) };
+    previous.map(|delay| delay.saturating_mul(2).min(maximum)).unwrap_or(initial)
+}
 
 struct Session {
     root: PathBuf,
@@ -1213,9 +1228,18 @@ pub fn start(app: &AppHandle) {
                     // 다른 서재에 있을 때 바꾼 장치 이름은 연결 확인 요청으로 전한다.
                     let _ = sync_own_name(&app, false);
                 }
-                // 그룹 주제에 참여해 구성원 목록과 변경 알림을 받는다.
+                let phase = crate::background_sync::phase(&app);
+                let live = matches!(phase, Phase::Foreground | Phase::Live);
+                // 주기 확인·일시 중지 중에는 gossip 연결도 내려 유지 패킷과 별도 재접속을 멈춘다.
+                // 주기 확인에 필요한 구성원 정보는 파일 연결의 hello 요청으로도 교환한다.
                 let group = with_group(&app, |group| Ok(group.clone())).unwrap_or(None);
                 match &group {
+                    _ if !live => {
+                        *rt.announcer.lock().unwrap() = None;
+                        subscription = None;
+                        subscription_retry = None;
+                        introduced.clear();
+                    }
                     None => {
                         subscription = None;
                         subscription_retry = None;
@@ -1253,7 +1277,6 @@ pub fn start(app: &AppHandle) {
                     }
                 }
                 let wanted = peers(&app);
-                let phase = crate::background_sync::phase(&app);
                 crate::background_sync::refresh(&app, !wanted.is_empty());
                 if phase == Phase::Periodic && !periodic_active {
                     // 주기 확인에서는 재시도 대기와 관계없이 모든 구성원을 확인한다.
@@ -1299,6 +1322,7 @@ pub fn start(app: &AppHandle) {
                 let requested = rt.requested.load(Ordering::SeqCst);
                 let peer_requests = rt.peer_requests.lock().unwrap().clone();
                 for peer in wanted {
+                    if phase == Phase::Paused { break; }
                     let id = peer["id"].as_str().unwrap_or("").to_string();
                     let asked = peer["endpoint"].as_str().and_then(|endpoint| peer_requests.get(endpoint)).copied().unwrap_or(0);
                     let revision = (generation, requested, asked);
@@ -1380,14 +1404,15 @@ pub fn start(app: &AppHandle) {
                                     status["message"] = Value::Null;
                                     drop(statuses);
                                     // 감지하지 못한 네트워크 변경으로 접속이 계속 실패할 수 있어 주소를 다시 확인한다.
+                                    let network_interval = if phase == Phase::Live { 300 } else { 60 };
                                     if probe.connection.is_none()
-                                        && network_checked.is_none_or(|at| at.elapsed() >= Duration::from_secs(60))
+                                        && network_checked.is_none_or(|at| at.elapsed() >= Duration::from_secs(network_interval))
                                     {
                                         network_checked = Some(Instant::now());
                                         let node = node.clone();
                                         runtime.spawn(async move { node.endpoint.network_change().await });
                                     }
-                                    let delay = retry.get(&id).map(|(_, d)| (*d * 2).min(30)).unwrap_or(1);
+                                    let delay = reconnect_delay(retry.get(&id).map(|(_, d)| *d), phase);
                                     retry.insert(id.clone(), (Instant::now() + Duration::from_secs(delay), delay));
                                 }
                             }
@@ -1400,7 +1425,7 @@ pub fn start(app: &AppHandle) {
                         continue;
                     }
                     let needs_check = connected.contains_key(&id)
-                        && checked.get(&id).is_none_or(|at| at.elapsed() >= CONNECTION_CHECK_INTERVAL)
+                        && checked.get(&id).is_none_or(|at| at.elapsed() >= connection_check_interval(phase))
                         && !app.state::<AppState>().syncing.load(Ordering::SeqCst);
                     if (!connected.contains_key(&id) || needs_check) && !probes.contains_key(&id)
                         && (phase != Phase::Periodic || !periodic_attempted.contains(&id)) {
@@ -1489,19 +1514,19 @@ pub fn start(app: &AppHandle) {
                             }
                             rt.live.lock().unwrap().retain(|key, conn|
                                 key != &id || conn.close_reason().is_none());
-                            let delay = retry.get(&id).map(|(_, d)| (*d * 2).min(30)).unwrap_or(1);
+                            let delay = reconnect_delay(retry.get(&id).map(|(_, d)| *d), phase);
                             retry.insert(id, (Instant::now() + Duration::from_secs(delay), delay));
                         }
                     }
                 }
                 crate::auto_sync::refresh_realtime(&app);
                 // 연결이 끊긴 구성원도 변경 알림을 받으면 재시도 대기 없이 다시 접속한다.
-                if generation != announced && group.is_some() {
+                if generation != announced && subscription.is_some() {
                     announce(&app, Announcement::Changed { endpoint: own.clone() });
                     announced = generation;
                 }
-                if phase == Phase::Periodic {
-                    if !probes.is_empty() {
+                if matches!(phase, Phase::Periodic | Phase::Paused) {
+                    if phase == Phase::Periodic && !probes.is_empty() {
                         // 접속 확인은 기기별로 병렬 실행하되 주기 확인이 끝나기 전 결과를 받는다.
                         let urgent = rt.urgent.lock().unwrap();
                         drop(rt.wake.wait_timeout(urgent, Duration::from_millis(250)).unwrap());
@@ -1512,9 +1537,16 @@ pub fn start(app: &AppHandle) {
                         conn.close(0u8.into(), b"background");
                     }
                     connected.clear();
-                    rt.live.lock().unwrap().clear();
+                    for (_, probe) in probes.drain() { probe.task.abort(); }
+                    for (_, conn) in rt.live.lock().unwrap().drain() {
+                        conn.close(0u8.into(), b"background");
+                    }
+                    // 인증 대기나 교체된 연결도 전송 작업이 참조할 수 있어 핸들 해제만으로는 닫히지 않는다.
+                    for session in rt.sessions.lock().unwrap().values() {
+                        session.connection.close(0u8.into(), b"background");
+                    }
                     periodic_active = false;
-                    crate::background_sync::realtime_done(&app);
+                    if phase == Phase::Periodic { crate::background_sync::realtime_done(&app); }
                 }
                 // 화면에 있거나 즉시 동기화를 유지하는 동안 저장·수신·접속 알림을 기다린다.
                 // 이후에는 알림을 미루고 주기 확인 시각에만 깨어난다.
@@ -1534,7 +1566,7 @@ pub fn start(app: &AppHandle) {
                                 .then(|| crate::background_sync::live_deadline(&app))
                                 .flatten();
                             let health = connected.keys().filter(|id| !probes.contains_key(*id))
-                                .filter_map(|id| checked.get(id).map(|at| (*at + CONNECTION_CHECK_INTERVAL).max(Instant::now() + Duration::from_secs(1))))
+                                .filter_map(|id| checked.get(id).map(|at| (*at + connection_check_interval(phase)).max(Instant::now() + Duration::from_secs(1))))
                                 .min();
                             let pending = (!probes.is_empty()).then(|| Instant::now() + Duration::from_millis(250));
                             retry.iter().filter(|(id, _)| !probes.contains_key(*id)).map(|(_, (when, _))| *when)
