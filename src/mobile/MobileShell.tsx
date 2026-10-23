@@ -4,6 +4,7 @@ import {
   Bookmark as BookmarkIcon,
   Check,
   FolderOpen,
+  HardDrive,
   Library as LibraryIcon,
   Moon,
   Search,
@@ -307,8 +308,8 @@ export default function MobileShell({
   ) => Promise<void>;
   replaceActiveSymbols: () => void;
   showHistory: () => Promise<void>;
-  chooseVault: () => Promise<void>;
-  moveVault: () => Promise<void>;
+  chooseVault: (options?: { internal?: boolean }) => Promise<void>;
+  moveVault: (options?: { internal?: boolean }) => Promise<void>;
   projectReorder: ReturnType<typeof useProjectReorder>;
   openSettingsData: () => Promise<void>;
   renderSyncConnections: () => React.JSX.Element;
@@ -969,18 +970,25 @@ export default function MobileShell({
                   </p>
                   <div className="setup-vault-picker">
                     <output title={lib.root}>
-                      {/^\/data\/(?:data|user\/\d+)\/local\.lof\.writer\//i.test(
+                      {lib.isInternal || /^\/data\/(?:data|user\/\d+)\/local\.lof\.writer\//i.test(
                         lib.root || "",
                       )
-                        ? `앱 기본 서재 폴더 (${(lib.root || "").split("/").filter(Boolean).pop() || "LofWriter"})`
+                        ? `앱 내부 저장소 (${lib.root})`
                         : lib.root}
                     </output>
                     <button
                       type="button"
                       disabled={busy}
-                      onClick={attempt(chooseVault)}
+                      onClick={attempt(() => chooseVault())}
                     >
                       <FolderOpen size={15} /> 서재 변경
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy || Boolean(lib.isInternal)}
+                      onClick={attempt(() => chooseVault({ internal: true }))}
+                    >
+                      <HardDrive size={15} /> 앱 내부 저장소
                     </button>
                   </div>
                 </section>

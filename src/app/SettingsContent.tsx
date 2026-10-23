@@ -71,14 +71,16 @@ type Props = {
   skillDownloading: boolean;
   setSkillDownloading: React.Dispatch<React.SetStateAction<boolean>>;
   onOpenExport: () => void;
-  chooseVault?: () => Promise<void>;
-  moveVault?: () => Promise<void>;
+  chooseVault?: (options?: { internal?: boolean }) => Promise<void>;
+  moveVault?: (options?: { internal?: boolean }) => Promise<void>;
   mobileDetailOpen?: boolean;
   onMobileDetailChange?: (open: boolean) => void;
 };
 
-function formatStoragePath(rawPath: string | undefined, fallbackLabel: string): string {
-  return rawPath || fallbackLabel;
+function formatStoragePath(rawPath: string | undefined, fallbackLabel: string, isInternal?: boolean): string {
+  if (!rawPath) return fallbackLabel;
+  if (isInternal) return `앱 내부 저장소 (${rawPath})`;
+  return rawPath;
 }
 
 export default function SettingsContent({
@@ -123,7 +125,7 @@ export default function SettingsContent({
     ? requestedSettingsPage
     : "editor";
   const [internalDetailOpen, setInternalDetailOpen] = useState(false);
-  const [movingVault, setMovingVault] = useState(false);
+  const [movingVault, setMovingVault] = useState<false | "folder" | "internal">(false);
   const mobileDetailOpen = controlledDetailOpen ?? internalDetailOpen;
   const setMobileDetailOpen = (open: boolean) => {
     setInternalDetailOpen(open);
@@ -308,29 +310,56 @@ export default function SettingsContent({
                 <div className="connection vault-location-connection">
                   <div>
                     <b>현재 서재 폴더</b>
-                    <small>{formatStoragePath(lib.root, "앱 기본 서재 폴더")}</small>
+                    <small>{formatStoragePath(lib.root, "앱 기본 서재 폴더", isMobile && lib.isInternal)}</small>
                   </div>
-                  <button disabled={busy} onClick={attempt(chooseVault)}>
+                  <button disabled={busy} onClick={attempt(() => chooseVault())}>
                     <FolderOpen size={15} />
                     서재 변경
                   </button>
                 </div>
+                {isMobile && (
+                  <div className="history-actions">
+                    <button
+                      disabled={busy || Boolean(lib.isInternal)}
+                      onClick={attempt(() => chooseVault({ internal: true }))}
+                    >
+                      <HardDrive size={15} />
+                      앱 내부 저장소로 지정
+                    </button>
+                  </div>
+                )}
                 <p className="muted">
-                  서재 변경으로 다른 폴더의 서재를 엽니다.
+                  {isMobile
+                    ? "서재 변경으로 공유 저장소 폴더의 서재를 열거나, 앱 내부 저장소를 서재 위치로 지정합니다."
+                    : "서재 변경으로 다른 폴더의 서재를 엽니다."}
                 </p>
                 {moveVault && (
                   <>
                     <div className="history-actions">
                       <button disabled={busy} onClick={attempt(async () => {
-                        setMovingVault(true);
+                        setMovingVault("folder");
                         try { await moveVault(); } finally { setMovingVault(false); }
                       })}>
                         <FolderInput size={15} />
-                        {movingVault ? "서재 이동 중…" : "서재 이동"}
+                        {movingVault === "folder" ? "서재 이동 중…" : "서재 이동"}
                       </button>
+                      {isMobile && (
+                        <button
+                          disabled={busy || Boolean(lib.isInternal)}
+                          onClick={attempt(async () => {
+                            setMovingVault("internal");
+                            try { await moveVault({ internal: true }); } finally { setMovingVault(false); }
+                          })}
+                        >
+                          <HardDrive size={15} />
+                          {movingVault === "internal" ? "서재 이동 중…" : "앱 내부 저장소로 이동"}
+                        </button>
+                      )}
                     </div>
                     <p className="muted">
-                      현재 서재의 파일·변경 이력·동기화 연결을 유지한 채 새 위치로 옮깁니다. 이동할 빈 폴더를 선택하세요.
+                      {isMobile
+                        ? "현재 서재의 파일·변경 이력·동기화 연결을 유지한 채 선택한 공유 저장소 빈 폴더나 앱 내부 저장소로 옮깁니다. 앱 내부 저장소의 서재는 앱을 삭제하면 함께 삭제됩니다."
+                        : "현재 서재의 파일·변경 이력·동기화 연결을 유지한 채 새 위치로 옮깁니다. 이동할 빈 폴더를 선택하세요."}
                     </p>
                   </>
                 )}

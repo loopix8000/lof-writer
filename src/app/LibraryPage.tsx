@@ -28,7 +28,7 @@ type Props = {
   askDeleteProject: (id: string) => void;
   setDialog: React.Dispatch<React.SetStateAction<Dialog | null>>;
   busy: boolean;
-  chooseVault: () => Promise<void>;
+  chooseVault: (options?: { internal?: boolean }) => Promise<void>;
 };
 
 export default function LibraryPage({
@@ -163,7 +163,7 @@ export default function LibraryPage({
       <div className="library-footer">
         <button
           disabled={busy}
-          onClick={attempt(chooseVault)}
+          onClick={attempt(() => chooseVault())}
         >
           <FolderOpen size={15} />
           다른 서재 열기

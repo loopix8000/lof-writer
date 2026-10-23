@@ -15,13 +15,26 @@ export default function StorageGate({ children }: { children: ReactNode }) {
   const [notice, setNotice] = useState("");
   const [theme, setTheme] = useState<Pick<PinStatus, "theme" | "colorTheme"> | null>(null);
 
-  const open = useCallback(async (request: boolean) => {
+  const open = useCallback(async (request: boolean, internal = false) => {
     setError("");
     try {
+      if (internal) {
+        setPhase("preparing");
+        await call("prepareAndroidLibrary", { internal: true });
+        setPhase("ready");
+        return;
+      }
+      if (!request) {
+        const check = await call<{ ready?: boolean }>("prepareAndroidLibrary", { onlyIfInternal: true }).catch(() => null);
+        if (check?.ready) {
+          setPhase("ready");
+          return;
+        }
+      }
       const access = await invoke<{ granted?: boolean }>("android_storage_access", { request });
       if (!access?.granted) {
         setPhase("access");
-        if (request) setError("모든 파일 접근을 허용해야 서재를 열 수 있습니다.");
+        if (request) setError("모든 파일 접근을 허용해야 기기 폴더의 서재를 열 수 있습니다.");
         return;
       }
       setPhase("preparing");
@@ -57,14 +70,14 @@ export default function StorageGate({ children }: { children: ReactNode }) {
           </> : phase === "access" ? <>
             <h1>저장공간 접근 허용</h1>
             <p>
-              원고는 기기의 Documents 폴더에 Markdown 파일로 보관됩니다.
-              앱을 삭제해도 남고, 파일 관리자와 다른 앱에서도 열 수 있습니다.
-              다음 화면에서 Lof Writer의 "모든 파일 접근"을 허용해 주세요.
+              원고는 기기의 Documents 폴더에 Markdown 파일로 보관하거나 앱 내부 저장소에 둘 수 있습니다.
+              기기 폴더를 쓰려면 다음 화면에서 Lof Writer의 "모든 파일 접근"을 허용해 주세요.
             </p>
             <button className="primary" type="button" onClick={() => void open(true)}>권한 허용하기</button>
+            <button type="button" onClick={() => void open(false, true)}>앱 내부 저장소 사용</button>
           </> : <>
             <h1>서재를 여는 중…</h1>
-            <p>앱에 보관하던 서재가 있으면 기기 폴더로 옮깁니다. 잠시 기다려 주세요.</p>
+            <p>서재를 준비하고 있습니다. 잠시 기다려 주세요.</p>
           </>}
           {error && <p className="pin-error" role="alert">{error}</p>}
         </div>

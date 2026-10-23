@@ -89,7 +89,7 @@ fn copy_files(source: &Path, target: &Path, files: &Inventory) -> Result<(), Lof
             fs::copy(&from, &to)?;
             if let Ok(modified) = fs::metadata(&from)?.modified() {
                 if let Ok(file) = fs::OpenOptions::new().write(true).open(&to) {
-                    file.set_times(fs::FileTimes::new().set_modified(modified))?;
+                    let _ = file.set_times(fs::FileTimes::new().set_modified(modified));
                 }
             }
         }
@@ -180,24 +180,69 @@ fn remove_original(source: &Path, files: &Inventory) -> bool {
     fs::remove_dir(source).is_err()
 }
 
+/// 앱 내부 저장소 서재 폴더를 이동 대상(빈 폴더)으로 준비한다.
+/// 이전에 빈 서재로 한 번 열려 `.lof`만 생성된 경우에는 빈 `.lof`를 정리한다.
+fn prepare_internal_target(raw_target: &Path, store: &Store) -> Result<PathBuf, LofError> {
+    if raw_target.exists() {
+        let mut has_lof = false;
+        for entry in fs::read_dir(raw_target)? {
+            let entry = entry?;
+            if entry.file_name() == ".lof" {
+                has_lof = true;
+            } else {
+                return Err(fail_invalid(
+                    "앱 내부 저장소에 이미 서재 파일이 있어 이동할 수 없습니다. 기존 서재와 합칠 수 없습니다.",
+                ));
+            }
+        }
+        if has_lof {
+            let lof_dir = raw_target.join(".lof");
+            for subdir in ["drafts", "backups", "file-conflicts"] {
+                if fs::read_dir(lof_dir.join(subdir)).is_ok_and(|mut d| d.next().is_some()) {
+                    return Err(fail_invalid(
+                        "앱 내부 저장소에 이미 서재 데이터가 있어 이동할 수 없습니다. 기존 서재와 합칠 수 없습니다.",
+                    ));
+                }
+            }
+            if lof_dir.join("library.sqlite").exists() {
+                let mut existing = Store::new(
+                    raw_target,
+                    store.history_policy,
+                    store.default_manual_line_break,
+                )?;
+                let list = existing.list()?;
+                let has_projects = list["projects"].as_array().is_some_and(|a| !a.is_empty());
+                let has_docs = list["documents"].as_array().is_some_and(|a| !a.is_empty());
+                drop(existing);
+                if has_projects || has_docs {
+                    return Err(fail_invalid(
+                        "앱 내부 저장소에 이미 작품이나 원고가 있어 이동할 수 없습니다. 기존 서재와 합칠 수 없습니다.",
+                    ));
+                }
+            }
+            fs::remove_dir_all(&lof_dir)?;
+        }
+    } else {
+        fs::create_dir_all(raw_target)?;
+    }
+    Ok(strip_verbatim_prefix(&fs::canonicalize(raw_target)?))
+}
+
 pub fn move_library(state: &AppState, app: &AppHandle, args: &Value) -> Result<Value, LofError> {
-    let path = args["path"]
-        .as_str()
-        .filter(|s| !s.trim().is_empty())
-        .ok_or_else(|| fail_invalid("이동할 서재 폴더를 선택해 주세요."))?;
-    if !Path::new(path).is_absolute() {
-        return Err(fail_invalid("절대 경로의 폴더를 선택해 주세요."));
-    }
-    let target = strip_verbatim_prefix(&fs::canonicalize(path)?);
-    #[cfg(target_os = "android")]
-    if crate::android_library::is_internal(&target) {
-        return Err(fail_invalid(
-            "서재는 기기 폴더에만 둘 수 있습니다. 기기 폴더를 선택해 주세요.",
-        ));
-    }
-    if !target.is_dir() {
-        return Err(fail_invalid("이동할 위치가 폴더가 아닙니다."));
-    }
+    let to_internal = args["internal"].as_bool() == Some(true);
+    let custom_path = if to_internal {
+        None
+    } else {
+        let path = args["path"]
+            .as_str()
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| fail_invalid("이동할 서재 폴더를 선택해 주세요."))?;
+        if !Path::new(path).is_absolute() {
+            return Err(fail_invalid("절대 경로의 폴더를 선택해 주세요."));
+        }
+        Some(strip_verbatim_prefix(&fs::canonicalize(path)?))
+    };
+
     let _sync = state.syncing.try_exclusive().ok_or_else(|| fail(
             "동기화가 끝난 뒤 서재 이동을 다시 시도해 주세요.",
             "SYNC_BUSY",
@@ -213,6 +258,20 @@ pub fn move_library(state: &AppState, app: &AppHandle, args: &Value) -> Result<V
             "VAULT_CHANGED",
         ));
     }
+
+    let target = if to_internal {
+        let raw_target = crate::android_library::internal_library_root(&state.user_dir);
+        if source == raw_target || crate::android_library::is_internal(&state.user_dir, &source) && source == raw_target {
+            return Err(fail_invalid("현재 서재가 이미 앱 내부 저장소에 있습니다."));
+        }
+        prepare_internal_target(&raw_target, store)?
+    } else {
+        custom_path.unwrap()
+    };
+
+    if !target.is_dir() {
+        return Err(fail_invalid("이동할 위치가 폴더가 아닙니다."));
+    }
     if source == target {
         return Err(fail_invalid("현재 서재와 다른 폴더를 선택해 주세요."));
     }
@@ -221,7 +280,11 @@ pub fn move_library(state: &AppState, app: &AppHandle, args: &Value) -> Result<V
             "현재 서재의 상위 또는 하위 폴더로는 이동할 수 없습니다.",
         ));
     }
-    if state.config_file.starts_with(&source) || state.user_dir.starts_with(&source) {
+    if state.config_file.starts_with(&source)
+        || state.user_dir.starts_with(&source)
+        || state.config_file.starts_with(&target)
+        || state.user_dir.starts_with(&target)
+    {
         return Err(fail_invalid(
             "앱 설정 폴더를 포함한 서재는 이동할 수 없습니다.",
         ));
@@ -274,6 +337,9 @@ pub fn move_library(state: &AppState, app: &AppHandle, args: &Value) -> Result<V
             store.history_policy,
             store.default_manual_line_break,
         )?;
+        if let Some(base) = state.config_file.parent() {
+            next_store.set_recovery_directory(base);
+        }
         next_store.require_database()?;
         if next_store.vault["id"] != store.vault["id"]
             || document_ids(&mut next_store)? != expected_ids

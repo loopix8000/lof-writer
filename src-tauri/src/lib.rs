@@ -637,7 +637,7 @@ fn dispatch_method(
             }
             Ok(json!(true))
         }
-        "prepareAndroidLibrary" => android_library::prepare(state, app),
+        "prepareAndroidLibrary" => android_library::prepare(state, app, &args),
         "bootstrap" => {
             let prefs = {
                 let s = state.settings.lock().unwrap();
@@ -664,6 +664,16 @@ fn dispatch_method(
             out.insert("localGit".to_string(), st.local_git.status());
             out.insert("preferences".to_string(), prefs);
             out.insert(
+                "internalRoot".to_string(),
+                json!(android_library::internal_library_root(&state.user_dir)
+                    .to_string_lossy()
+                    .to_string()),
+            );
+            out.insert(
+                "isInternal".to_string(),
+                json!(android_library::is_internal(&state.user_dir, &st.root)),
+            );
+            out.insert(
                 "version".to_string(),
                 json!(app.package_info().version.to_string()),
             );
@@ -680,16 +690,18 @@ fn dispatch_method(
         }
         "moveVault" => library_move::move_library(state, app, &args),
         "chooseVault" => {
+            if args.get("internal").and_then(Value::as_bool) == Some(true) {
+                let folder = android_library::internal_library_root(&state.user_dir);
+                fs::create_dir_all(&folder)?;
+                bind_vault(state, app, &folder)?;
+                return Ok(json!(true));
+            }
             if let Some(custom_path) = args
                 .get("path")
                 .and_then(Value::as_str)
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
             {
-                #[cfg(target_os = "android")]
-                if !Path::new(custom_path).is_absolute() || android_library::is_internal(Path::new(custom_path)) {
-                    return Err(fail_invalid("서재는 기기 폴더에만 둘 수 있습니다. 기기 폴더를 선택해 주세요."));
-                }
                 let folder = if Path::new(custom_path).is_absolute() {
                     PathBuf::from(custom_path)
                 } else {
@@ -697,8 +709,11 @@ fn dispatch_method(
                         .chars()
                         .map(|c| if matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') { '_' } else { c })
                         .collect();
-                    state.user_dir.join(if safe_name.is_empty() { "LofWriter" } else { &safe_name })
+                    state.user_dir.join(if safe_name.is_empty() { "Lof Library" } else { &safe_name })
                 };
+                if state.config_file.starts_with(&folder) || state.user_dir.starts_with(&folder) {
+                    return Err(fail_invalid("앱 설정 폴더는 서재로 지정할 수 없습니다."));
+                }
                 fs::create_dir_all(&folder)?;
                 bind_vault(state, app, &folder)?;
                 return Ok(json!(true));
@@ -1147,7 +1162,7 @@ fn dispatch_method(
                 .filter(|s| !s.is_empty())
             {
                 #[cfg(target_os = "android")]
-                if !Path::new(custom_path).is_absolute() || android_library::is_internal(Path::new(custom_path)) {
+                if !Path::new(custom_path).is_absolute() || android_library::is_internal(&state.user_dir, Path::new(custom_path)) {
                     return Err(fail_invalid("공용 메모는 기기 폴더에만 둘 수 있습니다. 기기 폴더를 선택해 주세요."));
                 }
                 let p = if Path::new(custom_path).is_absolute() {
@@ -1562,6 +1577,8 @@ fn dispatch_method(
             Ok(json!({
                 "connections": conns,
                 "vaultPath": store_root.to_string_lossy().to_string(),
+                "internalVaultPath": android_library::internal_library_root(&state.user_dir).to_string_lossy().to_string(),
+                "isInternalVault": android_library::is_internal(&state.user_dir, &store_root),
                 "commonMemoPath": common_root.to_string_lossy().to_string(),
                 "apiPort": state.api.port,
                 "preferences": prefs,
@@ -2331,9 +2348,33 @@ pub fn run() {
             }
         }
     };
-    // Android는 화면에서 모든 파일 접근 권한을 확인한 뒤 기기 폴더의 서재를 연다.
+    // Android는 기본 서재가 앱 내부 저장소이며, 공유 저장소 폴더가 지정된 경우에만 권한 확인 뒤 연다.
     #[cfg(target_os = "android")]
-    let initial_store: Option<Store> = None;
+    let initial_store: Option<Store> = {
+        let vault_root = settings
+            .get("vaultPath")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.trim().is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| android_library::internal_library_root(&user_dir));
+        if android_library::is_internal(&user_dir, &vault_root) {
+            let _ = fs::create_dir_all(&vault_root);
+            match Store::new(
+                &vault_root,
+                history_policy_from_settings(&settings),
+                default_manual_line_break_from_settings(&settings),
+            ) {
+                Ok(mut st) => {
+                    st.set_recovery_directory(&user_dir);
+                    settings["vaultPath"] = json!(st.root.to_string_lossy().to_string());
+                    Some(st)
+                }
+                Err(_) => None,
+            }
+        } else {
+            None
+        }
+    };
     let _ = persist_settings(&config_file, &settings);
 
     let store_arc = Arc::new(Mutex::new(initial_store));

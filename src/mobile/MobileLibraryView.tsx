@@ -30,7 +30,7 @@ export default function MobileLibraryView({
   attempt: (fn: () => Promise<any>) => () => Promise<any>;
   onSelectProject: (id: string) => Promise<void>;
   setDialog: React.Dispatch<React.SetStateAction<Dialog | null>>;
-  chooseVault: () => Promise<void>;
+  chooseVault: (options?: { internal?: boolean }) => Promise<void>;
   projectReorder: ReturnType<typeof useProjectReorder>;
 }) {
   const scrollRef = useMobileProjectReorder(lib, loaded, busy, projectReorder, attempt);

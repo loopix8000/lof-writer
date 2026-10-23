@@ -100,6 +100,8 @@ export type SystemFontOption = {
 export type Library = {
   localGit?: { ready: boolean; message: string; head: string; importedHistory: number; path: string };
   root: string;
+  internalRoot?: string;
+  isInternal?: boolean;
   projects: Project[];
   documents: Doc[];
   warnings: string[];

@@ -206,8 +206,7 @@ export function installTauriBridge() {
           if (name === "pickVaultDestination") {
             return { ok: true, data: await pickAndroidFolder() };
           }
-          // Android 서재와 공용 메모는 기기 폴더에만 둔다.
-          if ((name === "chooseVault" || name === "chooseCommonMemo") && !payload.path) {
+          if ((name === "chooseVault" || name === "chooseCommonMemo") && !payload.path && !payload.internal) {
             const folder = await pickAndroidFolder();
             if (!folder) return { ok: true, data: name === "chooseVault" ? false : null };
             return invoke("lof_invoke", {

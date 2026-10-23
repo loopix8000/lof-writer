@@ -1062,11 +1062,11 @@ export default function App() {
       onBackgroundSyncChange={(patch) => savePrefs(patch)}
       busy={busy} setBusy={setBusy} onSync={doSync} message={message} report={report} />;
   }
-  async function chooseVault() {
+  async function chooseVault(options?: { internal?: boolean }) {
     setBusy(true);
     try {
       await flush();
-      if (!await call("chooseVault")) return;
+      if (!await call("chooseVault", options?.internal ? { internal: true } : undefined)) return;
       clearRetainedDocuments();
       session.resetVault();
       resetGroups();
@@ -1076,25 +1076,35 @@ export default function App() {
       setView("library");
       resetNavigation();
       await refresh();
+      await loadSettingsData();
+      if (options?.internal) {
+        message("서재 위치를 앱 내부 저장소로 지정했습니다.");
+      }
     } finally {
       setBusy(false);
     }
   }
-  async function moveVault() {
+  async function moveVault(options?: { internal?: boolean }) {
     if (busy) return;
     setBusy(true);
     try {
       await flush();
       await writingQueue.current;
-      const destination = await call<string | null>("pickVaultDestination");
+      const toInternal = Boolean(options?.internal);
+      const destination = toInternal ? (lib.internalRoot || "앱 내부 저장소") : await call<string | null>("pickVaultDestination");
       if (!destination) return;
       if (!await confirm({
-        title: "서재 이동",
-        message: "현재 서재의 파일과 변경 이력, 동기화 연결을 아래 폴더로 옮길까요?",
+        title: toInternal ? "앱 내부 저장소로 서재 이동" : "서재 이동",
+        message: toInternal
+          ? "현재 서재의 파일과 변경 이력, 동기화 연결을 앱 내부 저장소로 옮길까요? 앱 내부 저장소의 서재는 앱을 삭제하면 함께 삭제됩니다."
+          : "현재 서재의 파일과 변경 이력, 동기화 연결을 아래 폴더로 옮길까요?",
         detail: destination,
         confirmLabel: "이동",
       })) return;
-      const result = await call<{ root: string; source: string; sourceRetained: boolean }>("moveVault", {
+      const result = await call<{ root: string; source: string; sourceRetained: boolean }>("moveVault", toInternal ? {
+        internal: true,
+        expectedRoot: lib.root,
+      } : {
         path: destination,
         expectedRoot: lib.root,
       });
@@ -1109,7 +1119,9 @@ export default function App() {
       await loadSettingsData();
       message(result.sourceRetained
         ? `서재를 이동했습니다. 정리하지 못한 원본 파일은 '${result.source}'에 남겨 두었습니다.`
-        : "서재를 이동했습니다.");
+        : toInternal
+          ? "서재를 앱 내부 저장소로 이동했습니다."
+          : "서재를 이동했습니다.");
     } finally {
       setBusy(false);
     }
@@ -2630,7 +2642,7 @@ export default function App() {
                   <p className="muted">작품과 원고를 저장할 폴더입니다. 기본 위치를 그대로 사용하거나 다른 폴더를 선택하세요.</p>
                   <div className="setup-vault-picker">
                     <output aria-label="서재 위치" title={lib.root}>{lib.root}</output>
-                    <button type="button" disabled={busy} onClick={attempt(chooseVault)}>
+                    <button type="button" disabled={busy} onClick={attempt(() => chooseVault())}>
                       <FolderOpen size={15} />폴더 선택
                     </button>
                   </div>
