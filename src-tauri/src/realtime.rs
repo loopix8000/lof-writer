@@ -34,7 +34,7 @@ const CONTROL_TIMEOUT: Duration = Duration::from_secs(8);
 
 fn reconnect_delay(previous: Option<u64>, phase: Phase) -> u64 {
     // 앱 복귀·네트워크 변경·상대 접속은 이 대기를 건너뛰므로 오프라인 장치를 계속 깨우지 않는다.
-    let (initial, maximum) = if phase == Phase::Live { (5, 300) } else { (1, 30) };
+    let (initial, maximum) = if phase == Phase::Live { (5, 300) } else { (5, 30) };
     previous.map(|delay| delay.saturating_mul(2).min(maximum)).unwrap_or(initial)
 }
 
