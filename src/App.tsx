@@ -492,7 +492,6 @@ export default function App() {
     document.addEventListener("visibilitychange", handleVisibility);
     window.addEventListener("pagehide", handlePageHide);
     window.addEventListener("online", handleNetworkOnline);
-    window.addEventListener("focus", handleNetworkOnline);
 
     return () => {
       off();
@@ -502,7 +501,6 @@ export default function App() {
       document.removeEventListener("visibilitychange", handleVisibility);
       window.removeEventListener("pagehide", handlePageHide);
       window.removeEventListener("online", handleNetworkOnline);
-      window.removeEventListener("focus", handleNetworkOnline);
     };
   }, [refresh, flush, flushForClose, waitForSave, report]);
   // beforeCommit은 문서를 읽은 뒤 화면 상태를 바꾸기 직전에 부른다. 같은 렌더에 묶여 중간 상태가 그려지지 않는다.

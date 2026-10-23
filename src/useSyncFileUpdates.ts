@@ -20,7 +20,14 @@ export function useProjectSyncUpdates(projectKey: string, report: (error: any) =
     if (!projectKey) return;
     let canceled = false, receivedStatus = false;
     const update = (status: AutoSyncStatus) => {
-      if (!canceled) stateRef.current(status.phase === "syncing", status.hasConnections);
+      if (!canceled) {
+        const files = status.channels?.files;
+        const realtime = status.channels?.realtime;
+        const syncing = status.channels
+          ? files?.phase === "syncing" || (realtime?.phase === "syncing" && realtime.activity !== "comparing")
+          : status.phase === "syncing";
+        stateRef.current(syncing, status.hasConnections);
+      }
     };
     // 화면은 공통 스케줄러의 상태만 구독하며 별도 네트워크 동기화를 실행하지 않는다.
     const off = window.lof.onAutoSync?.((status) => { receivedStatus = true; update(status); });

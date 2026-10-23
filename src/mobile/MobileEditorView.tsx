@@ -263,11 +263,14 @@ export default function MobileEditorView({
   const kindPrefs = resolveKindPrefs(prefs, active.kind);
 
   // 동기화 아이콘은 실시간·폴더 동기화가 진행 중일 때 보이고, 끝나면 완료 상태를 잠깐 보여 준 뒤 숨긴다
+  const realtime = autoSync.channels?.realtime;
+  const files = autoSync.channels?.files;
   const syncBusy =
     syncChecking ||
-    autoSync.phase === "syncing" ||
-    autoSync.channels?.realtime?.phase === "syncing" ||
-    autoSync.channels?.files?.phase === "syncing";
+    (autoSync.channels
+      ? files?.phase === "syncing" ||
+        (realtime?.phase === "syncing" && realtime.activity !== "comparing")
+      : autoSync.phase === "syncing");
   const [syncShown, setSyncShown] = useState(syncBusy);
   useEffect(() => {
     if (syncBusy) {

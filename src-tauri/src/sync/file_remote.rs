@@ -47,6 +47,9 @@ pub(crate) trait FileRemote {
     fn heartbeat(&mut self) -> Result<(), LofError> {
         Ok(())
     }
+    fn hash_etag(&self) -> bool {
+        false
+    }
     fn close(&mut self) {}
 }
 

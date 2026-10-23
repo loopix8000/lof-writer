@@ -1175,6 +1175,9 @@ impl FileRemote for PeerRemote {
         }
         Ok(())
     }
+    fn hash_etag(&self) -> bool {
+        true
+    }
     fn modified(&mut self, _: &str) -> Result<Option<i64>, LofError> {
         Ok(None)
     }

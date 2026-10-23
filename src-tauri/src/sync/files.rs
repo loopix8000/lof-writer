@@ -555,6 +555,10 @@ fn run(
                     remote_id = state.identities.get(path).cloned();
                     Some(hash.clone())
                 }
+                None if remote.hash_etag() && local.is_some() && info.etag == local => {
+                    remote_id = local_id.clone();
+                    local.clone()
+                }
                 None => {
                     let bytes = match remote.read(&path) {
                         Ok(bytes) => bytes,
@@ -601,13 +605,6 @@ fn run(
         let operation = (|| -> Result<(), LofError> {
             with_store(store, root, |st| st.ensure_sync_ready(&path))?;
             let pair = &pairs[&path];
-            if path == crate::project_order::FILE {
-                if let Some(hash) = sync_project_order(store, root, remote, pair, total)? {
-                    checkpoint(state, &path, Some(&hash), None);
-                    save(store, root, key, state)?;
-                    return Ok(());
-                }
-            }
             let base = state.files.get(&path);
             let local = pair.local.as_deref();
             let other = pair.remote.as_deref();
@@ -650,6 +647,21 @@ fn run(
                     state.identities.remove(&path);
                 }
                 return Ok(());
+            }
+            if path == crate::project_order::FILE {
+                if let Some(hash) = sync_project_order(store, root, remote, pair, total)? {
+                    let tagged = Info { etag: Some(hash.clone()), ..Info::default() };
+                    let info = if other == Some(hash.as_str()) {
+                        pair.remote_info.as_ref()
+                    } else if remote.hash_etag() {
+                        Some(&tagged)
+                    } else {
+                        None
+                    };
+                    checkpoint(state, &path, Some(&hash), info);
+                    save(store, root, key, state)?;
+                    return Ok(());
+                }
             }
             let protected = protected
                 .iter()
@@ -754,8 +766,9 @@ fn run(
                     remote.remove(&path, pair.remote_info.as_ref().ok_or_else(retry)?)?;
                     add(total, "cleanedFiles", 1);
                 }
-                // 쓴 뒤의 ETag는 다음에 확인한다. 예전 값을 캐시하지 않는다.
-                checkpoint(state, &path, local, None);
+                // 쓴 뒤의 ETag는 다음에 확인한다. 실시간 동기화는 파일 해시가 곧 ETag이므로 바로 기록한다.
+                let tagged = local.map(|hash| Info { etag: Some(hash.to_string()), ..Info::default() });
+                checkpoint(state, &path, local, if remote.hash_etag() { tagged.as_ref() } else { None });
                 if let Some(id) = &pair.local_id {
                     state.identities.insert(path.clone(), id.clone());
                 } else {
