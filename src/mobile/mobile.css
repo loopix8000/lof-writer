@@ -670,42 +670,59 @@
   color: var(--ink);
 }
 
-/* 작품 정보는 목록과 같은 스크롤 안에 두고, 접히는 정도(--hero-progress, 0~1)와
-   올라간 거리(--hero-offset)를 스크롤 위치에서 받아 흐려지고 천천히 밀려 올라가게 한다. */
+/* 작품 정보와 탭·검색줄은 목록 위에 떠 있는 레이어다. 목록은 탭·검색줄 높이(--project-tools-height)만큼만
+   위를 비워 두고, 펼쳐져 있을 때는 목록 본문을 작품 정보 높이(--project-hero-height)만큼 아래로 밀어 두었다가
+   접힐 때 레이어와 함께 위로 당긴다. 목록 영역의 크기와 스크롤 위치는 바뀌지 않아 관성이 그대로 이어진다. */
 .m-project-screen {
-  --hero-progress: 0;
-  --hero-offset: 0px;
+  --project-tools-height: 0px;
+  --project-hero-height: 0px;
 }
 
 .m-project-page-header {
   padding-bottom: 4px;
 }
 
-.m-project-hero-wrap {
-  margin: 0 -8px;
-  padding: 6px 14px 0;
-  opacity: calc(1 - var(--hero-progress) * 1.15);
-  transform: translateY(calc(var(--hero-offset) * 0.35)) scale(calc(1 - var(--hero-progress) * 0.03));
-  transform-origin: top center;
-  will-change: transform, opacity;
+.m-project-head {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 3;
+  background: var(--surface);
+  transition: transform 0.28s ease;
+  will-change: transform;
 }
 
-/* 탭과 검색줄은 작품 정보가 다 접히면 틈 없이 상단에 붙는다 */
-.m-project-sticky-tools {
-  position: sticky;
-  top: 0;
-  z-index: 3;
+.m-project-head.collapsed {
+  transform: translateY(calc(var(--project-hero-height) * -1));
+}
+
+.m-project-hero-wrap {
+  padding: 6px 14px 0;
+  transition:
+    opacity 0.22s ease,
+    transform 0.28s ease;
+}
+
+.m-project-head.collapsed .m-project-hero-wrap {
+  opacity: 0;
+  transform: translateY(10px) scale(0.97);
+  pointer-events: none;
+}
+
+.m-project-tools {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  margin: 0 -8px 4px;
   padding: 10px 14px 8px;
   background: var(--surface);
 }
 
-/* 작품 화면 목록은 기본 스크롤바를 숨기고 탭·검색줄 아래 구간에만 막대를 덧씌운다. */
+/* 작품 화면 목록은 기본 스크롤바를 숨기고 탭·검색줄 아래 구간에만 막대를 덧씌운다.
+   위로 밀려 올라간 머리 레이어는 이 영역 밖으로 잘라 상단 막대를 가리지 않게 한다. */
 .m-project-list-wrap {
   position: relative;
+  overflow: hidden;
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
@@ -716,9 +733,19 @@
   scrollbar-width: none;
 }
 
-/* 위쪽 여백이 있으면 고정된 탭 위로 목록이 비쳐 보이므로 없앤다 */
+/* 목록 맨 위는 탭·검색줄 높이만큼 비워 두고, 펼쳐진 동안에는 본문을 작품 정보 높이만큼 아래로 밀어 둔다 */
 .m-tree-scroll.m-project-list {
-  padding-top: 0 !important;
+  padding-top: calc(var(--project-tools-height) + 4px) !important;
+}
+
+.m-project-list > .m-tree-container {
+  transform: translateY(var(--project-hero-height));
+  transition: transform 0.28s ease;
+  will-change: transform;
+}
+
+.m-project-screen.hero-collapsed .m-project-list > .m-tree-container {
+  transform: translateY(0);
 }
 
 .m-project-list::-webkit-scrollbar {
@@ -756,13 +783,27 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  opacity: clamp(0, calc((var(--hero-progress, 1) - 0.55) / 0.45), 1);
-  transform: translateY(calc((1 - var(--hero-progress, 1)) * 4px));
+  opacity: 0;
+  transform: translateY(4px);
   pointer-events: none;
+  transition:
+    opacity 0.2s ease,
+    transform 0.28s ease;
 }
 
 .m-project-page-header.hero-collapsed .m-project-compact-title {
+  opacity: 1;
+  transform: translateY(0);
   pointer-events: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .m-project-head,
+  .m-project-hero-wrap,
+  .m-project-compact-title,
+  .m-project-list > .m-tree-container {
+    transition: none;
+  }
 }
 
 .m-project-hero {

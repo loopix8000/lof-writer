@@ -34,7 +34,7 @@ import {
   Upload,
   X,
 } from "lucide-react";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { STATUS_SHORT, normalizeStatus } from "../../core/episode.mjs";
 import { normalizeWriting } from "../../core/platforms.mjs";
 import CoverImage from "../CoverImage";
@@ -145,69 +145,128 @@ export default function MobileProjectView({
   } | null>(null);
   const [moveFolderDoc, setMoveFolderDoc] = useState<Doc | null>(null);
   const [heroCollapsed, setHeroCollapsed] = useState(false);
+  const collapsedRef = useRef(false);
   const screenRef = useRef<HTMLDivElement>(null);
   const listScrollRef = useRef<HTMLDivElement>(null);
-  const toolsRef = useRef<HTMLDivElement>(null);
-  const touching = useRef(false);
-  const snapTimer = useRef<number | undefined>(undefined);
-  const progressFrame = useRef<number | undefined>(undefined);
+  const headRef = useRef<HTMLDivElement>(null);
+  const heroRef = useRef<HTMLDivElement>(null);
+  const heroHeight = useRef(0);
+  const toolsHeight = useRef(0);
+  const lastTop = useRef(0);
+  const intent = useRef({ down: 0, up: 0 });
+  const toggleLockUntil = useRef(0);
+  const touchY = useRef<number | null>(null);
+  const headTouch = useRef<{ x: number; y: number } | null>(null);
   const listThumbRef = useOverlayScrollbar(
     listScrollRef,
     [activeTab, archive, project.id, docs, filterQuery, docScope],
-    toolsRef,
+    { startRef: headRef, reservedTop: () => toolsHeight.current },
   );
 
-  // 작품 정보가 다 접히는 스크롤 거리. 탭·검색줄이 상단에 붙기 시작하는 위치와 같다.
-  const collapseDistance = () => toolsRef.current?.offsetTop ?? 0;
+  // 작품 정보와 탭·검색줄은 목록 위에 떠 있는 레이어다. 목록은 탭·검색줄 높이만큼만 위를 비워 두고,
+  // 펼쳐져 있을 때는 목록 본문을 작품 정보 높이만큼 아래로 밀어 두었다가 접힐 때 레이어와 함께 끌어올린다.
+  useLayoutEffect(() => {
+    const screen = screenRef.current, head = headRef.current, hero = heroRef.current;
+    if (!screen || !head || !hero) return;
+    const measure = () => {
+      const heroH = hero.offsetHeight;
+      const toolsH = Math.max(0, head.offsetHeight - heroH);
+      heroHeight.current = heroH;
+      toolsHeight.current = toolsH;
+      screen.style.setProperty("--project-tools-height", `${toolsH}px`);
+      screen.style.setProperty("--project-hero-height", `${heroH}px`);
+    };
+    const resize = new ResizeObserver(measure);
+    resize.observe(head);
+    resize.observe(hero);
+    measure();
+    return () => resize.disconnect();
+  }, []);
 
-  // 작품 정보는 목록과 같은 스크롤 안에서 손가락을 따라 먼저 올라가고, 다 올라간 뒤 같은 손동작으로 목록이 움직인다.
-  // 흐려짐·밀림과 상단 작품 제목도 시간이 아니라 스크롤 위치를 따라 바뀐다.
-  const applyHeroProgress = () => {
-    progressFrame.current = undefined;
-    const el = listScrollRef.current, screen = screenRef.current;
-    if (!el || !screen) return;
-    const distance = collapseDistance();
-    const offset = Math.min(Math.max(0, el.scrollTop), distance);
-    const progress = distance > 0 ? offset / distance : 0;
-    screen.style.setProperty("--hero-progress", progress.toFixed(3));
-    screen.style.setProperty("--hero-offset", `${offset}px`);
-    const collapsed = progress >= 0.98;
-    setHeroCollapsed((previous) => (previous === collapsed ? previous : collapsed));
+  const setCollapsed = (next: boolean) => {
+    if (collapsedRef.current === next) return;
+    collapsedRef.current = next;
+    intent.current = { down: 0, up: 0 };
+    // 애니메이션 동안에는 상태만 다시 바꾸지 않는다. 목록 스크롤은 그대로 이어진다.
+    toggleLockUntil.current = Date.now() + 320;
+    setHeroCollapsed(next);
   };
 
-  // 손을 뗐을 때 작품 정보가 반쯤 걸쳐 있으면 가까운 쪽으로 마저 접거나 펼친다.
-  const snapHero = () => {
-    window.clearTimeout(snapTimer.current);
-    snapTimer.current = window.setTimeout(() => {
-      const el = listScrollRef.current;
-      if (!el || touching.current) return;
-      const distance = collapseDistance();
-      const top = el.scrollTop;
-      if (top <= 0 || top >= distance) return;
-      el.scrollTo({ top: top < distance / 2 ? 0 : distance, behavior: "smooth" });
-    }, 140);
+  const collapseHero = (el: HTMLDivElement | null) => {
+    if (!el || el.scrollHeight <= el.clientHeight + 2) return;
+    setCollapsed(true);
   };
 
   // 탭·작품·보관함을 바꾸면 목록을 맨 위로 돌리고 작품 정보를 다시 펼친다
   useEffect(() => {
-    window.clearTimeout(snapTimer.current);
     const list = listScrollRef.current;
     if (list) list.scrollTop = 0;
-    applyHeroProgress();
+    lastTop.current = 0;
+    collapsedRef.current = false;
+    intent.current = { down: 0, up: 0 };
+    setHeroCollapsed(false);
   }, [activeTab, archive, project.id]);
-
-  useEffect(() => () => {
-    window.clearTimeout(snapTimer.current);
-    if (progressFrame.current !== undefined) cancelAnimationFrame(progressFrame.current);
-  }, []);
 
   useEffect(() => {
     setClosedFolders(new Set());
   }, [project.id]);
 
-  const onListScroll = () => {
-    progressFrame.current ??= requestAnimationFrame(applyHeroProgress);
-    snapHero();
+  // 아래로 내리면 접고, 맨 위 근처로 올라오면 펼친다. 목록 중간에서 위로 올릴 때는 펼치지 않는다.
+  const onListScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    const top = Math.max(0, el.scrollTop);
+    const delta = top - lastTop.current;
+    lastTop.current = top;
+    if (!delta) return;
+    if (Date.now() < toggleLockUntil.current) {
+      intent.current = { down: 0, up: 0 };
+      return;
+    }
+    const hint = intent.current;
+    if (delta > 0) {
+      hint.down += delta;
+      hint.up = 0;
+    } else {
+      hint.up -= delta;
+      hint.down = 0;
+    }
+    if (!collapsedRef.current) {
+      if (hint.down >= 14 && top > 6) collapseHero(el);
+    } else if (delta < 0 && (top <= 2 || (hint.up >= 10 && top <= 24))) {
+      setCollapsed(false);
+    }
+  };
+
+  // 맨 위에서 더 당기면 목록은 그대로 두고 작품 정보만 펼친다.
+  const onListTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
+    touchY.current = e.touches.length === 1 ? e.touches[0].clientY : null;
+  };
+  const onListTouchMove = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (touchY.current === null || e.touches.length !== 1) return;
+    const pulled = e.touches[0].clientY - touchY.current;
+    if (collapsedRef.current && e.currentTarget.scrollTop <= 0 && pulled > 12) {
+      touchY.current = null;
+      setCollapsed(false);
+    }
+  };
+
+  // 작품 정보·탭 영역 위에서 쓸어올리거나 맨 위에서 끌어내릴 때도 접고 펼친다.
+  const onHeadTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
+    headTouch.current =
+      e.touches.length === 1 ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : null;
+  };
+  const onHeadTouchMove = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (!headTouch.current || e.touches.length !== 1) return;
+    const dx = e.touches[0].clientX - headTouch.current.x;
+    const dy = e.touches[0].clientY - headTouch.current.y;
+    if (Math.abs(dy) <= Math.abs(dx)) return;
+    if (!collapsedRef.current && dy < -14) {
+      headTouch.current = null;
+      collapseHero(listScrollRef.current);
+    } else if (collapsedRef.current && (listScrollRef.current?.scrollTop ?? 0) <= 16 && dy > 14) {
+      headTouch.current = null;
+      setCollapsed(false);
+    }
   };
 
   const episodes = useMemo(
@@ -912,7 +971,10 @@ export default function MobileProjectView({
     });
 
   return (
-    <div ref={screenRef} className="m-screen m-modern-workspace m-project-screen">
+    <div
+      ref={screenRef}
+      className={`m-screen m-modern-workspace m-project-screen ${heroCollapsed ? "hero-collapsed" : ""}`}
+    >
       {/* 상단 내 서재 이동 및 작품 영웅(Hero) 헤더 */}
       <header
         className={`m-modern-header m-project-page-header ${heroCollapsed ? "hero-collapsed" : ""}`}
@@ -962,21 +1024,171 @@ export default function MobileProjectView({
           className="m-scroll-body m-tree-scroll m-project-list"
           ref={listScrollRef}
           onScroll={onListScroll}
-          onTouchStart={() => {
-            touching.current = true;
-            window.clearTimeout(snapTimer.current);
-          }}
-          onTouchEnd={() => {
-            touching.current = false;
-            snapHero();
-          }}
-          onTouchCancel={() => {
-            touching.current = false;
-            snapHero();
-          }}
+          onTouchStart={onListTouchStart}
+          onTouchMove={onListTouchMove}
+          onTouchEnd={() => { touchY.current = null; }}
+          onTouchCancel={() => { touchY.current = null; }}
+        >
+          {activeTab === "episode" ? (
+            <div className="m-tree-container">
+              {!filterQuery.trim() && filteredEpisodes.length > EPISODE_GROUP
+                ? Array.from(
+                    { length: Math.ceil(filteredEpisodes.length / EPISODE_GROUP) },
+                    (_, g) => g * EPISODE_GROUP,
+                  )
+                    .sort((a, b) => (episodeSort === "desc" ? b - a : a - b))
+                    .map((start) => {
+                      const group = filteredEpisodes.slice(start, start + EPISODE_GROUP);
+                      const items = episodeSort === "desc" ? [...group].reverse() : group;
+                      const isOpen = isGroupOpen(start);
+                      return (
+                        <div key={start} className="m-tree-node">
+                          <div className="m-tree-row m-tree-folder">
+                            <button
+                              type="button"
+                              className="m-tree-row-main"
+                              aria-expanded={isOpen}
+                              onClick={() => toggleEpGroup(start)}
+                            >
+                              <span className="m-tree-chevron">
+                                {isOpen ? (
+                                  <ChevronDown size={15} />
+                                ) : (
+                                  <ChevronRight size={15} />
+                                )}
+                              </span>
+                              <span className="m-tree-label">
+                                {episodeSort === "desc"
+                                  ? `${start + items.length} – ${start + 1}화`
+                                  : `${start + 1} – ${start + items.length}화`}
+                              </span>
+                              <span className="m-tree-count">{items.length}</span>
+                            </button>
+                          </div>
+                          {isOpen && (
+                            <div className="m-tree-children">
+                              {items.map((d) => renderEpisodeRow(d))}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })
+                : sortedEpisodes.map((d) => renderEpisodeRow(d))}
+
+              {filteredEpisodes.length === 0 && (
+                <div className="m-empty-state">
+                  <BookOpen size={30} />
+                  <h3>
+                    {filterQuery.trim()
+                      ? "일치하는 에피소드가 없습니다"
+                      : archive
+                        ? "보관된 에피소드가 없습니다"
+                        : "아직 에피소드가 없습니다"}
+                  </h3>
+                  <p>
+                    {archive
+                      ? "보관함으로 옮긴 회차가 여기에 표시됩니다."
+                      : "새 에피소드 버튼을 눌러 첫 에피소드를 시작해 보세요."}
+                  </p>
+                  {!archive && !filterQuery.trim() && (
+                    <button
+                      type="button"
+                      className="m-btn-primary"
+                      onClick={attempt(() => createDoc("episode"))}
+                    >
+                      <Plus size={17} />
+                      <span>새 에피소드 쓰기</span>
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          ) : docScope === "byEpisode" ? (
+            <div className="m-tree-container">
+              {projectEpisodes.map((ep) => {
+                const bound = filteredKindDocs.filter((d) => d.episodeId === ep.id);
+                if (bound.length === 0) return null;
+                return (
+                  <div key={ep.id} className="m-tree-node">
+                    <div className="m-tree-group-header">
+                      <BookOpen size={14} />
+                      <span>
+                        {numberOf(ep)} · {ep.title || "제목 없음"}
+                      </span>
+                      <small>{bound.length}</small>
+                    </div>
+                    <div className="m-tree-children">
+                      {bound.map((d) => renderDocRow(d))}
+                    </div>
+                  </div>
+                );
+              })}
+              {unlinkedKindDocs.length > 0 && (
+                <div className="m-tree-node">
+                  <div className="m-tree-group-header">
+                    <Folder size={14} />
+                    <span>독립 {labels[activeTab]} (회차 미연결)</span>
+                  </div>
+                  <div className="m-tree-children">
+                    {unlinkedKindDocs.map((d) => renderDocRow(d))}
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="m-tree-container">
+              {renderDocTreeLevel("", 0)}
+
+              {filteredKindDocs.length === 0 && (
+                <div className="m-empty-state">
+                  {activeTab === "plot" ? <FileText size={30} /> : <StickyNote size={30} />}
+                  <h3>
+                    {filterQuery.trim()
+                      ? `일치하는 ${labels[activeTab]}가 없습니다`
+                      : archive
+                        ? `보관된 ${labels[activeTab]}가 없습니다`
+                        : `아직 ${labels[activeTab]}가 없습니다`}
+                  </h3>
+                  <p>
+                    {archive
+                      ? `보관함으로 옮긴 ${labels[activeTab]} 문서가 여기에 표시됩니다.`
+                      : activeTab === "plot"
+                        ? "회차별 플롯이나 전체 스토리 구성안을 작성해 보세요."
+                        : "캐릭터 설정, 세계관, 아이디어 메모를 자유롭게 정리해 보세요."}
+                  </p>
+                  {!archive && !filterQuery.trim() && (
+                    <button
+                      type="button"
+                      className="m-btn-primary"
+                      onClick={() =>
+                        setRenameTarget({
+                          type: "newDoc",
+                          idOrPath: "",
+                          initialValue: activeTab === "plot" ? "새 플롯" : "새 메모",
+                          kind: activeTab,
+                        })
+                      }
+                    >
+                      <Plus size={17} />
+                      <span>첫 {labels[activeTab]} 만들기</span>
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+        {/* 작품 정보와 탭·검색줄 레이어. 접히면 목록 크기를 바꾸지 않고 작품 정보 높이만큼 위로 밀려 올라간다 */}
+        <div
+          ref={headRef}
+          className={`m-project-head ${heroCollapsed ? "collapsed" : ""}`}
+          onTouchStart={onHeadTouchStart}
+          onTouchMove={onHeadTouchMove}
+          onTouchEnd={() => { headTouch.current = null; }}
+          onTouchCancel={() => { headTouch.current = null; }}
         >
           {/* 작품 표지(좌측) + 작품 정보·태그·관리 버튼(우측) */}
-          <div className="m-project-hero-wrap" aria-hidden={heroCollapsed}>
+          <div ref={heroRef} className="m-project-hero-wrap" aria-hidden={heroCollapsed}>
             <div className="m-project-hero">
               <button
                 type="button"
@@ -1034,8 +1246,7 @@ export default function MobileProjectView({
             </div>
           </div>
 
-          {/* 탭과 검색줄은 작품 정보가 다 접히면 목록 위에 붙는다 */}
-          <div ref={toolsRef} className="m-project-sticky-tools">
+          <div className="m-project-tools">
             {/* 작품 화면 3탭 구조: 에피소드 / 플롯 / 메모 */}
             <div
               className="m-pill-tabs three-cols"
@@ -1193,155 +1404,6 @@ export default function MobileProjectView({
               </div>
             )}
           </div>
-
-          {activeTab === "episode" ? (
-            <div className="m-tree-container">
-              {!filterQuery.trim() && filteredEpisodes.length > EPISODE_GROUP
-                ? Array.from(
-                    { length: Math.ceil(filteredEpisodes.length / EPISODE_GROUP) },
-                    (_, g) => g * EPISODE_GROUP,
-                  )
-                    .sort((a, b) => (episodeSort === "desc" ? b - a : a - b))
-                    .map((start) => {
-                      const group = filteredEpisodes.slice(start, start + EPISODE_GROUP);
-                      const items = episodeSort === "desc" ? [...group].reverse() : group;
-                      const isOpen = isGroupOpen(start);
-                      return (
-                        <div key={start} className="m-tree-node">
-                          <div className="m-tree-row m-tree-folder">
-                            <button
-                              type="button"
-                              className="m-tree-row-main"
-                              aria-expanded={isOpen}
-                              onClick={() => toggleEpGroup(start)}
-                            >
-                              <span className="m-tree-chevron">
-                                {isOpen ? (
-                                  <ChevronDown size={15} />
-                                ) : (
-                                  <ChevronRight size={15} />
-                                )}
-                              </span>
-                              <span className="m-tree-label">
-                                {episodeSort === "desc"
-                                  ? `${start + items.length} – ${start + 1}화`
-                                  : `${start + 1} – ${start + items.length}화`}
-                              </span>
-                              <span className="m-tree-count">{items.length}</span>
-                            </button>
-                          </div>
-                          {isOpen && (
-                            <div className="m-tree-children">
-                              {items.map((d) => renderEpisodeRow(d))}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })
-                : sortedEpisodes.map((d) => renderEpisodeRow(d))}
-
-              {filteredEpisodes.length === 0 && (
-                <div className="m-empty-state">
-                  <BookOpen size={30} />
-                  <h3>
-                    {filterQuery.trim()
-                      ? "일치하는 에피소드가 없습니다"
-                      : archive
-                        ? "보관된 에피소드가 없습니다"
-                        : "아직 에피소드가 없습니다"}
-                  </h3>
-                  <p>
-                    {archive
-                      ? "보관함으로 옮긴 회차가 여기에 표시됩니다."
-                      : "새 에피소드 버튼을 눌러 첫 에피소드를 시작해 보세요."}
-                  </p>
-                  {!archive && !filterQuery.trim() && (
-                    <button
-                      type="button"
-                      className="m-btn-primary"
-                      onClick={attempt(() => createDoc("episode"))}
-                    >
-                      <Plus size={17} />
-                      <span>새 에피소드 쓰기</span>
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
-          ) : docScope === "byEpisode" ? (
-            <div className="m-tree-container">
-              {projectEpisodes.map((ep) => {
-                const bound = filteredKindDocs.filter((d) => d.episodeId === ep.id);
-                if (bound.length === 0) return null;
-                return (
-                  <div key={ep.id} className="m-tree-node">
-                    <div className="m-tree-group-header">
-                      <BookOpen size={14} />
-                      <span>
-                        {numberOf(ep)} · {ep.title || "제목 없음"}
-                      </span>
-                      <small>{bound.length}</small>
-                    </div>
-                    <div className="m-tree-children">
-                      {bound.map((d) => renderDocRow(d))}
-                    </div>
-                  </div>
-                );
-              })}
-              {unlinkedKindDocs.length > 0 && (
-                <div className="m-tree-node">
-                  <div className="m-tree-group-header">
-                    <Folder size={14} />
-                    <span>독립 {labels[activeTab]} (회차 미연결)</span>
-                  </div>
-                  <div className="m-tree-children">
-                    {unlinkedKindDocs.map((d) => renderDocRow(d))}
-                  </div>
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="m-tree-container">
-              {renderDocTreeLevel("", 0)}
-
-              {filteredKindDocs.length === 0 && (
-                <div className="m-empty-state">
-                  {activeTab === "plot" ? <FileText size={30} /> : <StickyNote size={30} />}
-                  <h3>
-                    {filterQuery.trim()
-                      ? `일치하는 ${labels[activeTab]}가 없습니다`
-                      : archive
-                        ? `보관된 ${labels[activeTab]}가 없습니다`
-                        : `아직 ${labels[activeTab]}가 없습니다`}
-                  </h3>
-                  <p>
-                    {archive
-                      ? `보관함으로 옮긴 ${labels[activeTab]} 문서가 여기에 표시됩니다.`
-                      : activeTab === "plot"
-                        ? "회차별 플롯이나 전체 스토리 구성안을 작성해 보세요."
-                        : "캐릭터 설정, 세계관, 아이디어 메모를 자유롭게 정리해 보세요."}
-                  </p>
-                  {!archive && !filterQuery.trim() && (
-                    <button
-                      type="button"
-                      className="m-btn-primary"
-                      onClick={() =>
-                        setRenameTarget({
-                          type: "newDoc",
-                          idOrPath: "",
-                          initialValue: activeTab === "plot" ? "새 플롯" : "새 메모",
-                          kind: activeTab,
-                        })
-                      }
-                    >
-                      <Plus size={17} />
-                      <span>첫 {labels[activeTab]} 만들기</span>
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
         </div>
         <div ref={listThumbRef} className="m-overlay-scrollbar" aria-hidden="true" hidden />
       </div>
