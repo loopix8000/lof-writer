@@ -209,16 +209,23 @@ export default function MobileProjectView({
     setCollapsed(true);
   };
 
-  // 탭·작품·보관함을 바꾸면 애니메이션 없이 첫 프레임부터 제자리에서 보이도록 즉시 초기화한다
+  // 작품·보관함을 바꾸면 작품 정보를 펼친 상태로 초기화한다.
   useLayoutEffect(() => {
     window.clearTimeout(animTimer.current);
     setHeroAnimating(false);
+    collapsedRef.current = false;
+    setHeroCollapsed(false);
+  }, [archive, project.id]);
+
+  // 탭 전환은 목록 위치만 초기화하고 작품 정보의 접힘 상태는 유지한다.
+  useLayoutEffect(() => {
     const list = listScrollRef.current;
     if (list) list.scrollTop = 0;
     lastTop.current = 0;
-    collapsedRef.current = false;
     intent.current = { down: 0, up: 0 };
-    setHeroCollapsed(false);
+    touchY.current = null;
+    headTouch.current = null;
+    toggleLockUntil.current = Date.now() + HERO_ANIM_MS;
   }, [activeTab, archive, project.id]);
 
   useEffect(() => () => window.clearTimeout(animTimer.current), []);
@@ -304,6 +311,7 @@ export default function MobileProjectView({
     () => (activeTab === "plot" ? plots : memos),
     [activeTab, plots, memos],
   );
+  const showDocScope = activeTab !== "episode" && currentKindDocs.some(doc => !!doc.episodeId);
 
   const projectEpisodes = useMemo(
     () => lib.documents.filter((d) => d.projectId === project.id && d.kind === "episode"),
@@ -1322,71 +1330,63 @@ export default function MobileProjectView({
 
               {!archive && (
                 <div className="m-toolbar-create-btns">
-                  {activeTab === "episode" ? (
-                    <button
-                      type="button"
-                      className="m-btn-primary m-btn-sm"
-                      onClick={attempt(() => createDoc("episode"))}
-                    >
-                      <Plus size={15} />
-                      <span>새 에피소드</span>
-                    </button>
-                  ) : (
-                    <>
-                      <button
-                        type="button"
-                        className="m-btn-secondary m-btn-sm"
-                        aria-label="새 폴더 만들기"
-                        onClick={() =>
-                          setRenameTarget({
-                            type: "newFolder",
-                            idOrPath: "",
-                            initialValue: "새 폴더",
-                          })
-                        }
-                      >
-                        <FolderPlus size={15} />
-                      </button>
-                      <button
-                        type="button"
-                        className="m-btn-primary m-btn-sm"
-                        onClick={() =>
-                          setRenameTarget({
-                            type: "newDoc",
-                            idOrPath: "",
-                            initialValue: activeTab === "plot" ? "새 플롯" : "새 메모",
-                            kind: activeTab,
-                          })
-                        }
-                      >
-                        <Plus size={15} />
-                        <span>{activeTab === "plot" ? "새 플롯" : "새 메모"}</span>
-                      </button>
-                    </>
-                  )}
+                  <button
+                    type="button"
+                    className="m-btn-secondary m-btn-sm m-project-folder-create"
+                    aria-label="새 폴더 만들기"
+                    aria-hidden={activeTab === "episode"}
+                    disabled={activeTab === "episode"}
+                    style={{ visibility: activeTab === "episode" ? "hidden" : undefined }}
+                    onClick={() => setRenameTarget({
+                      type: "newFolder", idOrPath: "", initialValue: "새 폴더",
+                    })}
+                  >
+                    <FolderPlus size={15} />
+                  </button>
+                  <button
+                    type="button"
+                    className="m-btn-primary m-btn-sm m-project-doc-create"
+                    onClick={attempt(async () => {
+                      if (activeTab === "episode") await createDoc("episode");
+                      else setRenameTarget({
+                        type: "newDoc", idOrPath: "",
+                        initialValue: activeTab === "plot" ? "새 플롯" : "새 메모",
+                        kind: activeTab,
+                      });
+                    })}
+                  >
+                    <Plus size={15} />
+                    <span>새 {labels[activeTab]}</span>
+                  </button>
                 </div>
               )}
             </div>
 
             {/* 플롯/메모 탭 보기 방식 전환 (전체 트리 / 회차별 연결 문서) */}
-            {activeTab !== "episode" && currentKindDocs.some((d) => !!d.episodeId) && (
-              <div className="m-doc-scope-bar">
-                <button
-                  type="button"
-                  className={`m-scope-chip ${docScope === "all" ? "active" : ""}`}
-                  onClick={() => setDocScope("all")}
-                >
-                  전체 폴더 트리
-                </button>
-                <button
-                  type="button"
-                  className={`m-scope-chip ${docScope === "byEpisode" ? "active" : ""}`}
-                  onClick={() => setDocScope("byEpisode")}
-                >
-                  회차별 연결 {labels[activeTab]}
-                </button>
+            <div
+              className={`m-project-scope-wrap ${showDocScope ? "is-visible" : ""}`}
+              aria-hidden={!showDocScope}
+              inert={!showDocScope}
+            >
+              <div className="m-project-scope-content">
+                <div className="m-doc-scope-bar">
+                  <button
+                    type="button"
+                    className={`m-scope-chip ${docScope === "all" ? "active" : ""}`}
+                    onClick={() => setDocScope("all")}
+                  >
+                    전체 폴더 트리
+                  </button>
+                  <button
+                    type="button"
+                    className={`m-scope-chip ${docScope === "byEpisode" ? "active" : ""}`}
+                    onClick={() => setDocScope("byEpisode")}
+                  >
+                    회차별 연결 {labels[activeTab]}
+                  </button>
+                </div>
               </div>
-            )}
+            </div>
           </div>
         </div>
         <div ref={listThumbRef} className="m-overlay-scrollbar" aria-hidden="true" hidden />

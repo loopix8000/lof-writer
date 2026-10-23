@@ -747,6 +747,7 @@
 /* 목록 맨 위는 탭·검색줄 높이만큼 비워 두고, 펼쳐진 동안에는 본문을 작품 정보 높이만큼 아래로 밀어 둔다 */
 .m-tree-scroll.m-project-list {
   padding-top: calc(var(--project-tools-height) + 4px) !important;
+  overflow-anchor: none;
 }
 
 /* 목록 끝은 본문의 transform이 아니라 이 감싸개의 높이로 정한다. 펼쳐진 동안에만 아래에 작품 정보 높이만큼
@@ -1132,6 +1133,43 @@
   align-items: center;
   gap: 6px;
   flex-shrink: 0;
+}
+
+.m-project-folder-create {
+  width: 34px;
+  padding: 0;
+}
+
+.m-project-doc-create {
+  width: 8.5em;
+  padding: 0 8px;
+}
+
+.m-project-scope-wrap {
+  display: grid;
+  grid-template-rows: 0fr;
+  margin-top: -10px;
+  opacity: 0;
+  pointer-events: none;
+  transition: grid-template-rows 0.25s ease, margin-top 0.25s ease, opacity 0.25s ease;
+}
+
+.m-project-scope-wrap.is-visible {
+  grid-template-rows: 1fr;
+  margin-top: 0;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.m-project-scope-content {
+  min-height: 0;
+  overflow: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .m-project-scope-wrap {
+    transition: none;
+  }
 }
 
 .m-doc-scope-bar {
