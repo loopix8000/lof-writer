@@ -32,6 +32,7 @@ const formatTools = [
   { action: "italic", label: "기울임", icon: Italic },
   { action: "strike", label: "취소선", icon: Strikethrough },
   { action: "heading", label: "소제목", icon: Heading2 },
+  { action: "taskList", label: "체크박스 추가", icon: ListTodo },
   { action: "divider", label: "장면 구분선", icon: Minus },
 ] as const;
 
