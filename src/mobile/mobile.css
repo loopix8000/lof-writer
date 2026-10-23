@@ -3576,6 +3576,61 @@
   border: 1px solid var(--line);
 }
 
+/* 위젯 안에서 펼치는 플랫폼 설정. 위젯 카드 안의 한 묶음으로 보이게 테두리 없이 안쪽 여백을 둔다. */
+.mobile-app .platform-picker.compact {
+  gap: 14px;
+  padding: 16px;
+  margin: 0 0 16px;
+  border: none;
+  border-radius: 14px;
+}
+
+.mobile-app .platform-picker.compact .platform-rule-fields {
+  gap: 14px;
+}
+
+.mobile-app .platform-picker label {
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.mobile-app .platform-picker label.check-row {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.mobile-app .platform-picker select,
+.mobile-app .platform-picker input:not([type="checkbox"]) {
+  min-height: 44px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background-color: var(--bg);
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.mobile-app .platform-picker select {
+  padding-right: 36px;
+  background-position: right 13px center;
+}
+
+.mobile-app .platform-picker > button {
+  min-height: 42px;
+  border-radius: 10px;
+  border: none;
+  background: var(--soft);
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 600;
+}
+
 .mobile-app .platform-field {
   display: flex;
   flex-direction: column;
