@@ -45,7 +45,7 @@ export default function BackgroundSyncSettings({ prefs, savePrefs, report }: {
   const always = prefs.backgroundLiveMode === "always";
   const minutes = Number.isInteger(prefs.backgroundLiveMinutes) && prefs.backgroundLiveMinutes >= 1
     ? Math.min(prefs.backgroundLiveMinutes, 120) : 30;
-  const interval = Math.max(5, Math.min(60, Math.round((prefs.backgroundSyncIntervalSeconds ?? 300) / 60)));
+  const interval = Math.max(15, Math.min(60, Math.round((prefs.backgroundSyncIntervalSeconds ?? 900) / 60)));
   const notification = prefs.backgroundKeepAlive === "off" ? "off"
     : always || prefs.backgroundKeepAlive === "always" ? "always" : "live";
   const [exempt, setExempt] = useState<boolean | null>(null);
@@ -110,7 +110,7 @@ export default function BackgroundSyncSettings({ prefs, savePrefs, report }: {
       {!always && <div className="settings-grid">
         <Minutes label="유지 시간" value={minutes} min={1} max={120} hint="1~120분 · 기본값 30분"
           onSave={value => save({ backgroundLiveMinutes: value })} />
-        <Minutes label="이후 확인 주기" value={interval} min={5} max={60} hint="5~60분 · 기본값 5분"
+        <Minutes label="이후 확인 주기" value={interval} min={15} max={60} hint="15~60분 · 기본값 15분"
           onSave={value => save({ backgroundSyncIntervalSeconds: value * 60 })} />
       </div>}
       <p className="settings-note">{always

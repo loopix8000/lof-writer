@@ -13,7 +13,8 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
 const DEFAULT_INTERVAL: Duration = Duration::from_secs(300);
-const MIN_BACKGROUND_INTERVAL: u64 = 300;
+const MIN_BACKGROUND_INTERVAL: u64 = 900;
+const DEFAULT_BACKGROUND_INTERVAL: Duration = Duration::from_secs(900);
 const LOCAL_CHECK_INTERVAL: Duration = Duration::from_secs(5);
 const RETRY_DELAY: Duration = Duration::from_secs(30);
 
@@ -61,7 +62,7 @@ impl Default for AutoSyncState {
                 local_error: None,
                 interval: DEFAULT_INTERVAL,
                 bg_enabled: true,
-                bg_interval: DEFAULT_INTERVAL,
+                bg_interval: DEFAULT_BACKGROUND_INTERVAL,
                 status: json!({ "phase": "idle", "message": "", "hasConnections": false }),
                 realtime: json!({ "phase": "idle", "message": "", "hasConnections": false }),
             }),
@@ -226,9 +227,9 @@ pub fn background_interval_seconds(settings: &Value) -> u64 {
         .and_then(|prefs| prefs.get("backgroundSyncIntervalSeconds"))
         .and_then(Value::as_u64)
         .filter(|seconds| (60..=3600).contains(seconds))
-        // 이전에 고른 1·3분 주기는 최소 주기인 5분으로 올린다.
+        // 이전에 고른 5분 이하 주기는 최소 주기인 15분으로 올린다.
         .map(|seconds| seconds.max(MIN_BACKGROUND_INTERVAL))
-        .unwrap_or(DEFAULT_INTERVAL.as_secs())
+        .unwrap_or(DEFAULT_BACKGROUND_INTERVAL.as_secs())
 }
 
 pub fn has_connections(app: &AppHandle) -> bool {

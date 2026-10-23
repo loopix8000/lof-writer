@@ -4,7 +4,7 @@ import SettingsToggle from "./app/SettingsToggle";
 import { call, type AutoSyncStatus, type SyncConnection } from "./types";
 const labels = { idle: "동기화 완료", pending: "동기화 대기", syncing: "동기화 중", error: "동기화 재시도 대기" };
 const PRESET_SECONDS = [60, 180, 300, 600, 900, 1800, 3600];
-const PRESET_BG_SECONDS = [300, 600, 900, 1800, 3600];
+const PRESET_BG_SECONDS = [900, 1800, 3600];
 export default function SyncConnections({
   connections,
   setConnections,
@@ -12,7 +12,7 @@ export default function SyncConnections({
   intervalSeconds,
   onIntervalChange,
   backgroundEnabled = true,
-  backgroundIntervalSeconds = 300,
+  backgroundIntervalSeconds = 900,
   onBackgroundSyncChange,
   busy,
   setBusy,
@@ -39,7 +39,7 @@ export default function SyncConnections({
   const status = autoSync.channels?.files ?? { phase: "idle", message: "" };
   const attempt = (action: () => Promise<unknown>) => () => { void action().catch(report); };
   const reload = async () => { setConnections((await call("settings")).connections); };
-  const bgMinutes = Math.max(5, Math.min(60, Math.round(backgroundIntervalSeconds / 60)));
+  const bgMinutes = Math.max(15, Math.min(60, Math.round(backgroundIntervalSeconds / 60)));
   // PC는 창을 닫아도 계속 동기화하므로 백그라운드 설정은 Android에서만 보여 준다.
   const backgroundChange = isAndroid ? onBackgroundSyncChange : undefined;
   const hasCustomBgInterval = backgroundEnabled && !PRESET_BG_SECONDS.includes(backgroundIntervalSeconds);
@@ -68,9 +68,7 @@ export default function SyncConnections({
             }}
           >
             <option value="off">끄기 (사용 안 함)</option>
-            <option value="300">5분 (기본)</option>
-            <option value="600">10분</option>
-            <option value="900">15분</option>
+            <option value="900">15분 (기본)</option>
             <option value="1800">30분</option>
             <option value="3600">1시간 (60분)</option>
             {hasCustomBgInterval && (
@@ -81,16 +79,16 @@ export default function SyncConnections({
       )}
       {backgroundChange && backgroundEnabled && (
         <label className="connection-conflict-policy">
-          백그라운드 주기 직접 입력 (5~60분)
+          백그라운드 주기 직접 입력 (15~60분)
           <input
             type="number"
             aria-label="백그라운드 동기화 주기 (분)"
-            min={5}
+            min={15}
             max={60}
             value={bgMinutes}
             onChange={event => {
               const mins = Number(event.target.value);
-              if (Number.isFinite(mins) && mins >= 5 && mins <= 60) {
+              if (Number.isFinite(mins) && mins >= 15 && mins <= 60) {
                 backgroundChange({
                   backgroundSyncEnabled: true,
                   backgroundSyncIntervalSeconds: Math.round(mins) * 60,
