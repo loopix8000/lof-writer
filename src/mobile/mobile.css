@@ -1147,6 +1147,13 @@
 .m-project-doc-create {
   width: 8.5em;
   padding: 0 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  transition: width 0.25s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.m-project-doc-create.is-compact {
+  width: 6.6em;
 }
 
 .m-project-scope-wrap {
@@ -1171,7 +1178,8 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .m-project-scope-wrap {
+  .m-project-scope-wrap,
+  .m-project-doc-create {
     transition: none;
   }
 }

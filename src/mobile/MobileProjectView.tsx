@@ -1347,7 +1347,7 @@ export default function MobileProjectView({
                   </button>
                   <button
                     type="button"
-                    className="m-btn-primary m-btn-sm m-project-doc-create"
+                    className={`m-btn-primary m-btn-sm m-project-doc-create ${activeTab !== "episode" ? "is-compact" : ""}`}
                     onClick={attempt(async () => {
                       if (activeTab === "episode") await createDoc("episode");
                       else setRenameTarget({
