@@ -1767,6 +1767,16 @@ body.sidebar-resizing * {
 .editor-find button.active { color: var(--accent); background: var(--selection-bg); }
 .editor-find button:disabled { cursor: default; }
 .editor-find-count { flex-shrink: 0; color: var(--muted); white-space: nowrap; font-size: 11px; font-variant-numeric: tabular-nums; }
+.app:not(.mobile-app) .editor-find { min-height: 0; gap: 4px; padding: 6px; }
+.app:not(.mobile-app) .editor-find.is-floating { width: min(360px, calc(100% - 24px)); }
+.app:not(.mobile-app) .editor-find-row { gap: 2px; }
+.app:not(.mobile-app) .editor-find-search-row { grid-template-columns: minmax(0, 1fr) repeat(4, 24px); }
+.app:not(.mobile-app) .editor-find-replace-row { grid-template-columns: minmax(0, 1fr) repeat(2, 24px); }
+.app:not(.mobile-app) .editor-find-search-field { height: 28px; gap: 5px; padding: 0 7px; }
+.app:not(.mobile-app) .editor-find-replacement { height: 28px; padding: 0 7px; }
+.app:not(.mobile-app) .editor-find input { font-size: 12px; }
+.app:not(.mobile-app) .editor-find button { width: 24px; height: 28px; border-radius: 4px; }
+.app:not(.mobile-app) .editor-find svg { width: 16px; height: 16px; }
 .editor-find-hit { background: var(--find-match); color: var(--find-text); }
 .editor-find-hit.current { background: var(--find-current); outline: 1px solid var(--find-text); }
 .tiptap {

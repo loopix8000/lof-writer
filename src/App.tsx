@@ -35,7 +35,6 @@ import {
   BookOpen,
   Check,
   Cloud,
-  Code2,
   Columns2,
   Copy,
   Download,
@@ -215,7 +214,7 @@ export default function App() {
     [bookmarkJump, setBookmarkJump] = useState<{ docId: string; index: number; seq: number } | null>(null),
     // 레일의 전체 북마크 화면 검색어.
     [bookmarkQuery, setBookmarkQuery] = useState("");
-  const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[]; target?: string } | null>(null),
+  const [menu, setMenu] = useState<{ x: number; y: number; align?: "start" | "end"; items: MenuItem[]; target?: string } | null>(null),
     [dragTab, setDragTab] = useState(""),
     [emptyDrop, setEmptyDrop] = useState(false);
   const memoFlush = useRef<((options?: { closing?: boolean }) => Promise<void>) | null>(null);
@@ -1377,13 +1376,6 @@ export default function App() {
           </div>
           <div className="editor-action-buttons" aria-hidden={!focused}>
             <button
-              aria-label="저장"
-              title="저장 (Ctrl+S)"
-              onClick={attempt(manualSave)}
-            >
-              <Check size={17} />
-            </button>
-            <button
               type="button"
               aria-label="문자 검색 및 치환"
               title="문자 검색 및 치환 (F3)"
@@ -1399,17 +1391,6 @@ export default function App() {
               <History size={18} />
             </button>
             <button
-              aria-label="내보내기"
-              title="Markdown 내보내기"
-              onClick={attempt(async () => {
-                await flush();
-                if (await call("exportDocument", { id: active.id }))
-                  message("원고를 내보냈습니다.");
-              })}
-            >
-              <Download size={18} />
-            </button>
-            <button
               aria-label="본문 텍스트 복사"
               title={
                 source || requiresDocumentSource(active)
@@ -1420,14 +1401,6 @@ export default function App() {
               onClick={attempt(() => copyDocManuscript(active, source || requiresDocumentSource(active)))}
             >
               <Copy size={18} />
-            </button>
-            <button
-              className={source ? "active" : ""}
-              aria-label="Markdown 모드"
-              title="Markdown 원문 / 편집"
-              onClick={() => setSource((s) => !s)}
-            >
-              <Code2 size={18} />
             </button>
             {isMobile && (
               <button
@@ -1457,9 +1430,25 @@ export default function App() {
               <Maximize size={17} />
             </button>
             <button
+              type="button"
               aria-label="문서 더보기"
-              title="문서 보관 및 설정"
-              onClick={() => setDialog({ type: "document" })}
+              title="문서 더보기"
+              aria-haspopup="menu"
+              aria-expanded={menu?.target === `document-actions:${active.id}`}
+              onClick={(event) => {
+                const rect = event.currentTarget.getBoundingClientRect();
+                setMenu({ x: rect.right, y: rect.bottom + 4, align: "end", target: `document-actions:${active.id}`, items: [
+                  { label: "Markdown 내보내기", icon: <Download size={15} />, action: attempt(async () => {
+                    await flush();
+                    if (await call("exportDocument", { id: active.id })) message("원고를 내보냈습니다.");
+                  }) },
+                  "separator",
+                  { label: active.archived ? "보관 해제" : "보관함으로 이동", icon: <Archive size={15} />,
+                    action: attempt(() => archiveDoc(active)) },
+                  { label: "영구 삭제", icon: <Trash2 size={15} />, danger: true,
+                    action: () => setDialog({ type: "deleteDoc", value: active.id }) },
+                ] });
+              }}
             >
               <MoreHorizontal size={20} />
             </button>
@@ -1540,6 +1529,7 @@ export default function App() {
               fontSize={activeBox.norm.fontSize}
               lineHeight={activeBox.norm.lineHeight}
               source={source}
+              onToggleSource={() => setSource((value) => !value)}
               typingOptions={{
                 autoCloseQuotes: prefs.autoCloseQuotes,
                 autoCloseBrackets: prefs.autoCloseBrackets,
@@ -2472,7 +2462,7 @@ export default function App() {
         </div>
       )}
       {menu && (
-        <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={closeMenu} />
+        <ContextMenu x={menu.x} y={menu.y} align={menu.align} items={menu.items} onClose={closeMenu} />
       )}
       {quickNote && (
         <QuickNote
@@ -2539,7 +2529,6 @@ export default function App() {
                     settings: "설정",
                     serverSync: "실시간 동기화",
                     history: "변경 이력",
-                    document: "문서 관리",
                     deleteDoc: "영구 삭제",
                     deleteProject: "작품 삭제",
                     linkEpisode: "회차에 연결",
@@ -2624,33 +2613,6 @@ export default function App() {
                 message(restored.historyWarning ?? "이전 원고를 복원했습니다. 복원 전 원고와 복원 결과를 모두 이력에 남겼습니다.");
                 void refresh().catch(report);
               }} />
-            )}
-            {dialog.type === "document" && active && (
-              <>
-                <p>
-                  파일 ID: <code>{active.id}</code>
-                </p>
-                <p className="muted">
-                  보관한 문서는 보관함에서 다시 열 수 있습니다.
-                </p>
-                <button
-                  className="danger-outline"
-                  onClick={attempt(async () => {
-                    setDialog(null);
-                    await archiveDoc(active);
-                  })}
-                >
-                  <Archive size={16} />
-                  {active.archived ? "보관 해제" : "보관함으로 옮기기"}
-                </button>
-                <button
-                  className="danger-outline"
-                  onClick={() => setDialog({ type: "deleteDoc", value: active.id })}
-                >
-                  <Trash2 size={16} />
-                  영구 삭제
-                </button>
-              </>
             )}
             {dialog.type === "deleteDoc" &&
               (() => {

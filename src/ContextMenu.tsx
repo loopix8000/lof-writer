@@ -22,11 +22,13 @@ export type MenuItem =
 export default function ContextMenu({
   x,
   y,
+  align = "start",
   items,
   onClose,
 }: {
   x: number;
   y: number;
+  align?: "start" | "end";
   items: MenuItem[];
   onClose: () => void;
 }) {
@@ -37,11 +39,11 @@ export default function ContextMenu({
     if (!el) return;
     const { width, height } = el.getBoundingClientRect();
     setPos({
-      left: Math.max(4, Math.min(x, window.innerWidth - width - 4)),
+      left: Math.max(4, Math.min(align === "end" ? x - width : x, window.innerWidth - width - 4)),
       top: Math.max(4, Math.min(y, window.innerHeight - height - 4)),
     });
     el.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
-  }, [x, y]);
+  }, [x, y, align]);
   useEffect(() => {
     const close = (e: Event) => {
       if (e.target instanceof Node && ref.current?.contains(e.target)) return;

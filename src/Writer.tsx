@@ -27,6 +27,7 @@ import {
   ClipboardPaste,
   ImagePlus,
   MessageSquareCode,
+  Code2,
 } from "lucide-react";
 import { createPortal } from "react-dom";
 import ContextMenu, { type MenuItem } from "./ContextMenu";
@@ -395,6 +396,7 @@ export default function Writer({
   fontSize,
   lineHeight,
   source,
+  onToggleSource,
   typingOptions,
   revision,
   readOnly = false,
@@ -428,6 +430,7 @@ export default function Writer({
   fontSize: number;
   lineHeight: number;
   source: boolean;
+  onToggleSource?: () => void;
   typingOptions: Record<string, any>;
   revision: string;
   session?: EditorSession;
@@ -1051,10 +1054,18 @@ export default function Writer({
     document.querySelector(".app") ?? document.body,
   );
 
+  const sourceButton = onToggleSource && (
+    <button type="button" aria-label="Markdown 원문 / 편집" title="Markdown 원문 / 편집"
+      className={source ? "active" : ""} aria-pressed={source}
+      onMouseDown={(event) => event.preventDefault()} onClick={onToggleSource}>
+      <Code2 size={16} />
+    </button>
+  );
   if (source || protectedSource)
     return (
       <div className="source-editor">
         <EditorFind sourceRef={sourceRef} body={body} enabled={visible && !inactive} editable={editable} />
+        {sourceButton && <FormatBar inactive={inactive} visible={visible}>{sourceButton}</FormatBar>}
         {protectedSource && <div className="source-hint">원문 편집</div>}
         <div onContextMenu={(event) => {
           const handle = sourceRef.current, view = handle?.view;
@@ -1171,6 +1182,8 @@ export default function Writer({
       <EditorFind editor={editor} enabled={visible && !inactive} editable={editable} />
       {/* 다른 그룹의 막대도 원래 위치에서는 표시하고 상단에 고정됐을 때만 숨긴다. */}
       <FormatBar inactive={inactive} visible={visible}>
+        {sourceButton}
+        {sourceButton && <i className="format-divider" />}
         {tools.map((t) => (
           <button
             key={t.label}
