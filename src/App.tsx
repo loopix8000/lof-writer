@@ -208,6 +208,8 @@ export default function App() {
     [busy, setBusy] = useState(false),
     // 메모 세션(레일의 메모 버튼). 열려 있는 동안 집필 화면은 그대로 두고 가린다.
     [memoOpen, setMemoOpen] = useState(false),
+    // 모바일에서 문서를 닫는 동안 저장이 끝나기 전에도 편집 화면을 먼저 내린다.
+    [mobileClosing, setMobileClosing] = useState(false),
     [commonMemoPath, setCommonMemoPath] = useState(""),
     // 본문 우클릭 '메모 추가'로 연 퀵 노트 창.
     [quickNote, setQuickNote] = useState<QuickNoteSource | null>(null),
@@ -505,6 +507,12 @@ export default function App() {
   }, [refresh, flush, flushForClose, waitForSave, report]);
   // beforeCommit은 문서를 읽은 뒤 화면 상태를 바꾸기 직전에 부른다. 같은 렌더에 묶여 중간 상태가 그려지지 않는다.
   async function navigate(destination: Destination, historyIndex?: number, beforeCommit?: () => boolean | void) {
+    const seq = navigationSeq.current + 1;
+    try { await navigateNow(destination, historyIndex, beforeCommit); }
+    // 닫는 중에 다른 문서로 이동했다면 이동이 끝난 뒤 가려 둔 화면을 푼다.
+    finally { if (seq === navigationSeq.current) setMobileClosing(false); }
+  }
+  async function navigateNow(destination: Destination, historyIndex?: number, beforeCommit?: () => boolean | void) {
     const seq = ++navigationSeq.current;
     await flush();
     if (seq !== navigationSeq.current) return;
@@ -575,13 +583,19 @@ export default function App() {
   async function closeMobileDocument() {
     if (!session.currentId()) return;
     const seq = ++navigationSeq.current;
-    await flush({ closing: true, skipMemo: true });
-    if (seq !== navigationSeq.current) return;
-    // 저장하면서 메모 제목이 바뀌면 파일 경로에서 만든 문서 ID도 바뀔 수 있다.
-    const id = session.currentId();
-    // 다른 탭이나 분할 그룹으로 이동하지 않고 현재 문서만 닫는다.
-    area.updateTabs(tabs => tabs.filter(tab => tab.id !== id));
-    session.closeDocument();
+    // 화면은 바로 닫고 저장은 뒤에서 마친다. 저장에 실패하면 문서를 다시 보여 준다.
+    setMobileClosing(true);
+    try {
+      await flush({ closing: true, skipMemo: true });
+      if (seq !== navigationSeq.current) return;
+      // 저장하면서 메모 제목이 바뀌면 파일 경로에서 만든 문서 ID도 바뀔 수 있다.
+      const id = session.currentId();
+      // 다른 탭이나 분할 그룹으로 이동하지 않고 현재 문서만 닫는다.
+      area.updateTabs(tabs => tabs.filter(tab => tab.id !== id));
+      session.closeDocument();
+    } finally {
+      if (seq === navigationSeq.current) setMobileClosing(false);
+    }
   }
   // 문서 ID가 바뀌었을 때(메모 이름 바꾸기) 탭·분할 보기·이동 기록이 새 ID를 가리키게 한다.
   function handleDocumentIdChange(oldId: string, newId: string, location?: Doc) {
@@ -932,6 +946,7 @@ export default function App() {
   }
   function resetNavigation() {
     ++navigationSeq.current;
+    setMobileClosing(false);
     const next = initialNavigation();
     navigationRef.current = next;
     setNavigation(next);
@@ -1816,7 +1831,7 @@ export default function App() {
         setTab={setTab}
         archive={archive}
         setArchive={setArchive}
-        active={active}
+        active={mobileClosing ? null : active}
         saveStatus={saveStatus}
         conflict={conflict}
         autoSync={autoSync}
