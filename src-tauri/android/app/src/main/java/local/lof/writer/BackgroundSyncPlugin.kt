@@ -19,18 +19,23 @@ import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
+import android.net.Uri
+import android.provider.Settings
+import app.tauri.plugin.JSObject
 import androidx.annotation.Keep
+import androidx.activity.result.ActivityResult
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import app.tauri.annotation.Command
+import app.tauri.annotation.ActivityCallback
 import app.tauri.annotation.TauriPlugin
 import app.tauri.plugin.Invoke
 import app.tauri.plugin.Plugin
 
 /** 앱을 닫은 뒤의 동기화 유지 상태. 알림 서비스와 주기 확인 알람이 함께 사용한다. */
 object BackgroundSync {
-  const val LIVE_MILLIS = 30L * 60 * 1000
+  private const val DEFAULT_LIVE_MILLIS = 30L * 60 * 1000
   const val NOTIFICATION_ID = 7301
   private const val CHANNEL = "background-sync"
   private const val PREFS = "background-sync"
@@ -40,6 +45,7 @@ object BackgroundSync {
   private val handler = Handler(Looper.getMainLooper())
   private val timeout = Runnable { release() }
   @Volatile var attached = false
+  @Volatile private var hiddenAt: Long? = null
   private var waiting: Invoke? = null
   private var missed = false
   private var hold: BroadcastReceiver.PendingResult? = null
@@ -49,12 +55,32 @@ object BackgroundSync {
   fun mode(context: Context) = prefs(context).getString("mode", "live") ?: "live"
   private fun active(context: Context) = prefs(context).getBoolean("active", false)
 
-  fun configure(context: Context, mode: String, active: Boolean) {
-    prefs(context).edit().putString("mode", mode).putBoolean("active", active).apply()
+  fun configure(context: Context, mode: String, active: Boolean, liveMillis: Long) {
+    prefs(context).edit().putString("mode", mode).putBoolean("active", active)
+      .putLong("liveMillis", liveMillis.coerceIn(0L, 86_400_000L)).apply()
+    if (hiddenAt != null) updateService(context)
   }
 
+  fun remainingLiveMillis(context: Context): Long? {
+    val duration = prefs(context).getLong("liveMillis", DEFAULT_LIVE_MILLIS)
+    if (duration == 0L) return null
+    val since = hiddenAt ?: SystemClock.elapsedRealtime()
+    return (duration - (SystemClock.elapsedRealtime() - since)).coerceAtLeast(0L)
+  }
+
+  fun serviceAllowed(context: Context) = hiddenAt != null && active(context) && mode(context) != "off"
+
   fun appHidden(context: Context) {
-    if (!active(context) || mode(context) == "off") return
+    if (hiddenAt == null) hiddenAt = SystemClock.elapsedRealtime()
+    updateService(context)
+  }
+
+  private fun updateService(context: Context) {
+    if (!serviceAllowed(context) ||
+      (remainingLiveMillis(context) == 0L && mode(context) != "always")) {
+      context.stopService(Intent(context, BackgroundSyncService::class.java))
+      return
+    }
     try {
       ContextCompat.startForegroundService(context, Intent(context, BackgroundSyncService::class.java))
     } catch (_: Exception) {
@@ -63,6 +89,7 @@ object BackgroundSync {
   }
 
   fun appVisible(context: Context) {
+    hiddenAt = null
     context.stopService(Intent(context, BackgroundSyncService::class.java))
   }
 
@@ -223,8 +250,35 @@ class BackgroundSyncPlugin(private val activity: Activity) : Plugin(activity) {
   @Command
   fun configure(invoke: Invoke) {
     val args = invoke.getArgs()
-    BackgroundSync.configure(activity.applicationContext, args.optString("mode", "live"), args.optBoolean("active", false))
+    BackgroundSync.configure(activity.applicationContext, args.optString("mode", "live"), args.optBoolean("active", false), args.optLong("liveMillis", 1_800_000L))
     invoke.resolve()
+  }
+
+  @Command
+  fun batterySettings(invoke: Invoke) {
+    val power = activity.getSystemService(PowerManager::class.java)
+    val exempt = power?.isIgnoringBatteryOptimizations(activity.packageName) == true
+    if (invoke.getArgs().optBoolean("open", false)) {
+      try {
+        startActivityForResult(invoke, Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS), "batterySettingsReturned")
+      } catch (_: Exception) {
+        try {
+          startActivityForResult(invoke, Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${activity.packageName}")), "batterySettingsReturned")
+        } catch (_: Exception) {
+          invoke.reject("배터리 설정을 열지 못했습니다. 기기 설정에서 Lof Writer의 배터리 제한을 확인해 주세요.")
+          return
+        }
+      }
+      return
+    }
+    invoke.resolve(JSObject().apply { put("exempt", exempt) })
+  }
+
+  @ActivityCallback
+  fun batterySettingsReturned(invoke: Invoke, result: ActivityResult) {
+    val exempt = activity.getSystemService(PowerManager::class.java)
+      ?.isIgnoringBatteryOptimizations(activity.packageName) == true
+    invoke.resolve(JSObject().apply { put("exempt", exempt) })
   }
 
   @Command

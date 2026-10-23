@@ -1,5 +1,5 @@
 //! 앱을 닫은 뒤의 동기화 시점을 정한다.
-//! Android에서는 30분 동안 화면에 있을 때처럼 변경 즉시 동기화하고, 이후에는 설정한 주기마다 한 번씩 확인한다.
+//! Android에서는 설정한 시간 동안 변경 즉시 동기화하고, 이후에는 설정한 주기마다 확인한다.
 //! PC는 창을 닫아도 계속 화면에 있을 때처럼 동기화한다.
 use crate::AppState;
 use serde_json::{json, Value};
@@ -8,7 +8,13 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime};
 use tauri::{AppHandle, Manager};
 
-pub const LIVE_WINDOW: Duration = Duration::from_secs(30 * 60);
+fn live_window(settings: &Value) -> Option<Duration> {
+    let prefs = &settings["preferences"];
+    if prefs["backgroundLiveMode"].as_str() == Some("always") { return None; }
+    let minutes = prefs["backgroundLiveMinutes"].as_u64()
+        .filter(|value| (1..=1440).contains(value)).unwrap_or(30);
+    Some(Duration::from_secs(minutes * 60))
+}
 
 #[derive(Default)]
 pub struct BackgroundSync {
@@ -18,13 +24,13 @@ pub struct BackgroundSync {
     tick: AtomicBool,
     realtime_pending: AtomicBool,
     files_pending: AtomicBool,
-    pushed: Mutex<Option<(String, bool)>>,
+    pushed: Mutex<Option<(String, bool, Option<u64>)>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
     Foreground,
-    /// 앱을 닫은 뒤 30분 동안. 변경 알림을 받는 즉시 동기화한다.
+    /// 설정한 유지 시간 동안. 변경 알림을 받는 즉시 동기화한다.
     Live,
     /// 이후에는 연결을 닫고 설정한 주기마다 확인한다.
     Periodic,
@@ -33,6 +39,9 @@ pub enum Phase {
 }
 
 pub fn keep_alive_mode(settings: &Value) -> &'static str {
+    if live_window(settings).is_none() && settings["preferences"]["backgroundKeepAlive"].as_str() != Some("off") {
+        return "always";
+    }
     match settings
         .get("preferences")
         .and_then(|prefs| prefs.get("backgroundKeepAlive"))
@@ -56,9 +65,11 @@ pub fn phase(app: &AppHandle) -> Phase {
     let Some(since) = *app.state::<BackgroundSync>().since.lock().unwrap() else {
         return Phase::Foreground;
     };
-    if !crate::auto_sync::background_enabled(&app.state::<AppState>().settings.lock().unwrap()) {
+    let state = app.state::<AppState>();
+    let settings = state.settings.lock().unwrap();
+    if !crate::auto_sync::background_enabled(&settings) {
         Phase::Paused
-    } else if elapsed(since) < LIVE_WINDOW {
+    } else if live_window(&settings).is_none_or(|window| elapsed(since) < window) {
         Phase::Live
     } else {
         Phase::Periodic
@@ -71,7 +82,8 @@ pub fn live_deadline(app: &AppHandle) -> Option<Instant> {
         return None;
     }
     let since = (*app.state::<BackgroundSync>().since.lock().unwrap())?;
-    Some(Instant::now() + LIVE_WINDOW.saturating_sub(elapsed(since)))
+    let window = live_window(&app.state::<AppState>().settings.lock().unwrap())?;
+    Some(Instant::now() + window.saturating_sub(elapsed(since)))
 }
 
 pub fn set_background(app: &AppHandle, background: bool) {
@@ -83,7 +95,9 @@ pub fn set_background(app: &AppHandle, background: bool) {
             drop(since);
             // 앱이 멈춰 있어도 실시간 유지가 끝날 때 깨어나 주기 확인을 시작한다.
             if pushed_active(app) {
-                schedule(app, LIVE_WINDOW);
+                if let Some(remaining) = live_deadline(app) {
+                    schedule(app, remaining.saturating_duration_since(Instant::now()));
+                } else { cancel(app); }
             }
         }
     } else if since.take().is_some() {
@@ -153,21 +167,22 @@ fn pushed_active(app: &AppHandle) -> bool {
         .lock()
         .unwrap()
         .as_ref()
-        .is_some_and(|(_, active)| *active)
+        .is_some_and(|(_, active, _)| *active)
 }
 
 /// 앱을 닫을 때 알림을 띄울지 Android에 미리 알려 둔다. 동기화할 대상이 없으면 띄우지 않는다.
 pub fn refresh(app: &AppHandle, has_peers: bool) {
-    let (mode, enabled) = {
+    let (mode, enabled, window) = {
         let state = app.state::<AppState>();
         let settings = state.settings.lock().unwrap();
         (
             keep_alive_mode(&settings).to_string(),
             crate::auto_sync::background_enabled(&settings),
+            live_window(&settings).map(|window| window.as_secs()),
         )
     };
     let active = enabled && (has_peers || crate::auto_sync::has_connections(app));
-    let next = Some((mode.clone(), active));
+    let next = Some((mode.clone(), active, window));
     let state = app.state::<BackgroundSync>();
     let mut pushed = state.pushed.lock().unwrap();
     if *pushed == next {
@@ -175,7 +190,15 @@ pub fn refresh(app: &AppHandle, has_peers: bool) {
     }
     *pushed = next;
     drop(pushed);
-    call(app, "configure", json!({"mode": mode, "active": active}));
+    call(app, "configure", json!({"mode": mode, "active": active, "liveMillis": window.map(|seconds| seconds * 1000).unwrap_or(0)}));
+    let since = *state.since.lock().unwrap();
+    if let Some(since) = since {
+        *state.next_tick.lock().unwrap() = None;
+        if !active { cancel(app); finish(app); }
+        else if let Some(seconds) = window {
+            schedule(app, Duration::from_secs(seconds).saturating_sub(elapsed(since)).max(Duration::from_secs(1)));
+        } else { cancel(app); }
+    }
 }
 
 fn schedule(app: &AppHandle, delay: Duration) {
@@ -195,6 +218,17 @@ fn finish(app: &AppHandle) {
 
 pub fn request_notifications(app: &AppHandle) {
     call(app, "requestNotifications", json!({}));
+}
+
+#[tauri::command]
+pub async fn android_background_battery(app: AppHandle, open: bool) -> Result<Value, String> {
+    #[cfg(target_os = "android")]
+    {
+        app.state::<Plugin>().0.run_mobile_plugin_async("batterySettings", json!({"open": open}))
+            .await.map_err(|error| error.to_string())
+    }
+    #[cfg(not(target_os = "android"))]
+    { let _ = (app, open); Err("Android 앱에서만 사용할 수 있습니다.".into()) }
 }
 
 #[cfg(target_os = "android")]

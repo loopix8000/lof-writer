@@ -1709,6 +1709,16 @@ fn dispatch_method(
                     return Err(fail_invalid("앱을 닫은 뒤 알림 설정이 올바르지 않습니다."));
                 }
             }
+            if let Some(value) = args.get("backgroundLiveMode") {
+                if !matches!(value.as_str(), Some("timed" | "always")) {
+                    return Err(fail_invalid("즉시 동기화 유지 방식을 확인해 주세요."));
+                }
+            }
+            if let Some(value) = args.get("backgroundLiveMinutes") {
+                if !value.as_u64().is_some_and(|minutes| (1..=1440).contains(&minutes)) {
+                    return Err(fail_invalid("유지 시간은 1분부터 1440분 사이로 지정해 주세요."));
+                }
+            }
             let new_prefs = {
                 let mut s_guard = state.settings.lock().unwrap();
                 let mut prefs = s_guard
@@ -2406,6 +2416,7 @@ pub fn run() {
             android_biometric::android_biometric_set_enabled,
             android_biometric::android_biometric_unlock,
             android_system_bars::android_set_system_bars,
+            background_sync::android_background_battery,
         ])
         .setup(move |app| {
             #[cfg(not(target_os = "android"))]

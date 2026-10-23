@@ -481,7 +481,7 @@ fn worker(app: AppHandle) {
         {
             let mut queue = auto.queue.lock().unwrap();
             while !auto.stopped.load(Ordering::SeqCst) {
-                // 앱을 닫은 뒤 30분 동안은 화면에 있을 때와 같은 주기로 확인한다.
+                // 즉시 동기화 유지 시간 동안은 화면에 있을 때와 같은 주기로 확인한다.
                 let bg = crate::background_sync::is_periodic(&app);
                 let target_interval = if bg { queue.bg_interval } else { queue.interval };
                 if target_interval != interval {

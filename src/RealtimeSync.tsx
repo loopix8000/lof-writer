@@ -2,12 +2,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { AlertCircle, ArrowLeft, ArrowRight, Check, CheckCircle2, ChevronDown, ChevronRight, Clock3, Cloud, Copy, Link, Loader2, LogOut, Maximize2, Monitor, Pencil, QrCode, RefreshCw, ScanLine, Server, Smartphone, Users, X } from "lucide-react";
-import SettingsToggle from "./app/SettingsToggle";
+import BackgroundSyncSettings from "./BackgroundSyncSettings";
 import { useConfirm } from "./ConfirmDialog";
 import { isAndroidApp } from "./tauri-bridge";
 import { call } from "./types";
 
-const PRESET_BG_SECONDS = [300, 600, 900, 1800, 3600];
+
 
 type Peer = { id: string; name: string; endpoint: string; storage: boolean; status?: { phase: string; message?: string; conflicts?: number; lastSync?: string } };
 type InviteInfo = { id: string; remainingMs: number; durationMs: number; phase: "waiting" | "expired" | "connected"; peer?: Peer };
@@ -349,16 +349,6 @@ export default function RealtimeSync({
   };
 
   const currentTab = tabs.find(item => item.id === tab);
-  const bgEnabled = prefs?.backgroundSyncEnabled !== false;
-  const bgIntervalSeconds = prefs?.backgroundSyncIntervalSeconds ?? 300;
-  const bgMinutes = Math.max(5, Math.min(60, Math.round(bgIntervalSeconds / 60)));
-  const keepAlive = prefs?.backgroundKeepAlive === "always" || prefs?.backgroundKeepAlive === "off" ? prefs.backgroundKeepAlive : "live";
-  const hasCustomBgInterval = bgEnabled && !PRESET_BG_SECONDS.includes(bgIntervalSeconds);
-  const handlePrefPatch = (patch: Record<string, any>) => {
-    if (!savePrefs) return;
-    savePrefs(patch).catch(err => report?.(err));
-  };
-
   return <div className={`settings-layout realtime-layout realtime-sync ${embedded ? "is-embedded mobile-detail-open" : mobileDetailOpen ? "mobile-detail-open" : "mobile-menu-list"}`} aria-label="실시간 장치 동기화">
     <nav className={`settings-nav realtime-nav ${embedded ? "realtime-embedded-tabs" : ""}`} role="tablist" aria-label="실시간 동기화 분류" aria-orientation={embedded ? "horizontal" : "vertical"} onKeyDown={event => {
       const index = tabs.findIndex(item => item.id === tab);
@@ -408,91 +398,7 @@ export default function RealtimeSync({
           {status.device && <div className="realtime-device-list realtime-own-device">{ownDevice(status.device.name)}</div>}
           {status.peers.length ? <div className="realtime-device-list">{status.peers.map(peer => device(peer, true))}</div>
             : <div className="realtime-empty"><Cloud size={38} /><strong>아직 그룹에 다른 장치가 없습니다</strong><p>초대 코드를 만들어 다른 장치를 그룹에 추가하거나, 다른 장치의 코드로 그룹에 가입해 보세요.</p></div>}
-          {savePrefs && isAndroidApp() && (
-            <div className="realtime-bg-sync-box">
-              <h4>백그라운드 동기화 설정</h4>
-              <p className="settings-description">앱을 닫은 뒤 30분 동안은 변경 내용을 바로 동기화하고, 이후에는 설정한 주기마다 확인합니다 (5분~1시간, 기본값 5분).</p>
-              <div className="settings-toggles" style={{ marginBottom: 10 }}>
-                <SettingsToggle
-                  label="백그라운드 동기화 사용"
-                  description="끄면 앱이 백그라운드에 있는 동안 주기적 동기화를 수행하지 않습니다."
-                  checked={bgEnabled}
-                  onChange={checked => handlePrefPatch({ backgroundSyncEnabled: checked })}
-                />
-              </div>
-              {bgEnabled && <div className="settings-grid">
-                <label>
-                  백그라운드 동기화 주기
-                  <select
-                    aria-label="백그라운드 동기화 주기"
-                    value={bgEnabled ? String(bgIntervalSeconds) : "off"}
-                    onChange={event => {
-                      const val = event.target.value;
-                      if (val === "off") {
-                        handlePrefPatch({ backgroundSyncEnabled: false });
-                      } else {
-                        handlePrefPatch({
-                          backgroundSyncEnabled: true,
-                          backgroundSyncIntervalSeconds: Number(val),
-                        });
-                      }
-                    }}
-                  >
-                    <option value="off">끄기 (사용 안 함)</option>
-                    <option value="300">5분 (기본)</option>
-                    <option value="600">10분</option>
-                    <option value="900">15분</option>
-                    <option value="1800">30분</option>
-                    <option value="3600">1시간 (60분)</option>
-                    {hasCustomBgInterval && (
-                      <option value={String(bgIntervalSeconds)}>{bgMinutes}분 (직접 설정)</option>
-                    )}
-                  </select>
-                </label>
-                <label>
-                  주기 직접 설정 (5~60분)
-                  <input
-                    type="number"
-                    aria-label="백그라운드 동기화 주기 직접 설정 (분)"
-                    min={5}
-                    max={60}
-                    value={bgMinutes}
-                    onChange={event => {
-                      const mins = Number(event.target.value);
-                      if (Number.isFinite(mins) && mins >= 5 && mins <= 60) {
-                        handlePrefPatch({
-                          backgroundSyncEnabled: true,
-                          backgroundSyncIntervalSeconds: Math.round(mins) * 60,
-                        });
-                      }
-                    }}
-                  />
-                </label>
-                <label>
-                  앱을 닫은 뒤 알림
-                  <select
-                    aria-label="앱을 닫은 뒤 동기화 유지 알림"
-                    value={keepAlive}
-                    onChange={event => {
-                      const value = event.target.value;
-                      handlePrefPatch({ backgroundKeepAlive: value });
-                      if (value !== "off") void call("backgroundNotifications").catch(() => {});
-                    }}
-                  >
-                    <option value="live">30분 동안 표시 (기본)</option>
-                    <option value="always">계속 표시</option>
-                    <option value="off">표시 안 함</option>
-                  </select>
-                </label>
-              </div>}
-              {bgEnabled && <p className="settings-note">
-                {keepAlive === "live" ? "알림이 떠 있는 30분 동안 연결을 유지합니다. 이후에는 알림을 내리고 주기마다 잠시 깨어나 확인합니다."
-                  : keepAlive === "always" ? "알림을 계속 띄워 Android가 앱을 멈추지 않게 합니다. 배터리를 조금 더 사용합니다."
-                    : "알림 없이 동작합니다. Android가 앱을 멈추면 30분이 지나기 전에도 동기화가 멈출 수 있습니다."}
-                {" "}기기가 대기 상태일 때는 Android가 확인 시각을 조금 늦출 수 있습니다.
-              </p>}
-            </div>
-          )}
+          {savePrefs && isAndroidApp() && <BackgroundSyncSettings prefs={prefs ?? {}} savePrefs={savePrefs} report={report} />}
         </>}
         {tab === "invite" && (invitedPeer ? success(invitedPeer, "장치가 그룹에 가입했습니다") : <>
           <h3 ref={heading} tabIndex={-1}>{expired ? "페어링 코드가 만료되었어요" : "다른 장치를 그룹에 초대하세요"}</h3>

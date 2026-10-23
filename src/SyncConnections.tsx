@@ -105,7 +105,7 @@ export default function SyncConnections({
       <div className="settings-toggles" style={{ marginTop: 10, marginBottom: 10 }}>
         <SettingsToggle
           label="백그라운드 동기화 사용"
-          description="앱을 닫은 뒤 30분 동안은 화면에 있을 때와 같은 주기로, 이후에는 설정한 주기(5분~1시간, 기본값 5분)마다 동기화합니다. 끄면 백그라운드에서 주기적 동기화를 수행하지 않습니다."
+          description="앱을 벗어난 뒤 지정한 유지 시간 동안 연결을 유지하고, 이후에는 설정한 주기마다 동기화합니다. 유지 시간은 동기화 그룹 설정에서 변경할 수 있습니다."
           checked={backgroundEnabled}
           onChange={checked => backgroundChange({ backgroundSyncEnabled: checked }).catch(report)}
         />

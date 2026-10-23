@@ -1516,7 +1516,7 @@ pub fn start(app: &AppHandle) {
                     periodic_active = false;
                     crate::background_sync::realtime_done(&app);
                 }
-                // 화면에 있을 때와 앱을 닫은 뒤 30분 동안은 저장·수신·접속 알림을 기다린다.
+                // 화면에 있거나 즉시 동기화를 유지하는 동안 저장·수신·접속 알림을 기다린다.
                 // 이후에는 알림을 미루고 주기 확인 시각에만 깨어난다.
                 loop {
                     let phase = crate::background_sync::phase(&app);

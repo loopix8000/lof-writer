@@ -48,6 +48,17 @@
 .pin-settings-form { max-width: 360px; display: flex; flex-direction: column; gap: 16px; }
 .pin-settings-form > label { display: flex; flex-direction: column; gap: 7px; font-size: 13px; }
 .pin-biometric-settings { margin-top: 24px; max-width: 480px; }
+.background-sync-options { display: flex; flex-direction: column; gap: 16px; margin-top: 16px; }
+.background-sync-options > label, .background-sync-options .settings-grid > label { display: flex; flex-direction: column; gap: 7px; font-size: 13px; }
+.background-sync-options .settings-note { margin: 0; }
+.background-sync-number { display: flex; align-items: center; gap: 8px; }
+.background-sync-number input { width: 100%; }
+.background-sync-number > span { color: var(--muted); }
+.background-sync-warning { display: flex; align-items: flex-start; gap: 8px; margin: 0; padding: 10px 12px; border-radius: 7px; background: var(--warning-bg); color: var(--warning-text); font-size: 12px; line-height: 1.6; }
+.background-sync-warning > svg { flex-shrink: 0; margin-top: 2px; }
+.background-sync-battery { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 14px; border-top: 1px solid var(--border); font-size: 13px; }
+.background-sync-battery small { display: block; margin-top: 5px; color: var(--muted); line-height: 1.6; }
+.background-sync-battery button { flex-shrink: 0; }
 .pin-biometric-settings .settings-toggle > span { display: inline-flex; align-items: center; gap: 6px; }
 .auto-sync-status { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); white-space: nowrap; }
 .auto-sync-status.idle { color: var(--sync-done, #0078d4); }

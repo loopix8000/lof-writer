@@ -12,14 +12,12 @@ import android.os.Looper
 import android.os.PowerManager
 import androidx.core.app.ServiceCompat
 
-/** 앱을 닫은 뒤 알림을 띄워 두고, 30분 동안 연결이 끊기지 않게 기기를 깨워 둔다. */
+/** 설정한 즉시 동기화 유지 시간과 상태 알림을 함께 관리한다. */
 class BackgroundSyncService : Service() {
   private val handler = Handler(Looper.getMainLooper())
   private var wakeLock: PowerManager.WakeLock? = null
   private val endLive = Runnable {
-    wakeLock?.let { if (it.isHeld) it.release() }
-    wakeLock = null
-    if (BackgroundSync.mode(this) == "always") show(false) else stopSelf()
+    update()
   }
 
   override fun onBind(intent: Intent?): IBinder? = null
@@ -37,20 +35,30 @@ class BackgroundSyncService : Service() {
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-    if (!show(true)) {
+    update()
+    return START_NOT_STICKY
+  }
+
+  private fun update() {
+    handler.removeCallbacks(endLive)
+    wakeLock?.let { if (it.isHeld) it.release() }
+    wakeLock = null
+    if (!BackgroundSync.serviceAllowed(this)) { stopSelf(); return }
+    val remaining = BackgroundSync.remainingLiveMillis(this)
+    val live = remaining == null || remaining > 0L
+    if ((!live && BackgroundSync.mode(this) != "always") || !show(live)) {
       stopSelf()
-      return START_NOT_STICKY
+      return
     }
-    if (wakeLock == null) {
+    if (live) {
       wakeLock = getSystemService(PowerManager::class.java)
         ?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "lof:live-sync")
         ?.apply {
           setReferenceCounted(false)
-          acquire(BackgroundSync.LIVE_MILLIS)
+          if (remaining == null) acquire() else acquire(remaining)
         }
-      handler.postDelayed(endLive, BackgroundSync.LIVE_MILLIS)
+      if (remaining != null) handler.postDelayed(endLive, remaining)
     }
-    return START_NOT_STICKY
   }
 
   // Android 15부터 데이터 동기화 서비스의 하루 실행 시간이 끝나면 호출된다.

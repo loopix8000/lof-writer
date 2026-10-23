@@ -113,6 +113,10 @@ async function withExternalScreen<T>(open: () => Promise<T>): Promise<T> {
   }
 }
 
+export function openBackgroundBatterySettings() {
+  return withExternalScreen(() => invoke<{ exempt: boolean }>("android_background_battery", { open: true }));
+}
+
 async function pickAndroidImage(mimeTypes: string[]): Promise<{ name: string; data: string } | null> {
   const picked = await withExternalScreen(() =>
     invoke<{ name?: string; data?: string | null }>("android_pick_image", { mimeTypes }),
