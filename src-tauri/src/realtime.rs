@@ -742,10 +742,13 @@ impl Host for WriterHost {
         }
     }
     fn handle(&self, peer: &str, session: &str, message: Message) -> lof_realtime::Result<Message> {
+        let error_codes = message.meta["errorCodes"].as_bool().unwrap_or(false);
         let res = self.handle_inner(peer, session, message);
         crate::auto_sync::refresh_realtime(&self.0);
-        res
-            .map_err(|e| e.message)
+        match res {
+            Err(e) if error_codes => Ok(Message::json(json!({"fileError":{"code":e.code,"message":e.message}}))),
+            other => other.map_err(|e| e.message),
+        }
     }
     fn disconnected(&self, session: &str) {
         release(&self.0, session);
@@ -1015,7 +1018,7 @@ impl WriterHost {
                 sync_activity(app, peer_config["id"].as_str().unwrap_or(""), "uploading");
                 Ok(Message {
                     meta: json!(null),
-                    data: files::read_local(&current, path)?
+                    data: files::read_for_sync(&state.store, &current, path)?
                         .ok_or_else(|| fail_invalid("파일이 변경되었습니다."))?,
                 })
             }
@@ -1068,7 +1071,8 @@ impl PeerRemote {
         }
         meta["vault"] = json!(self.local_vault);
         meta["target"] = json!(self.remote_vault);
-        self.handle
+        meta["errorCodes"] = json!(true);
+        let response = self.handle
             .block_on(lof_realtime::request(
                 &self.connection,
                 Message { meta, data },
@@ -1077,10 +1081,17 @@ impl PeerRemote {
                 // 이전 앱도 오류 문구만 전송하므로 수신 시 대기 사유를 복원한다.
                 if error == SYNC_BUSY_MESSAGE {
                     fail(error, "SYNC_BUSY")
+                } else if error == crate::store::SYNC_HOLD_MESSAGE {
+                    fail(error, "SYNC_RETRY")
                 } else {
                     net(error)
                 }
-            })
+            })?;
+        if let Some(error) = response.meta.get("fileError") {
+            return Err(fail(error["message"].as_str().unwrap_or("파일을 처리하지 못했습니다."),
+                error["code"].as_str().unwrap_or("SYNC_RETRY")));
+        }
+        Ok(response)
     }
 }
 impl FileRemote for PeerRemote {
@@ -1208,7 +1219,8 @@ fn sync(
         peer["id"].as_str().unwrap_or(""),
         &mut remote,
     );
-    let ended = remote.rpc(json!({"op":"end","success":result.is_ok()}), vec![]);
+    let complete = result.as_ref().is_ok_and(|value| value["deferredFiles"].as_u64().unwrap_or(0) == 0);
+    let ended = remote.rpc(json!({"op":"end","success":complete}), vec![]);
     if result.as_ref().is_ok_and(|result| {
         ["downloaded", "removed", "fileConflicts"].iter()
             .any(|key| result[*key].as_u64().unwrap_or(0) > 0)
@@ -1591,6 +1603,9 @@ pub fn start(app: &AppHandle) {
                             // 변경 알림만 보내는 경우는 비교가 아니므로 동기화 중으로 표시하지 않는다.
                             sync_activity(&app, &id, "comparing");
                             let outcome = sync(&app, &peer, conn, runtime.handle())?;
+                            if outcome["deferredFiles"].as_u64().unwrap_or(0) > 0 {
+                                return Err(fail("일부 문서의 정리를 기다리고 있습니다.", "SYNC_RETRY"));
+                            }
                             rt.statuses.lock().unwrap().insert(id.clone(),json!({"phase":"connected","lastSync":chrono::Utc::now().to_rfc3339(),"conflicts":outcome["fileConflicts"]}));
                             crate::auto_sync::refresh_realtime(&app);
                         } else {

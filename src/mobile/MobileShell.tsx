@@ -166,8 +166,8 @@ export default function MobileShell({
   counterUpdate,
   manualSave,
   flush,
-  resolveConflict,
-  checkOpenDocument,
+  syncIssue,
+  retrySync,
   restoreHistory,
   discardDraft,
   refresh,
@@ -312,8 +312,8 @@ export default function MobileShell({
   counterUpdate: (body: string, delta: any) => void;
   manualSave: () => Promise<void>;
   flush: () => Promise<void>;
-  resolveConflict: () => Promise<void>;
-  checkOpenDocument: (apply?: boolean) => Promise<void>;
+  syncIssue?: string;
+  retrySync: (discard?: boolean) => Promise<void>;
   restoreHistory: (
     id: string,
     name: string,
@@ -546,8 +546,8 @@ export default function MobileShell({
                 counterUpdate={counterUpdate}
                 manualSave={manualSave}
                 flush={flush}
-                resolveConflict={resolveConflict}
-                checkOpenDocument={checkOpenDocument}
+                syncIssue={syncIssue}
+                retrySync={retrySync}
                 replaceActiveSymbols={replaceActiveSymbols}
                 openDoc={openDoc}
                 openLinkedDocument={openLinkedDocument}

@@ -63,7 +63,7 @@ fn identity(path: &str, bytes: &[u8]) -> Result<Option<String>, LofError> {
 }
 
 fn can_defer_file(error: &LofError) -> bool {
-    matches!(error.code.as_str(), "ENOENT" | "EACCES" | "IO_ERROR" | "FILE_BUSY" | "FORMAT" | "INVALID" | "NOT_FOUND" | "CONFLICT" | "SYNC_RETRY")
+    matches!(error.code.as_str(), "ENOENT" | "EACCES" | "IO_ERROR" | "FILE_BUSY" | "FORMAT" | "INVALID" | "NOT_FOUND" | "CONFLICT" | "SYNC_RETRY" | "LOCAL_GIT")
 }
 
 // 목록 조회의 경고 문구로 전송 여부를 결정하지 않는다. 안전하지 않은 경로만 표시한다.
@@ -224,6 +224,13 @@ pub(crate) fn read_local(root: &Path, path: &str) -> Result<Option<Vec<u8>>, Lof
     Ok(Some(bytes))
 }
 
+pub(crate) fn read_for_sync(store: &Mutex<Option<Store>>, root: &Path, path: &str) -> Result<Option<Vec<u8>>, LofError> {
+    with_store(store, root, |st| {
+        st.ensure_sync_ready(path)?;
+        read_local(root, path)
+    })
+}
+
 fn save(
     store: &Mutex<Option<Store>>,
     root: &Path,
@@ -257,10 +264,14 @@ pub(crate) fn apply_local(
 ) -> Result<(), LofError> {
     with_store(store, root, |st| {
         st.require_database()?;
+        st.ensure_sync_ready(path)?;
         let old = read_local(root, path)?;
         if old.as_deref().map(hash_bytes).as_deref() != expected {
             return Err(retry());
         }
+        let preserved_draft = if path.to_ascii_lowercase().ends_with(".md") {
+            old.as_deref().map(|raw| st.preserve_sync_draft(raw)).transpose()?.flatten()
+        } else { None };
         if path == crate::project_order::FILE
             && crate::project_order::receive(root, st.database()?, bytes)?
         {
@@ -300,6 +311,7 @@ pub(crate) fn apply_local(
                 record_change(&target);
             }
         }
+        if let Some(id) = preserved_draft { st.clear_draft(&id)?; }
         Ok(())
     })
 }
@@ -431,9 +443,6 @@ pub(crate) fn sync_peer(
     let result=run(store,root,&key,&mut state,remote,false,&mut total);
     let refreshed=with_store(store,root,|st| {st.poll_disk()?; Ok(())});
     result?; refreshed?;
-    if total["deferredFiles"].as_u64().unwrap_or(0) > 0 {
-        return Err(retry());
-    }
     Ok(total)
 }
 
@@ -485,20 +494,23 @@ fn run(
     for (path, info) in local_files.iter().chain(remote_files.iter()) {
         if info.unavailable { deferred.insert(path); }
     }
-    let mut folded = HashSet::new();
+    let mut folded = HashMap::new();
     for path in &names {
         if !file_remote::path_ok(path)
             || !file_remote::included(path)
-            || !folded.insert(path.to_lowercase())
         {
-            return Err(fail_invalid(
-                "동기화 경로가 올바르지 않거나 대소문자만 다른 파일이 있습니다.",
-            ));
+            deferred.insert(path);
+            continue;
+        }
+        if let Some(other) = folded.insert(path.to_lowercase(), path) {
+            deferred.insert(other);
+            deferred.insert(path);
         }
         if deferred.contains(path) { continue; }
         for (index, _) in path.match_indices('/') {
             if names.contains(&path[..index]) {
-                return Err(fail_invalid("동기화할 파일과 폴더의 경로가 겹칩니다."));
+                deferred.insert(&path[..index]);
+                deferred.insert(path);
             }
         }
     }
@@ -506,6 +518,11 @@ fn run(
     for path in &names {
         if deferred.contains(path) { continue; }
         remote.heartbeat()?;
+        match with_store(store, root, |st| st.ensure_sync_ready(path)) {
+            Ok(()) => {},
+            Err(error) if can_defer_file(&error) => { deferred.insert(path); continue; },
+            Err(error) => return Err(error),
+        }
         let local_info = local_files.get(path).cloned();
         let (local, local_id) = if local_info.is_some() {
             let checked = with_store(store, root, |_| {
@@ -539,7 +556,11 @@ fn run(
                     Some(hash.clone())
                 }
                 None => {
-                    let bytes = remote.read(&path)?;
+                    let bytes = match remote.read(&path) {
+                        Ok(bytes) => bytes,
+                        Err(error) if can_defer_file(&error) => { deferred.insert(path); continue; }
+                        Err(error) => return Err(error),
+                    };
                     add(total, "downloadedBytes", bytes.len());
                     add(total, "downloadedFiles", 1);
                     remote_id = match identity(path, &bytes) {
@@ -578,6 +599,7 @@ fn run(
     for path in paths {
         if deferred.contains(&path) { continue; }
         let operation = (|| -> Result<(), LofError> {
+            with_store(store, root, |st| st.ensure_sync_ready(&path))?;
             let pair = &pairs[&path];
             if path == crate::project_order::FILE {
                 if let Some(hash) = sync_project_order(store, root, remote, pair, total)? {
@@ -611,6 +633,7 @@ fn run(
                     if Some(hash_bytes(&remote.read(&path)?)).as_deref() != other {
                         return Err(retry());
                     }
+                    with_store(store, root, |st| st.ensure_sync_ready(&path))?;
                     remote.remove(&path, info)?;
                     add(total, "cleanedFiles", 1);
                 }
@@ -633,6 +656,17 @@ fn run(
                 .any(|folder| path.starts_with(&format!("{folder}/")));
             let take_remote = if protected && (local.is_none() || other.is_none()) {
                 other.is_some()
+            } else if local.is_some() && other.is_some()
+                && pair.local_id == pair.remote_id
+                && pair.local_id.as_deref().is_some_and(|id| id.starts_with("document:")) {
+                let ours = with_store(store, root, |_| read_local(root, &path))?.ok_or_else(retry)?;
+                let theirs = remote.read(&path)?;
+                if Some(hash_bytes(&ours)).as_deref() != local || Some(hash_bytes(&theirs)).as_deref() != other {
+                    return Err(retry());
+                }
+                let ours_at = lof_realtime::document_version::modified(&ours, pair.local_info.as_ref().and_then(|info| info.modified));
+                let theirs_at = lof_realtime::document_version::modified(&theirs, pair.remote_info.as_ref().and_then(|info| info.modified));
+                (theirs_at, other) > (ours_at, local)
             } else if base.map(String::as_str) == local {
                 true
             } else if base.map(String::as_str) == other {
@@ -710,7 +744,7 @@ fn run(
                     return Err(retry());
                 }
                 // 전송 직전에 서재가 바뀌거나 닫히지 않았는지도 확인한다.
-                with_store(store, root, |st| st.require_database())?;
+                with_store(store, root, |st| { st.require_database()?; st.ensure_sync_ready(&path) })?;
                 if let Some(bytes) = bytes {
                     original(&path, &bytes)?;
                     remote.write(&path, &bytes, pair.remote_info.as_ref())?;

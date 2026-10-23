@@ -1,3 +1,4 @@
+import RecoveryCopies from "../RecoveryCopies";
 import {
   Archive,
   ArrowDown,
@@ -1055,6 +1056,7 @@ export default function MobileProjectView({
         >
           {/* 목록 끝 위치는 본문의 transform이 아니라 이 감싸개의 높이로 정한다 */}
           <div className="m-project-list-body">
+            {archive && <RecoveryCopies projectId={project.id} openDoc={openDoc} />}
             {activeTab === "episode" ? (
               <div ref={listBodyRef} className="m-tree-container">
                 {!filterQuery.trim() && filteredEpisodes.length > EPISODE_GROUP

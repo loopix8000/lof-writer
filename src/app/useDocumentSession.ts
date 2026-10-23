@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { EditorScrollPositions } from "../EditorScroll";
 import { call, type Doc } from "../types";
+import { resolveSyncedFile, saveRecoveryCopy } from "../sync-recovery";
 import { useGitActivity } from "../useGitActivity";
 import { readFileForClose, useSyncFileUpdates } from "../useSyncFileUpdates";
 import { autoSaveCondition as checkAutoSave } from "./auto-save";
@@ -18,11 +19,8 @@ type Options = {
   saveMemoManually: () => Promise<void> | undefined;
   retainDocument: (doc: Doc) => void;
   clearRetainedDocuments: () => void;
-  clearSideDocument: () => void;
   pinTab: (id: string) => void;
   onDocumentIdChanged: (oldId: string, newId: string, location?: Doc) => void;
-  refresh: () => Promise<unknown>;
-  openDoc: (id: string, pinned: boolean) => Promise<void>;
   message: (text: string) => void;
   report: (error: any) => void;
 };
@@ -43,7 +41,16 @@ export function useDocumentSession(options: Options) {
   const [active, setActiveState] = useState<Doc | null>(null);
   const [saveStatus, setSaveStatus] = useState("저장됨");
   const [conflict, setConflict] = useState(false);
+  const [syncIssues, setSyncIssues] = useState<Record<string, string>>({});
+  const issues = useRef<Record<string, string>>({});
+  const setSyncIssue = useCallback((id: string, text?: string) => {
+    const next = { ...issues.current };
+    if (text) next[id] = text; else delete next[id];
+    issues.current = next;
+    setSyncIssues(next);
+  }, []);
   const draft = useRef<DraftState | null>(null);
+  const syncClient = useRef(crypto.randomUUID());
   const saveChain = useRef(Promise.resolve());
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -91,7 +98,7 @@ export function useDocumentSession(options: Options) {
     }
     if (!target || target.seq === target.saved || target.draftSaved === target.seq) return;
     const seq = target.seq;
-    const payload = { ...target.doc, expectedRevision: target.doc.revision };
+    const payload = { ...target.doc, expectedRevision: target.doc.revision, recoveryOnly: !!issues.current[target.doc.id] };
     void call("saveDraft", payload)
       .then(() => {
         if (draft.current === target && target.seq === seq && target.seq !== target.saved && !conflictRef.current) {
@@ -99,15 +106,19 @@ export function useDocumentSession(options: Options) {
           setSaveStatus("편집 중");
         }
       })
-      .catch(report);
-  }, [report]);
+      .catch(async (error: any) => {
+        setSyncIssue(target.doc.id, error.message || "임시 저장을 완료하지 못했습니다.");
+        try { await saveRecoveryCopy(target.doc); }
+        catch (backupError: any) { setSyncIssue(target.doc.id, `복구 사본 저장 실패: ${backupError.message}`); }
+      });
+  }, [setSyncIssue]);
 
   const scheduleDraftSave = useCallback(() => {
     if (draftTimer.current) clearTimeout(draftTimer.current);
     draftTimer.current = setTimeout(() => {
       draftTimer.current = null;
       persistDraftNow();
-    }, 150);
+    }, issues.current[draft.current?.doc.id ?? ""] ? 1500 : 150);
   }, [persistDraftNow]);
 
   const flushRef = useRef<(options?: FlushOptions) => Promise<void>>(async () => {});
@@ -118,7 +129,7 @@ export function useDocumentSession(options: Options) {
       timer.current = null;
     }
     const d = draft.current;
-    if (!d || d.seq === d.saved || conflictRef.current) return;
+    if (!d || d.seq === d.saved || conflictRef.current || issues.current[d.doc.id]) return;
     const { chars, minChars, delay } = autoSaveCondition(d);
     if (chars < minChars) return;
     timer.current = setTimeout(() => {
@@ -126,6 +137,41 @@ export function useDocumentSession(options: Options) {
       void flushRef.current({ auto: true }).catch(report);
     }, delay);
   }, [autoSaveCondition, report]);
+
+  const applySyncedDocument = useCallback(async (doc: Doc, discard = false) => {
+    const syncToken = `${syncClient.current}:${doc.id}`;
+    const result = await resolveSyncedFile({
+      current: () => {
+        const state = draft.current;
+        return state?.doc.id === doc.id ? { state, seq: state.seq, doc: state.doc, dirty: state.seq !== state.saved } : null;
+      },
+      unchanged: ({ state, seq }) => draft.current === state && state.seq === seq,
+      adopt: ({ dirty, doc: snapshot }, drop) => {
+        if (timer.current) clearTimeout(timer.current);
+        if (draftTimer.current) clearTimeout(draftTimer.current);
+        return call<Doc>("adoptDocument", {
+          id: doc.id, syncToken, discardDraft: drop,
+          ...(dirty ? { draft: snapshot } : {}),
+        });
+      },
+      apply: async (fresh) => {
+        draft.current = { doc: fresh, base: fresh, seq: 0, saved: 0, draftSaved: 0, lastSavedAt: Date.now(), edited: false };
+        conflictRef.current = false;
+        setConflict(false);
+        setActive(fresh);
+        setSaveStatus("저장됨");
+        return call<boolean>("finishDocumentSync", { id: doc.id, revision: fresh.revision, syncToken });
+      },
+      preserve: ({ doc: snapshot }) => saveRecoveryCopy(snapshot),
+    }, discard);
+    if (result.recoverySaved) message("편집 내용을 보관함의 복구 사본에 저장했습니다.");
+    if (result.status === "resolved") setSyncIssue(doc.id);
+    else if (result.status === "failed") {
+      const error = result.error;
+      setSyncIssue(doc.id, error instanceof Error ? error.message : "충돌 정리를 완료하지 못했습니다.");
+      if (draft.current?.doc.id === doc.id) setSaveStatus("이 문서 확인 필요");
+    }
+  }, [setActive, setSyncIssue, message]);
 
   const flush = useCallback(async ({ auto = false, closing = false, skipMemo = false, manual = false }: FlushOptions = {}) => {
     if (!auto && !skipMemo) await latest.current.flushMemo({ closing });
@@ -143,29 +189,30 @@ export function useDocumentSession(options: Options) {
       if (moving) await moving;
       const d = draft.current;
       if (!d) return;
+      if (issues.current[d.doc.id]) {
+        // 실패한 문서만 별도 보관하고 다른 문서로 이동할 수 있게 한다.
+        try { await saveRecoveryCopy(d.doc); }
+        catch { await call("saveDraft", { ...d.doc, recoveryOnly: true }); }
+        return;
+      }
       const loadExternalOnClose = async (onlyIfChanged = false) => {
         const seq = d.seq;
         const fresh = await readFileForClose(() => call<Doc>("readDocument", { id: d.doc.id }));
         if (draft.current !== d || d.seq !== seq)
           throw Error("닫는 동안 원고가 변경되었습니다. 다시 닫아 주세요.");
         if (onlyIfChanged && !conflictRef.current && fresh.revision === d.doc.revision) return false;
-        await call("clearDraft", { id: d.doc.id });
-        if (draft.current !== d || d.seq !== seq)
-          throw Error("닫는 동안 원고가 변경되었습니다. 다시 닫아 주세요.");
-        d.doc = fresh;
-        d.base = fresh;
-        d.saved = seq;
-        d.draftSaved = seq;
-        d.lastSavedAt = Date.now();
-        d.edited = false;
-        conflictRef.current = false;
-        setConflict(false);
-        setActive(fresh);
-        setSaveStatus("저장됨");
+        await applySyncedDocument(fresh);
         return true;
       };
-      // 닫기는 파일의 최신 내용을 채택하며, 일반 저장은 기존 충돌 처리를 유지한다.
-      if (closing && await loadExternalOnClose(true)) return;
+      // 닫을 때도 임시본을 보관하고 파일의 최신 내용을 채택한다.
+      if (closing) {
+        try { if (await loadExternalOnClose(true)) return; }
+        catch (error: any) {
+          await saveRecoveryCopy(d.doc);
+          setSyncIssue(d.doc.id, error.message || "문서를 확인하지 못했습니다.");
+          return;
+        }
+      }
       if (d.seq === d.saved) {
         if (manual) {
           await call("checkpointDocument", { id: d.doc.id, force: true });
@@ -191,14 +238,17 @@ export function useDocumentSession(options: Options) {
           forceHistory: true,
           ...(manual ? { manualHistory: true } : {}),
         };
-      await call("saveDraft", { ...d.doc, expectedRevision: d.doc.revision });
+      try { await call("saveDraft", { ...d.doc, expectedRevision: d.doc.revision }); }
+      catch (error: any) {
+        await saveRecoveryCopy(d.doc);
+        setSyncIssue(d.doc.id, error.message || "임시 저장을 완료하지 못했습니다.");
+        setSaveStatus("복구 사본 보관됨");
+        return;
+      }
       d.draftSaved = seq;
       if (conflictRef.current) {
-        if (closing) { await loadExternalOnClose(); return; }
-        if (auto) return;
-        throw Error(
-          "변경 충돌을 해결해 주세요. 입력한 원고는 임시 저장되어 있습니다.",
-        );
+        await applySyncedDocument(d.doc);
+        return;
       }
       setSaveStatus("저장 중");
       try {
@@ -209,7 +259,11 @@ export function useDocumentSession(options: Options) {
           if (error.code !== "CONFLICT") throw error;
           // 변경 알림보다 저장이 먼저 도착한 경우도 마지막 저장 원고로 확인한다.
           const fresh = await call<Doc>("readDocument", { id: d.doc.id });
-          if (draft.current !== d || !sameDocumentContent(d.base, fresh)) throw error;
+          if (draft.current !== d) return;
+          if (!sameDocumentContent(d.base, fresh)) {
+            await applySyncedDocument(fresh);
+            return;
+          }
           d.base = fresh;
           d.doc = updateDocumentLocation(d.doc, fresh);
           conflictRef.current = false;
@@ -249,19 +303,23 @@ export function useDocumentSession(options: Options) {
           }
         }
       } catch (e: any) {
-        if (closing && e.code === "CONFLICT") { await loadExternalOnClose(); return; }
-        setSaveStatus(e.code === "CONFLICT" ? "변경 충돌" : "저장 실패");
-        if (e.code === "CONFLICT") {
-          conflictRef.current = true;
-          setConflict(true);
+        if (e.code === "CONFLICT") { await applySyncedDocument(d.doc); return; }
+        try {
+          await saveRecoveryCopy(d.doc);
+          setSaveStatus("복구 사본 보관됨");
+          setSyncIssue(d.doc.id, e.message || "원고 저장을 완료하지 못했습니다.");
+        } catch (backupError: any) {
+          setSyncIssue(d.doc.id, `복구 사본 저장 실패: ${backupError.message}`);
+          setSaveStatus("임시본 확인 필요");
+          // 이 경로에서는 saveDraft가 이미 성공했다. 이동할 때 보관을 다시 시도한다.
+          if (d.draftSaved !== d.seq) throw backupError;
         }
-        throw e;
       }
     };
     const task = saveChain.current.then(run);
     saveChain.current = task.catch(() => {});
     return task;
-  }, [autoSaveCondition, scheduleAutoSave, scheduleDraftSave, setActive]);
+  }, [autoSaveCondition, scheduleAutoSave, scheduleDraftSave, setActive, applySyncedDocument, setSyncIssue]);
   flushRef.current = flush;
 
   useEffect(() => {
@@ -280,7 +338,8 @@ export function useDocumentSession(options: Options) {
   const checkOpenDocument = useSyncFileUpdates({
     fileKey: shownActive?.id ?? "",
     enabled: options.loaded && !!shownActive,
-    canCheck: () => latest.current.visible && !latest.current.pendingDocumentMove(),
+    automatic: true,
+    canCheck: () => latest.current.visible && !latest.current.pendingDocumentMove() && !issues.current[draft.current?.doc.id ?? ""],
     current: () => {
       const d = draft.current;
       return d ? { doc: d.doc, version: `${d.seq}:${d.doc.revision}` } : null;
@@ -303,32 +362,16 @@ export function useDocumentSession(options: Options) {
       }
       return true;
     },
-    pending: () => {
-      if (timer.current) clearTimeout(timer.current);
-      if (draftTimer.current) clearTimeout(draftTimer.current);
-      conflictRef.current = true;
-      setConflict(true);
+    apply: (doc) => {
+      const task = saveChain.current.then(() => applySyncedDocument(doc));
+      saveChain.current = task.catch(() => {});
+      return task;
+    },
+    report: (error) => {
       const d = draft.current;
-      if (d) {
-        if (d.seq === d.saved) d.seq++;
-        void call("saveDraft", { ...d.doc, expectedRevision: d.doc.revision }).catch(report);
-      }
-      setSaveStatus("외부 변경 있음");
+      if (d) void applySyncedDocument(d.doc);
+      else report(error);
     },
-    apply: async (doc) => {
-      const previous = draft.current;
-      if (previous?.doc.id !== doc.id) return;
-      const previousSeq = previous.seq;
-      await call("clearDraft", { id: doc.id });
-      if (draft.current !== previous || previous.seq !== previousSeq) return;
-      draft.current = { doc, base: doc, seq: 0, saved: 0, draftSaved: 0, lastSavedAt: Date.now(), edited: false };
-      conflictRef.current = false;
-      setActive(doc);
-      setConflict(false);
-      setSaveStatus("저장됨");
-      message("동기화된 새 내용을 불러왔습니다.");
-    },
-    report,
   });
   // 변경된 원고의 수동 이력은 saveDocument가 기록한다. 동기화 요청은 저장 완료를 지연시키지 않는다.
   const manualSave = useCallback(async () => {
@@ -430,24 +473,6 @@ export function useDocumentSession(options: Options) {
     }
   }
 
-  async function resolveConflict() {
-    const d = draft.current;
-    if (!d) return;
-    const copy = await call<Doc>("createDocument", {
-      projectId: d.doc.projectId,
-      kind: d.doc.kind,
-      title: d.doc.title + " (내 편집 사본)",
-      body: d.doc.body,
-    });
-    await call("clearDraft", { id: d.doc.id });
-    draft.current = null;
-    conflictRef.current = false;
-    setConflict(false);
-    await latest.current.refresh();
-    await latest.current.openDoc(copy.id, true);
-    message("내 편집을 새 문서로 보존했습니다. 기존 문서도 유지됩니다.");
-  }
-
   function commitDocument(doc: Doc, keepOlder: boolean) {
     if (timer.current) clearTimeout(timer.current);
     if (draftTimer.current) clearTimeout(draftTimer.current);
@@ -488,6 +513,7 @@ export function useDocumentSession(options: Options) {
   }
 
   function resetVault() {
+    issues.current = {}; setSyncIssues({});
     sessionStarts.current.clear();
     scrollPositions.current.clear();
     if (timer.current) clearTimeout(timer.current);
@@ -506,7 +532,6 @@ export function useDocumentSession(options: Options) {
     // 트레이에서 돌아오거나 다른 탭을 다시 열 때도 예전 본문을 되살리지 않는다.
     latest.current.clearRetainedDocuments();
     if (draft.current) setActive(draft.current.doc);
-    latest.current.clearSideDocument();
   }, [flush, setActive]);
 
   async function prepareForInstall() {
@@ -548,9 +573,17 @@ export function useDocumentSession(options: Options) {
 
   return {
     active: shownActive, saveStatus, conflict, scrollPositions: scrollPositions.current,
+    syncIssue: syncIssues[shownActive?.id ?? ""],
+    retrySync: async (discard = false) => {
+      const doc = draft.current?.doc;
+      if (!doc) return;
+      const task = saveChain.current.then(() => applySyncedDocument(doc, discard));
+      saveChain.current = task.catch(() => {});
+      await task;
+    },
     currentId, currentDocument, waitForSave, flush, flushForClose, manualSave, prepareForInstall,
-    edit, checkOpenDocument, reconcileDocuments, commitDocument,
+    edit, reconcileDocuments, commitDocument,
     discardDraft, detachDocument, closeDocument, resetVault, replaceDocId, writeMeta,
-    remapDocuments, resolveConflict, restoreHistory, recordBaseline, sessionDelta,
+    remapDocuments, restoreHistory, recordBaseline, sessionDelta,
   };
 }

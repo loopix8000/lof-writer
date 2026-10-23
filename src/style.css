@@ -6632,3 +6632,13 @@ input.property-text {
   flex: 1;
   min-width: 0;
 }
+
+.sync-issue-banner { flex-wrap: wrap; gap: 10px; }
+.sync-issue-banner details { margin: 6px 0; overflow-wrap: anywhere; }
+.sync-issue-banner small { display: block; }
+.recovery-copies { padding: 16px; overflow-wrap: anywhere; }
+.recovery-copies > p { color: var(--muted); font-size: 13px; }
+.recovery-copies details { margin: 12px 0; }
+.recovery-copies summary { cursor: pointer; }
+.recovery-copies textarea { width: 100%; box-sizing: border-box; resize: vertical; margin: 10px 0; }
+.recovery-copies .conflict-actions { flex-wrap: wrap; }

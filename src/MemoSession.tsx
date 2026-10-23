@@ -1,3 +1,5 @@
+import { resolveSyncedFile, saveRecoveryCopy } from "./sync-recovery";
+import SyncIssueBanner from "./SyncIssueBanner";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronDown,
@@ -221,13 +223,74 @@ export default function MemoSession({
     setMemo(m);
   };
   const markSaved = (body: string) => { lastSaved.current = { body, at: Date.now() }; };
+  const [syncIssues, setSyncIssues] = useState<Record<string, string>>({});
+  const issueRef = useRef<Record<string, string>>({});
+  function memoSyncIssue(key: string, message?: string) {
+    const next = { ...issueRef.current };
+    if (message) next[key] = message; else delete next[key];
+    issueRef.current = next; setSyncIssues(next);
+  }
+  const documentsRef = useRef(documents); documentsRef.current = documents;
+  const recoveryDocument = (m: Memo) => {
+    const id = isDocPath(m.path) ? m.path.slice(DOC.length) : m.id;
+    const document = documentsRef.current.find(d => d.id === id);
+    return { ...document, ...m, id, kind: document?.kind ?? "memo",
+      title: sameTab(m, memoRef.current) ? titleRef.current || m.title : m.title,
+      projectId: document?.projectId ?? (m.space === COMMON ? undefined : m.space) };
+  };
+  const syncTokens = useRef(new Map<string, string>());
+  useEffect(() => { issueRef.current = {}; setSyncIssues({}); syncTokens.current.clear(); }, [workspaceRoot]);
+  async function adoptSyncedMemo(m: Memo, discard = false) {
+    const key = tabKey(m);
+    const syncToken = syncTokens.current.get(key) ?? crypto.randomUUID();
+    syncTokens.current.set(key, syncToken);
+    const result = await resolveSyncedFile({
+      current: () => {
+        const memo = memoRef.current;
+        if (!memo || !sameTab(m, memo)) return null;
+        const stored = readMemoDraft(m.space, m.path);
+        return { memo, seq: dirty.current.seq, body: dirty.current.seq !== dirty.current.saved ? memo.body : stored?.body };
+      },
+      unchanged: ({ memo, seq }) => memoRef.current === memo && dirty.current.seq === seq,
+      adopt: async ({ memo, body }, drop) => {
+        clearTimeout(timer.current); clearTimeout(draftTimer.current);
+        if (m.space === COMMON && !isDocPath(m.path)) {
+          if (!drop && body !== undefined) await saveRecoveryCopy(recoveryDocument({ ...memo, body }));
+          return readItem(m.space, m.path);
+        }
+        if (isDocPath(m.path)) {
+          const id = m.path.slice(DOC.length);
+          const doc = await call<Doc>("adoptDocument", { id, syncToken, discardDraft: drop, ...(body !== undefined ? { draft: { id, body } } : {}) });
+          return { ...memo, id: doc.id, title: doc.title, body: doc.body, revision: doc.revision, updatedAt: doc.updatedAt, manualLineBreak: doc.manualLineBreak };
+        }
+        return call<Memo>("adoptMemo", { space: m.space, path: m.path, syncToken, discardDraft: drop, ...(body !== undefined ? { draftBody: body } : {}) });
+      },
+      apply: async (fresh) => {
+        dirty.current = { seq: 0, saved: 0 }; markSaved(fresh.body);
+        clearMemoDraft(m.space, m.path);
+        conflictRef.current = false; setConflict(false); setStatus("저장됨");
+        titleRef.current = fresh.title; setTitle(fresh.title); setCurrent(fresh);
+        if (m.space === COMMON && !isDocPath(m.path)) return true;
+        const id = isDocPath(m.path) ? m.path.slice(DOC.length) : fresh.id;
+        return call<boolean>("finishDocumentSync", { id, revision: fresh.revision, syncToken });
+      },
+      preserve: ({ memo, body }) => saveRecoveryCopy(recoveryDocument({ ...memo, body: body ?? memo.body })),
+    }, discard);
+    if (result.status === "resolved") memoSyncIssue(key);
+    else if (result.status === "failed") {
+      const error = result.error;
+      memoSyncIssue(key, error instanceof Error ? error.message : "충돌 정리를 완료하지 못했습니다.");
+      if (sameTab(m, memoRef.current)) setStatus("이 문서 확인 필요");
+    }
+  }
   // 새로 연 메모에 이 기기에 남은 저장 전 입력이 있으면 이어서 쓴다.
   const restoreDraft = (m: Memo) => {
     const draft = readMemoDraft(m.space, m.path);
     if (!draft) return;
     if (draft.revision !== m.revision) {
-      clearMemoDraft(m.space, m.path);
-      if (draft.body !== m.body) report(Error("다른 곳에서 바뀐 메모라 이 기기에 남아 있던 저장 전 입력은 불러오지 않았습니다."));
+      const task = chain.current.then(() => adoptSyncedMemo(m));
+      chain.current = task.catch(() => {});
+      void task.catch(report);
       return;
     }
     if (draft.body === m.body) return clearMemoDraft(m.space, m.path);
@@ -282,24 +345,27 @@ export default function MemoSession({
     const run = async () => {
       const m = memoRef.current;
       if (!m) return;
+      if (issueRef.current[tabKey(m)]) {
+        await saveRecoveryCopy(recoveryDocument(m));
+        return;
+      }
       const loadExternalOnClose = async (onlyIfChanged = false) => {
         const seq = dirty.current.seq;
         const fresh = await readFileForClose(() => readItem(m.space, m.path));
         if (memoRef.current !== m || dirty.current.seq !== seq)
           throw Error("닫는 동안 메모가 변경되었습니다. 다시 닫아 주세요.");
         if (onlyIfChanged && !conflictRef.current && fresh.revision === m.revision) return false;
-        dirty.current = { seq: 0, saved: 0 };
-        markSaved(fresh.body);
-        clearMemoDraft(m.space, m.path);
-        conflictRef.current = false;
-        setConflict(false);
-        setStatus("저장됨");
-        titleRef.current = fresh.title;
-        setTitle(fresh.title);
-        setCurrent(fresh);
+        await adoptSyncedMemo(m);
         return true;
       };
-      if (closing && await loadExternalOnClose(true)) return;
+      if (closing) {
+        try { if (await loadExternalOnClose(true)) return; }
+        catch (error: any) {
+          await saveRecoveryCopy(recoveryDocument(m));
+          memoSyncIssue(tabKey(m), error.message || "문서를 확인하지 못했습니다.");
+          return;
+        }
+      }
       if (dirty.current.seq === dirty.current.saved) return;
       if (auto && conflictRef.current) return;
       if (auto) {
@@ -337,13 +403,10 @@ export default function MemoSession({
         if (saved.historyWarning) report(Error(saved.historyWarning));
         if (!auto) void call("requestSyncNow").catch(() => {});
       } catch (e: any) {
-        if (closing && e.code === "CONFLICT") { await loadExternalOnClose(); return; }
-        if (e.code === "CONFLICT") {
-          conflictRef.current = true;
-          setConflict(true);
-        }
-        setStatus("저장 안 됨");
-        throw e;
+        if (e.code === "CONFLICT") { await adoptSyncedMemo(m); return; }
+        await saveRecoveryCopy(recoveryDocument(m));
+        memoSyncIssue(tabKey(m), e.message || "메모를 저장하지 못했습니다.");
+        setStatus("복구 사본 보관됨");
       }
     };
     const task = chain.current.then(run);
@@ -352,8 +415,6 @@ export default function MemoSession({
   }, []);
   const flush = useCallback(async ({ closing = false } = {}) => {
     clearTimeout(timer.current);
-    if (!closing && conflictRef.current && dirty.current.seq !== dirty.current.saved)
-      throw Error("메모 변경 충돌을 해결해 주세요.");
     await save(false, closing);
   }, [save]);
   const gitActivity = useGitActivity(async () => true, report);
@@ -454,7 +515,8 @@ export default function MemoSession({
   const checkOpenMemo = useSyncFileUpdates({
     fileKey: memo ? `${memo.space}\n${memo.path}` : "",
     enabled: !!memo,
-    canCheck: () => active,
+    automatic: !!memo && (memo.space !== COMMON || isDocPath(memo.path)),
+    canCheck: () => active && !issueRef.current[memoRef.current ? tabKey(memoRef.current) : ""],
     current: () => {
       const m = memoRef.current;
       return m ? { doc: m, version: `${dirty.current.seq}:${m.revision}:${titleRef.current}` } : null;
@@ -469,19 +531,20 @@ export default function MemoSession({
       setStatus("외부 변경 있음");
     },
     apply: (fresh) => {
-      dirty.current = { seq: 0, saved: 0 };
-      markSaved(fresh.body);
-      clearMemoDraft(fresh.space, fresh.path);
-      conflictRef.current = false;
-      setConflict(false);
-      setStatus("저장됨");
-      setTitle(fresh.title);
-      setCurrent(fresh);
+      const task = chain.current.then(() => adoptSyncedMemo(fresh));
+      chain.current = task.catch(() => {});
+      return task;
     },
-    report,
+    report: (error) => {
+      const m = memoRef.current;
+      if (m && (m.space !== COMMON || isDocPath(m.path))) {
+        const task = chain.current.then(() => adoptSyncedMemo(m));
+        chain.current = task.catch(() => {}); void task.catch(report);
+      } else report(error);
+    },
   });
   checkMemoRef.current = checkOpenMemo;
-  // 바깥에서 파일이 바뀌면 트리는 다시 읽되, 열린 본문은 사용자 확인 후에만 반영한다.
+  // 작품 문서는 자동 반영하고, 공용 메모는 기존 확인 방식을 따른다.
   const reloadOpen = useCallback(async () => {
     const m = memoRef.current;
     if (!m) return;
@@ -615,6 +678,7 @@ export default function MemoSession({
     const shown = retainedMemos.current.get(key);
     const check = useSyncFileUpdates({
       fileKey: key, enabled: !!shown && !sameTab(shown, memo),
+      automatic: !!shown && (shown.space !== COMMON || isDocPath(shown.path)),
       canCheck: () => active,
       current: () => { const doc = retainedMemos.current.get(key); return doc ? { doc, version: doc.revision } : null; },
       read: (m: Memo) => readItem(m.space, m.path),
@@ -896,20 +960,6 @@ export default function MemoSession({
       },
     );
   }
-  async function reloadFromDisk() {
-    await checkOpenMemo(true);
-  }
-  async function keepMine() {
-    const m = memoRef.current;
-    if (!m) return;
-    const fresh = await readItem(m.space, m.path);
-    if (dirty.current.seq === dirty.current.saved) dirty.current.seq++;
-    setCurrent({ ...memoRef.current!, revision: fresh.revision });
-    setConflict(false);
-    conflictRef.current = false;
-    await save();
-  }
-
   function openMenu(e: React.MouseEvent, items: MenuItem[], target: string) {
     e.preventDefault();
     e.stopPropagation();
@@ -1210,15 +1260,10 @@ export default function MemoSession({
             <SyncStatus status={syncStatus} checking={syncChecking} available={syncAvailable} editing={groupStatus !== "저장됨"} />
           </div>
         </div>
-        {focused && conflict && (
-          <div className="memo-conflict" role="alert">
-            <span>다른 곳에서 이 메모가 바뀌었습니다. 선택하지 않고 닫으면 바뀐 내용을 사용합니다.</span>
-            <div className="conflict-actions">
-              <button onClick={attempt(reloadFromDisk)}>바뀐 내용 불러오기</button>
-              <button onClick={attempt(keepMine)}>내 내용으로 덮어쓰기</button>
-            </div>
-          </div>
-        )}
+        {focused && (syncIssues[tabKey(memo)] || conflict) && <SyncIssueBanner issue={syncIssues[tabKey(memo)] || "다른 곳에서 바뀐 메모와 이 기기의 임시본을 정리합니다."} retry={async (discard) => {
+          const task = chain.current.then(() => adoptSyncedMemo(memo, discard));
+          chain.current = task.catch(() => {}); await task;
+        }} />}
         {!focused && sideSyncKeys[side] === `${memo.space}\n${memo.path}\n${memo.revision}` && (
           <div className="memo-conflict" data-sync-actions>
             <span>다른 곳에서 이 메모가 바뀌었습니다. 현재 내용은 유지됩니다.</span>

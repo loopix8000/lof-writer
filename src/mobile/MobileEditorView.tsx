@@ -1,3 +1,4 @@
+import SyncIssueBanner from "../SyncIssueBanner";
 import {
   Archive,
   ArrowDown01,
@@ -112,8 +113,8 @@ export default function MobileEditorView({
   counterUpdate,
   manualSave,
   flush,
-  resolveConflict,
-  checkOpenDocument,
+  syncIssue,
+  retrySync,
   replaceActiveSymbols,
   openDoc,
   openLinkedDocument,
@@ -176,8 +177,8 @@ export default function MobileEditorView({
   counterUpdate: (body: string, delta: any) => void;
   manualSave: () => Promise<void>;
   flush: () => Promise<void>;
-  resolveConflict: () => Promise<void>;
-  checkOpenDocument: (apply?: boolean) => Promise<void>;
+  syncIssue?: string;
+  retrySync: (discard?: boolean) => Promise<void>;
   replaceActiveSymbols: () => void;
   openDoc: (id: string, pinned?: boolean) => Promise<void>;
   openLinkedDocument: (id: string) => Promise<void>;
@@ -987,22 +988,7 @@ export default function MobileEditorView({
       </header>
 
       {/* 충돌 배너 */}
-      {conflict && (
-        <div className="m-conflict-banner">
-          <span>다른 기기에서 변경된 원고가 있습니다.</span>
-          <div className="m-conflict-actions">
-            <button type="button" onClick={attempt(resolveConflict)}>
-              사본 저장
-            </button>
-            <button
-              type="button"
-              onClick={attempt(() => checkOpenDocument(true))}
-            >
-              새 내용 불러오기
-            </button>
-          </div>
-        </div>
-      )}
+      {(syncIssue || conflict) && <SyncIssueBanner issue={syncIssue || "다른 곳에서 바뀐 원고와 이 기기의 임시본을 정리합니다."} retry={retrySync} />}
 
       <div className="m-editor-sync-anchor">
         <div

@@ -36,6 +36,7 @@ type Snapshot<T> = { doc: T; version: string | number };
 type Options<T> = {
   fileKey: string;
   enabled: boolean;
+  automatic?: boolean;
   canCheck: () => boolean;
   current: () => Snapshot<T> | null;
   read: (doc: T) => Promise<T>;
@@ -50,13 +51,15 @@ type Options<T> = {
 export function useSyncFileUpdates<T extends SyncedFile>(options: Options<T>) {
   const latest = useRef(options); latest.current = options;
   const checking = useRef(false);
+  const recheck = useRef(false);
   const noticed = useRef(new Map<string, string>());
   const alive = useRef(true);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
-  const checkLocal = useCallback(async (loadLatest = false) => {
+  const checkLocal = useCallback(async (loadLatest = false): Promise<void> => {
     const start = latest.current;
-    if (!start.enabled || !start.fileKey || !start.canCheck() || checking.current ||
+    if (!start.enabled || !start.fileKey || !start.canCheck() ||
         document.documentElement.dataset.pinLocked === "true") return;
+    if (checking.current) { recheck.current = true; return; }
     checking.current = true;
     const key = start.fileKey;
     const valid = () => alive.current && latest.current.enabled && latest.current.fileKey === key && latest.current.canCheck();
@@ -68,10 +71,10 @@ export function useSyncFileUpdates<T extends SyncedFile>(options: Options<T>) {
       const fresh = await start.read(snapshot.doc);
       if (!valid()) return;
       const current = latest.current.current();
-      if (!current || current.version !== snapshot.version) return;
+      if (!current || (!start.automatic && current.version !== snapshot.version)) return;
       if (fresh.revision === current.doc.revision) { noticed.current.delete(key); return; }
       if (!loadLatest && latest.current.reconcile?.(fresh)) { noticed.current.delete(key); return; }
-      if (!loadLatest) {
+      if (!loadLatest && !start.automatic) {
         // 자동 확인에서는 본문을 유지하고, 안내줄을 눌렀을 때만 새 내용을 불러온다.
         const change = `${current.doc.revision}\n${fresh.revision}`;
         if (noticed.current.get(key) !== change) {
@@ -84,6 +87,10 @@ export function useSyncFileUpdates<T extends SyncedFile>(options: Options<T>) {
       noticed.current.delete(key);
     } finally {
       checking.current = false;
+      if (recheck.current && alive.current) {
+        recheck.current = false;
+        void checkLocal().catch(error => latest.current.report(error));
+      }
     }
   }, []);
   useEffect(() => {

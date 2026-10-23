@@ -845,6 +845,13 @@ impl LibraryDb {
         Ok(())
     }
 
+    pub fn draft(&self, id: &str) -> Result<Option<Value>, LofError> {
+        let data: Option<Vec<u8>> = self.connection.query_row(
+            "SELECT data FROM drafts WHERE doc_id=?1", [id], |row| row.get(0),
+        ).optional()?;
+        data.map(|data| decode(&data)).transpose()
+    }
+
     pub fn drafts(&self) -> Result<Vec<Value>, LofError> {
         let mut query = self
             .connection

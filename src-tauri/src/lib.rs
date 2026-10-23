@@ -34,6 +34,7 @@ mod project_order;
 mod single_instance;
 mod skills;
 pub mod store;
+mod recovery;
 pub mod sync;
 pub mod text;
 
@@ -342,7 +343,8 @@ fn bind_vault(state: &AppState, app: &AppHandle, root: &Path) -> Result<(), LofE
             default_manual_line_break_from_settings(&s),
         )
     };
-    let new_store = Store::new(root, policy, manual_lb)?;
+    let mut new_store = Store::new(root, policy, manual_lb)?;
+    if let Some(base) = state.config_file.parent() { new_store.set_recovery_directory(base); }
     let clean_root = new_store.root.clone();
     {
         let mut st_guard = state.store.lock().unwrap();
@@ -1039,6 +1041,12 @@ fn dispatch_method(
                 .ok_or_else(|| fail_invalid("Store not initialized"))?;
             Memos::read(st, &common_root, space, path)
         }
+        "adoptMemo" => {
+            let (_, common_root) = get_store_and_common()?;
+            let mut guard = state.store.lock().unwrap();
+            let st = guard.as_mut().ok_or_else(|| fail_invalid("Store not initialized"))?;
+            Memos::adopt(st, &common_root, &args)
+        }
         "memoSave" => {
             let (_, common_root) = get_store_and_common()?;
             let res = {
@@ -1297,6 +1305,34 @@ fn dispatch_method(
             };
             schedule_notify(app, &state.notify_seq);
             Ok(res)
+        }
+        "saveRecoveryCopy" | "recoveryCopies" | "readRecoveryCopy" | "deleteRecoveryCopy" | "restoreRecoveryCopy" => {
+            let mut guard = state.store.lock().unwrap();
+            let st = guard.as_mut().ok_or_else(|| fail_invalid("서재가 열려 있지 않습니다."))?;
+            let result = match method {
+                "saveRecoveryCopy" => st.save_recovery_copy(&args),
+                "recoveryCopies" => st.recovery_copies(),
+                "readRecoveryCopy" => st.read_recovery_copy(args["key"].as_str().unwrap_or("")),
+                "deleteRecoveryCopy" => st.remove_recovery_copy(args["key"].as_str().unwrap_or("")),
+                _ => st.restore_recovery_copy(&args),
+            };
+            drop(guard);
+            if result.is_ok() && !matches!(method, "recoveryCopies" | "readRecoveryCopy") { schedule_notify(app, &state.notify_seq); }
+            if result.is_ok() && method == "restoreRecoveryCopy" { auto_sync::request(app); }
+            result
+        }
+        "adoptDocument" => {
+            let mut guard = state.store.lock().unwrap();
+            let st = guard.as_mut().ok_or_else(|| fail_invalid("Store not initialized"))?;
+            st.adopt_document(&args)
+        }
+        "finishDocumentSync" => {
+            let mut guard = state.store.lock().unwrap();
+            let st = guard.as_mut().ok_or_else(|| fail_invalid("Store not initialized"))?;
+            let finished = st.finish_document_sync(&args)?;
+            drop(guard);
+            if finished { auto_sync::request(app); }
+            Ok(json!(finished))
         }
         "saveDraft" => {
             let mut guard = state.store.lock().unwrap();
@@ -1909,7 +1945,7 @@ async fn lof_invoke(
     window: WebviewWindow,
 ) -> Result<Value, String> {
     let args_val = args.unwrap_or_else(|| json!({}));
-    let result = if method.starts_with("realtime") || matches!(method.as_str(), "sync" | "pinUnlock" | "pinSave" | "backupStorage" | "backupGitHistory" | "history" | "historyPage" | "historyRead" | "restore" | "checkpointDocument" | "countManuscript" | "downloadSkill" | "checkSyncUpdates" | "systemFonts" | "readUserFont" | "exportLibrary" | "exportProject" | "prepareAndroidLibrary" | "moveVault") {
+    let result = if method.starts_with("realtime") || matches!(method.as_str(), "adoptDocument" | "adoptMemo" | "finishDocumentSync" | "saveDraft" | "saveRecoveryCopy" | "recoveryCopies" | "readRecoveryCopy" | "deleteRecoveryCopy" | "restoreRecoveryCopy" | "sync" | "pinUnlock" | "pinSave" | "backupStorage" | "backupGitHistory" | "history" | "historyPage" | "historyRead" | "restore" | "checkpointDocument" | "countManuscript" | "downloadSkill" | "checkSyncUpdates" | "systemFonts" | "readUserFont" | "exportLibrary" | "exportProject" | "prepareAndroidLibrary" | "moveVault") {
         tauri::async_runtime::spawn_blocking(move || {
             let state = app.state::<AppState>();
             if method == "pinUnlock" || method == "pinSave" {
@@ -2293,7 +2329,8 @@ pub fn run() {
             default_manual_line_break_from_settings(&settings),
         );
         match opened {
-            Ok(st) => {
+            Ok(mut st) => {
+                st.set_recovery_directory(&user_dir);
                 settings["vaultPath"] = json!(st.root.to_string_lossy().to_string());
                 Some(st)
             }

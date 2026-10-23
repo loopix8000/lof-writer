@@ -323,6 +323,21 @@ impl Memos {
         Ok(value)
     }
 
+    pub fn adopt(
+        store: &mut Store, common_root: &Path, input: &Value,
+    ) -> Result<Value, LofError> {
+        let space = input["space"].as_str().unwrap_or("");
+        let path = input["path"].as_str().unwrap_or("");
+        if space == COMMON { return Err(fail_invalid("작품 메모만 자동으로 반영할 수 있습니다.")); }
+        let current = Self::read(store, common_root, space, path)?;
+        let mut args = json!({"id":current["id"],"syncToken":input["syncToken"],"discardDraft":input["discardDraft"]});
+        if let Some(body) = input["draftBody"].as_str() {
+            args["draft"] = json!({"id":current["id"],"body":body});
+        }
+        store.adopt_document(&args)?;
+        Self::read(store, common_root, space, path)
+    }
+
     pub fn save(
         store: &mut Store,
         common_root: &Path,

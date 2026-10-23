@@ -30,14 +30,12 @@ const tabFor = (id: string): EditorTab => ({ id, pinned: true });
 export function useEditorGroups(options: Options) {
   const latest = useRef(options); latest.current = options;
   const [, renderDocuments] = useState(0);
-  const [pending, setPending] = useState<Partial<Record<Side, string>>>({});
   const retainedDocuments = useRef(new Map<string, Doc>());
   const projectKey = useRef("");
   const linkedOpenSeq = useRef(0);
   const retainDocument = useCallback((doc: Doc) => { retainedDocuments.current.set(doc.id, doc); }, []);
   const getRetainedDocument = useCallback((id: string) => retainedDocuments.current.get(id), []);
   const clearRetainedDocuments = useCallback(() => retainedDocuments.current.clear(), []);
-  const clearSideDocument = useCallback(() => setPending({}), []);
   const setSideDoc = useCallback((doc: Doc) => {
     retainedDocuments.current.set(doc.id, doc); renderDocuments(value => value + 1);
   }, []);
@@ -148,23 +146,23 @@ export function useEditorGroups(options: Options) {
     document.querySelector<HTMLElement>(".editor-group.focused .editor-tab.current")?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [options.active?.id, split.tabs.length]);
 
-  // 각 그룹의 외부 변경 안내와 읽기는 독립적으로 유지한다. 포커스된 그룹은 편집 세션이 맡는다.
+  // 각 그룹에 보이는 문서도 최신 내용으로 갱신한다. 포커스된 그룹은 편집 세션이 맡는다.
   function useSideDocument(side: Side) {
     const group = side === split.focused ? undefined : split.groups[side];
     const id = group?.current ?? "", doc = getRetainedDocument(id);
     const revision = options.documents.find(d => d.id === id)?.revision;
     const check = useSyncFileUpdates({
       fileKey: id, enabled: !!id && !!doc && id !== options.active?.id,
+      automatic: true,
       canCheck: () => latest.current.visible && !latest.current.pendingDocumentMove(),
       current: () => { const doc = getRetainedDocument(id); return doc ? { doc, version: doc.revision } : null; },
       read: (doc: Doc) => call<Doc>("readDocument", { id: doc.id }),
       reconcile: fresh => {
         const current = getRetainedDocument(id);
         if (!current || !sameDocumentContent(current, fresh)) return false;
-        setSideDoc(fresh); setPending(p => ({ ...p, [side]: undefined })); return true;
+        setSideDoc(fresh); return true;
       },
-      pending: () => setPending(p => ({ ...p, [side]: `${id}:${doc?.revision}` })),
-      apply: fresh => { setSideDoc(fresh); setPending(p => ({ ...p, [side]: undefined })); },
+      apply: setSideDoc,
       report: options.report,
     });
     useEffect(() => {
@@ -174,14 +172,13 @@ export function useEditorGroups(options: Options) {
       call<Doc>("readDocument", { id }).then(doc => { if (!canceled) setSideDoc(doc); }).catch(latest.current.report);
       return () => { canceled = true; };
     }, [id, revision, !!doc, check]);
-    return check;
   }
   // 그룹 ID 목록은 고정이므로 매 렌더 같은 순서로 훅을 부른다.
-  const checks = Object.fromEntries(groupIds.map(side => [side, useSideDocument(side)])) as Record<Side, ReturnType<typeof useSideDocument>>;
+  groupIds.forEach(side => useSideDocument(side));
   return {
     area: split, tabs: split.tabs, groups: split.groups, sides: split.order, split: split.split, focusedSide: split.focused,
-    pending, checks, groupStyle: split.groupStyle,
-    retainDocument, getRetainedDocument, clearRetainedDocuments, clearSideDocument,
+    groupStyle: split.groupStyle,
+    retainDocument, getRetainedDocument, clearRetainedDocuments,
     pruneDocuments, resetGroups, commitOpenDocument, replaceDocumentId, getProjectDocument,
     openDoc, openLinked, pinTab, pinSideTab: split.pinOtherTab, cycleTab: split.cycleTab, shiftTab: split.shiftTab, canSplit: split.canSplit,
     closeTab: split.closeTab, closeTabs: split.closeTabs, moveTab: split.moveTab,

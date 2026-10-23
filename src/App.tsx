@@ -1,3 +1,4 @@
+import RecoveryCopies from "./RecoveryCopies";
 import BookmarkList from "./app/BookmarkList";
 import BookmarksPage from "./app/BookmarksPage";
 import BrokenFiles from "./app/BrokenFiles";
@@ -86,6 +87,7 @@ import { ImageViewer } from "./CoverImage";
 import EditorScroll from "./EditorScroll";
 import EpisodeBindingPicker from "./EpisodeBindingPicker";
 import EpisodeProperties, { statusItems } from "./EpisodeProperties";
+import SyncIssueBanner from "./SyncIssueBanner";
 import HistoryDialog from "./HistoryDialog";
 import MemoSession from "./MemoSession";
 import MobilePreview from "./MobilePreview";
@@ -278,17 +280,15 @@ export default function App() {
     saveMemoManually: () => memoManualSave.current?.(),
     retainDocument: (doc) => retainDocument(doc),
     clearRetainedDocuments: () => clearRetainedDocuments(),
-    clearSideDocument: () => clearSideDocument(),
     pinTab: (id) => pinTab(id),
     onDocumentIdChanged: handleDocumentIdChange,
-    refresh: () => refresh(), openDoc: (id, pinned) => openDoc(id, pinned),
     message, report,
   });
   const { active, saveStatus, conflict, flush, flushForClose, waitForSave, reconcileDocuments,
-    manualSave, edit, checkOpenDocument, writeMeta, resolveConflict } = session;
+    manualSave, edit, writeMeta } = session;
   const {
-    area, tabs: editorTabs, split, groups, sides, focusedSide, pending: sideSyncKeys, checks: sideChecks,
-    retainDocument, getRetainedDocument, clearRetainedDocuments, clearSideDocument,
+    area, tabs: editorTabs, split, groups, sides, focusedSide,
+    retainDocument, getRetainedDocument, clearRetainedDocuments,
     pruneDocuments, resetGroups, commitOpenDocument, replaceDocumentId: replaceGroupDocumentId, getProjectDocument,
     openDoc, openLinked, pinTab, pinSideTab, closeTab, closeTabs, cycleTab, shiftTab, moveTab,
     focusOther, focusSide, focusGroupAt, focusDirection, openInGroup, splitTo, canSplit, closeGroup, closeOtherGroup, moveToOther, moveToDirection, closeSideTab, closeSideTabs,
@@ -1472,27 +1472,7 @@ export default function App() {
             </button>
           </div>
         </div>
-        {focused && conflict && (
-          <div className="conflict-banner">
-            <span>
-              다른 편집 내용이 있습니다. 선택하지 않고 닫으면 바뀐 내용을 사용합니다.
-            </span>
-            <div className="conflict-actions">
-              <button onClick={attempt(resolveConflict)}>
-                내 편집 사본 만들기
-              </button>
-              <button onClick={attempt(() => checkOpenDocument(true))}>바뀐 내용 불러오기</button>
-            </div>
-          </div>
-        )}
-        {!focused && sideSyncKeys[side] === `${active.id}:${active.revision}` && (
-          <div className="conflict-banner" data-sync-actions>
-            <span>다른 곳에서 이 원고가 바뀌었습니다. 현재 내용은 유지됩니다.</span>
-            <div className="conflict-actions">
-              <button onClick={attempt(() => sideChecks[side](true))}>바뀐 내용 불러오기</button>
-            </div>
-          </div>
-        )}
+        {focused && (session.syncIssue || conflict) && <SyncIssueBanner issue={session.syncIssue || "다른 곳에서 바뀐 원고와 이 기기의 임시본을 정리합니다."} retry={session.retrySync} />}
         <EditorScroll key={active.id} documentId={`${side}\n${active.id}`} scope={workspaceKey(lib.root, active.projectId)} positions={session.scrollPositions} visible={visible}>
           <article className={manuscriptClassName} style={manuscriptStyle}>
             <div className="document-kind">
@@ -1792,7 +1772,7 @@ export default function App() {
   }
 
   // 충돌이나 저장 실패로 남은 임시본은 그대로 알린다.
-  const saving = !conflict && saveStatus !== "저장 실패",
+  const saving = !conflict && !session.syncIssue && saveStatus !== "저장 실패",
     recoverable = (lib.drafts || []).filter(
       (d: any) => !(saving && d.id === active?.id && Date.parse(d.savedAt) >= appStartedAt),
     ).length;
@@ -1910,8 +1890,8 @@ export default function App() {
         counterUpdate={(body, delta) => counter.update(body, delta)}
         manualSave={manualSave}
         flush={flush}
-        resolveConflict={resolveConflict}
-        checkOpenDocument={checkOpenDocument}
+        syncIssue={session.syncIssue}
+        retrySync={session.retrySync}
         restoreHistory={(id, name, onDone) => session.restoreHistory(id, name, onDone)}
         discardDraft={(id) => session.discardDraft(id)}
         refresh={refresh}
@@ -2142,7 +2122,7 @@ export default function App() {
           archive={archive}
           setArchive={setArchive}
           createDoc={createDoc}
-          brokenFiles={<BrokenFiles
+          brokenFiles={<>{archive && <RecoveryCopies key={lib.root} projectId={projectId} openDoc={openDoc} />}<BrokenFiles
             lib={lib}
             projectId={projectId}
             attempt={attempt}
@@ -2151,7 +2131,7 @@ export default function App() {
             menu={menu}
             openMenu={openMenu}
             refresh={refresh}
-          />}
+          /></>}
         />)}
         <main className={isWorkspace || emptyWorkspace ? "workspace" : "main-page"}>
           {emptyWorkspace && (

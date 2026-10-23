@@ -32,6 +32,7 @@ use uuid::Uuid;
 pub const FORMAT: i64 = 2;
 pub const FOLDERS: &[&str] = &["assets", "doc", "episodes"];
 pub const KINDS: &[&str] = &["episode", "plot", "memo"];
+pub(crate) const SYNC_HOLD_MESSAGE: &str = "원고 충돌 정리가 끝날 때까지 전송을 보류합니다.";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum SyncConflictPolicy {
@@ -880,6 +881,7 @@ struct SnapshotEntry {
 
 pub struct Store {
     pub root: PathBuf,
+    pub recovery_dir: Option<PathBuf>,
     pub vault: Value,
     pub index: FileIndex,
     pub catalog: Option<Catalog>,
@@ -887,6 +889,8 @@ pub struct Store {
     pub index_sequence: u64,
     sync_sequence: AtomicU64,
     sync_checkpoints: HashMap<String, ((u64, u64), Instant)>,
+    // 편집 화면이 임시본 보관과 최신본 반영을 마칠 때까지 문서별 전송을 보류한다.
+    sync_holds: HashMap<String, (String, String)>,
     disk_inventory: Option<DiskInventory>,
     pub migration_warning: String,
     pub local_git: crate::local_git::LocalHistory,
@@ -903,7 +907,7 @@ impl Store {
 
     // 표시용 경고와 별개로 아직 안전하게 비교할 수 없는 경로만 동기화에서 보류한다.
     pub fn sync_deferred_paths(&self) -> Result<Vec<String>, LofError> {
-        let mut paths = Vec::new();
+        let mut paths: Vec<String> = self.sync_holds.values().map(|(_, path)| path.clone()).collect();
         if let Some(catalog) = &self.catalog {
             for project in &catalog.projects {
                 let Some(folder) = project.dir.file_name().and_then(|name| name.to_str()) else { continue };
@@ -926,6 +930,25 @@ impl Store {
             }
         }
         Ok(paths)
+    }
+
+    pub(crate) fn ensure_sync_ready(&self, path: &str) -> Result<(), LofError> {
+        if self.sync_holds.values().any(|(_, held)| held == path) {
+            return Err(fail(SYNC_HOLD_MESSAGE, "SYNC_RETRY"));
+        }
+        Ok(())
+    }
+
+    pub fn finish_document_sync(&mut self, input: &Value) -> Result<bool, LofError> {
+        let id = input["id"].as_str().filter(|id| valid_id(id))
+            .ok_or_else(|| fail_invalid("잘못된 문서 ID"))?;
+        let token = input["syncToken"].as_str().ok_or_else(|| fail_invalid("동기화 정리 식별자가 없습니다."))?;
+        let current = self.read(id)?;
+        if input["revision"] != current["revision"] { return Ok(false); }
+        if self.sync_holds.get(token).is_some_and(|(held_id, _)| held_id == id) {
+            self.sync_holds.remove(token);
+        }
+        Ok(true)
     }
 
     // 외부 편집기가 저장 중이라 읽지 못한 원고가 남아 있는지 확인한다.
@@ -1070,6 +1093,8 @@ impl Store {
             index_sequence: CHANGE_SEQUENCE.load(Ordering::SeqCst),
             sync_sequence: AtomicU64::new(0),
             sync_checkpoints: HashMap::new(),
+            sync_holds: HashMap::new(),
+            recovery_dir: None,
             disk_inventory: None,
             migration_warning: String::new(),
             last_snapshot: HashMap::new(),
@@ -3601,6 +3626,9 @@ impl Store {
             }
             let folder = input.get("folder").and_then(|v| v.as_str());
             let mut attrs = stored_document_meta(Some(input));
+            if let Some(id) = fixed["id"].as_str().filter(|id| valid_id(id)) {
+                attrs.insert("id".to_string(), json!(id));
+            }
             let props = custom_properties(input);
             attrs.insert("properties".to_string(), Value::Object(props));
             if let Some(co) = fixed
@@ -3753,7 +3781,8 @@ impl Store {
             &mut taken,
         );
         let now = now_iso();
-        let id = Uuid::new_v4().to_string();
+        let id = attributes.get("id").and_then(Value::as_str).filter(|id| valid_id(id))
+            .map(str::to_owned).unwrap_or_else(|| Uuid::new_v4().to_string());
         let mut doc = Map::new();
         for (k, v) in attributes {
             doc.insert(k.clone(), v.clone());
@@ -4836,11 +4865,88 @@ impl Store {
         }))
     }
 
-    pub fn draft(&self, input: &Value) -> Result<bool, LofError> {
+    // 임시본은 원본 파일을 바꾸지 않고 이력으로만 보관한다. 기존 이력과 같으면 기록하지 않는다.
+    fn archive_document_draft(&mut self, input: &Value) -> Result<(), LofError> {
+        let id = input["id"].as_str().filter(|id| valid_id(id))
+            .ok_or_else(|| fail_invalid("잘못된 문서 ID"))?;
+        let body = input["body"].as_str().ok_or_else(|| fail_invalid("임시 원고 본문이 없습니다."))?;
+        if utf16_len(body) > 10_000_000 { return Err(fail_invalid("본문은 10MB 이하만 지원합니다.")); }
+        let mut document = self.read(id)?;
+        for key in ["body", "title", "status", "episodeId", "properties"].iter().copied().chain(META_FIELDS.iter().copied()) {
+            if let Some(value) = input.get(key) { document[key] = value.clone(); }
+        }
+        let raw = self.markdown(id)?;
+        self.write_history(id, &document, &raw)
+    }
+
+    fn stored_draft(&self, id: &str) -> Result<Option<Value>, LofError> {
+        if let Some(db) = &self.index.database { return db.draft(id); }
+        let file = self.root.join(".lof/drafts").join(format!("{id}.json"));
+        match fs::read_to_string(file) {
+            Ok(raw) => serde_json::from_str(&raw).map(Some).map_err(|e| fail(e.to_string(), "FORMAT")),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    pub(crate) fn preserve_sync_draft(&mut self, raw: &[u8]) -> Result<Option<String>, LofError> {
+        let parsed = read_markdown(std::str::from_utf8(raw).map_err(|_| fail_invalid("원고 인코딩 오류"))?)?;
+        let Some(id) = parsed.properties.get("id").and_then(Value::as_str).filter(|id| valid_id(id)) else { return Ok(None); };
+        if let Some(input) = self.stored_draft(id)? {
+            if self.archive_document_draft(&input).is_err() {
+                let mut document = self.read(id).unwrap_or_else(|_| input.clone());
+                if let (Some(target), Some(source)) = (document.as_object_mut(), input.as_object()) {
+                    target.extend(source.clone());
+                }
+                self.save_recovery_copy(&json!({"document": document}))?;
+            }
+            return Ok(Some(id.to_string()));
+        }
+        Ok(None)
+    }
+
+    pub fn adopt_document(&mut self, input: &Value) -> Result<Value, LofError> {
+        let id = input["id"].as_str().filter(|id| valid_id(id))
+            .ok_or_else(|| fail_invalid("잘못된 문서 ID"))?;
+        let token = input["syncToken"].as_str().filter(|token| !token.is_empty() && token.len() <= 256)
+            .ok_or_else(|| fail_invalid("동기화 정리 식별자가 없습니다."))?;
+        let file = self.locate(id)?;
+        let relative = file.strip_prefix(&self.root).map_err(|_| fail_invalid("서재 밖의 문서입니다."))?
+            .to_string_lossy().replace('\\', "/");
+        self.sync_holds.insert(token.to_string(), (id.to_string(), relative));
+        let current = self.read(id)?;
+        if !input["discardDraft"].as_bool().unwrap_or(false) {
+          let saved_draft = if input["draft"].is_object() { None } else { self.stored_draft(id)? };
+          if let Some(draft) = input.get("draft").filter(|draft| draft.is_object()).or(saved_draft.as_ref()) {
+            if draft["id"].as_str() != Some(id) { return Err(fail_invalid("임시본의 문서 ID가 다릅니다.")); }
+            // 이력 저장에 실패해도 다른 문서로 이동할 수 있도록 임시본부터 별도로 남긴다.
+            let mut saved = current.clone();
+            if let (Some(target), Some(source)) = (saved.as_object_mut(), draft.as_object()) { target.extend(source.clone()); }
+            self.persist_draft(id, &saved)?;
+            self.archive_document_draft(draft)?;
+          }
+        }
+        self.clear_draft(id)?;
+        Ok(current)
+    }
+
+    pub fn draft(&mut self, input: &Value) -> Result<bool, LofError> {
         let id = input.get("id").and_then(|v| v.as_str()).unwrap_or("");
         if !valid_id(id) {
             return Err(fail_invalid("잘못된 문서 ID"));
         }
+        // 동기화 반영 뒤 늦게 도착한 이전 버전의 임시본이 복구 대상으로 되살아나지 않게 한다.
+        if !input["recoveryOnly"].as_bool().unwrap_or(false) {
+          if let Some(expected) = input["expectedRevision"].as_str() {
+            if self.read(id).is_ok_and(|doc| doc["revision"].as_str() != Some(expected)) {
+                if self.archive_document_draft(input).is_ok() { return Ok(true); }
+            }
+          }
+        }
+        self.persist_draft(id, input)
+    }
+
+    fn persist_draft(&self, id: &str, input: &Value) -> Result<bool, LofError> {
         let mut payload = input.as_object().cloned().unwrap_or_default();
         payload.insert("savedAt".to_string(), json!(now_iso()));
         if let Some(db) = &self.index.database {
@@ -4886,9 +4992,6 @@ impl Store {
         }
         if let Some(db) = &self.index.database {
             db.clear_draft(id)?;
-        }
-        if !valid_id(id) {
-            return Err(fail_invalid("잘못된 ID"));
         }
         let file = self
             .root
@@ -4991,6 +5094,7 @@ impl Store {
         self.last_snapshot.remove(id);
         let _ = self.clear_draft(id);
         self.tombstone(id, &proj_id, deleted_at)?;
+        self.sync_holds.retain(|_, (held_id, _)| held_id != id);
         Ok(true)
     }
 
@@ -5024,6 +5128,7 @@ impl Store {
         record_change(&p.dir);
         let mut deleted = self.deleted()?;
         for doc_id in ids {
+            self.sync_holds.retain(|_, (held_id, _)| held_id != &doc_id);
             self.last_snapshot.remove(&doc_id);
             let _ = self.clear_draft(&doc_id);
             deleted.insert(
