@@ -1,5 +1,6 @@
 export type Kind = "episode" | "plot" | "memo";
-export type SyncProgress = { phase: "idle" | "pending" | "syncing" | "error"; message: string; hasConnections?: boolean; activity?: "comparing" | "uploading" | "downloading" };
+export type DaemonUpdateNotice = { id: string; name: string };
+export type SyncProgress = { phase: "idle" | "pending" | "syncing" | "error"; message: string; hasConnections?: boolean; activity?: "comparing" | "uploading" | "downloading"; daemonUpdates?: DaemonUpdateNotice[] };
 export type AutoSyncStatus = SyncProgress & { channels?: Partial<Record<"files" | "realtime", SyncProgress>> };
 export type SyncConnection = {
   id: string;

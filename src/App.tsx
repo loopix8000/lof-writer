@@ -80,6 +80,7 @@ import {
 import { globalView, initialNavigation, requiresDocumentSource, sameDocumentContent, withDocumentDraft, type Destination, type Dialog, type EditorTab, type Navigation, type Side } from "./app/model";
 import { useConfirm } from "./ConfirmDialog";
 import { useLargeDocumentMode } from "./app/useLargeDocumentMode";
+import { useDaemonUpdateNotice } from "./app/useDaemonUpdateNotice";
 import ContextMenu, { type MenuItem } from "./ContextMenu";
 import { ImageViewer } from "./CoverImage";
 import EditorScroll from "./EditorScroll";
@@ -409,6 +410,7 @@ export default function App() {
   const releaseNotice = useReleaseNotice(lib.version, loaded, prefs.setupComplete === true);
   const [releaseNotesOpen, setReleaseNotesOpen] = useState(false);
   const [confirm, confirmDialog] = useConfirm();
+  useDaemonUpdateNotice(loaded, autoSync.channels?.realtime?.daemonUpdates, confirm, () => openSettings("serverSync"), report);
   const largeDocument = useLargeDocumentMode(active, confirm);
   // 원문 편집 전환과 10만 자가 넘는 문서에서 고른 모드를 함께 본다.
   const sourceFor = (doc: Doc) => source || largeDocument.sourceFor(doc);

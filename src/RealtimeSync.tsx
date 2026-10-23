@@ -9,7 +9,7 @@ import { call } from "./types";
 
 
 
-type Peer = { id: string; name: string; endpoint: string; storage: boolean; status?: { phase: string; message?: string; conflicts?: number; lastSync?: string } };
+type Peer = { id: string; name: string; endpoint: string; storage: boolean; updateRequired?: boolean; status?: { phase: string; message?: string; conflicts?: number; lastSync?: string } };
 type InviteInfo = { id: string; remainingMs: number; durationMs: number; phase: "waiting" | "expired" | "connected"; peer?: Peer };
 type InviteData = InviteInfo & { code: string; qr: string };
 type Pairing = { id: string; phase: "connecting" | "connected" | "cancelled" | "error"; peer?: Peer; error?: string; code?: string };
@@ -320,6 +320,7 @@ export default function RealtimeSync({
           {peer.status?.lastSync && ` · ${new Date(peer.status.lastSync).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`}
         </span>}
         {controls && peer.status?.message && <p className="realtime-inline-error">{peer.status.message}</p>}
+        {peer.updateRequired && <p className="realtime-inline-error" role="status">Lof Library 업데이트가 필요합니다. 해당 기기에서 데몬을 최신 버전으로 업데이트해 주세요.</p>}
         {controls && !!peer.status?.conflicts && <p className="settings-note">충돌 사본 {peer.status.conflicts}개를 보관했습니다.</p>}
       </div>
       {controls && <div className="realtime-device-actions">

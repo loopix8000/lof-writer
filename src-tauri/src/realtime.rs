@@ -94,6 +94,8 @@ pub struct Realtime {
     // 상대마다 마지막으로 보낸 파일 목록과 받은 파일 목록. 요약값이 맞으면 바뀐 항목만 주고받는다.
     sent_inventories: Mutex<HashMap<String, (String, BTreeMap<String, Info>)>>,
     received_inventories: Mutex<HashMap<String, (String, BTreeMap<String, Info>)>>,
+    // 연결된 데몬이 변경 목록 교환을 지원하지 않으면 앱에서 업데이트를 안내한다.
+    legacy_daemons: Mutex<HashSet<(PathBuf, String)>>,
     wake: Condvar,
 }
 struct Invitation {
@@ -446,7 +448,46 @@ fn peers(app: &AppHandle) -> Vec<Value> {
         .map(|member| peer_value(member, &current, &aliases))
         .collect()
 }
-// 전송 규격은 유지하고, 이 장치에서 수행하는 파일 작업만 화면에 알린다.
+fn daemon_protocol(app: &AppHandle, peer: &Value, supported: bool) {
+    if peer["storage"] != true {
+        return;
+    }
+    let Ok(current) = root(app) else { return; };
+    let Some(id) = peer["id"].as_str() else { return; };
+    let rt = app.state::<Realtime>();
+    let key = (current, id.to_string());
+    let changed = {
+        let mut legacy = rt.legacy_daemons.lock().unwrap();
+        if supported {
+            legacy.remove(&key)
+        } else {
+            legacy.insert(key)
+        }
+    };
+    if changed {
+        crate::auto_sync::refresh_realtime(app);
+    }
+}
+
+fn supports_inventory_delta(message: &Value) -> bool {
+    message["capabilities"].as_array().is_some_and(|values| {
+        values.iter().any(|value| value.as_str() == Some(INVENTORY_DELTA))
+    })
+}
+
+fn daemon_updates(app: &AppHandle, list: &[Value]) -> Vec<Value> {
+    let Ok(current) = root(app) else { return Vec::new(); };
+    let rt = app.state::<Realtime>();
+    let legacy = rt.legacy_daemons.lock().unwrap();
+    let live = rt.live.lock().unwrap();
+    list.iter().filter(|peer| {
+        let id = peer["id"].as_str().unwrap_or("");
+        peer["storage"] == true && legacy.contains(&(current.clone(), id.to_string()))
+            && live.get(id).is_some_and(|conn| conn.close_reason().is_none())
+    }).map(|peer| json!({"id":peer["id"],"name":peer["name"]})).collect()
+}
+
+// 이 장치에서 수행하는 파일 작업을 화면에 알린다.
 fn sync_activity(app: &AppHandle, peer: &str, activity: &str) {
     let rt = app.state::<Realtime>();
     let changed = {
@@ -472,9 +513,10 @@ pub fn progress(app: &AppHandle) -> Value {
         return json!({ "phase": "idle", "message": "", "hasConnections": false });
     }
     let rt = app.state::<Realtime>();
+    let updates = daemon_updates(app, &list);
     let fatal = rt.error.lock().unwrap().clone();
     if !fatal.is_empty() {
-        return json!({ "phase": "error", "message": fatal, "hasConnections": true });
+        return json!({ "phase": "error", "message": fatal, "hasConnections": true, "daemonUpdates": updates });
     }
     let statuses = rt.statuses.lock().unwrap();
     let mut syncing = false;
@@ -518,6 +560,7 @@ pub fn progress(app: &AppHandle) -> Value {
         "phase": phase,
         "message": message,
         "hasConnections": true,
+        "daemonUpdates": updates,
     });
     if let Some(activity) = activity {
         progress["activity"] = json!(activity);
@@ -852,6 +895,7 @@ impl WriterHost {
             return Ok(Message::json(json!(true)));
         }
         if op == "hello" {
+            daemon_protocol(app, &peer_config, supports_inventory_delta(request));
             rt.reconnect.lock().unwrap().insert(peer.to_string());
         }
         if op == "notify" {
@@ -861,7 +905,7 @@ impl WriterHost {
         if op == "hello" {
             wake(app);
             return Ok(Message::json(
-                json!({"storage":false,"members":members(app)}),
+                json!({"storage":false,"capabilities":[INVENTORY_DELTA],"members":members(app)}),
             ));
         }
         let current = root(app)?;
@@ -1051,6 +1095,9 @@ impl FileRemote for PeerRemote {
             let mut reply = self
                 .rpc(json!({"op":"inventory","deferredPaths":true,"delta":true,"known":known}), vec![])?
                 .meta;
+            if let Some(peer) = peers(&self.app).iter().find(|peer| peer["id"].as_str() == Some(self.peer.as_str())) {
+                daemon_protocol(&self.app, peer, reply["format"].as_str() == Some(INVENTORY_DELTA));
+            }
             if reply["format"].as_str() != Some(INVENTORY_DELTA) {
                 // 이전 앱은 요약값을 모르고 항상 전체 목록을 보낸다.
                 return serde_json::from_value(reply).map_err(net);
@@ -1435,6 +1482,7 @@ pub fn start(app: &AppHandle) {
                                     conn.close(0u8.into(), b"removed");
                                     return Err("이 장치가 동기화 그룹에서 제거되었습니다.".into());
                                 }
+                                daemon_protocol(&app, &peer, supports_inventory_delta(&reply.meta));
                                 if !connected.contains_key(&id) {
                                     rt.live.lock().unwrap().insert(id.clone(), conn.clone());
                                     watch_close(&runtime, &app, &conn);
@@ -1506,7 +1554,7 @@ pub fn start(app: &AppHandle) {
                         let node = node.clone();
                         let events = app.clone();
                         let endpoint = peer["endpoint"].as_str().unwrap_or("").to_string();
-                        let hello = json!({"op":"hello","vault":vault(&app)?,"target":peer["remoteVault"],"members":members(&app)});
+                        let hello = json!({"op":"hello","vault":vault(&app)?,"target":peer["remoteVault"],"capabilities":[INVENTORY_DELTA],"members":members(&app)});
                         let task = runtime.spawn(async move {
                             let result = async {
                                 let conn = match existing {
@@ -1732,6 +1780,7 @@ fn leave(app: &AppHandle) -> Result<Value, LofError> {
         .join();
     }
     rt.statuses.lock().unwrap().clear();
+    rt.legacy_daemons.lock().unwrap().clear();
     *rt.invite.lock().unwrap() = None;
     wake(app);
     Ok(json!(true))
@@ -1747,9 +1796,10 @@ pub fn command(app: &AppHandle, method: &str, args: &Value) -> Result<Value, Lof
         })?;
         let list: Vec<_> = {
             let peers = peers(app);
+            let updates = daemon_updates(app, &peers);
             let statuses = rt.statuses.lock().unwrap();
             peers.into_iter()
-            .map(|p|json!({"id":p["id"],"name":p["name"],"endpoint":p["endpoint"],"storage":p["storage"],"status":statuses.get(p["id"].as_str().unwrap_or(""))})).collect()
+            .map(|p|json!({"id":p["id"],"name":p["name"],"endpoint":p["endpoint"],"storage":p["storage"],"updateRequired":updates.iter().any(|update| update["id"] == p["id"]),"status":statuses.get(p["id"].as_str().unwrap_or(""))})).collect()
         };
         let invite = rt
             .invite
