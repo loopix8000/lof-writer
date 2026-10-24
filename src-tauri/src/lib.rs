@@ -475,8 +475,42 @@ fn api_sync_status(app: &AppHandle) -> Value {
     status
 }
 
+// 앱 검색 화면과 MCP 검색이 같은 결과를 내도록 통합 검색(작품·파일 이름·태그·본문)과 공용 메모 검색을 함께 실행한다.
+fn search_library(state: &AppState, args: &Value) -> Result<Value, LofError> {
+    let query = args.get("query").and_then(Value::as_str).unwrap_or("");
+    let project_id = args
+        .get("projectId")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty());
+    let case_sensitive = args
+        .get("caseSensitive")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let store_root = {
+        let guard = state.store.lock().unwrap();
+        guard
+            .as_ref()
+            .ok_or_else(|| fail_invalid("Store not initialized"))?
+            .root
+            .clone()
+    };
+    let common_root = common_memo_root_of(&store_root, &state.settings.lock().unwrap());
+    let mut guard = state.store.lock().unwrap();
+    let st = guard
+        .as_mut()
+        .ok_or_else(|| fail_invalid("Store not initialized"))?;
+    let all = st.search_all(query, project_id, case_sensitive)?;
+    let common = Memos::search_text(st, &common_root, "common", query, case_sensitive)?;
+    let mut out = all.as_object().cloned().unwrap_or_default();
+    out.insert("common".to_string(), common);
+    Ok(Value::Object(out))
+}
+
 // MCP 앱 작업은 기능별 처리기로 전달한다. 동기화는 화면과 같은 대기열을 사용한다.
 fn api_app_tool(app: &AppHandle, name: &str, args: &Value) -> Result<Value, LofError> {
+    if name == "document_search" {
+        return search_library(&app.state::<AppState>(), args);
+    }
     if name.starts_with("skill_") {
         if name == "skill_install" && app.state::<AppState>().closing.load(Ordering::SeqCst) {
             return Err(fail("앱이 종료 중이라 스킬을 설치할 수 없습니다.", "SKILL_BUSY"));
@@ -1252,27 +1286,7 @@ fn dispatch_method(
             let st = guard.as_mut().ok_or_else(|| fail_invalid("Store not initialized"))?;
             st.search_document_ids(query, project_id)
         }
-        "searchText" => {
-            let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
-            let project_id = args
-                .get("projectId")
-                .and_then(|v| v.as_str())
-                .filter(|s| !s.is_empty());
-            let case_sensitive = args
-                .get("caseSensitive")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            let (_, common_root) = get_store_and_common()?;
-            let mut guard = state.store.lock().unwrap();
-            let st = guard
-                .as_mut()
-                .ok_or_else(|| fail_invalid("Store not initialized"))?;
-            let all = st.search_all(query, project_id, case_sensitive)?;
-            let common = Memos::search_text(st, &common_root, "common", query, case_sensitive)?;
-            let mut out = all.as_object().cloned().unwrap_or_default();
-            out.insert("common".to_string(), common);
-            Ok(Value::Object(out))
-        }
+        "searchText" => search_library(state, &args),
         "history" => {
             let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
             let mut guard = state.store.lock().unwrap();
