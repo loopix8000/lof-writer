@@ -2678,7 +2678,9 @@ pub fn run() {
                 *h_guard = Some(handle.clone());
             }
             let st: State<AppState> = app.state();
-            let start_in_tray = desktop_startup::start_in_tray(&st.settings.lock().unwrap());
+            // 업데이트 후 재실행은 이전 실행 인자와 트레이 시작 설정을 이어받아도 창을 띄운다.
+            let start_in_tray = !desktop_startup::take_update_relaunch(&st.user_dir)
+                && desktop_startup::start_in_tray(&st.settings.lock().unwrap());
             let bg_color = {
                 let s_guard = st.settings.lock().unwrap();
                 let prefs = s_guard.get("preferences");

@@ -10,11 +10,13 @@ pub async fn desktop_update_check(webview: tauri::Webview, channel: String) -> R
     #[cfg(not(target_os = "android"))]
     {
         use tauri_plugin_updater::UpdaterExt;
+        let user_dir = webview.state::<crate::AppState>().user_dir.clone();
         let endpoint = format!("https://github.com/loopix8000/lof-writer/releases/download/{channel}/latest.json");
         let updater = webview.updater_builder()
             .endpoints(vec![tauri::Url::parse(&endpoint).map_err(|error| error.to_string())?])
             .map_err(|error| error.to_string())?
             .timeout(std::time::Duration::from_secs(15))
+            .on_before_exit(move || crate::desktop_startup::mark_update_relaunch(&user_dir))
             .version_comparator(move |current, release| {
                 let kind = release.version.pre.as_str().split('.').next().unwrap_or("");
                 release.version > current && match channel.as_str() {

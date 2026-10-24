@@ -1,6 +1,7 @@
 //! Windows 로그인 시 실행 등록과 처음 창을 표시할 방식을 관리한다.
 use crate::error::{fail_invalid, LofError};
 use serde_json::Value;
+use std::path::Path;
 
 pub fn background_launch() -> bool {
     cfg!(windows)
@@ -13,6 +14,19 @@ pub fn start_in_tray(settings: &Value) -> bool {
     cfg!(windows)
         && (settings["preferences"]["startInTray"] == true
             || std::env::args().skip(1).any(|arg| arg == "--tray"))
+}
+
+const UPDATE_RELAUNCH: &str = "update-relaunch";
+
+/// 업데이트 설치로 앱이 종료되기 직전에 남겨, 설치 후 다시 실행될 때 트레이 대신 창을 띄우게 한다.
+#[cfg(not(target_os = "android"))]
+pub fn mark_update_relaunch(user_dir: &Path) {
+    let _ = std::fs::write(user_dir.join(UPDATE_RELAUNCH), b"");
+}
+
+/// 업데이트 후 재실행인지 확인하고 표시를 지운다. 설치에 실패해 남은 표시도 다음 실행에서 한 번만 쓰인다.
+pub fn take_update_relaunch(user_dir: &Path) -> bool {
+    std::fs::remove_file(user_dir.join(UPDATE_RELAUNCH)).is_ok()
 }
 
 pub fn validate(patch: &Value) -> Result<(), LofError> {
