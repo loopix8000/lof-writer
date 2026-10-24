@@ -68,7 +68,7 @@ fn can_defer_file(error: &LofError) -> bool {
 
 // 목록 조회의 경고 문구로 전송 여부를 결정하지 않는다. 안전하지 않은 경로만 표시한다.
 pub(crate) fn inventory(
-    store: &Mutex<Option<Store>>, root: &Path, hashes: bool,
+    store: &Mutex<Option<Store>>, root: &Path,
 ) -> Result<BTreeMap<String, Info>, LofError> {
     // 서재 전체를 훑는 동안 잠금을 계속 쥐면 저장과 문서 열기가 기다린다.
     // 목록만 잠근 채 받고, 원고 확인은 문서마다 잠금을 잡았다 놓으며, 디스크 목록과 해시는 잠금 밖에서 계산한다.
@@ -79,11 +79,11 @@ pub(crate) fn inventory(
         st.poll_disk_with(disk)?;
         let deferred = st.sync_deferred_paths()?;
         let list = st.list()?;
-        let documents: Vec<(String, String)> = list["documents"].as_array().into_iter().flatten()
+        let documents: HashMap<String, String> = list["documents"].as_array().into_iter().flatten()
             .filter_map(|document| {
                 let (id, path) = (document["id"].as_str()?, document["path"].as_str()?);
                 let relative = Path::new(path).strip_prefix(root).ok()?;
-                Some((id.to_string(), relative.to_string_lossy().replace('\\', "/")))
+                Some((relative.to_string_lossy().replace('\\', "/"), id.to_string()))
             })
             .collect();
         Ok((deferred, documents))
@@ -94,30 +94,46 @@ pub(crate) fn inventory(
         deferred.insert(&path);
         files.insert(path, Info::unavailable());
     }
-    // 덮어쓰기 전에 읽을 수 있는 원고만 로컬 이력에 기록한다.
-    for (id, relative) in documents {
-        if deferred.contains(&relative) { continue; }
-        if let Err(error) = with_store(store, root, |st| st.read(&id).map(|_| ())) {
-            if !can_defer_file(&error) { return Err(error); }
-            deferred.insert(&relative);
-            files.insert(relative, Info::unavailable());
-        }
-    }
-    if hashes {
-        for (path, info) in &mut files {
-            if info.unavailable || deferred.contains(path) { continue; }
-            let checked = read_local(root, path).and_then(|bytes| {
-                let bytes = bytes.ok_or_else(retry)?;
-                original(path, &bytes)?;
-                Ok(hash_bytes(&bytes))
-            });
-            match checked {
-                Ok(hash) => info.etag = Some(hash),
-                Err(error) if can_defer_file(&error) => { info.unavailable = true; deferred.insert(path); }
-                Err(error) => return Err(error),
+    let index = lof_realtime::file_index::Index::open(root).map_err(|e| fail(e, "DATABASE"))?;
+    for (path, info) in &mut files {
+        if info.unavailable || deferred.contains(path) { continue; }
+        let mut changed = false;
+        let checked = index.inspect(root, path, |bytes| {
+            changed = true;
+            original(path, bytes).map_err(|e| e.message)?;
+            let header = if path.to_ascii_lowercase().ends_with(".md") {
+                Value::Object(crate::markdown::read_markdown(std::str::from_utf8(bytes).map_err(|e| e.to_string())?)
+                    .map_err(|e| e.message)?.properties)
+            } else if path.ends_with("/project.json") {
+                serde_json::from_slice(bytes).map_err(|e| e.to_string())?
+            } else { Value::Null };
+            Ok((identity(path, bytes).map_err(|e| e.message)?, header))
+        }).map_err(|e| fail(e, "SYNC_RETRY"));
+        let checked = checked.and_then(|entry| {
+            // 변경된 원고만 관찰 DB에 반영한다. 전송 직전에는 실제 바이트를 다시 확인한다.
+            if changed {
+                if let Some(id) = documents.get(path) {
+                    with_store(store, root, |st| st.read(id).map(|_| ()))?;
+                }
             }
+            Ok(entry)
+        });
+        match checked {
+            Ok(entry) => {
+                info.size = entry.size;
+                info.modified = entry.modified;
+                info.etag = Some(entry.index.version.clone());
+                info.index = Some(entry.index);
+            },
+            Err(error) if can_defer_file(&error) => {
+                index.invalidate(path).map_err(|e| fail(e, "DATABASE"))?;
+                info.unavailable = true;
+                deferred.insert(path);
+            }
+            Err(error) => return Err(error),
         }
     }
+    index.retain(files.keys()).map_err(|e| fail(e, "DATABASE"))?;
     Ok(files)
 }
 
@@ -279,6 +295,8 @@ pub(crate) fn apply_local(
         if old.as_deref().map(hash_bytes).as_deref() != expected {
             return Err(retry());
         }
+        lof_realtime::file_index::Index::open(root).and_then(|index| index.invalidate(path))
+            .map_err(|e| fail(e, "DATABASE"))?;
         let preserved_draft = if path.to_ascii_lowercase().ends_with(".md") {
             old.as_deref().map(|raw| st.preserve_sync_draft(raw)).transpose()?.flatten()
         } else { None };
@@ -292,7 +310,15 @@ pub(crate) fn apply_local(
         match bytes {
             Some(bytes) => {
                 original(path, bytes)?;
+                let received_raw = if path.to_ascii_lowercase().ends_with(".md") {
+                    let raw = std::str::from_utf8(bytes).map_err(|_| fail_invalid("원고 인코딩 오류"))?;
+                    st.database()?.queue_received_history(path, raw)?;
+                    Some(raw)
+                } else { None };
                 atomic_write_bytes(&target, bytes)?;
+                if let Some(raw) = received_raw {
+                    st.database()?.mark_received_history(path, raw)?;
+                }
                 if let Some(seconds) = modified.filter(|seconds| *seconds >= 0) {
                     let times = fs::FileTimes::new()
                         .set_modified(UNIX_EPOCH + Duration::from_secs(seconds as u64));
@@ -438,7 +464,11 @@ pub(super) fn sync(
 // 서재 파일 목록은 잠금 밖에서 만들고, 열린 서재에 반영할 때만 잠근다.
 fn refresh_disk(store: &Mutex<Option<Store>>, root: &Path) -> Result<bool, LofError> {
     let files = crate::store::disk_inventory(root)?;
-    with_store(store, root, |st| st.poll_disk_with(files))
+    with_store(store, root, |st| {
+        let changed = st.poll_disk_with(files)?;
+        st.flush_received_history()?;
+        Ok(changed)
+    })
 }
 
 /// 실시간 피어도 파일 저장소와 같은 충돌·삭제·이름 변경 규칙을 사용한다.
@@ -495,7 +525,7 @@ fn run(
         state.remote_id = Some(id);
     }
     save(store, root, key, state)?;
-    let mut local_files = inventory(store, root, false)?;
+    let mut local_files = inventory(store, root)?;
     local_files.remove(ID_FILE);
     let names: BTreeSet<_> = local_files
         .keys()
@@ -537,15 +567,19 @@ fn run(
             Err(error) => return Err(error),
         }
         let local_info = local_files.get(path).cloned();
-        let (local, local_id) = if local_info.is_some() {
-            let checked = with_store(store, root, |_| {
-                let bytes = read_local(root, path)?.ok_or_else(retry)?;
-                Ok((Some(hash_bytes(&bytes)), identity(path, &bytes)?))
-            });
-            match checked {
-                Ok(value) => value,
-                Err(error) if can_defer_file(&error) => { deferred.insert(path); continue; }
-                Err(error) => return Err(error),
+        let (local, local_id) = if let Some(info) = &local_info {
+            if let Some(index) = info.index.as_ref().filter(|index| index.matches(info.etag.as_deref())) {
+                (info.etag.clone(), index.identity.clone())
+            } else {
+                let checked = with_store(store, root, |_| {
+                    let bytes = read_local(root, path)?.ok_or_else(retry)?;
+                    Ok((Some(hash_bytes(&bytes)), identity(path, &bytes)?))
+                });
+                match checked {
+                    Ok(value) => value,
+                    Err(error) if can_defer_file(&error) => { deferred.insert(path); continue; }
+                    Err(error) => return Err(error),
+                }
             }
         } else {
             (None, None)
@@ -553,6 +587,8 @@ fn run(
         let remote_info = remote_files.get(path).cloned();
         let mut remote_id = None;
         let remote_hash = if let Some(info) = &remote_info {
+            let indexed = info.index.as_ref().filter(|index| remote.hash_etag() && index.matches(info.etag.as_deref()));
+            let invalid_index = info.index.is_some() && indexed.is_none();
             let cached = info
                 .etag
                 .as_ref()
@@ -561,31 +597,36 @@ fn run(
                     state
                         .tags
                         .get(path)
-                        .filter(|(previous, _)| previous == tag)
+                        .filter(|(previous, _)| !invalid_index && previous == tag)
                 });
-            match cached {
-                Some((_, hash)) => {
-                    remote_id = state.identities.get(path).cloned();
-                    Some(hash.clone())
-                }
-                None if remote.hash_etag() && local.is_some() && info.etag == local => {
-                    remote_id = local_id.clone();
-                    local.clone()
-                }
-                None => {
-                    let bytes = match remote.read(&path) {
-                        Ok(bytes) => bytes,
-                        Err(error) if can_defer_file(&error) => { deferred.insert(path); continue; }
-                        Err(error) => return Err(error),
-                    };
-                    add(total, "downloadedBytes", bytes.len());
-                    add(total, "downloadedFiles", 1);
-                    remote_id = match identity(path, &bytes) {
-                        Ok(id) => id,
-                        Err(error) if can_defer_file(&error) => { deferred.insert(path); continue; }
-                        Err(error) => return Err(error),
-                    };
-                    Some(hash_bytes(&bytes))
+            if let Some(indexed) = indexed {
+                remote_id = indexed.identity.clone();
+                info.etag.clone()
+            } else {
+                match cached {
+                    Some((_, hash)) => {
+                        remote_id = state.identities.get(path).cloned();
+                        Some(hash.clone())
+                    }
+                    None if !invalid_index && remote.hash_etag() && local.is_some() && info.etag == local => {
+                        remote_id = local_id.clone();
+                        local.clone()
+                    }
+                    None => {
+                        let bytes = match remote.read(&path) {
+                            Ok(bytes) => bytes,
+                            Err(error) if can_defer_file(&error) => { deferred.insert(path); continue; }
+                            Err(error) => return Err(error),
+                        };
+                        add(total, "downloadedBytes", bytes.len());
+                        add(total, "downloadedFiles", 1);
+                        remote_id = match identity(path, &bytes) {
+                            Ok(id) => id,
+                            Err(error) if can_defer_file(&error) => { deferred.insert(path); continue; }
+                            Err(error) => return Err(error),
+                        };
+                        Some(hash_bytes(&bytes))
+                    }
                 }
             }
         } else {

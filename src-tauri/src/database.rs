@@ -202,6 +202,7 @@ impl LibraryDb {
             CREATE TABLE IF NOT EXISTS pending_writes (doc_id TEXT PRIMARY KEY, previous BLOB NOT NULL, started_at TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS drafts (doc_id TEXT PRIMARY KEY, data BLOB NOT NULL, saved_at TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS legacy_sources (path TEXT PRIMARY KEY, hash TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS received_history (seq INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT NOT NULL, revision TEXT NOT NULL, raw TEXT NOT NULL, applied INTEGER NOT NULL DEFAULT 0, retry_at INTEGER NOT NULL DEFAULT 0, UNIQUE(path,revision));
             PRAGMA user_version=1;")?;
         let db = Self {
             connection,
@@ -421,6 +422,35 @@ impl LibraryDb {
 
     pub fn observe(&self, doc: &Value) -> Result<(), LofError> {
         self.observe_document(doc, None, true).map(|_| ())
+    }
+
+    pub fn queue_received_history(&self, path: &str, raw: &str) -> Result<(), LofError> {
+        self.connection.execute("INSERT OR IGNORE INTO received_history(path,revision,raw) VALUES(?1,?2,?3)",
+            params![path, hash_str(raw), raw])?;
+        Ok(())
+    }
+
+    pub fn mark_received_history(&self, path: &str, raw: &str) -> Result<(), LofError> {
+        self.connection.execute("UPDATE received_history SET applied=1 WHERE path=?1 AND revision=?2",
+            params![path, hash_str(raw)])?;
+        Ok(())
+    }
+
+    pub fn received_history(&self) -> Result<Vec<(i64, String, String, bool)>, LofError> {
+        let mut query = self.connection.prepare("SELECT seq,path,raw,applied FROM received_history WHERE retry_at<=?1 ORDER BY seq LIMIT 20")?;
+        let rows = query.query_map([chrono::Utc::now().timestamp()], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    pub fn finish_received_history(&self, sequence: i64) -> Result<(), LofError> {
+        self.connection.execute("DELETE FROM received_history WHERE seq=?1", [sequence])?;
+        Ok(())
+    }
+
+    pub fn defer_received_history(&self, sequence: i64) -> Result<(), LofError> {
+        self.connection.execute("UPDATE received_history SET retry_at=?2 WHERE seq=?1",
+            params![sequence, chrono::Utc::now().timestamp() + 5])?;
+        Ok(())
     }
 
     pub fn observe_file(&self, doc: &Value, modified: &str, app_write: bool) -> Result<Value, LofError> {

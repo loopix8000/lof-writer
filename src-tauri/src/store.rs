@@ -1087,6 +1087,7 @@ impl Store {
                 self.local_git.finish_migration(&vault_id, self.index.database.as_ref().unwrap(), &snapshot)?;
             }
         }
+        self.flush_received_history()?;
         self.local_git.observe(self.sync_revision());
         if self.local_git.due(force, editing) {
             let snapshot = self.git_snapshot()?;
@@ -1302,6 +1303,7 @@ impl Store {
             && !relative.split(['/', '\\']).any(|s| s == ".lof")
         {
             self.index.dirty.insert(relative.replace('\\', "/"));
+            lof_realtime::file_index::changed(&self.root, &relative.replace('\\', "/"));
             self.sync_sequence.fetch_add(1, Ordering::SeqCst);
         }
     }
@@ -4948,6 +4950,33 @@ impl Store {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(e.into()),
         }
+    }
+
+    pub(crate) fn flush_received_history(&mut self) -> Result<(), LofError> {
+        // 작품 정보가 원고 뒤에 도착해도 수신한 본문을 DB에 남겨 다음 확인에서 이어 기록한다.
+        for (sequence, path, raw, applied) in self.database()?.received_history()? {
+            // 쓰기 완료 표시 전에 종료됐다면 실제 파일로 완료 여부를 확인한다.
+            if !applied && crate::sync::files::read_local(&self.root, &path)?.as_deref() != Some(raw.as_bytes()) {
+                self.database()?.finish_received_history(sequence)?;
+                continue;
+            }
+            let parsed = read_markdown(&raw)?;
+            if let Some(id) = parsed.properties.get("id").and_then(Value::as_str).filter(|id| valid_id(id)) {
+                let (project, mut entry, _) = match self.find_doc(id) {
+                    Ok(document) => document,
+                    Err(error) if error.code == "NOT_FOUND" || error.code == "ENOENT" => {
+                        self.database()?.defer_received_history(sequence)?;
+                        continue;
+                    },
+                    Err(error) => return Err(error),
+                };
+                if let Some(kind) = parsed.properties.get("kind") { entry["kind"] = kind.clone(); }
+                let document = doc_of(&project.dir, project.project["id"].as_str().unwrap_or(""), &entry, &raw)?;
+                self.write_history(id, &document, &raw)?;
+            }
+            self.database()?.finish_received_history(sequence)?;
+        }
+        Ok(())
     }
 
     pub(crate) fn preserve_sync_draft(&mut self, raw: &[u8]) -> Result<Option<String>, LofError> {

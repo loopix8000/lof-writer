@@ -34,6 +34,7 @@ const SYNC_BUSY_MESSAGE: &str = "다른 동기화가 진행 중입니다.";
 const CONTROL_TIMEOUT: Duration = Duration::from_secs(8);
 // 파일 목록을 바뀐 항목만 주고받는 응답 형식. 이전 앱은 이 표시 없이 전체 목록을 보낸다.
 const INVENTORY_DELTA: &str = "inventory-delta-v1";
+const INVENTORY_INDEX: &str = lof_realtime::file_index::FORMAT;
 
 fn inventory_digest(files: &BTreeMap<String, Info>) -> Result<String, LofError> {
     Ok(crate::error::hash_bytes(&serde_json::to_vec(files).map_err(net)?))
@@ -938,7 +939,7 @@ impl WriterHost {
         if op == "hello" {
             wake(app);
             return Ok(Message::json(
-                json!({"storage":false,"capabilities":[INVENTORY_DELTA],"members":members(app)}),
+                json!({"storage":false,"capabilities":[INVENTORY_DELTA, INVENTORY_INDEX],"members":members(app)}),
             ));
         }
         let current = root(app)?;
@@ -977,6 +978,7 @@ impl WriterHost {
             let mut store = state.store.lock().unwrap();
             if let Some(s) = store.as_mut() {
                 s.poll_disk()?;
+                s.flush_received_history()?;
             }
             drop(store);
             crate::schedule_notify(app, &state.notify_seq);
@@ -993,7 +995,11 @@ impl WriterHost {
         }
         if op == "inventory" {
             sync_activity(app, peer_config["id"].as_str().unwrap_or(""), "comparing");
-            let mut inventory = files::inventory(&state.store, &current, true)?;
+            let mut inventory = files::inventory(&state.store, &current)?;
+            // 구형 피어에는 기존 필드만 보내 목록 요약값의 직렬화 규칙을 유지한다.
+            if request["index"] != true {
+                for info in inventory.values_mut() { info.index = None; }
+            }
             // 이전 클라이언트가 보류 표시를 삭제로 오인하지 않도록 지원 여부를 확인한다.
             if request["deferredPaths"] != true && inventory.values().any(|info| info.unavailable) {
                 return Err(fail("일부 파일을 확인 중입니다. 연결한 앱을 업데이트해 주세요.", "SYNC_RETRY"));
@@ -1010,6 +1016,7 @@ impl WriterHost {
             }
             // 상대가 마지막으로 받은 목록을 가지고 있으면 바뀐 항목과 지워진 경로만 보낸다.
             let digest = inventory_digest(&inventory)?;
+            let format = if request["index"] == true { INVENTORY_INDEX } else { INVENTORY_DELTA };
             let key = format!("{peer}\n{}", current.to_string_lossy());
             let mut sent = rt.sent_inventories.lock().unwrap();
             let reply = match sent.get(&key) {
@@ -1020,9 +1027,9 @@ impl WriterHost {
                         .collect();
                     let removed: Vec<&String> =
                         previous.keys().filter(|path| !inventory.contains_key(*path)).collect();
-                    json!({"format":INVENTORY_DELTA,"digest":digest,"base":base,"changed":changed,"removed":removed})
+                    json!({"format":format,"digest":digest,"base":base,"changed":changed,"removed":removed})
                 }
-                _ => json!({"format":INVENTORY_DELTA,"digest":digest,"files":inventory}),
+                _ => json!({"format":format,"digest":digest,"files":inventory}),
             };
             sent.insert(key, (digest, inventory));
             return Ok(Message::json(reply));
@@ -1127,15 +1134,15 @@ impl FileRemote for PeerRemote {
         let rt = app.state::<Realtime>();
         // 지난번에 받은 목록의 요약값을 보내 바뀐 항목만 받는다.
         let mut cached = rt.received_inventories.lock().unwrap().remove(&key);
-        loop {
+        for _ in 0..2 {
             let known = cached.as_ref().map(|(digest, _)| digest.clone());
             let mut reply = self
-                .rpc(json!({"op":"inventory","deferredPaths":true,"delta":true,"known":known}), vec![])?
+                .rpc(json!({"op":"inventory","deferredPaths":true,"delta":true,"index":true,"known":known}), vec![])?
                 .meta;
             if let Some(peer) = peers(&self.app).iter().find(|peer| peer["id"].as_str() == Some(self.peer.as_str())) {
-                daemon_protocol(&self.app, peer, reply["format"].as_str() == Some(INVENTORY_DELTA));
+                daemon_protocol(&self.app, peer, matches!(reply["format"].as_str(), Some(INVENTORY_DELTA | INVENTORY_INDEX)));
             }
-            if reply["format"].as_str() != Some(INVENTORY_DELTA) {
+            if !matches!(reply["format"].as_str(), Some(INVENTORY_DELTA | INVENTORY_INDEX)) {
                 // 이전 앱은 요약값을 모르고 항상 전체 목록을 보낸다.
                 return serde_json::from_value(reply).map_err(net);
             }
@@ -1160,11 +1167,9 @@ impl FileRemote for PeerRemote {
                 rt.received_inventories.lock().unwrap().insert(key, (digest, files.clone()));
                 return Ok(files);
             }
-            if full {
-                return Ok(files);
-            }
             // 합친 목록이 상대와 다르면 전체 목록을 다시 받는다.
         }
+        Err(fail("파일 목록이 변경되어 다시 비교합니다.", "SYNC_RETRY"))
     }
     fn read(&mut self, path: &str) -> Result<Vec<u8>, LofError> {
         Ok(self.rpc(json!({"op":"read","path":path}), vec![])?.data)
@@ -1644,7 +1649,7 @@ pub fn start(app: &AppHandle) {
                         let node = node.clone();
                         let events = app.clone();
                         let endpoint = peer["endpoint"].as_str().unwrap_or("").to_string();
-                        let hello = json!({"op":"hello","vault":vault(&app)?,"target":peer["remoteVault"],"capabilities":[INVENTORY_DELTA],"members":members(&app)});
+                        let hello = json!({"op":"hello","vault":vault(&app)?,"target":peer["remoteVault"],"capabilities":[INVENTORY_DELTA, INVENTORY_INDEX],"members":members(&app)});
                         let task = runtime.spawn(async move {
                             let result = async {
                                 let conn = match existing {

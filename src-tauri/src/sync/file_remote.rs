@@ -28,6 +28,8 @@ pub(crate) struct Info {
     // 삭제와 읽기 실패를 구분한다. 이 경로의 이전 비교 기록은 유지한다.
     #[serde(default)]
     pub unavailable: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index: Option<lof_realtime::file_index::Version>,
 }
 
 impl Info {
