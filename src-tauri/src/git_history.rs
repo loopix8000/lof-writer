@@ -1,18 +1,13 @@
 use crate::error::{fail, fail_invalid, valid_id, LofError};
 use crate::local_git::{
-    put_document, read_document, read_json, remove_dir_force, update_tree, LocalHistory,
+    put_document, read_document, read_json, update_tree, LocalHistory,
 };
 use git2::{Commit, Oid, Repository, Signature, Sort};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashSet};
-use std::fs;
-use std::io;
 use std::path::Path;
 
 const MAIN: &str = "refs/heads/main";
-// 백업 파일 안의 서재 이력과 공용 메모 이력 폴더 이름. 공용 메모 이력은 공용 메모 폴더의 .lof에 같은 이름으로 둔다.
-const LIBRARY_REPOSITORY: &str = "git";
-const COMMON_REPOSITORY: &str = "common-memo-git";
 
 fn latest(repo: &Repository) -> Result<Commit<'_>, LofError> {
     Ok(repo.find_reference(MAIN)?.peel_to_commit()?)
@@ -321,182 +316,6 @@ impl LocalHistory {
         }
         Ok(true)
     }
-
-    // 서재 이력은 git/, 공용 메모 이력은 common-memo-git/ 아래에 담는다. 공용 메모 이력이 없으면 서재 이력만 담는다.
-    pub fn backup(&self, destination: &Path, common_root: &Path) -> Result<(), LofError> {
-        let repo = self.repository()?;
-        let common = common_root.join(".lof").join(COMMON_REPOSITORY);
-        let common = if common.try_exists()? {
-            Some(LocalHistory::common_memos(common_root)?.repository()?)
-        } else {
-            None
-        };
-        let file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(destination)?;
-        let mut archive = zip::ZipWriter::new(file);
-        fn visit(
-            root: &Path,
-            directory: &Path,
-            prefix: &str,
-            archive: &mut zip::ZipWriter<fs::File>,
-        ) -> Result<(), LofError> {
-            for entry in fs::read_dir(directory)? {
-                let entry = entry?;
-                let kind = entry.file_type()?;
-                if kind.is_symlink() {
-                    return Err(fail_invalid("연결된 Git 파일은 백업할 수 없습니다."));
-                }
-                let path = entry.path();
-                if kind.is_dir() {
-                    visit(root, &path, prefix, archive)?;
-                } else if kind.is_file() {
-                    let relative = path
-                        .strip_prefix(root)
-                        .map_err(|_| fail_invalid("백업 경로가 올바르지 않습니다."))?;
-                    let name = format!("{prefix}/{}", relative.to_string_lossy().replace('\\', "/"));
-                    archive
-                        .start_file(name, zip::write::SimpleFileOptions::default())
-                        .map_err(|error| fail_invalid(error.to_string()))?;
-                    io::copy(&mut fs::File::open(path)?, archive)?;
-                }
-            }
-            Ok(())
-        }
-        visit(repo.path(), repo.path(), LIBRARY_REPOSITORY, &mut archive)?;
-        if let Some(common) = &common {
-            visit(common.path(), common.path(), COMMON_REPOSITORY, &mut archive)?;
-        }
-        let vault = repo
-            .path()
-            .parent()
-            .ok_or_else(|| fail_invalid("서재 경로가 없습니다."))?
-            .join("vault.json");
-        archive
-            .start_file("vault.json", zip::write::SimpleFileOptions::default())
-            .map_err(|error| fail_invalid(error.to_string()))?;
-        io::copy(&mut fs::File::open(vault)?, &mut archive)?;
-        archive
-            .finish()
-            .map_err(|error| fail_invalid(error.to_string()))?
-            .sync_all()?;
-        Ok(())
-    }
-
-    // 백업 파일의 Git 기록을 현재 기록에 합친다. 현재 기록은 그대로 두고,
-    // 백업의 마지막 기록을 두 번째 부모로 이어 붙여 문서별 이력 목록에 함께 보이게 한다.
-    // 서재와 공용 메모 이력을 각각 합치며, 둘 다 이미 들어 있는 백업이면 false.
-    pub fn import_backup(&mut self, archive: &Path, scratch: &Path, common_root: &Path) -> Result<bool, LofError> {
-        let result = (|| {
-            extract_backup(archive, scratch)?;
-            let mut imported = false;
-            let library = scratch.join(LIBRARY_REPOSITORY);
-            if library.try_exists()? {
-                let target = self.repository()?;
-                imported |= self.merge_backup(&target, &library, false)?;
-            }
-            let common = scratch.join(COMMON_REPOSITORY);
-            if common.try_exists()? {
-                let mut history = LocalHistory::common_memos(common_root)?;
-                let target = history.repository()?;
-                imported |= history.merge_backup(&target, &common, true)?;
-            }
-            Ok(imported)
-        })();
-        let _ = remove_dir_force(scratch);
-        result
-    }
-
-    fn merge_backup(&mut self, target: &Repository, source: &Path, common: bool) -> Result<bool, LofError> {
-        let invalid = || fail_invalid("Lof Writer의 Git 이력 백업 파일이 아닙니다.");
-        let source = Repository::open_bare(source).map_err(|_| invalid())?;
-        let tip = latest(&source).map_err(|_| invalid())?;
-        let format = read_json(&source, &tip.tree()?, "format.json").map_err(|_| invalid())?;
-        // 서재 이력과 공용 메모 이력이 서로 바뀌어 들어가지 않게 확인한다.
-        if format["format"].as_u64() != Some(1)
-            || (format["vaultId"].as_str() == Some("common-memos")) != common
-        {
-            return Err(fail_invalid("지원하지 않는 형식의 Git 이력 백업입니다."));
-        }
-        let current = latest(target)?;
-        if target.find_commit(tip.id()).is_ok()
-            && (tip.id() == current.id() || target.graph_descendant_of(current.id(), tip.id())?)
-        {
-            return Ok(false);
-        }
-        let source_odb = source.odb()?;
-        let target_odb = target.odb()?;
-        let mut failure = None;
-        let copied = source_odb.foreach(|oid| {
-            if target_odb.exists(*oid) {
-                return true;
-            }
-            match source_odb.read(*oid).and_then(|object| target_odb.write(object.kind(), object.data())) {
-                Ok(_) => true,
-                Err(error) => {
-                    failure = Some(error);
-                    false
-                }
-            }
-        });
-        if let Some(error) = failure {
-            return Err(error.into());
-        }
-        copied?;
-        // 수동 저장·복원·지움 표시도 함께 옮긴다. 현재 서재에 같은 표시가 있으면 그대로 둔다.
-        for kind in ["manual", "restore", "before-restore", "deleted"] {
-            for reference in source.references_glob(&format!("refs/lof/{kind}/*"))? {
-                let reference = reference?;
-                let (Ok(name), Some(oid)) = (reference.name(), reference.target()) else {
-                    continue;
-                };
-                match target.reference(name, oid, false, "Git 이력 백업 불러오기") {
-                    Err(error) if error.code() != git2::ErrorCode::Exists => return Err(error.into()),
-                    _ => {}
-                }
-            }
-        }
-        let tip = target.find_commit(tip.id())?;
-        let sig = Signature::now("Lof Writer", "local@lof-writer.invalid")?;
-        self.head = target
-            .commit(Some(MAIN), &sig, &sig, "Git 이력 백업 불러오기", &current.tree()?, &[&current, &tip])?
-            .to_string();
-        Ok(true)
-    }
-}
-
-// 백업 파일의 git/과 common-memo-git/ 아래 파일만 같은 이름의 폴더로 꺼낸다.
-// 폴더 밖을 가리키는 경로나 연결 파일은 받지 않는다.
-fn extract_backup(archive: &Path, destination: &Path) -> Result<(), LofError> {
-    let unreadable = || fail_invalid("Git 이력 백업 파일을 읽지 못했습니다.");
-    let mut zip = zip::ZipArchive::new(fs::File::open(archive)?).map_err(|_| unreadable())?;
-    let mut found = false;
-    for index in 0..zip.len() {
-        let mut entry = zip.by_index(index).map_err(|_| unreadable())?;
-        let name = entry
-            .enclosed_name()
-            .ok_or_else(|| fail_invalid("백업 파일의 경로가 올바르지 않습니다."))?;
-        if ![LIBRARY_REPOSITORY, COMMON_REPOSITORY].iter().any(|prefix| name.starts_with(prefix))
-            || name.components().count() < 2
-            || entry.is_dir()
-        {
-            continue;
-        }
-        if !entry.is_file() {
-            return Err(fail_invalid("연결된 파일이 든 백업은 불러올 수 없습니다."));
-        }
-        let path = destination.join(&name);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        io::copy(&mut entry, &mut fs::File::create(&path)?).map_err(|_| unreadable())?;
-        found = true;
-    }
-    if !found {
-        return Err(fail_invalid("Lof Writer의 Git 이력 백업 파일이 아닙니다."));
-    }
-    Ok(())
 }
 
 pub fn comparison(previous: &Value, document: &Value) -> Result<Value, LofError> {

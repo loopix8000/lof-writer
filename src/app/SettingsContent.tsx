@@ -1,5 +1,4 @@
 import {
-  ArchiveRestore,
   ArrowLeft,
   ChevronRight,
   Cloud,
@@ -550,35 +549,6 @@ export default function SettingsContent({
               </label>
             </div>
             <p className="settings-description">수동 저장 기록은 별도로 표시합니다. 이전 원고를 복원하면 현재 원고를 먼저 보존한 뒤 복원 결과를 새 기록으로 남깁니다.</p>
-            <p className="settings-description">
-              {lib.isInternal
-                ? "앱 내부 저장소의 서재는 다른 앱에서 열 수 없으므로, 백업할 때 저장할 폴더를 선택합니다."
-                : "백업 파일은 서재 폴더의 .lof/backups에 저장합니다."}
-              {" "}백업에는 작품 원고·플롯·메모와 공용 메모의 이력이 함께 담기며, 불러오면 현재 이력은 그대로 두고 백업의 이력을 함께 보관합니다.
-            </p>
-            <div className="history-actions">
-              <button disabled={busy || !lib.localGit?.ready} onClick={attempt(async () => {
-                setBusy(true);
-                try {
-                  await flush();
-                  // 내부 저장소의 서재는 밖에서 열 수 없으므로 저장할 폴더를 고른다.
-                  const result = await call<{ path: string } | null>("backupGitHistory", lib.isInternal ? { pick: true } : undefined);
-                  if (result) message("Git 이력 백업을 저장했습니다: " + result.path);
-                } finally { setBusy(false); }
-              })}>
-                <HardDrive size={16} /> Git 이력 백업
-              </button>
-              <button disabled={busy || !lib.localGit?.ready} onClick={attempt(async () => {
-                setBusy(true);
-                try {
-                  await flush();
-                  const result = await call<{ imported: boolean } | null>("importGitHistory");
-                  if (result) message(result.imported ? "Git 이력 백업을 불러왔습니다." : "이미 불러온 Git 이력 백업입니다.");
-                } finally { setBusy(false); }
-              })}>
-                <ArchiveRestore size={16} /> Git 이력 불러오기
-              </button>
-            </div>
             <div className="history-actions">
               <button
                 className="danger-outline"

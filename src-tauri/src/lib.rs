@@ -631,89 +631,6 @@ fn dispatch_method(
             store.database()?.backup(&destination)?;
             Ok(json!({"path":destination.to_string_lossy()}))
         }
-        "backupGitHistory" => {
-            // 내부 저장소의 서재는 밖에서 열 수 없으므로 고른 폴더에 저장한다. 그 밖에는 서재의 .lof/backups에 둔다.
-            let picked = args.get("path").and_then(Value::as_str).filter(|p| !p.is_empty()).map(PathBuf::from);
-            #[cfg(not(target_os = "android"))]
-            let picked = match picked {
-                None if args.get("pick").and_then(Value::as_bool) == Some(true) => {
-                    match FileDialog::new().set_title("Git 이력 백업을 저장할 폴더 선택").pick_folder() {
-                        Some(folder) => Some(strip_verbatim_prefix(&folder)),
-                        None => return Ok(Value::Null),
-                    }
-                }
-                picked => picked,
-            };
-            if picked.as_ref().is_some_and(|folder| !folder.is_absolute() || !folder.is_dir()) {
-                return Err(fail_invalid("백업을 저장할 폴더를 확인할 수 없습니다. 다른 폴더를 선택해 주세요."));
-            }
-            let (_, common_root) = get_store_and_common()?;
-            let mut guard = state.store.lock().unwrap();
-            let store = guard.as_mut().ok_or_else(|| fail_invalid("서재가 열려 있지 않습니다."))?;
-            if !store.local_git.ready { return Err(fail_invalid("이력 이관이 끝난 뒤 백업해 주세요.")); }
-            store.git_tick(true, false)?;
-            let destination = match picked {
-                Some(folder) => {
-                    let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
-                    let plain = folder.join(format!("lof-git-history-{stamp}.zip"));
-                    if plain.try_exists()? {
-                        folder.join(format!("lof-git-history-{stamp}-{}.zip", &Uuid::new_v4().simple().to_string()[..8]))
-                    } else {
-                        plain
-                    }
-                }
-                None => {
-                    let directory = store.root.join(".lof").join("backups");
-                    fs::create_dir_all(&directory)?;
-                    directory.join(format!("git-history-{}-{}.zip", chrono::Utc::now().format("%Y%m%d-%H%M%S"), Uuid::new_v4()))
-                }
-            };
-            let temporary = destination.with_extension("zip.tmp");
-            if let Err(error) = store.local_git.backup(&temporary, &common_root).and_then(|_| Ok(fs::rename(&temporary, &destination)?)) {
-                let _ = fs::remove_file(&temporary);
-                return Err(error);
-            }
-            Ok(json!({"path":destination.to_string_lossy()}))
-        }
-        "importGitHistory" => {
-            // Android는 파일 선택 화면에서 읽은 내용(data)을, PC는 고른 파일 경로를 받는다.
-            let picked = args.get("path").and_then(Value::as_str).filter(|p| !p.is_empty()).map(PathBuf::from);
-            #[cfg(not(target_os = "android"))]
-            let picked = match picked {
-                None if args.get("data").is_none() => {
-                    match FileDialog::new().set_title("불러올 Git 이력 백업 선택").add_filter("Git 이력 백업", &["zip"]).pick_file() {
-                        Some(file) => Some(file),
-                        None => return Ok(Value::Null),
-                    }
-                }
-                picked => picked,
-            };
-            let (_, common_root) = get_store_and_common()?;
-            let mut guard = state.store.lock().unwrap();
-            let store = guard.as_mut().ok_or_else(|| fail_invalid("서재가 열려 있지 않습니다."))?;
-            let received = match args.get("data").and_then(Value::as_str) {
-                Some(data) => {
-                    let bytes = base64::engine::general_purpose::STANDARD
-                        .decode(data)
-                        .map_err(|_| fail_invalid("백업 파일을 읽지 못했습니다."))?;
-                    let path = store.root.join(".lof").join(format!("git-import-{}.zip", Uuid::new_v4()));
-                    fs::write(&path, bytes)?;
-                    Some(path)
-                }
-                None => None,
-            };
-            let Some(archive) = received.clone().or(picked) else {
-                return Err(fail_invalid("불러올 백업 파일을 선택해 주세요."));
-            };
-            let result = store.import_git_history(&archive, &common_root);
-            if let Some(path) = received {
-                let _ = fs::remove_file(path);
-            }
-            let imported = result?;
-            drop(guard);
-            if imported { schedule_notify(app, &state.notify_seq); }
-            Ok(json!({"imported": imported}))
-        }
         "resetHistory" => {
             let (_, common_root) = get_store_and_common()?;
             let mut guard = state.store.lock().unwrap();
@@ -2087,7 +2004,7 @@ async fn lof_invoke(
     window: WebviewWindow,
 ) -> Result<Value, String> {
     let args_val = args.unwrap_or_else(|| json!({}));
-    let result = if method.starts_with("realtime") || matches!(method.as_str(), "settings" | "searchText" | "searchDocumentIds" | "search" | "adoptDocument" | "adoptMemo" | "finishDocumentSync" | "saveDraft" | "saveRecoveryCopy" | "recoveryCopies" | "readRecoveryCopy" | "deleteRecoveryCopy" | "restoreRecoveryCopy" | "sync" | "pinUnlock" | "pinSave" | "backupStorage" | "backupGitHistory" | "importGitHistory" | "resetHistory" | "history" | "historyPage" | "historyRead" | "restore" | "checkpointDocument" | "countManuscript" | "downloadSkill" | "checkSyncUpdates" | "systemFonts" | "readUserFont" | "exportLibrary" | "exportProject" | "prepareAndroidLibrary" | "moveVault") {
+    let result = if method.starts_with("realtime") || matches!(method.as_str(), "settings" | "searchText" | "searchDocumentIds" | "search" | "adoptDocument" | "adoptMemo" | "finishDocumentSync" | "saveDraft" | "saveRecoveryCopy" | "recoveryCopies" | "readRecoveryCopy" | "deleteRecoveryCopy" | "restoreRecoveryCopy" | "sync" | "pinUnlock" | "pinSave" | "backupStorage" | "resetHistory" | "history" | "historyPage" | "historyRead" | "restore" | "checkpointDocument" | "countManuscript" | "downloadSkill" | "checkSyncUpdates" | "systemFonts" | "readUserFont" | "exportLibrary" | "exportProject" | "prepareAndroidLibrary" | "moveVault") {
         tauri::async_runtime::spawn_blocking(move || {
             let state = app.state::<AppState>();
             if method == "pinUnlock" || method == "pinSave" {
