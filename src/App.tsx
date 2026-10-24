@@ -1075,7 +1075,7 @@ export default function App() {
     return <SyncConnections connections={connections} setConnections={setConnections}
       autoSync={autoSync} intervalSeconds={prefs.syncIntervalSeconds ?? 300}
       onIntervalChange={(seconds) => savePrefs({ syncIntervalSeconds: seconds })}
-      backgroundEnabled={prefs.backgroundSyncEnabled !== false}
+      backgroundEnabled={prefs.backgroundSyncEnabled === true}
       backgroundIntervalSeconds={prefs.backgroundSyncIntervalSeconds ?? 1800}
       onBackgroundSyncChange={(patch) => savePrefs(patch)}
       busy={busy} setBusy={setBusy} onSync={doSync} message={message} report={report} />;

@@ -218,7 +218,7 @@ pub fn background_enabled(settings: &Value) -> bool {
         .get("preferences")
         .and_then(|prefs| prefs.get("backgroundSyncEnabled"))
         .and_then(Value::as_bool)
-        .unwrap_or(true)
+        .unwrap_or(false)
 }
 
 pub fn background_interval_seconds(settings: &Value) -> u64 {

@@ -41,7 +41,7 @@ export default function BackgroundSyncSettings({ prefs, savePrefs, report }: {
   prefs: Record<string, any>; savePrefs: (patch: Record<string, any>) => Promise<void>;
   report?: (error: any) => void;
 }) {
-  const enabled = prefs.backgroundSyncEnabled !== false;
+  const enabled = prefs.backgroundSyncEnabled === true;
   const always = prefs.backgroundLiveMode === "always";
   const minutes = Number.isInteger(prefs.backgroundLiveMinutes) && prefs.backgroundLiveMinutes >= 1
     ? Math.min(prefs.backgroundLiveMinutes, 120) : 30;
