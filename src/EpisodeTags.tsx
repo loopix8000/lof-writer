@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { Plus, X } from "lucide-react";
 import TagAddPopup from "./TagAddPopup";
 
@@ -16,11 +17,11 @@ export default function EpisodeTags({
   autoOpen?: boolean;
 }) {
   const [open, setOpen] = useState(autoOpen);
-  const addBtnRef = useRef<HTMLButtonElement>(null);
+  const [addButton, setAddButton] = useState<HTMLButtonElement | null>(null);
   const dragging = useRef<string | null>(null);
   const suppressClick = useRef(false);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (autoOpen && editable) setOpen(true);
   }, [autoOpen, editable]);
 
@@ -91,21 +92,21 @@ export default function EpisodeTags({
         )}
         {editable && (
           <button
-            ref={addBtnRef}
+            ref={setAddButton}
             type="button"
             className={`episode-tag-add-btn${open ? " active" : ""}`}
             aria-label="태그 추가"
             aria-expanded={open}
-            onClick={() => setOpen((v) => !v)}
+            onClick={() => flushSync(() => setOpen((v) => !v))}
           >
             <Plus size={12} />
             <span>태그 추가</span>
           </button>
         )}
       </div>
-      {open && editable && (
+      {open && editable && addButton && (
         <TagAddPopup
-          anchorEl={addBtnRef.current}
+          anchorEl={addButton}
           tags={tags}
           favorites={favorites}
           uppercase

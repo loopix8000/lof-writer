@@ -22,7 +22,6 @@ export default function TagAddPopup({
 }) {
   const [value, setValue] = useState("");
   const [error, setError] = useState("");
-  const [pos, setPos] = useState<{ left: number; top: number }>({ left: 12, top: 12 });
   const popupRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const composing = useRef(false);
@@ -70,28 +69,47 @@ export default function TagAddPopup({
     const updatePosition = () => {
       const pop = popupRef.current;
       if (!pop) return;
+      const viewport = window.visualViewport;
+      const vx = viewport?.offsetLeft ?? 0;
+      const vy = viewport?.offsetTop ?? 0;
+      const vw = viewport?.width ?? window.innerWidth;
+      const vh = viewport?.height ?? window.innerHeight;
+      pop.style.maxWidth = `${Math.max(0, vw - 16)}px`;
+      pop.style.maxHeight = `${Math.max(0, vh - 16)}px`;
       const popRect = pop.getBoundingClientRect();
       const anchorRect = anchorEl?.getBoundingClientRect();
-      const vw = window.innerWidth;
-      const vh = window.innerHeight;
-      let left = anchorRect ? anchorRect.left : Math.round((vw - popRect.width) / 2);
-      let top = anchorRect ? anchorRect.bottom + 6 : Math.round(vh * 0.2);
-      if (anchorRect && top + popRect.height > vh - 8 && anchorRect.top - popRect.height - 6 >= 8) {
+      let left = anchorRect ? anchorRect.left : vx + Math.round((vw - popRect.width) / 2);
+      let top = anchorRect ? anchorRect.bottom + 6 : vy + Math.round(vh * 0.2);
+      if (anchorRect && top + popRect.height > vy + vh - 8 && anchorRect.top - popRect.height - 6 >= vy + 8) {
         top = anchorRect.top - popRect.height - 6;
       }
-      left = Math.max(8, Math.min(left, vw - popRect.width - 8));
-      top = Math.max(8, Math.min(top, vh - popRect.height - 8));
-      setPos({ left, top });
+      left = Math.max(vx + 8, Math.min(left, vx + vw - popRect.width - 8));
+      top = Math.max(vy + 8, Math.min(top, vy + vh - popRect.height - 8));
+      // 포커스 전에 실제 위치를 적용해 키보드가 잘못된 위치로 화면을 밀지 않게 한다.
+      pop.style.left = `${left}px`;
+      pop.style.top = `${top}px`;
     };
     updatePosition();
-    inputRef.current?.focus({ preventScroll: true });
+    const viewport = window.visualViewport;
+    const resize = new ResizeObserver(updatePosition);
+    if (popupRef.current) resize.observe(popupRef.current);
+    if (anchorEl) resize.observe(anchorEl);
     window.addEventListener("resize", updatePosition);
     window.addEventListener("scroll", updatePosition, true);
+    viewport?.addEventListener("resize", updatePosition);
+    viewport?.addEventListener("scroll", updatePosition);
     return () => {
+      resize.disconnect();
       window.removeEventListener("resize", updatePosition);
       window.removeEventListener("scroll", updatePosition, true);
+      viewport?.removeEventListener("resize", updatePosition);
+      viewport?.removeEventListener("scroll", updatePosition);
     };
-  }, [anchorEl, tags.length, error]);
+  }, [anchorEl, tags.length]);
+
+  useLayoutEffect(() => {
+    inputRef.current?.focus({ preventScroll: true });
+  }, []);
 
   useEffect(() => {
     const onPointerDown = (e: Event) => {
@@ -121,7 +139,6 @@ export default function TagAddPopup({
       className="tag-add-popup"
       role="dialog"
       aria-label="태그 추가"
-      style={pos}
       onClick={(e) => e.stopPropagation()}
     >
       <div className="tag-add-popup-row">
@@ -169,8 +186,8 @@ export default function TagAddPopup({
           title="태그 추가"
           onMouseDown={(e) => e.preventDefault()}
           onClick={() => {
+            inputRef.current?.focus({ preventScroll: true });
             if (!value.trim()) {
-              inputRef.current?.focus();
               return;
             }
             add(value, true);
@@ -188,7 +205,10 @@ export default function TagAddPopup({
         tags={tags}
         favorites={favorites}
         query={value}
-        onSelect={(tag) => add(tag, true)}
+        onSelect={(tag) => {
+          inputRef.current?.focus({ preventScroll: true });
+          add(tag, true);
+        }}
       />
     </div>,
     document.querySelector(".app") ?? document.body,

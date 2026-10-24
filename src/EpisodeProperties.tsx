@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { flushSync } from "react-dom";
 import {
   AlignLeft,
   Asterisk,
@@ -290,7 +291,7 @@ export default function EpisodeProperties({
             <PropertyRow
               key={p.id}
               prop={p}
-              autoFocus={focusId === p.id}
+              autoFocus={focusId === p.id && p.id !== "tags"}
               onRemove={edit && p.optional && p.clear ? () => remove(p) : undefined}
             >
               {control(p)}
@@ -303,8 +304,13 @@ export default function EpisodeProperties({
               icon: <span className="faded-icon">{p.icon}</span>,
               hint: p.description,
               action: () => {
-                setShown((s) => new Set(s).add(p.id));
-                setFocusId(p.id);
+                const show = () => {
+                  setShown((s) => new Set(s).add(p.id));
+                  setFocusId(p.id);
+                };
+                // 태그 입력창은 메뉴를 누른 동작 안에서 열고 포커스한다.
+                if (p.id === "tags") flushSync(show);
+                else show();
               },
             }))} />
         </div>
