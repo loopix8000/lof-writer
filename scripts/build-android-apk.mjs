@@ -1,5 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { androidConfig, prepareAndroidProject } from "./prepare-android-project.mjs";
 
@@ -147,6 +148,63 @@ const apkPath = path.join(
   `app-${flavorLower}-${profileDir}${isRelease ? "-unsigned" : ""}.apk`,
 );
 
+function signDebugApkIfPossible(targetApkPath) {
+  if (isRelease || !fs.existsSync(targetApkPath)) return;
+  const androidPrivateDir = path.join(rootDir, ".private", "android");
+  const signingJsonPath = path.join(androidPrivateDir, "signing.json");
+  const jksBase64Path = path.join(androidPrivateDir, "release.jks.base64.txt");
+  const jksPath = path.join(androidPrivateDir, "release.jks");
+  if (!fs.existsSync(signingJsonPath)) return;
+  const signingConfig = JSON.parse(fs.readFileSync(signingJsonPath, "utf8"));
+  const keyAlias = signingConfig.keyAlias || "";
+  const keyPassword = signingConfig.keyPassword || signingConfig.storePassword || "";
+  let keyBytes = null;
+  if (fs.existsSync(jksPath)) {
+    keyBytes = fs.readFileSync(jksPath);
+  } else if (fs.existsSync(jksBase64Path)) {
+    keyBytes = Buffer.from(fs.readFileSync(jksBase64Path, "utf8").trim(), "base64");
+  }
+  if (!keyBytes || !keyAlias || !keyPassword) return;
+  const toolsDir = path.join(androidHome, "build-tools", "36.0.0");
+  const apksignerJar = path.join(toolsDir, "lib", "apksigner.jar");
+  if (!fs.existsSync(apksignerJar)) return;
+  const javaExe = process.env.JAVA_HOME
+    ? path.join(process.env.JAVA_HOME, "bin", process.platform === "win32" ? "java.exe" : "java")
+    : "java";
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "lof-debug-sign-"));
+  try {
+    const tempKeystore = path.join(tempDir, "release.jks");
+    fs.writeFileSync(tempKeystore, keyBytes, { mode: 0o600 });
+    const res = spawnSync(
+      javaExe,
+      [
+        "-jar",
+        apksignerJar,
+        "sign",
+        "--ks",
+        tempKeystore,
+        "--ks-key-alias",
+        keyAlias,
+        "--ks-pass",
+        "env:ANDROID_KEY_PASSWORD",
+        "--key-pass",
+        "env:ANDROID_KEY_PASSWORD",
+        targetApkPath,
+      ],
+      {
+        env: { ...buildEnv, ANDROID_KEY_PASSWORD: keyPassword },
+        encoding: "utf8",
+        windowsHide: true,
+      },
+    );
+    if (res.status === 0) {
+      console.log("기존 설치본과 호환되도록 로컬 서명 키로 디버그 APK를 서명했습니다.");
+    }
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
 if (!runOnly || !fs.existsSync(apkPath)) {
   prepareAndroidProject();
   fs.mkdirSync(kotlinGeneratedDir, { recursive: true });
@@ -201,7 +259,10 @@ if (!runOnly || !fs.existsSync(apkPath)) {
     process.exit(1);
   }
 
+  signDebugApkIfPossible(apkPath);
   console.log(`\nAPK 생성 완료: ${apkPath}`);
+} else {
+  signDebugApkIfPossible(apkPath);
 }
 
 if (shouldRun) {
@@ -214,10 +275,13 @@ if (shouldRun) {
       .split(/\r?\n/)
       .slice(1)
       .map((l) => l.trim())
-      .filter((l) => l && /\bdevice$/.test(l));
+      .filter((l) => l && /\bdevice$/.test(l))
+      .map((l) => l.split(/\s+/)[0]);
   };
 
-  const launchedEmulator = getConnectedDevices().length === 0;
+  const preferEmulator = targetArg === "x86_64" || targetArg === "i686";
+  let devices = getConnectedDevices();
+  const launchedEmulator = preferEmulator && !devices.some((d) => d.startsWith("emulator-")) || devices.length === 0;
   if (launchedEmulator) {
     const avds = runCapture(emulatorExe, ["-list-avds"])
       .split(/\r?\n/)
@@ -239,12 +303,21 @@ if (shouldRun) {
     child.unref();
   }
 
-  console.log("에뮬레이터 부팅 대기 중...");
-  run(adbExe, ["wait-for-device"]);
+  if (launchedEmulator) {
+    console.log("에뮬레이터 부팅 대기 중...");
+    run(adbExe, ["wait-for-device"]);
+  }
+  devices = getConnectedDevices();
+  const selectedDevice =
+    (preferEmulator
+      ? devices.find((d) => d.startsWith("emulator-"))
+      : devices.find((d) => !d.startsWith("emulator-"))) || devices[0];
+  const adbArgs = (args) => (selectedDevice ? ["-s", selectedDevice, ...args] : args);
+
   for (let i = 0; i < 120; i++) {
-    const boot = runCapture(adbExe, ["shell", "getprop", "sys.boot_completed"]);
-    const anim = runCapture(adbExe, ["shell", "getprop", "init.svc.bootanim"]);
-    const pmReady = runCapture(adbExe, ["shell", "pm", "path", "android"]);
+    const boot = runCapture(adbExe, adbArgs(["shell", "getprop", "sys.boot_completed"]));
+    const anim = runCapture(adbExe, adbArgs(["shell", "getprop", "init.svc.bootanim"]));
+    const pmReady = runCapture(adbExe, adbArgs(["shell", "pm", "path", "android"]));
     if (boot === "1" && anim === "stopped" && pmReady.includes("package:")) {
       break;
     }
@@ -252,20 +325,23 @@ if (shouldRun) {
   }
 
   if (launchedEmulator) {
-    runCapture(adbExe, ["shell", "wm", "dismiss-keyguard"]);
+    runCapture(adbExe, adbArgs(["shell", "wm", "dismiss-keyguard"]));
   }
 
-  console.log("APK 설치 및 앱 실행 중...");
-  if (run(adbExe, ["install", "-r", apkPath]) !== 0) {
+  console.log(`APK 설치 및 앱 실행 중 (${selectedDevice || "기본 기기"})...`);
+  if (run(adbExe, adbArgs(["install", "-r", apkPath])) !== 0) {
     process.exit(1);
   }
-  run(adbExe, ["shell", "am", "force-stop", "local.lof.writer"]);
-  run(adbExe, [
-    "shell",
-    "am",
-    "start",
-    "-W",
-    "-n",
-    "local.lof.writer/.MainActivity",
-  ]);
+  run(adbExe, adbArgs(["shell", "am", "force-stop", "local.lof.writer"]));
+  run(
+    adbExe,
+    adbArgs([
+      "shell",
+      "am",
+      "start",
+      "-W",
+      "-n",
+      "local.lof.writer/.MainActivity",
+    ]),
+  );
 }

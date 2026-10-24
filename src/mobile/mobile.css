@@ -670,15 +670,14 @@
   color: var(--ink);
 }
 
-/* 작품 정보와 탭·검색줄은 목록 위에 떠 있는 레이어다. 목록은 탭·검색줄 높이(--project-tools-height)만큼만
-   위를 비워 두고, 펼쳐져 있을 때는 목록 본문을 작품 정보 높이(--project-hero-height)만큼 아래로 밀어 두었다가
-   접힐 때 레이어와 함께 위로 당긴다. 목록 영역의 크기와 스크롤 위치는 바뀌지 않아 관성이 그대로 이어진다. */
+/* 스크롤 영역은 작품 정보 높이(--project-hero-height)와 탭·검색줄 높이(--project-tools-height)만큼
+   가상의 상단 여백을 둔다. 작품 정보와 스크롤 목록이 서로의 레이아웃을 바꾸지 않으면서,
+   스크롤 위치(--hero-offset, --hero-progress)에 따라 작품 정보가 자연스럽게 열리고 접힌다. */
 .m-project-screen {
   --project-tools-height: 0px;
   --project-hero-height: 0px;
-  /* 접고 펼칠 때 레이어·목록·여백이 같은 시간과 곡선으로 움직인다. 빠르게 출발해 끝에서 부드럽게 멈춘다. */
-  --hero-duration: 0.3s;
-  --hero-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --hero-offset: 0px;
+  --hero-progress: 0;
 }
 
 .m-project-page-header {
@@ -692,32 +691,19 @@
   right: 0;
   z-index: 3;
   background: var(--surface);
+  transform: translateY(calc(var(--hero-offset) * -1));
   will-change: transform;
-}
-
-.m-project-screen.hero-animating .m-project-head {
-  transition: transform var(--hero-duration) var(--hero-ease);
-}
-
-.m-project-head.collapsed {
-  transform: translateY(calc(var(--project-hero-height) * -1));
 }
 
 .m-project-hero-wrap {
   padding: 6px 14px 0;
   transform-origin: 50% 0;
-}
-
-/* 작품 정보의 이동과 페이드는 같은 시간에 시작하고 끝난다. */
-.m-project-screen.hero-animating .m-project-hero-wrap {
-  transition:
-    opacity var(--hero-duration) ease-in-out,
-    transform var(--hero-duration) var(--hero-ease);
+  opacity: calc(1 - var(--hero-progress));
+  transform: translateY(calc(var(--hero-progress) * 12px)) scale(calc(1 - var(--hero-progress) * 0.04));
+  will-change: transform, opacity;
 }
 
 .m-project-head.collapsed .m-project-hero-wrap {
-  opacity: 0;
-  transform: translateY(12px) scale(0.96);
   pointer-events: none;
 }
 
@@ -729,7 +715,7 @@
   background: var(--surface);
 }
 
-/* 작품 화면 목록은 기본 스크롤바를 숨기고 탭·검색줄 아래 구간에만 막대를 덧씌운다.
+/* 작품 화면 목록은 기본 스크롤바를 숨기고 탭·검색줄 아래의 실제 목록 구간에만 막대를 덧씌운다.
    위로 밀려 올라간 머리 레이어는 이 영역 밖으로 잘라 상단 막대를 가리지 않게 한다. */
 .m-project-list-wrap {
   position: relative;
@@ -744,41 +730,17 @@
   scrollbar-width: none;
 }
 
-/* 목록 맨 위는 탭·검색줄 높이만큼 비워 두고, 펼쳐진 동안에는 본문을 작품 정보 높이만큼 아래로 밀어 둔다 */
+/* 스크롤 영역은 작품 정보 높이와 탭·검색줄 높이만큼 가상의 상단 여백을 만든다 */
 .m-tree-scroll.m-project-list {
-  padding-top: calc(var(--project-tools-height) + 4px) !important;
+  padding-top: calc(var(--project-hero-height) + var(--project-tools-height) + 4px) !important;
   overflow-anchor: none;
 }
 
-/* 목록 끝은 본문의 transform이 아니라 이 감싸개의 높이로 정한다. 펼쳐진 동안에만 아래에 작품 정보 높이만큼
-   여백을 두고, 밀려 내려간 본문이 감싸개 밖으로 넘친 부분은 스크롤 범위에 섞이지 않게 잘라 낸다.
-   그래서 접힌 뒤에 목록 맨 아래에 빈 공간이 남지 않는다. 여백도 본문과 같이 줄어들어 목록 끝에서 접어도
-   마지막 항목이 잘려 보이지 않는다. */
+/* 짧은 목록에서도 작품 정보가 중간에 걸치지 않고 끝까지 자연스럽게 접히고 펼쳐지도록 최소 높이를 확보한다.
+   목록이 길 때는 실제 본문 높이를 그대로 따르므로 하단에 불필요한 빈 공간이 생기지 않는다. */
 .m-project-list-body {
   flex: none;
-  padding-bottom: var(--project-hero-height);
-  overflow-y: clip;
-}
-
-.m-project-screen.hero-animating .m-project-list-body {
-  transition: padding-bottom var(--hero-duration) var(--hero-ease);
-}
-
-.m-project-screen.hero-collapsed .m-project-list-body {
-  padding-bottom: 0;
-}
-
-.m-project-list-body > .m-tree-container {
-  transform: translateY(var(--project-hero-height));
-  will-change: transform;
-}
-
-.m-project-screen.hero-animating .m-project-list-body > .m-tree-container {
-  transition: transform var(--hero-duration) var(--hero-ease);
-}
-
-.m-project-screen.hero-collapsed .m-project-list-body > .m-tree-container {
-  transform: translateY(0);
+  min-height: calc(100% + var(--project-hero-height));
 }
 
 .m-project-list::-webkit-scrollbar {
@@ -816,32 +778,15 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  opacity: 0;
-  transform: translateY(4px);
+  --title-progress: clamp(0, calc((var(--hero-progress) - 0.55) / 0.45), 1);
+  opacity: var(--title-progress);
+  transform: translateY(calc((1 - var(--title-progress)) * 4px));
   pointer-events: none;
-}
-
-/* 접힌 상단 제목도 작품 정보와 함께 교차하며 나타나고 사라진다. */
-.m-project-screen.hero-animating .m-project-compact-title {
-  transition:
-    opacity var(--hero-duration) ease-in-out,
-    transform var(--hero-duration) var(--hero-ease);
+  will-change: transform, opacity;
 }
 
 .m-project-page-header.hero-collapsed .m-project-compact-title {
-  opacity: 1;
-  transform: translateY(0);
   pointer-events: auto;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .m-project-screen.hero-animating .m-project-head,
-  .m-project-screen.hero-animating .m-project-hero-wrap,
-  .m-project-screen.hero-animating .m-project-compact-title,
-  .m-project-screen.hero-animating .m-project-list-body,
-  .m-project-screen.hero-animating .m-project-list-body > .m-tree-container {
-    transition: none;
-  }
 }
 
 .m-project-hero {

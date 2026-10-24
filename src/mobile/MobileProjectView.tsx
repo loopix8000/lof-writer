@@ -56,9 +56,6 @@ import { useEpisodeGroups } from "./useEpisodeGroups";
 import { useOverlayScrollbar } from "./useOverlayScrollbar";
 import MobilePillTabs from "./MobilePillTabs";
 
-// 작품 정보 접힘·펼침 전환 시간. mobile.css의 가장 긴 전환(--hero-duration)보다 조금 길게 둔다.
-const HERO_ANIM_MS = 340;
-
 export default function MobileProjectView({
   lib,
   project,
@@ -150,7 +147,6 @@ export default function MobileProjectView({
   } | null>(null);
   const [moveFolderDoc, setMoveFolderDoc] = useState<Doc | null>(null);
   const [heroCollapsed, setHeroCollapsed] = useState(false);
-  const [heroAnimating, setHeroAnimating] = useState(false);
   const collapsedRef = useRef(false);
   const screenRef = useRef<HTMLDivElement>(null);
   const listScrollRef = useRef<HTMLDivElement>(null);
@@ -159,22 +155,50 @@ export default function MobileProjectView({
   const heroRef = useRef<HTMLDivElement>(null);
   const heroHeight = useRef(0);
   const toolsHeight = useRef(0);
-  const lastTop = useRef(0);
-  const intent = useRef({ down: 0, up: 0 });
-  const toggleLockUntil = useRef(0);
-  const animTimer = useRef<number | undefined>(undefined);
-  const touchY = useRef<number | null>(null);
-  const headTouch = useRef<{ x: number; y: number } | null>(null);
+  const prevTabRef = useRef(activeTab);
+  const headTouch = useRef<{
+    x: number;
+    y: number;
+    scrollTop: number;
+    scrolling: boolean;
+  } | null>(null);
   const listThumbRef = useOverlayScrollbar(
     listScrollRef,
     [activeTab, archive, project.id, docs, filterQuery, docScope],
-    { startRef: headRef, bodyRef: listBodyRef, reservedTop: () => toolsHeight.current },
+    {
+      startRef: headRef,
+      bodyRef: listBodyRef,
+      offsetTop: (scrollTop) => toolsHeight.current + Math.max(0, heroHeight.current - scrollTop),
+      reservedTop: () => toolsHeight.current,
+    },
   );
 
-  // 작품 정보와 탭·검색줄은 목록 위에 떠 있는 레이어다. 목록은 탭·검색줄 높이만큼만 위를 비워 두고,
-  // 펼쳐져 있을 때는 목록 본문을 작품 정보 높이만큼 아래로 밀어 두었다가 접힐 때 레이어와 함께 끌어올린다.
+  // 스크롤 위치(0 ~ 작품 정보 높이)에 맞춰 작품 정보 레이어의 이동 거리와 진행률을 1:1로 갱신한다.
+  const syncHeroScroll = () => {
+    const el = listScrollRef.current;
+    const screen = screenRef.current;
+    if (!el || !screen) return;
+    const heroH = heroHeight.current;
+    const top = Math.max(0, el.scrollTop);
+    const offset = heroH > 0 ? Math.min(top, heroH) : 0;
+    const progress = heroH > 0 ? Math.min(1, Math.max(0, offset / heroH)) : 0;
+    screen.style.setProperty("--hero-offset", `${offset}px`);
+    screen.style.setProperty("--hero-progress", progress.toFixed(4));
+    const nextCollapsed = heroH > 0 && offset >= heroH - 1;
+    if (collapsedRef.current !== nextCollapsed) {
+      collapsedRef.current = nextCollapsed;
+      setHeroCollapsed(nextCollapsed);
+    }
+  };
+
+  // 스크롤 영역은 작품 정보 높이와 탭·검색줄 높이만큼 가상의 상단 여백을 두고,
+  // 작품 정보와 스크롤 목록이 서로의 레이아웃을 바꾸지 않으면서 스크롤에 따라 자연스럽게 열리고 접히게 한다.
   useLayoutEffect(() => {
-    const screen = screenRef.current, head = headRef.current, hero = heroRef.current;
+    const screen = screenRef.current;
+    const head = headRef.current;
+    const hero = heroRef.current;
+    const list = listScrollRef.current;
+    const body = listBodyRef.current;
     if (!screen || !head || !hero) return;
     const measure = () => {
       const heroH = hero.offsetHeight;
@@ -183,114 +207,71 @@ export default function MobileProjectView({
       toolsHeight.current = toolsH;
       screen.style.setProperty("--project-tools-height", `${toolsH}px`);
       screen.style.setProperty("--project-hero-height", `${heroH}px`);
+      syncHeroScroll();
     };
     const resize = new ResizeObserver(measure);
     resize.observe(head);
     resize.observe(hero);
+    if (list) resize.observe(list);
+    if (body) resize.observe(body);
     measure();
     return () => resize.disconnect();
   }, []);
 
-  const setCollapsed = (next: boolean) => {
-    if (collapsedRef.current === next) return;
-    collapsedRef.current = next;
-    intent.current = { down: 0, up: 0 };
-    // 애니메이션 동안에는 상태만 다시 바꾸지 않는다. 목록 스크롤은 그대로 이어진다.
-    toggleLockUntil.current = Date.now() + HERO_ANIM_MS;
-    setHeroAnimating(true);
-    window.clearTimeout(animTimer.current);
-    animTimer.current = window.setTimeout(() => {
-      setHeroAnimating(false);
-    }, HERO_ANIM_MS);
-    setHeroCollapsed(next);
-  };
-
-  const collapseHero = (el: HTMLDivElement | null) => {
-    if (!el || el.scrollHeight <= el.clientHeight + 2) return;
-    setCollapsed(true);
-  };
-
-  // 작품·보관함을 바꾸면 작품 정보를 펼친 상태로 초기화한다.
-  useLayoutEffect(() => {
-    window.clearTimeout(animTimer.current);
-    setHeroAnimating(false);
-    collapsedRef.current = false;
-    setHeroCollapsed(false);
-  }, [archive, project.id]);
-
-  // 탭 전환은 목록 위치만 초기화하고 작품 정보의 접힘 상태는 유지한다.
+  // 작품·보관함을 바꾸면 스크롤과 작품 정보를 맨 위(펼침) 상태로 초기화한다.
   useLayoutEffect(() => {
     const list = listScrollRef.current;
     if (list) list.scrollTop = 0;
-    lastTop.current = 0;
-    intent.current = { down: 0, up: 0 };
-    touchY.current = null;
     headTouch.current = null;
-    toggleLockUntil.current = Date.now() + HERO_ANIM_MS;
-  }, [activeTab, archive, project.id]);
+    syncHeroScroll();
+  }, [archive, project.id]);
 
-  useEffect(() => () => window.clearTimeout(animTimer.current), []);
+  // 탭 전환 시에는 현재 작품 정보의 열림·접힘 위치는 유지하고 목록만 맨 위에서 시작한다.
+  useLayoutEffect(() => {
+    if (prevTabRef.current === activeTab) return;
+    prevTabRef.current = activeTab;
+    const list = listScrollRef.current;
+    if (list) {
+      list.scrollTop = Math.min(list.scrollTop, heroHeight.current);
+    }
+    headTouch.current = null;
+    syncHeroScroll();
+  }, [activeTab]);
 
   useEffect(() => {
     setClosedFolders(new Set());
   }, [project.id]);
 
-  // 아래로 내리면 접고, 맨 위 근처로 올라오면 펼친다. 목록 중간에서 위로 올릴 때는 펼치지 않는다.
-  const onListScroll = (e: React.UIEvent<HTMLDivElement>) => {
-    const el = e.currentTarget;
-    const top = Math.max(0, el.scrollTop);
-    const delta = top - lastTop.current;
-    lastTop.current = top;
-    if (!delta) return;
-    if (Date.now() < toggleLockUntil.current) {
-      intent.current = { down: 0, up: 0 };
+  const onListScroll = () => {
+    syncHeroScroll();
+  };
+
+  // 작품 정보·탭 영역 위에서 세로로 끌 때도 목록 스크롤과 1:1로 이어지게 한다.
+  const onHeadTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
+    const list = listScrollRef.current;
+    if (!list || e.touches.length !== 1) {
+      headTouch.current = null;
       return;
     }
-    const hint = intent.current;
-    if (delta > 0) {
-      hint.down += delta;
-      hint.up = 0;
-    } else {
-      hint.up -= delta;
-      hint.down = 0;
-    }
-    if (!collapsedRef.current) {
-      if (hint.down >= 14 && top > 6) collapseHero(el);
-    } else if (delta < 0 && (top <= 2 || (hint.up >= 10 && top <= 24))) {
-      setCollapsed(false);
-    }
-  };
-
-  // 맨 위에서 더 당기면 목록은 그대로 두고 작품 정보만 펼친다.
-  const onListTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
-    touchY.current = e.touches.length === 1 ? e.touches[0].clientY : null;
-  };
-  const onListTouchMove = (e: React.TouchEvent<HTMLDivElement>) => {
-    if (touchY.current === null || e.touches.length !== 1) return;
-    const pulled = e.touches[0].clientY - touchY.current;
-    if (collapsedRef.current && e.currentTarget.scrollTop <= 0 && pulled > 12) {
-      touchY.current = null;
-      setCollapsed(false);
-    }
-  };
-
-  // 작품 정보·탭 영역 위에서 쓸어올리거나 맨 위에서 끌어내릴 때도 접고 펼친다.
-  const onHeadTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
-    headTouch.current =
-      e.touches.length === 1 ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : null;
+    headTouch.current = {
+      x: e.touches[0].clientX,
+      y: e.touches[0].clientY,
+      scrollTop: list.scrollTop,
+      scrolling: false,
+    };
   };
   const onHeadTouchMove = (e: React.TouchEvent<HTMLDivElement>) => {
-    if (!headTouch.current || e.touches.length !== 1) return;
-    const dx = e.touches[0].clientX - headTouch.current.x;
-    const dy = e.touches[0].clientY - headTouch.current.y;
-    if (Math.abs(dy) <= Math.abs(dx)) return;
-    if (!collapsedRef.current && dy < -14) {
-      headTouch.current = null;
-      collapseHero(listScrollRef.current);
-    } else if (collapsedRef.current && (listScrollRef.current?.scrollTop ?? 0) <= 16 && dy > 14) {
-      headTouch.current = null;
-      setCollapsed(false);
+    const gesture = headTouch.current;
+    const list = listScrollRef.current;
+    if (!gesture || !list || e.touches.length !== 1) return;
+    const dx = e.touches[0].clientX - gesture.x;
+    const dy = e.touches[0].clientY - gesture.y;
+    if (!gesture.scrolling) {
+      if (Math.abs(dy) < 6 || Math.abs(dy) <= Math.abs(dx)) return;
+      gesture.scrolling = true;
     }
+    list.scrollTop = Math.max(0, gesture.scrollTop - dy);
+    syncHeroScroll();
   };
 
   const episodes = useMemo(
@@ -998,7 +979,7 @@ export default function MobileProjectView({
   return (
     <div
       ref={screenRef}
-      className={`m-screen m-modern-workspace m-project-screen ${heroCollapsed ? "hero-collapsed" : ""} ${heroAnimating ? "hero-animating" : ""}`}
+      className={`m-screen m-modern-workspace m-project-screen ${heroCollapsed ? "hero-collapsed" : ""}`}
     >
       {/* 상단 내 서재 이동 및 작품 영웅(Hero) 헤더 */}
       <header
@@ -1049,12 +1030,8 @@ export default function MobileProjectView({
           className="m-scroll-body m-tree-scroll m-project-list"
           ref={listScrollRef}
           onScroll={onListScroll}
-          onTouchStart={onListTouchStart}
-          onTouchMove={onListTouchMove}
-          onTouchEnd={() => { touchY.current = null; }}
-          onTouchCancel={() => { touchY.current = null; }}
         >
-          {/* 목록 끝 위치는 본문의 transform이 아니라 이 감싸개의 높이로 정한다 */}
+          {/* 작품 정보 높이만큼 가상의 상단 여백을 두고, 짧은 목록에서도 작품 정보가 끝까지 접힐 수 있는 최소 높이를 확보한다 */}
           <div className="m-project-list-body">
             <div ref={listBodyRef} className="m-tree-container">
               {archive && <RecoveryCopies projectId={project.id} openDoc={openDoc} />}
@@ -1209,7 +1186,7 @@ export default function MobileProjectView({
             </div>
           </div>
         </div>
-        {/* 작품 정보와 탭·검색줄 레이어. 접히면 목록 크기를 바꾸지 않고 작품 정보 높이만큼 위로 밀려 올라간다 */}
+        {/* 작품 정보와 탭·검색줄 레이어. 스크롤에 맞춰 작품 정보 높이만큼 자연스럽게 열리고 접힌다 */}
         <div
           ref={headRef}
           className={`m-project-head ${heroCollapsed ? "collapsed" : ""}`}
