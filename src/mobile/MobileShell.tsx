@@ -643,7 +643,6 @@ export default function MobileShell({
                 attempt={attempt}
                 onSelectProject={openLibraryProject}
                 setDialog={setDialog}
-                chooseVault={chooseVault}
               />
             )}
           </>

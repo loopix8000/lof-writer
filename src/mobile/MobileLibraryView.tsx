@@ -2,7 +2,6 @@ import {
   BookOpen,
   Feather,
   File,
-  FolderOpen,
   Plus,
 } from "lucide-react";
 import React from "react";
@@ -20,7 +19,6 @@ export default function MobileLibraryView({
   attempt,
   onSelectProject,
   setDialog,
-  chooseVault,
   projectReorder,
 }: {
   lib: Library;
@@ -30,7 +28,6 @@ export default function MobileLibraryView({
   attempt: (fn: () => Promise<any>) => () => Promise<any>;
   onSelectProject: (id: string) => Promise<void>;
   setDialog: React.Dispatch<React.SetStateAction<Dialog | null>>;
-  chooseVault: (options?: { internal?: boolean }) => Promise<void>;
   projectReorder: ReturnType<typeof useProjectReorder>;
 }) {
   const scrollRef = useMobileProjectReorder(lib, loaded, busy, projectReorder, attempt);
@@ -42,17 +39,6 @@ export default function MobileLibraryView({
           <span className="m-badge">{lib.projects.length}작품</span>
         </div>
         <div className="m-topbar-actions">
-          <button
-            type="button"
-            className="m-btn-secondary m-btn-sm"
-            disabled={busy}
-            aria-label="서재 위치 변경"
-            title="서재 위치 변경"
-            onClick={attempt(chooseVault)}
-          >
-            <FolderOpen size={15} />
-            <span>서재 변경</span>
-          </button>
           <button
             type="button"
             className="m-btn-primary m-btn-sm"

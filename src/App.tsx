@@ -2307,8 +2307,6 @@ export default function App() {
             openMenu={openMenu}
             askDeleteProject={askDeleteProject}
             setDialog={setDialog}
-            busy={busy}
-            chooseVault={chooseVault}
           />)}
           {view === "project" && project && (<ProjectPage
             attempt={attempt}

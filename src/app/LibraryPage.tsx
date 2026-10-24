@@ -2,7 +2,6 @@ import {
   BookOpen,
   ChevronRight,
   Feather,
-  FolderOpen,
   Plus
 } from "lucide-react";
 import { type MenuItem } from "../ContextMenu";
@@ -27,8 +26,6 @@ type Props = {
   openMenu: (e: React.MouseEvent, items: MenuItem[], target?: string) => void;
   askDeleteProject: (id: string) => void;
   setDialog: React.Dispatch<React.SetStateAction<Dialog | null>>;
-  busy: boolean;
-  chooseVault: (options?: { internal?: boolean }) => Promise<void>;
 };
 
 export default function LibraryPage({
@@ -42,8 +39,6 @@ export default function LibraryPage({
   openMenu,
   askDeleteProject,
   setDialog,
-  busy,
-  chooseVault,
 }: Props) {
 
   return (
@@ -161,13 +156,6 @@ export default function LibraryPage({
         </div>
       )}
       <div className="library-footer">
-        <button
-          disabled={busy}
-          onClick={attempt(() => chooseVault())}
-        >
-          <FolderOpen size={15} />
-          다른 서재 열기
-        </button>
         <span title={lib.root}>{lib.root}</span>
         <button onClick={attempt(() => call("reveal"))}>
           폴더에서 보기 <ChevronRight size={13} />
