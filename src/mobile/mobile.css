@@ -3783,13 +3783,8 @@
   padding-bottom: 10px !important;
 }
 
-.mobile-app .history-mode {
-  display: flex;
-}
-
-.mobile-app .history-mode button {
-  flex: 1;
-  min-height: 36px;
+.m-history-mode {
+  margin: 12px 0 10px;
 }
 
 /* 복원·사본 저장은 나란히 같은 너비로, 삭제는 끝의 아이콘 단추로 둔다. */

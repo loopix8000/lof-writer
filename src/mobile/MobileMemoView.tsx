@@ -1049,6 +1049,7 @@ export default function MobileMemoView({
             </header>
             <div className="m-dialog-body">
               <HistoryDialog
+                isMobile
                 documentId={historyTarget.id}
                 memoContext={historyTarget.space === COMMON ? { space: COMMON, path: historyTarget.path } : undefined}
                 report={report}

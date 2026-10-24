@@ -1052,6 +1052,7 @@ export default function MobileShell({
 
             {dialog.type === "history" && active && (
               <HistoryDialog
+                isMobile
                 documentId={active.id}
                 report={report}
                 onRestore={async (id, name) => {

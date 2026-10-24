@@ -3,7 +3,7 @@ import type { CSSProperties, ReactNode } from "react";
 type Tab<T extends string> = {
   value: T;
   label: string;
-  icon: ReactNode;
+  icon?: ReactNode;
   count?: number;
 };
 

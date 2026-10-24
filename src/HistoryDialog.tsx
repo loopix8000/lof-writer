@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { CopyPlus, RotateCcw, Trash2 } from "lucide-react";
 import { useConfirm } from "./ConfirmDialog";
+import MobilePillTabs from "./mobile/MobilePillTabs";
 import { call } from "./types";
 
 type Entry = { name: string; savedAt: string; title: string; kind: string; commit?: string };
@@ -24,9 +25,10 @@ function metadataValue(change: MetadataChange, value: unknown, exists: boolean):
   return JSON.stringify(value, null, 2);
 }
 
-export default function HistoryDialog({ documentId, memoContext, onRestore, onSaveCopy, report }: {
+export default function HistoryDialog({ documentId, memoContext, isMobile = false, onRestore, onSaveCopy, report }: {
   documentId: string;
   memoContext?: { space: string; path: string };
+  isMobile?: boolean;
   onRestore: (id: string, name: string) => Promise<void>;
   // 고른 이력의 원고를 새 문서로 저장한다. 없으면 사본 저장 단추를 숨긴다.
   onSaveCopy?: (id: string, version: { title?: string; body: string; savedAt: string }) => Promise<void>;
@@ -113,10 +115,15 @@ export default function HistoryDialog({ documentId, memoContext, onRestore, onSa
     <div className="history-preview">
       {reading ? <p role="status">원고를 불러오는 중…</p> : preview ? <>
         <b>{preview.title}</b>
-        <div className="history-mode" role="group" aria-label="이력 보기 방식">
+        {isMobile ? <div className="m-history-mode">
+          <MobilePillTabs value={mode} onChange={setMode} label="이력 보기 방식" items={[
+            { value: "compare", label: "현재 원고와 비교" },
+            { value: "body", label: "원고 보기" },
+          ]} />
+        </div> : <div className="history-mode" role="group" aria-label="이력 보기 방식">
           <button aria-pressed={mode === "compare"} onClick={() => setMode("compare")}>현재 원고와 비교</button>
           <button aria-pressed={mode === "body"} onClick={() => setMode("body")}>원고 보기</button>
-        </div>
+        </div>}
         {mode === "body" ? <pre>{preview.body}</pre> : comparison?.available ? <>
           <p className="muted">이전 원고 → 현재 원고 · 추가 {comparison.added}줄 · 삭제 {comparison.removed}줄</p>
           {!comparison.added && !comparison.removed ? <p>{comparison.metadataChanges?.length ? "본문은 같습니다." : "본문과 제목·속성이 모두 같습니다."}</p>
