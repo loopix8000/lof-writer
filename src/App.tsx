@@ -1844,7 +1844,10 @@ export default function App() {
     });
     setQuickNote(null);
     showCreatedDocument(doc);
-    message("메모가 저장되었습니다", { label: "열기", run: attempt(() => openDoc(doc.id, true)) });
+    message("메모가 저장되었습니다", {
+      label: "열기",
+      run: attempt(() => (isMobile ? openMobileLinkedDocument(doc.id) : openDoc(doc.id, true))),
+    });
     await loadMemoFolders();
   }
 
@@ -2019,6 +2022,9 @@ export default function App() {
         refresh={refresh}
         changeLibrary={optimistic}
         showCreatedDocument={showCreatedDocument}
+        quickNote={quickNote}
+        setQuickNote={setQuickNote}
+        saveQuickNote={saveQuickNote}
         message={message}
         report={report}
       />
@@ -2317,6 +2323,7 @@ export default function App() {
             setDialog={setDialog}
             prefs={prefs}
             refresh={refresh}
+            changeLibrary={optimistic}
             message={message}
             setViewer={setViewer}
             tab={tab}

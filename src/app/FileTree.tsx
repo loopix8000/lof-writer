@@ -16,6 +16,7 @@ import type * as React from "react";
 import { Fragment } from "react";
 import { type MenuItem } from "../ContextMenu";
 import CoverImage from "../CoverImage";
+import PillTabs from "../PillTabs";
 import ResizableSidebar from "../ResizableSidebar";
 import {
   type Kind,
@@ -115,36 +116,38 @@ export default function FileTree({
         <ChevronDown size={15} />
       </button>
       {/* 에피소드와 문서(doc/ 폴더: 플롯·메모)를 탭으로 나눈다. 문서 탭에 'memo' 키를 쓴다. */}
-      <div className="tree-tabs" role="tablist" aria-label="파일 트리 보기">
-        {(["episode", "memo"] as const).map((tab) => (
-          <button
-            key={tab}
-            role="tab"
-            aria-selected={treeTab === tab}
-            className={treeTab === tab ? "active" : ""}
-            onClick={() => tree.setTab(tab)}
+      <PillTabs<"episode" | "memo">
+        className="tree-tabs"
+        value={treeTab}
+        label="파일 트리 보기"
+        items={[
+          {
+            value: "episode",
+            label: labels.episode,
+            count: count("episode"),
             // 문서를 끌어 에피소드 탭에 올리면 탭을 바꿔 회차 위에 놓을 수 있게 한다.
-            onDragEnter={() => tree.enterTab(tab)}
-          >
-            {tab === "memo" ? "문서" : labels.episode}
-            <small>{tab === "memo" ? count("plot") + count("memo") : count("episode")}</small>
-          </button>
-        ))}
-      </div>
+            onDragEnter: () => tree.enterTab("episode"),
+          },
+          {
+            value: "memo",
+            label: "문서",
+            count: count("plot") + count("memo"),
+            onDragEnter: () => tree.enterTab("memo"),
+          },
+        ]}
+        onChange={(tab) => tree.setTab(tab)}
+      />
       {treeTab === "memo" && (
-        <div className="doc-scope" role="radiogroup" aria-label="문서 보기 범위">
-          {([["all", "전체 문서"], ["episode", "현재 회차만"]] as const).map(([scope, label]) => (
-            <button
-              key={scope}
-              role="radio"
-              aria-checked={docScope === scope}
-              className={docScope === scope ? "active" : ""}
-              onClick={() => tree.setScope(scope)}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
+        <PillTabs<"all" | "episode">
+          className="doc-scope"
+          value={docScope}
+          label="문서 보기 범위"
+          items={[
+            { value: "all", label: "전체 문서" },
+            { value: "episode", label: "현재 회차만" },
+          ]}
+          onChange={(scope) => tree.setScope(scope)}
+        />
       )}
       <div className="tree-search-row">
         <label className="tree-search">
@@ -199,7 +202,7 @@ export default function FileTree({
           className="tree-section tree-panel"
           hidden={treeTab !== "episode"}
           onContextMenu={(e) =>
-            openMenu(e, [{ label: "새 에피소드", disabled: archive, action: attempt(() => createDoc("episode")) }])
+            openMenu(e, [{ label: "새 회차", disabled: archive, action: attempt(() => createDoc("episode")) }])
           }
         >
           {!treeQuery.episode.trim() && treeEpisodes.length > EPISODE_GROUP
@@ -264,7 +267,7 @@ export default function FileTree({
         {treeTab === "episode" && !archive && (
           <button className="episode-add" onClick={attempt(() => createDoc("episode"))}>
             <Plus size={16} />
-            새 에피소드
+            새 회차
           </button>
         )}
         <button

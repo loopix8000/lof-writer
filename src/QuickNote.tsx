@@ -37,9 +37,8 @@ export function quickNoteMarkdown(source: QuickNoteSource, memo: string): string
     .join("\n>\n");
   const parts = [
     `출처: [${escapeLinkText(source.title || "제목 없음")}](${noteLink(source.docId)})`,
-    "## 선택한 본문",
-    quote,
   ];
+  if (quote) parts.push("## 선택한 본문", quote);
   const note = memo.trim();
   if (note) parts.push("## 메모", note);
   return parts.join("\n\n") + "\n";
@@ -73,6 +72,12 @@ export default function QuickNote({
   useLayoutEffect(() => {
     setPos(clamp(source.at.x + 12, source.at.y + 12));
     textRef.current?.focus({ preventScroll: true });
+    const onResize = () => {
+      if (!ref.current) return;
+      setPos((prev) => clamp(prev.left, prev.top));
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
   }, [source]);
   async function save() {
     if (saving) return;
@@ -142,8 +147,12 @@ export default function QuickNote({
           textRef.current?.focus();
         }}
       />
-      <div className="quick-note-label">선택한 본문</div>
-      <blockquote className="quick-note-quote">{source.text}</blockquote>
+      {source.text.trim() && (
+        <>
+          <div className="quick-note-label">선택한 본문</div>
+          <blockquote className="quick-note-quote">{source.text}</blockquote>
+        </>
+      )}
       <label className="quick-note-label" htmlFor="quick-note-memo">
         메모
       </label>

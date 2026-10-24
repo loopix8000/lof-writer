@@ -33,6 +33,7 @@ import type { MenuItem } from "../ContextMenu";
 import EpisodeBindingPicker from "../EpisodeBindingPicker";
 import HistoryDialog from "../HistoryDialog";
 import PlatformPicker from "../PlatformPicker";
+import QuickNote, { type QuickNoteSource } from "../QuickNote";
 import { ReleaseNotesDialog, ReleaseNotice } from "../ReleaseNotes";
 import type { SearchMatch, SearchResult } from "../SearchViews";
 import {
@@ -176,6 +177,9 @@ export default function MobileShell({
   refresh,
   changeLibrary,
   showCreatedDocument,
+  quickNote,
+  setQuickNote,
+  saveQuickNote,
   message,
   report,
 }: {
@@ -329,6 +333,9 @@ export default function MobileShell({
   refresh: () => Promise<Library | undefined>;
   changeLibrary: <T>(change: LibraryChange, run: () => Promise<T>) => Promise<T>;
   showCreatedDocument: (doc: Doc) => void;
+  quickNote: QuickNoteSource | null;
+  setQuickNote: React.Dispatch<React.SetStateAction<QuickNoteSource | null>>;
+  saveQuickNote: (note: QuickNoteSource, memo: string, title: string) => Promise<void>;
   message: (text: string, action?: { label: string; run: () => void }, duration?: number) => void;
   report: (e: any) => void;
 }) {
@@ -401,6 +408,10 @@ export default function MobileShell({
       if ((window as any).__lofOverlayBack?.()) {
         return true;
       }
+      if (quickNote) {
+        setQuickNote(null);
+        return true;
+      }
       if (viewer) {
         closeViewer();
         return true;
@@ -441,6 +452,8 @@ export default function MobileShell({
       delete (window as any).__lofMobileBack;
     };
   }, [
+    quickNote,
+    setQuickNote,
     viewer,
     closeViewer,
     dialog,
@@ -587,6 +600,7 @@ export default function MobileShell({
                 numberOf={tree.numberOf}
                 bookmarkJump={bookmarkJump}
                 setBookmarkJump={setBookmarkJump}
+                onQuickNote={setQuickNote}
               />
             ) : isWritingEditor ? (
               <MobileEmptyEditorView
@@ -902,6 +916,14 @@ export default function MobileShell({
       {/* 이미지 뷰어 */}
       {viewer && (
         <ImageViewer src={viewer.src} alt={viewer.alt} onClose={closeViewer} />
+      )}
+
+      {quickNote && (
+        <QuickNote
+          source={quickNote}
+          onSave={(memo, title) => saveQuickNote(quickNote, memo, title).catch(report)}
+          onClose={() => setQuickNote(null)}
+        />
       )}
 
       {confirmDialog}

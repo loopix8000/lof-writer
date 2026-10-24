@@ -645,6 +645,16 @@ fn dispatch_method(
             fs::rename(&temporary, &destination)?;
             Ok(json!({"path":destination.to_string_lossy()}))
         }
+        "resetHistory" => {
+            let (_, common_root) = get_store_and_common()?;
+            let mut guard = state.store.lock().unwrap();
+            let store = guard.as_mut().ok_or_else(|| fail_invalid("서재가 열려 있지 않습니다."))?;
+            store.reset_history(&common_root)?;
+            let status = store.local_git.status();
+            drop(guard);
+            schedule_notify(app, &state.notify_seq);
+            Ok(status)
+        }
         "pinStatus" => Ok(pin_status(app)),
         "pinReady" => {
             let generation = args.get("generation").and_then(Value::as_u64).unwrap_or(0);
@@ -1997,7 +2007,7 @@ async fn lof_invoke(
     window: WebviewWindow,
 ) -> Result<Value, String> {
     let args_val = args.unwrap_or_else(|| json!({}));
-    let result = if method.starts_with("realtime") || matches!(method.as_str(), "settings" | "searchText" | "search" | "adoptDocument" | "adoptMemo" | "finishDocumentSync" | "saveDraft" | "saveRecoveryCopy" | "recoveryCopies" | "readRecoveryCopy" | "deleteRecoveryCopy" | "restoreRecoveryCopy" | "sync" | "pinUnlock" | "pinSave" | "backupStorage" | "backupGitHistory" | "history" | "historyPage" | "historyRead" | "restore" | "checkpointDocument" | "countManuscript" | "downloadSkill" | "checkSyncUpdates" | "systemFonts" | "readUserFont" | "exportLibrary" | "exportProject" | "prepareAndroidLibrary" | "moveVault") {
+    let result = if method.starts_with("realtime") || matches!(method.as_str(), "settings" | "searchText" | "search" | "adoptDocument" | "adoptMemo" | "finishDocumentSync" | "saveDraft" | "saveRecoveryCopy" | "recoveryCopies" | "readRecoveryCopy" | "deleteRecoveryCopy" | "restoreRecoveryCopy" | "sync" | "pinUnlock" | "pinSave" | "backupStorage" | "backupGitHistory" | "resetHistory" | "history" | "historyPage" | "historyRead" | "restore" | "checkpointDocument" | "countManuscript" | "downloadSkill" | "checkSyncUpdates" | "systemFonts" | "readUserFont" | "exportLibrary" | "exportProject" | "prepareAndroidLibrary" | "moveVault") {
         tauri::async_runtime::spawn_blocking(move || {
             let state = app.state::<AppState>();
             if method == "pinUnlock" || method == "pinSave" {

@@ -26,6 +26,9 @@ fn changed(commit: &Commit<'_>, id: &str) -> Result<bool, LofError> {
     let Some(current) = document_tree(commit, id)? else {
         return Ok(false);
     };
+    if commit.parent_count() == 0 && commit.message() == Ok("변경 이력 초기화") {
+        return Ok(false);
+    }
     Ok(commit.parent_count() == 0 || document_tree(&commit.parent(0)?, id)? != Some(current))
 }
 
@@ -109,7 +112,11 @@ impl LocalHistory {
         let mut total_for_doc = 0;
         for oid in walk(&repo, head)? {
             let commit = repo.find_commit(oid?)?;
-            if deleted.contains(&commit.id()) || !changed(&commit, id)? {
+            let is_manual_reset = commit.parent_count() == 0
+                && commit.message() == Ok("변경 이력 초기화")
+                && manual.contains(&commit.id())
+                && document_tree(&commit, id)?.is_some();
+            if deleted.contains(&commit.id()) || (!changed(&commit, id)? && !is_manual_reset) {
                 continue;
             }
             let value = read_json(
@@ -176,7 +183,10 @@ impl LocalHistory {
         }
         for oid in walk(&repo, head.id())? {
             let commit = repo.find_commit(oid?)?;
-            if !changed(&commit, id)? {
+            let is_reset_base = commit.parent_count() == 0
+                && commit.message() == Ok("변경 이력 초기화")
+                && document_tree(&commit, id)?.is_some();
+            if !changed(&commit, id)? && !is_reset_base {
                 continue;
             }
             let doc = read_document(&repo, &commit.tree()?, id)?;
@@ -211,7 +221,10 @@ impl LocalHistory {
         let repo = self.repository()?;
         for oid in walk(&repo, latest(&repo)?.id())? {
             let commit = repo.find_commit(oid?)?;
-            if !changed(&commit, id)? {
+            let is_reset_base = commit.parent_count() == 0
+                && commit.message() == Ok("변경 이력 초기화")
+                && document_tree(&commit, id)?.is_some();
+            if !changed(&commit, id)? && !is_reset_base {
                 continue;
             }
             let reference = format!("refs/lof/{kind}/{id}/{}", commit.id());
@@ -233,7 +246,10 @@ impl LocalHistory {
         }
         let repo = self.repository()?;
         let commit = checked_commit(&repo, name)?;
-        if !changed(&commit, id)? || is_deleted(&repo, id, commit.id())? {
+        let is_reset_base = commit.parent_count() == 0
+            && commit.message() == Ok("변경 이력 초기화")
+            && document_tree(&commit, id)?.is_some();
+        if (!changed(&commit, id)? && !is_reset_base) || is_deleted(&repo, id, commit.id())? {
             return Ok(false);
         }
         repo.reference(&deleted_ref(id, commit.id()), commit.id(), false, "원고 기록 지움 표시")?;

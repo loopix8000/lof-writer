@@ -885,6 +885,7 @@
 .m-project-tag-chip {
   display: inline-flex;
   align-items: center;
+  gap: 3px;
   min-height: 22px;
   padding: 0 8px;
   border-radius: 999px;
@@ -893,6 +894,18 @@
   color: var(--muted);
   font-size: 11px;
   font-weight: 600;
+}
+
+.m-project-tag-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1px;
+  margin-right: -3px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
 }
 
 .m-project-tag-chip.add {
@@ -950,6 +963,7 @@
   left: 3px;
   width: calc((100% - 6px - (var(--pill-count) - 1) * 4px) / var(--pill-count));
   border-radius: 9px;
+  border: none;
   background: var(--surface);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
   transform: translateX(calc(var(--pill-index) * (100% + 4px)));
@@ -1758,12 +1772,50 @@
   display: none !important;
 }
 
-/* 모바일에서는 왼쪽 북마크 리본과 여백 퀵노트 아이콘을 완전히 숨김 */
+/* 모바일에서는 왼쪽 북마크 리본을 여백 안쪽에 표시하고 터치는 가로채지 않음 */
 .mobile-app .bookmark-gutter-btn,
 .mobile-app .bookmark-ribbon,
 .mobile-app .note-gutter-btn,
 .mobile-app .note-margin-icon {
   display: none !important;
+}
+
+.mobile-app .editor-content,
+.mobile-app .editor-content * {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.mobile-app .editor-content .tiptap > .bookmarked::before {
+  left: -17px;
+  width: 14px;
+  pointer-events: none;
+  -webkit-mask-size: 13px 13px;
+  mask-size: 13px 13px;
+}
+
+.mobile-app .quick-note {
+  max-height: calc(100dvh - 16px);
+  overflow-y: auto;
+  z-index: 950;
+}
+
+.mobile-app .quick-note-source,
+.mobile-app .quick-note-title {
+  margin-bottom: 10px;
+}
+
+.mobile-app .quick-note-quote {
+  max-height: 68px;
+  margin-bottom: 10px;
+}
+
+.mobile-app .quick-note textarea {
+  min-height: 80px;
+}
+
+.mobile-app .quick-note-foot {
+  margin-top: 10px;
 }
 
 /* ---------- 2026 플로팅 필(Pill) 하단 집필 툴바 ---------- */

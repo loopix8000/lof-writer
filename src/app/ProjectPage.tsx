@@ -8,8 +8,10 @@ import {
   Plus,
   Search,
   Settings,
-  Upload
+  Upload,
+  X
 } from "lucide-react";
+import { useRef, useState } from "react";
 import type * as React from "react";
 import {
   STATUS_SHORT,
@@ -17,6 +19,8 @@ import {
 } from "../../core/episode.mjs";
 import { normalizeWriting } from "../../core/platforms.mjs";
 import CoverImage from "../CoverImage";
+import PillTabs from "../PillTabs";
+import TagAddPopup from "../TagAddPopup";
 import {
   call,
   type Doc,
@@ -25,6 +29,7 @@ import {
   type Project
 } from "../types";
 import { icons, labels } from "./document-ui";
+import { patchProject, type LibraryChange } from "./library-changes";
 
 import { type Dialog } from "./model";
 
@@ -36,6 +41,7 @@ type Props = {
   setDialog: React.Dispatch<React.SetStateAction<Dialog | null>>;
   prefs: Record<string, any>;
   refresh: () => Promise<Library | undefined>;
+  changeLibrary: <T>(change: LibraryChange, run: () => Promise<T>) => Promise<T>;
   message: (text: string, action?: { label: string; run: () => void; }) => void;
   setViewer: React.Dispatch<React.SetStateAction<{ src: string; alt: string; } | null>>;
   tab: Kind;
@@ -57,6 +63,7 @@ export default function ProjectPage({
   setDialog,
   prefs,
   refresh,
+  changeLibrary,
   message,
   setViewer,
   tab,
@@ -69,6 +76,16 @@ export default function ProjectPage({
   openDoc,
   numberOf,
 }: Props) {
+  const [tagPopupOpen, setTagPopupOpen] = useState(false);
+  const tagBtnRef = useRef<HTMLButtonElement | null>(null);
+
+  const saveProjectTags = (nextTags: string[]) => {
+    void attempt(() =>
+      changeLibrary(patchProject(project.id, { tags: nextTags }), () =>
+        call("updateProject", { id: project.id, tags: nextTags }),
+      ),
+    )();
+  };
 
   return (
     <div className="project-page">
@@ -90,26 +107,34 @@ export default function ProjectPage({
             {(project.tags || []).map((t) => (
               <span className="tag-chip" key={t}>
                 #{t}
+                <button
+                  type="button"
+                  aria-label={`${t} 태그 삭제`}
+                  onClick={() => saveProjectTags((project.tags || []).filter((x) => x !== t))}
+                >
+                  <X size={12} />
+                </button>
               </span>
             ))}
             <button
-              aria-label="작품 태그 편집"
-              onClick={() =>
-                setDialog({
-                  type: "editProject",
-                  value: project.title,
-                  description: project.description,
-                  tags: project.tags || [],
-                  manualLineBreak: project.manualLineBreak ?? null,
-                  writing: normalizeWriting(
-                    project.writing || prefs.defaultWriting,
-                  ),
-                })
-              }
+              ref={tagBtnRef}
+              type="button"
+              aria-label="작품 태그 추가"
+              aria-expanded={tagPopupOpen}
+              onClick={() => setTagPopupOpen((v) => !v)}
             >
               <Plus size={13} />
               태그 추가
             </button>
+            {tagPopupOpen && (
+              <TagAddPopup
+                anchorEl={tagBtnRef.current}
+                tags={project.tags || []}
+                favorites={prefs.favoriteTags}
+                onChange={saveProjectTags}
+                onClose={() => setTagPopupOpen(false)}
+              />
+            )}
           </div>
           <div className="row gap">
             <button
@@ -169,22 +194,20 @@ export default function ProjectPage({
       </div>
       {archive && <RecoveryCopies projectId={project.id} openDoc={openDoc} />}
       <div className="project-tabs">
-        <div className="row gap">
-          {(["episode", "plot", "memo"] as Kind[]).map((kind) => {
+        <PillTabs<Kind>
+          value={tab}
+          label="작품 문서 분류"
+          items={(["episode", "plot", "memo"] as Kind[]).map((kind) => {
             const Icon = icons[kind];
-            return (
-              <button
-                key={kind}
-                className={tab === kind ? "selected" : ""}
-                onClick={() => setTab(kind)}
-              >
-                <Icon size={16} />
-                {labels[kind]}
-                <small>{count(kind)}</small>
-              </button>
-            );
+            return {
+              value: kind,
+              label: labels[kind],
+              icon: <Icon size={16} />,
+              count: count(kind),
+            };
           })}
-        </div>
+          onChange={setTab}
+        />
         <div className="row gap">
           <button
             title="보관함"
@@ -213,7 +236,7 @@ export default function ProjectPage({
       <div className="episode-list">
         {docs
           .filter((d) => d.kind === tab)
-          .map((d, i) => (
+          .map((d) => (
             <button
               className="episode-row"
               key={d.id}

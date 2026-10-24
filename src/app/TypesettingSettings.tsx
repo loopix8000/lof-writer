@@ -22,6 +22,7 @@ import {
   normalizeUserFonts,
 } from "../../core/typesetting.mjs";
 import { syncUserFonts } from "../font-loader";
+import PillTabs from "../PillTabs";
 import {
   call,
   type Kind,
@@ -210,25 +211,20 @@ export default function TypesettingSettings({
         {inPanel ? (
           <strong className="typesetting-kind-current">{targetKindInfo.label}</strong>
         ) : (
-          <div className="typesetting-kind-tabs" role="tablist" aria-label="조판 대상 문서 타입">
-            {TYPESETTING_KINDS.map((k) => {
+          <PillTabs<"episode" | "document">
+            className="typesetting-kind-tabs"
+            value={targetKind}
+            label="조판 대상 문서 타입"
+            items={TYPESETTING_KINDS.map((k) => {
               const KIcon = k.id === "episode" ? BookOpen : FileText;
-              const selected = targetKind === k.id;
-              return (
-                <button
-                  key={k.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={selected}
-                  className={`typesetting-kind-tab ${selected ? "active" : ""}`}
-                  onClick={() => setTypesettingKind(k.id)}
-                >
-                  <KIcon size={15} />
-                  <span>{k.label}</span>
-                </button>
-              );
+              return {
+                value: k.id,
+                label: k.label,
+                icon: <KIcon size={15} />,
+              };
             })}
-          </div>
+            onChange={(id) => setTypesettingKind(id)}
+          />
         )}
         <div className="typesetting-kind-meta">
           <span>{targetKindInfo.description}</span>

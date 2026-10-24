@@ -11,7 +11,8 @@ import {
   HardDrive,
   History,
   Sparkles,
-  StickyNote
+  StickyNote,
+  Trash2
 } from "lucide-react";
 import { useLayoutEffect, useRef, useState } from "react";
 import type * as React from "react";
@@ -521,6 +522,32 @@ export default function SettingsContent({
                 } finally { setBusy(false); }
               })}>
                 <HardDrive size={16} /> Git 이력 백업
+              </button>
+              <button
+                className="danger-outline"
+                disabled={busy}
+                onClick={attempt(async () => {
+                  if (
+                    !(await confirm({
+                      title: "변경 이력 초기화",
+                      message:
+                        "서재의 모든 작품 원고, 플롯·메모, 공용 메모의 이전 변경 이력을 모두 삭제합니다. 현재 원고와 메모 본문은 그대로 유지되지만, 초기화된 이전 이력은 되돌릴 수 없습니다.",
+                      confirmLabel: "초기화",
+                      danger: true,
+                    }))
+                  )
+                    return;
+                  setBusy(true);
+                  try {
+                    await flush();
+                    await call("resetHistory");
+                    message("변경 이력을 초기화했습니다.");
+                  } finally {
+                    setBusy(false);
+                  }
+                })}
+              >
+                <Trash2 size={16} /> 이력 초기화
               </button>
             </div>
           </section>

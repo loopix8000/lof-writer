@@ -41,9 +41,10 @@ import { normalizeWriting } from "../../core/platforms.mjs";
 import CoverImage from "../CoverImage";
 import { labels } from "../app/document-ui";
 import { EPISODE_GROUP, parentOfRel, type FolderEntry } from "../app/file-tree-model";
-import { patchDocuments, reorderDocuments, type LibraryChange } from "../app/library-changes";
+import { patchDocuments, patchProject, reorderDocuments, type LibraryChange } from "../app/library-changes";
 import { type Dialog } from "../app/model";
 import type { FileTreeController } from "../app/useFileTree";
+import TagAddPopup from "../TagAddPopup";
 import { call, type Doc, type Kind, type Library, type Project } from "../types";
 import {
   MobileActionSheet,
@@ -147,7 +148,21 @@ export default function MobileProjectView({
   } | null>(null);
   const [moveFolderDoc, setMoveFolderDoc] = useState<Doc | null>(null);
   const [heroCollapsed, setHeroCollapsed] = useState(false);
+  const [tagPopupOpen, setTagPopupOpen] = useState(false);
+  const tagBtnRef = useRef<HTMLButtonElement | null>(null);
   const collapsedRef = useRef(false);
+
+  const saveProjectTags = (nextTags: string[]) => {
+    void attempt(() =>
+      changeLibrary(patchProject(project.id, { tags: nextTags }), () =>
+        call("updateProject", { id: project.id, tags: nextTags }),
+      ),
+    )();
+  };
+
+  useEffect(() => {
+    if (heroCollapsed) setTagPopupOpen(false);
+  }, [heroCollapsed]);
   const screenRef = useRef<HTMLDivElement>(null);
   const listScrollRef = useRef<HTMLDivElement>(null);
   const listBodyRef = useRef<HTMLDivElement>(null);
@@ -1240,15 +1255,34 @@ export default function MobileProjectView({
                   {(project.tags || []).map((t) => (
                     <span key={t} className="m-project-tag-chip">
                       #{t}
+                      <button
+                        type="button"
+                        className="m-project-tag-remove"
+                        aria-label={`${t} 태그 삭제`}
+                        onClick={() => saveProjectTags((project.tags || []).filter((x) => x !== t))}
+                      >
+                        <X size={11} />
+                      </button>
                     </span>
                   ))}
                   <button
+                    ref={tagBtnRef}
                     type="button"
                     className="m-project-tag-chip add"
-                    onClick={openEditProjectDialog}
+                    aria-expanded={tagPopupOpen}
+                    onClick={() => setTagPopupOpen((v) => !v)}
                   >
                     + 태그 추가
                   </button>
+                  {tagPopupOpen && (
+                    <TagAddPopup
+                      anchorEl={tagBtnRef.current}
+                      tags={project.tags || []}
+                      favorites={prefs.favoriteTags}
+                      onChange={saveProjectTags}
+                      onClose={() => setTagPopupOpen(false)}
+                    />
+                  )}
                 </div>
               </div>
             </div>

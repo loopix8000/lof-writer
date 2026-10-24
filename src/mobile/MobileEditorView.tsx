@@ -68,6 +68,7 @@ import {
 import { workspaceKey } from "../workspace-state";
 import { useUndoState } from "../useUndoState";
 import Writer from "../Writer";
+import type { QuickNoteSource } from "../QuickNote";
 import MobileEditorToolbar, { MobileEditorMenuActions } from "./MobileEditorToolbar";
 import {
   MobileActionSheet,
@@ -136,6 +137,7 @@ export default function MobileEditorView({
   numberOf,
   bookmarkJump,
   setBookmarkJump,
+  onQuickNote,
 }: {
   lib: Library;
   project?: Project;
@@ -205,6 +207,7 @@ export default function MobileEditorView({
   setBookmarkJump?: React.Dispatch<
     React.SetStateAction<{ docId: string; index: number; seq: number } | null>
   >;
+  onQuickNote?: (source: QuickNoteSource) => void;
 }) {
   // 왼쪽 파일트리 드로어 / 오른쪽 위젯 드로어 상태
   const [leftDrawerOpen, setLeftDrawerOpen] = useState(false);
@@ -1121,6 +1124,7 @@ export default function MobileEditorView({
           <Writer
             key="mobile-writer"
             readOnly={isProtected}
+            allowReadOnlyAnnotations={true}
             onUndoStateChange={onUndoStateChange}
             inactive={false}
             visible={true}
@@ -1165,7 +1169,25 @@ export default function MobileEditorView({
             jumpToBookmark={
               bookmarkJump?.docId === active.id ? bookmarkJump : null
             }
-            onQuickNote={undefined}
+            onQuickNote={
+              onQuickNote
+                ? (text, at) =>
+                    onQuickNote({
+                      projectId: active.projectId,
+                      docId: active.id,
+                      title:
+                        active.kind === "episode" && numberOf(active)
+                          ? `${numberOf(active)}. ${active.title || "제목 없음"}`
+                          : active.title,
+                      text,
+                      episodeId:
+                        active.kind === "episode"
+                          ? active.id
+                          : active.episodeId || undefined,
+                      at,
+                    })
+                : undefined
+            }
             links={active.kind === "memo" || active.kind === "plot"}
             onOpenLink={(href, quote) =>
               attempt(() => openNoteLink(href, quote))()
@@ -1519,7 +1541,7 @@ export default function MobileEditorView({
                   }}
                 >
                   <Plus size={17} />
-                  <span>새 에피소드</span>
+                  <span>새 회차</span>
                 </button>
               ) : (
                 <button

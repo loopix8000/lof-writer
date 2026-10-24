@@ -406,6 +406,88 @@ impl LocalHistory {
         self.pending = false;
         Ok(())
     }
+
+    pub fn reset(
+        &mut self,
+        vault_id: &str,
+        db: &LibraryDb,
+        snapshot: &Snapshot,
+    ) -> Result<(), LofError> {
+        remove_dir_force(&self.path)?;
+        let repo = self.repository()?;
+        let owner_path = repo.path().join("lof-owner.json");
+        crate::store::atomic_write_bytes(
+            &owner_path,
+            &json_bytes(&json!({"format":1,"vaultId":vault_id}))?,
+        )?;
+        let format = json!({"format":1,"vaultId":vault_id,"legacyHistory":0});
+        let current_files = snapshot_files(&repo, snapshot, &format)?;
+        let current_tree = repo.find_tree(tree(&repo, &current_files)?)?;
+        let sig = signature()?;
+        let oid = repo.commit(
+            Some(MAIN),
+            &sig,
+            &sig,
+            "변경 이력 초기화",
+            &current_tree,
+            &[],
+        )?;
+        repo.set_head(MAIN)?;
+        repo.reference(MIGRATION, oid, true, "변경 이력 초기화")?;
+        db.reset_history_state(&oid.to_string())?;
+        self.ready = true;
+        self.error.clear();
+        self.imported = 0;
+        self.head = oid.to_string();
+        self.migration_files = None;
+        self.migration_keys.clear();
+        self.pending = false;
+        Ok(())
+    }
+
+    pub fn reset_common_memos(root: &Path) -> Result<(), LofError> {
+        let git_dir = root.join(".lof").join("common-memo-git");
+        remove_dir_force(&git_dir)?;
+        if root.try_exists()? {
+            let _ = Self::common_memos(root)?;
+        }
+        Ok(())
+    }
+}
+
+pub(crate) fn remove_dir_force(path: &Path) -> Result<(), LofError> {
+    if !path.try_exists()? {
+        return Ok(());
+    }
+    fn clear_readonly(dir: &Path) -> std::io::Result<()> {
+        for entry in fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            let file_type = entry.file_type()?;
+            if let Ok(meta) = entry.metadata() {
+                let mut perms = meta.permissions();
+                if perms.readonly() {
+                    perms.set_readonly(false);
+                    let _ = fs::set_permissions(&path, perms);
+                }
+            }
+            if file_type.is_dir() && !file_type.is_symlink() {
+                let _ = clear_readonly(&path);
+            }
+        }
+        Ok(())
+    }
+    let _ = clear_readonly(path);
+    fs::remove_dir_all(path)?;
+    Ok(())
+}
+
+impl LocalHistory {
+    #[allow(dead_code)]
+    fn _noop(&mut self) -> Result<(), LofError> {
+        self.pending = false;
+        Ok(())
+    }
 }
 
 fn check_format(value: &Value, vault_id: &str) -> Result<(), LofError> {

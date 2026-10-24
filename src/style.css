@@ -851,6 +851,77 @@ h1 small {
 .gap {
   gap: 9px;
 }
+/* 공통 소프트 필 탭 슬라이더 (PC · 모바일 공통 애니메이션) */
+.m-pill-tabs {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  grid-template-columns: repeat(var(--pill-count, 2), minmax(0, 1fr));
+  gap: 4px;
+  padding: 3px;
+  border-radius: 10px;
+  background: var(--soft);
+}
+.m-pill-tab-indicator {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  width: calc((100% - 6px - (var(--pill-count) - 1) * 4px) / var(--pill-count));
+  border-radius: 7px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  transform: translateX(calc(var(--pill-index) * (100% + 4px)));
+  transition: transform 0.25s cubic-bezier(0.22, 0.61, 0.36, 1);
+  pointer-events: none;
+}
+.m-pill-tab {
+  position: relative;
+  min-width: 0;
+  min-height: 32px;
+  border-radius: 7px;
+  border: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 0 12px;
+  transition: color 0.25s ease;
+  white-space: nowrap;
+}
+@media (hover: hover) and (pointer: fine) {
+  .m-pill-tab:hover:not(.active) {
+    color: var(--text);
+  }
+}
+.m-pill-tab small {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(128, 128, 128, 0.12);
+  color: inherit;
+  margin-left: 1px;
+}
+.m-pill-tab.active {
+  color: var(--text);
+}
+.m-pill-tab.active small {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .m-pill-tab-indicator,
+  .m-pill-tab {
+    transition: none;
+  }
+}
 .project-tabs {
   display: flex;
   justify-content: space-between;
@@ -859,23 +930,13 @@ h1 small {
   padding: 20px 0;
   border-bottom: 1px solid var(--border);
 }
-/* 에피소드·플롯·메모 탭: 옅은 바탕 위에서 선택된 탭만 떠 보이게 한다. */
-.project-tabs .row:first-child {
-  gap: 2px;
-  padding: 3px;
-  border-radius: 10px;
-  background: var(--soft);
+/* 에피소드·플롯·메모 탭: 슬라이딩 필 애니메이션 */
+.project-tabs > .m-pill-tabs {
+  min-width: 300px;
 }
-.project-tabs .row:first-child button {
-  border: 1px solid transparent;
-  background: none;
-  border-radius: 7px;
-  color: var(--muted);
-}
-@media (hover: hover) and (pointer: fine) {
-  .project-tabs .row:first-child button:hover:not(.selected) {
-    color: var(--text);
-  }
+.project-tabs > .m-pill-tabs .m-pill-tab {
+  min-height: 34px;
+  padding: 0 14px;
 }
 .project-tabs button.selected {
   background: var(--surface) !important;
@@ -883,14 +944,6 @@ h1 small {
   color: var(--text) !important;
   font-weight: 600;
   box-shadow: 0 1px 3px #00000014;
-}
-.project-tabs small {
-  font-size: 12px;
-  font-weight: 500;
-  margin-left: 2px;
-}
-.project-tabs button.selected small {
-  color: var(--accent);
 }
 .episode-list {
   padding: 12px 0 40px;
@@ -1141,64 +1194,20 @@ body.sidebar-resizing * {
 .file-sidebar.file-tree {
   overflow: hidden;
 }
-.tree-tabs {
-  display: flex;
-  margin: 0 12px;
-  border-bottom: 1px solid var(--border);
+.tree-tabs.m-pill-tabs {
+  margin: 4px 12px 0;
 }
-.tree-tabs button {
-  flex: 1;
-  gap: 6px;
-  margin-bottom: -1px;
-  padding: 8px 0 9px;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  border-radius: 0;
-  background: none;
-  color: var(--muted);
-  font-size: 13px;
-  font-weight: 600;
+.tree-tabs.m-pill-tabs .m-pill-tab {
+  min-height: 30px;
+  padding: 0 8px;
 }
-@media (hover: hover) and (pointer: fine) {
-  .tree-tabs button:hover {
-    background: none;
-    color: var(--text);
-  }
+.doc-scope.m-pill-tabs {
+  margin: 8px 12px 0;
 }
-.tree-tabs button.active {
-  color: var(--text);
-  border-bottom-color: var(--accent);
-}
-.tree-tabs small {
-  font-size: 12px;
-  font-weight: 400;
-  color: var(--muted);
-}
-.doc-scope {
-  display: flex;
-  margin: 10px 12px 0;
-  padding: 2px;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--surface);
-}
-.doc-scope button {
-  flex: 1;
-  padding: 5px 0;
-  border: 0;
-  border-radius: 5px;
-  background: none;
-  color: var(--muted);
-  font-size: 13px;
-}
-@media (hover: hover) and (pointer: fine) {
-  .doc-scope button:hover {
-    background: var(--hover);
-  }
-}
-.doc-scope button.active {
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
+.doc-scope.m-pill-tabs .m-pill-tab {
+  min-height: 28px;
+  padding: 0 8px;
+  font-size: 12.5px;
 }
 .tree-search-row {
   display: flex;
@@ -1884,13 +1893,16 @@ body.sidebar-resizing * {
 }
 .tiptap .tableWrapper {
   overflow-x: auto;
-  margin: 1em 0;
+  margin: 1.1em 0 1.6em;
 }
 .tiptap table {
   border-collapse: collapse;
   table-layout: fixed;
   width: 100%;
   margin: 0;
+}
+.tiptap[contenteditable="true"] .tableWrapper table {
+  width: calc(100% - 22px);
 }
 .tiptap td,
 .tiptap th {
@@ -1900,10 +1912,169 @@ body.sidebar-resizing * {
   min-width: 5em;
   vertical-align: top;
   text-align: left;
+  transition: background-color 0.12s ease;
 }
 .tiptap th {
   background: var(--soft);
   font-weight: 600;
+}
+.tiptap :is(td, th)[data-table-highlight] {
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface)) !important;
+}
+/* 노션 스타일 표 편집 컨트롤 (행·열 핸들 + 하단·우측 추가 바 + 팝오버 메뉴) */
+.notion-table-controls {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 5;
+}
+.notion-table-handle {
+  position: absolute;
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: 5px;
+  border: 1px solid var(--border, var(--line));
+  background: var(--surface);
+  color: var(--muted);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+  transform: translate(-50%, -50%);
+  transition:
+    left 0.14s cubic-bezier(0.22, 0.61, 0.36, 1),
+    top 0.14s cubic-bezier(0.22, 0.61, 0.36, 1),
+    background-color 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease;
+}
+.notion-table-handle.col {
+  width: 26px;
+  height: 15px;
+}
+.notion-table-handle.col::before {
+  content: "";
+  position: absolute;
+  inset: -8px -6px;
+}
+.notion-table-handle.row {
+  width: 15px;
+  height: 26px;
+}
+.notion-table-handle.row::before {
+  content: "";
+  position: absolute;
+  inset: -6px -8px;
+}
+.notion-table-handle.active,
+.notion-table-handle:active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+@media (hover: hover) and (pointer: fine) {
+  .notion-table-handle:hover {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+  }
+}
+.notion-table-add-bar {
+  position: absolute;
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  background: color-mix(in srgb, var(--soft, var(--panel)) 75%, transparent);
+  color: var(--muted);
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease;
+}
+.notion-table-add-bar.row {
+  height: 18px;
+}
+.notion-table-add-bar.col {
+  width: 18px;
+}
+.notion-table-add-bar:active {
+  background: color-mix(in srgb, var(--accent) 16%, var(--soft, var(--panel)));
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  color: var(--accent);
+}
+@media (hover: hover) and (pointer: fine) {
+  .notion-table-add-bar:hover {
+    background: color-mix(in srgb, var(--accent) 14%, var(--soft, var(--panel)));
+    border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+    color: var(--accent);
+  }
+}
+.notion-table-menu {
+  position: fixed;
+  z-index: 1200;
+  min-width: 176px;
+  padding: 5px;
+  border-radius: 10px;
+  border: 1px solid var(--border, var(--line));
+  background: var(--surface);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.2);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.notion-table-menu-header {
+  padding: 4px 9px 5px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+.notion-table-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 9px;
+  width: 100%;
+  min-height: 32px;
+  padding: 5px 9px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text, var(--ink));
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+}
+.notion-table-menu-item svg {
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.notion-table-menu-item:active:not(:disabled) {
+  background: var(--soft, var(--panel));
+}
+@media (hover: hover) and (pointer: fine) {
+  .notion-table-menu-item:hover:not(:disabled) {
+    background: var(--soft, var(--panel));
+  }
+}
+.notion-table-menu-item.danger {
+  color: var(--danger-text, #d95e5e);
+}
+.notion-table-menu-item.danger svg {
+  color: inherit;
+}
+.notion-table-menu-item:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+.notion-table-menu-divider {
+  height: 1px;
+  margin: 4px 4px;
+  background: var(--border, var(--line));
 }
 .editor-content .tiptap :is(td, th) > p {
   margin: 0;
@@ -3169,28 +3340,10 @@ body.sidebar-resizing * {
 .history-list button small {
   color: var(--muted);
 }
-/* 비교·원고 보기를 한 묶음의 전환 단추로 보여 준다. */
+/* 비교·원고 보기를 한 묶음의 슬라이딩 필 탭으로 보여 준다. */
 .history-mode {
-  display: inline-flex;
-  gap: 2px;
   margin: 12px 0 10px;
-  padding: 3px;
-  border-radius: 9px;
-  background: var(--soft);
-}
-.history-mode button {
-  border: none;
-  background: transparent;
-  color: var(--muted);
-  padding: 6px 12px;
-  border-radius: 7px;
-  font-size: 13px;
-}
-.history-mode button[aria-pressed="true"] {
-  background: var(--surface);
-  color: var(--text);
-  font-weight: 600;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+  max-width: 300px;
 }
 .history-diff-added {
   background: color-mix(in srgb, #30975c 18%, transparent);
@@ -4718,34 +4871,80 @@ input.property-text {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
   width: 100%;
   min-width: 0;
 }
-.episode-tags.is-editable {
-  padding: 4px 6px;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  background: var(--surface);
-}
-.episode-tags.is-editable:focus-within {
-  border-color: var(--border-hover);
-}
-.episode-tags .episode-tag-input {
-  flex: 1 1 130px;
-  min-width: 0;
-  width: 0;
-  max-width: 100%;
-  padding: 2px 4px;
-  border: 0;
-  border-radius: 0;
+.episode-tag-add-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 7px;
+  border: 1px dashed var(--border);
+  border-radius: 4px;
   background: transparent;
-  box-shadow: none;
+  color: var(--muted);
   font-size: 12px;
   line-height: 18px;
 }
-.episode-tags .episode-tag-input:focus {
-  box-shadow: none;
+@media (hover: hover) and (pointer: fine) {
+  .episode-tag-add-btn:hover {
+    border-color: var(--border-hover);
+    color: var(--text);
+    background: var(--soft);
+  }
+}
+/* 태그 추가 플로팅 팝업 입력칸 (작품 페이지 · 편집 화면 공통) */
+.tag-add-popup {
+  position: fixed;
+  z-index: 1200;
+  width: 228px;
+  max-width: calc(100vw - 16px);
+  padding: 8px;
+  border-radius: 9px;
+  border: 1px solid var(--border, var(--line));
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.tag-add-popup-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.tag-add-popup-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 0;
+  height: 30px;
+  padding: 0 9px;
+  font-size: 12.5px;
+  border: 1px solid var(--border, var(--line));
+  border-radius: 6px;
+  background: var(--bg, var(--panel, var(--surface)));
+  color: var(--text, var(--ink));
+  outline: none;
+}
+.tag-add-popup-input:focus {
+  border-color: var(--accent);
+}
+.tag-add-popup-btn {
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 6px;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.tag-add-popup .tag-suggestions {
+  margin-top: 2px;
 }
 .episode-tag {
   display: inline-flex;
@@ -5373,39 +5572,8 @@ input.property-text {
   background: var(--sidebar);
 }
 
-.typesetting-kind-tabs {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px;
-}
-
-.typesetting-kind-tab {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  height: 36px;
-  padding: 0 12px;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--surface);
-  color: var(--muted);
-  font-size: 13px;
-  font-weight: 500;
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .typesetting-kind-tab:hover {
-    border-color: var(--accent);
-    color: var(--text);
-  }
-}
-
-.typesetting-kind-tab.active {
-  border-color: var(--accent);
-  background: var(--selection-bg);
-  color: var(--accent);
-  font-weight: 600;
+.typesetting-kind-tabs.m-pill-tabs .m-pill-tab {
+  min-height: 34px;
 }
 
 .typesetting-kind-meta {

@@ -16,12 +16,25 @@ const hoverKey = new PluginKey<number | null>("lofBookmarkHover");
 
 type BookmarkMeta = { set: number[] } | { toggle: number };
 
-const markable = (node: PMNode) => node.type.name !== "horizontalRule" && node.type.name !== "table";
+export const markable = (node: PMNode) => node.type.name !== "horizontalRule" && node.type.name !== "table";
 const snippets = new WeakMap<PMNode, string>();
 export function bookmarkSnippet(node: PMNode) {
   let text = snippets.get(node);
   if (text === undefined) snippets.set(node, (text = node.textContent.replace(/\s+/g, " ").trim().slice(0, 80)));
   return text;
+}
+
+export function isBookmarkedAt(state: EditorState, pos: number): boolean {
+  if (pos < 0) return false;
+  const set = bookmarkPluginKey.getState(state);
+  return !!set?.find(pos, pos, (spec) => spec.bookmark).some((d) => d.from === pos);
+}
+
+export function toggleBookmarkAt(view: EditorView, pos: number): boolean {
+  const node = view.state.doc.nodeAt(pos);
+  if (!node || !markable(node)) return false;
+  view.dispatch(view.state.tr.setMeta(bookmarkPluginKey, { toggle: pos }).setMeta("addToHistory", false));
+  return true;
 }
 
 function mark(doc: PMNode, pos: number) {

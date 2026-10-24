@@ -16,10 +16,6 @@ import {
   Minus,
   ArrowRightLeft,
   Table2,
-  BetweenHorizontalStart,
-  BetweenHorizontalEnd,
-  BetweenVerticalStart,
-  BetweenVerticalEnd,
   Trash2,
   Scissors,
   Copy,
@@ -29,6 +25,7 @@ import {
   ImagePlus,
   MessageSquareCode,
   Code2,
+  Bookmark as BookmarkIcon,
 } from "lucide-react";
 import { createPortal } from "react-dom";
 import ContextMenu, { type MenuItem } from "./ContextMenu";
@@ -40,8 +37,9 @@ import { blockAt, docIndex, docNeedsMarkdownCopy, nodeLineCount } from "./doc-in
 import { normalizeEditorStyle } from "../core/typesetting.mjs";
 import { TypingAssist, isInsideJsdocComment, toggleJsdocComment, typesettingPluginKey } from "./typing-extension";
 import { MarkdownTables } from "./table-extension";
+import TableControls from "./TableControls";
 import { MarkdownTasks } from "./task-extension";
-import { Bookmarks, BOOKMARK_LOAD, bookmarkPluginKey, readBookmarks, resolveBookmarks } from "./bookmark-extension";
+import { Bookmarks, BOOKMARK_LOAD, bookmarkPluginKey, isBookmarkedAt, markable, readBookmarks, resolveBookmarks, toggleBookmarkAt } from "./bookmark-extension";
 import { call, type Bookmark, type WritingRules } from "./types";
 import { paragraphCountDelta, type ManuscriptCounts } from "./manuscript-counts";
 import { MarkdownImage } from "./image-extension";
@@ -84,13 +82,6 @@ function clipboardTextParser(manual: boolean): NonNullable<EditorProps["clipboar
     );
     return new Slice(Fragment.fromArray(paragraphs), 1, 1);
   };
-}
-
-// 표 툴바는 커서 위치가 아니라 표 자체에 붙여서 셀 이동 중에도 자리가 흔들리지 않게 한다.
-function selectedTableElement(editor: Editor): HTMLElement | null {
-  const { node } = editor.view.domAtPos(editor.state.selection.from);
-  const el = node instanceof Element ? node : node.parentElement;
-  return el?.closest<HTMLElement>(".tableWrapper") ?? el?.closest<HTMLElement>("table") ?? null;
 }
 
 const parseManualClipboardText = clipboardTextParser(true);
@@ -224,6 +215,11 @@ type EditorMenuOps = {
   refocus: () => void;
   pasteText: (text: string) => void;
   insertImage: (img: { src: string; alt: string }) => void;
+  bookmark?: {
+    active: boolean;
+    toggle: () => void;
+  };
+  fallbackQuickNoteText?: string;
 };
 // 이미지를 눌렀을 때 고르는 크기. 너비(px)로 저장하고 본문 폭보다 넓으면 본문 폭에 맞춘다.
 const IMAGE_SIZES: [string, number | null][] = [["작게", 240], ["보통", 400], ["크게", 640], ["원본", null]];
@@ -354,6 +350,51 @@ function loadBookmarks(editor: Editor, list: Bookmark[] = []) {
       .setMeta(BOOKMARK_LOAD, true)
       .setMeta("addToHistory", false),
   );
+}
+function resolveTargetBlockPos(view: EditorView, coords?: { x: number; y: number } | null): number {
+  if (view.isDestroyed) return -1;
+  const { state } = view;
+  const fromDocPos = (pos: number) => {
+    const clamped = Math.max(0, Math.min(pos, state.doc.content.size));
+    const $pos = state.doc.resolve(clamped);
+    const blockPos = $pos.depth ? $pos.before(1) : $pos.pos;
+    const node = state.doc.nodeAt(blockPos);
+    return node && markable(node) ? blockPos : -1;
+  };
+  if (coords && (!view.editable || state.selection.empty)) {
+    const hit = view.posAtCoords({ left: coords.x, top: coords.y });
+    if (hit) {
+      const blockPos = fromDocPos(hit.pos);
+      if (blockPos >= 0) return blockPos;
+    }
+  }
+  const domSel = view.dom.ownerDocument.getSelection();
+  if (domSel?.anchorNode && view.dom.contains(domSel.anchorNode)) {
+    try {
+      const pos = view.posAtDOM(domSel.anchorNode, domSel.anchorOffset);
+      const blockPos = fromDocPos(pos);
+      if (blockPos >= 0) return blockPos;
+    } catch {}
+  }
+  const { $from } = state.selection;
+  const blockPos = $from.depth ? $from.before(1) : $from.pos;
+  const node = state.doc.nodeAt(blockPos);
+  return node && markable(node) ? blockPos : -1;
+}
+function toggleBookmarkWithFlash(view: EditorView, blockPos: number): boolean {
+  if (blockPos < 0 || view.isDestroyed) return false;
+  const wasBookmarked = isBookmarkedAt(view.state, blockPos);
+  if (!toggleBookmarkAt(view, blockPos)) return false;
+  if (!wasBookmarked) {
+    const dom = view.nodeDOM(blockPos);
+    if (dom instanceof HTMLElement) {
+      dom.classList.remove("bookmark-flash");
+      void dom.offsetWidth;
+      dom.classList.add("bookmark-flash");
+      setTimeout(() => dom.classList.remove("bookmark-flash"), 1200);
+    }
+  }
+  return true;
 }
 function FormatBar({ inactive, visible, children }: { inactive: boolean; visible: boolean; children: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -528,9 +569,12 @@ export default function Writer({
   const initialContent = useMemo(() => splitSoftBreaks(body, !manualLineBreak), [id, tables, links, hasImages]);
   const markdown = useMemo(createCachedMarkdown, [id, tables, links, hasImages]);
   const onOpenLinkRef = useRef(onOpenLink),
-    onOpenNotesRef = useRef(onOpenNotes);
+    onOpenNotesRef = useRef(onOpenNotes),
+    onQuickNoteRef = useRef(onQuickNote),
+    lastTouchCoordsRef = useRef<{ x: number; y: number; at: number } | null>(null);
   onOpenLinkRef.current = onOpenLink;
   onOpenNotesRef.current = onOpenNotes;
+  onQuickNoteRef.current = onQuickNote;
   const editable = !readOnly && !inactive;
   const editableRef = useRef(editable);
   editableRef.current = editable;
@@ -957,6 +1001,181 @@ export default function Writer({
       window.removeEventListener("lof:editor-action", onAction);
     };
   }, [editor, visible, inactive, editable, source, protectedSource, tables, lineBreak, manualLineBreak]);
+  // 모바일(Android) 커서 핸들·길게 누르기 컨텍스트 메뉴에 북마크·퀵노트 상태와 동작을 연결한다.
+  useEffect(() => {
+    if (!visible || inactive) return;
+    const bridge = () =>
+      (window as any).lofAndroidEditor as
+        | { setContextState?: (canBookmark: boolean, bookmarked: boolean, canQuickNote: boolean) => void }
+        | undefined;
+
+    const isSelectionInsideEditor = () => {
+      const activeEl = document.activeElement;
+      if (
+        activeEl instanceof HTMLElement &&
+        (activeEl.tagName === "INPUT" || activeEl.tagName === "TEXTAREA") &&
+        !sourceRef.current?.view?.dom.contains(activeEl)
+      ) {
+        return false;
+      }
+      if (source || protectedSource) {
+        const view = sourceRef.current?.view;
+        if (!view) return false;
+        const domSel = document.getSelection();
+        return Boolean(
+          view.hasFocus ||
+            (activeEl && view.dom.contains(activeEl)) ||
+            (domSel?.anchorNode && view.dom.contains(domSel.anchorNode)),
+        );
+      }
+      if (!editor || editor.isDestroyed) return false;
+      const view = editor.view;
+      const domSel = view.dom.ownerDocument.getSelection();
+      const hasDomSel = Boolean(domSel?.anchorNode && view.dom.contains(domSel.anchorNode));
+      const recentTouch = Boolean(lastTouchCoordsRef.current && Date.now() - lastTouchCoordsRef.current.at < 2500);
+      return Boolean(
+        view.hasFocus() ||
+          (activeEl && view.dom.contains(activeEl)) ||
+          hasDomSel ||
+          recentTouch,
+      );
+    };
+
+    const computeState = () => {
+      if (!annotationsEnabledRef.current || !isSelectionInsideEditor()) {
+        return { canBookmark: false, bookmarked: false, canQuickNote: false };
+      }
+      if (source || protectedSource) {
+        return {
+          canBookmark: false,
+          bookmarked: false,
+          canQuickNote: Boolean(onQuickNoteRef.current),
+        };
+      }
+      if (!editor || editor.isDestroyed) {
+        return { canBookmark: false, bookmarked: false, canQuickNote: false };
+      }
+      const recentTouch =
+        lastTouchCoordsRef.current && Date.now() - lastTouchCoordsRef.current.at < 1500
+          ? lastTouchCoordsRef.current
+          : null;
+      const blockPos = resolveTargetBlockPos(editor.view, !editor.view.editable ? recentTouch : null);
+      const canBookmark = Boolean(onBookmarksRef.current && blockPos >= 0);
+      const bookmarked = canBookmark && isBookmarkedAt(editor.state, blockPos);
+      const canQuickNote = Boolean(onQuickNoteRef.current);
+      return { canBookmark, bookmarked, canQuickNote };
+    };
+
+    const syncState = () => {
+      const next = computeState();
+      bridge()?.setContextState?.(next.canBookmark, next.bookmarked, next.canQuickNote);
+      return next;
+    };
+
+    (window as any).__lofSyncEditorContextState = syncState;
+    (window as any).__lofEditorContextAction = (action: string) => {
+      if (!annotationsEnabledRef.current) return;
+      if (action === "bookmark") {
+        if (source || protectedSource || !editor || editor.isDestroyed || !onBookmarksRef.current) return;
+        const recentTouch =
+          lastTouchCoordsRef.current && Date.now() - lastTouchCoordsRef.current.at < 2500
+            ? lastTouchCoordsRef.current
+            : null;
+        const blockPos = resolveTargetBlockPos(editor.view, !editor.view.editable ? recentTouch : null);
+        if (blockPos >= 0) {
+          toggleBookmarkWithFlash(editor.view, blockPos);
+          syncState();
+        }
+        return;
+      }
+      if (action === "quickNote") {
+        if (!onQuickNoteRef.current) return;
+        const defaultAt = () => ({
+          x: Math.max(12, Math.round((window.innerWidth - Math.min(380, window.innerWidth - 32)) / 2)),
+          y: Math.max(56, Math.round(window.innerHeight * 0.14)),
+        });
+        if (source || protectedSource) {
+          const view = sourceRef.current?.view;
+          if (!view) return;
+          const { from, to } = view.state.selection.main;
+          const selected = view.state.sliceDoc(from, to);
+          const text = selected.trim() ? selected : view.state.doc.lineAt(from).text.trim();
+          const coords = view.coordsAtPos(from);
+          const at = coords && !window.matchMedia?.("(max-width: 760px)").matches
+            ? { x: coords.left, y: coords.bottom }
+            : defaultAt();
+          setTimeout(() => onQuickNoteRef.current?.(text, at), 20);
+          return;
+        }
+        if (!editor || editor.isDestroyed) return;
+        const view = editor.view;
+        const { from, to } = editor.state.selection;
+        const domSel = view.dom.ownerDocument.getSelection();
+        const domInside = Boolean(
+          domSel?.anchorNode &&
+            domSel.focusNode &&
+            view.dom.contains(domSel.anchorNode) &&
+            view.dom.contains(domSel.focusNode),
+        );
+        const domText = domInside && domSel && !domSel.isCollapsed ? domSel.toString() : "";
+        const pmText =
+          from !== to
+            ? manualLineBreak
+              ? editor.state.doc.textBetween(from, to, "\n")
+              : view.serializeForClipboard(editor.state.selection.content()).text
+            : "";
+        const recentTouch =
+          lastTouchCoordsRef.current && Date.now() - lastTouchCoordsRef.current.at < 2500
+            ? lastTouchCoordsRef.current
+            : null;
+        const blockPos = resolveTargetBlockPos(view, !view.editable ? recentTouch : null);
+        const blockText = blockPos >= 0 ? editor.state.doc.nodeAt(blockPos)?.textContent.trim() ?? "" : "";
+        const text = domText.trim() ? domText : pmText.trim() ? pmText : blockText;
+        let at = defaultAt();
+        if (!window.matchMedia?.("(max-width: 760px)").matches) {
+          try {
+            const coords = view.coordsAtPos(from);
+            at = { x: coords.left, y: coords.bottom };
+          } catch {}
+        }
+        setTimeout(() => onQuickNoteRef.current?.(text, at), 20);
+      }
+    };
+
+    syncState();
+    const onSelectionChange = () => syncState();
+    const onTouchStart = (e: TouchEvent) => {
+      const target = e.target as Node | null;
+      const touch = e.touches[0];
+      const inRich = Boolean(editor && !editor.isDestroyed && target && editor.view.dom.contains(target));
+      const inSource = Boolean((source || protectedSource) && target && sourceRef.current?.view?.dom.contains(target));
+      if ((inRich || inSource) && touch) {
+        lastTouchCoordsRef.current = { x: touch.clientX, y: touch.clientY, at: Date.now() };
+      } else {
+        lastTouchCoordsRef.current = null;
+      }
+      syncState();
+    };
+    document.addEventListener("selectionchange", onSelectionChange);
+    document.addEventListener("focusin", onSelectionChange);
+    document.addEventListener("focusout", onSelectionChange);
+    document.addEventListener("touchstart", onTouchStart, { passive: true });
+    editor?.on("selectionUpdate", onSelectionChange);
+    editor?.on("transaction", onSelectionChange);
+    return () => {
+      document.removeEventListener("selectionchange", onSelectionChange);
+      document.removeEventListener("focusin", onSelectionChange);
+      document.removeEventListener("focusout", onSelectionChange);
+      document.removeEventListener("touchstart", onTouchStart);
+      editor?.off("selectionUpdate", onSelectionChange);
+      editor?.off("transaction", onSelectionChange);
+      bridge()?.setContextState?.(false, false, false);
+      if ((window as any).__lofSyncEditorContextState === syncState) {
+        delete (window as any).__lofSyncEditorContextState;
+        delete (window as any).__lofEditorContextAction;
+      }
+    };
+  }, [editor, visible, inactive, source, protectedSource, manualLineBreak]);
   useEffect(() => {
     if (!reveal?.query) return;
     const norm = (t: string) => (reveal.caseSensitive ? t : t.toLocaleLowerCase()),
@@ -1042,13 +1261,25 @@ export default function Writer({
         action: () => void paste(),
       },
       "separator",
+      ...(ops.bookmark && annotationsEnabled
+        ? [
+            {
+              label: ops.bookmark.active ? "북마크 해제" : "북마크",
+              icon: <BookmarkIcon size={15} />,
+              action: () => {
+                ops.bookmark!.toggle();
+                ops.refocus();
+              },
+            },
+          ]
+        : []),
       ...(onQuickNote
         ? [
             {
               label: "메모 추가",
               icon: <NotebookPen size={15} />,
-              disabled: !selected || !annotationsEnabled,
-              action: () => onQuickNote(text, { x: e.clientX, y: e.clientY }),
+              disabled: !annotationsEnabled,
+              action: () => onQuickNote(selected ? text : (ops.fallbackQuickNoteText ?? ""), { x: e.clientX, y: e.clientY }),
             },
           ]
         : []),
@@ -1102,6 +1333,7 @@ export default function Writer({
             refocus: reselect,
             pasteText: text => { reselect(); handle.paste(text); },
             insertImage: image => { reselect(); handle.insertImage(image); },
+            fallbackQuickNoteText: view.state.doc.lineAt(from).text.trim(),
           }, from !== to);
         }}>
           <Suspense fallback={<div role="status">원문 편집기를 준비하고 있습니다…</div>}>
@@ -1271,51 +1503,7 @@ export default function Writer({
         )}
       </FormatBar>
       {tables && editable && visible && (
-        <BubbleMenu
-          editor={editor}
-          pluginKey="tableToolbar"
-          className="table-tools"
-          role="toolbar"
-          aria-label="표 편집 (Tab: 다음 셀 · Shift+Tab: 이전 셀)"
-          updateDelay={0}
-          shouldShow={({ editor }) => !inactive && editor.isEditable && editor.isActive("table")}
-          getReferencedVirtualElement={() => {
-            const table = selectedTableElement(editor);
-            return table && { getBoundingClientRect: () => table.getBoundingClientRect() };
-          }}
-          options={{ placement: "top-start", offset: 6, flip: true, shift: { padding: 8 } }}
-        >
-          {[
-            [
-              { label: "위에 행 추가", icon: BetweenHorizontalStart, action: () => editor.chain().focus().addRowBefore().run() },
-              { label: "아래에 행 추가", icon: BetweenHorizontalEnd, action: () => editor.chain().focus().addRowAfter().run() },
-            ],
-            [
-              { label: "왼쪽에 열 추가", icon: BetweenVerticalStart, action: () => editor.chain().focus().addColumnBefore().run() },
-              { label: "오른쪽에 열 추가", icon: BetweenVerticalEnd, action: () => editor.chain().focus().addColumnAfter().run() },
-            ],
-            [
-              { label: "행 삭제", text: "행", action: () => editor.chain().focus().deleteRow().run() },
-              { label: "열 삭제", text: "열", action: () => editor.chain().focus().deleteColumn().run() },
-              { label: "표 삭제", text: "표", action: () => editor.chain().focus().deleteTable().run() },
-            ],
-          ].map((group, i) => (
-            <div key={i} className={`table-tools-group${i === 2 ? " danger" : ""}`}>
-              {group.map((tool) => (
-                <button
-                  key={tool.label}
-                  aria-label={tool.label}
-                  title={tool.label}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={tool.action}
-                >
-                  {"icon" in tool && tool.icon ? <tool.icon size={16} /> : <Trash2 size={14} />}
-                  {"text" in tool && <span>{tool.text}</span>}
-                </button>
-              ))}
-            </div>
-          ))}
-        </BubbleMenu>
+        <TableControls editor={editor} active={!inactive && editable && visible} />
       )}
       {images && editable && visible && (
         <BubbleMenu
@@ -1386,6 +1574,8 @@ export default function Writer({
           const text = nativeText ?? (manualLineBreak
             ? editor.state.doc.textBetween(from, to, "\n")
             : editor.view.serializeForClipboard(editor.state.selection.content()).text);
+          const blockPos = resolveTargetBlockPos(editor.view, { x: e.clientX, y: e.clientY });
+          const blockText = blockPos >= 0 ? editor.state.doc.nodeAt(blockPos)?.textContent.trim() ?? "" : "";
           openEditorMenu(e, text, {
             cut: () => editor.chain().focus().deleteSelection().run(),
             selectAll: () => editor.chain().focus().selectAll().run(),
@@ -1395,6 +1585,16 @@ export default function Writer({
               editor.view.pasteText(text);
             },
             insertImage: (img) => placeImage(editor.view, img),
+            bookmark:
+              onBookmarksChange && blockPos >= 0
+                ? {
+                    active: isBookmarkedAt(editor.state, blockPos),
+                    toggle: () => {
+                      toggleBookmarkWithFlash(editor.view, blockPos);
+                    },
+                  }
+                : undefined,
+            fallbackQuickNoteText: blockText,
           }, nativeText !== undefined ? !!nativeSelection && !nativeSelection.isCollapsed : from !== to);
         }}
       />

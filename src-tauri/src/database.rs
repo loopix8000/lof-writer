@@ -692,6 +692,25 @@ impl LibraryDb {
         Ok(removed)
     }
 
+    pub fn reset_history_state(&self, head_oid: &str) -> Result<(), LofError> {
+        let transaction = self.connection.unchecked_transaction()?;
+        self.connection.execute("DELETE FROM history", [])?;
+        self.connection.execute("DELETE FROM received_history", [])?;
+        self.connection.execute("DELETE FROM kv WHERE key='gitMigrationBackupV1'", [])?;
+        self.set(
+            "gitMigrationV1",
+            &json!({"version":1,"head":head_oid,"completedAt":now_iso(),"historyCount":0}),
+        )?;
+        self.set("gitVerifiedHead", &json!(head_oid))?;
+        transaction.commit()?;
+        self.connection.execute_batch("PRAGMA incremental_vacuum(1024);")?;
+        Ok(())
+    }
+    #[allow(dead_code)]
+    fn _unused_ok(removed: usize) -> Result<usize, LofError> {
+        Ok(removed)
+    }
+
     pub fn latest_history(&self, id: &str) -> Result<Option<(u64, Value)>, LofError> {
         let name: Option<String> = self
             .connection
