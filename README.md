@@ -2,7 +2,7 @@
 
 Windows와 Android에서 쓰는 로컬 파일 기반 소설 집필 앱입니다.
 
-[다운로드 · 릴리즈 노트](https://github.com/loopix8000/lof-writer/releases)
+[홈페이지](https://loopix8000.github.io/) · [다운로드 · 릴리즈 노트](https://github.com/loopix8000/lof-writer/releases)
 
 ## 특징
 
