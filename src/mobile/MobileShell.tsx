@@ -156,6 +156,7 @@ export default function MobileShell({
   deleteDocs,
   deleteProject,
   askDeleteProject,
+  setProjectHidden,
   duplicateDoc,
   saveHistoryCopy,
   copyDocManuscript,
@@ -304,6 +305,7 @@ export default function MobileShell({
   deleteDocs: (docs: Doc[]) => Promise<void>;
   deleteProject: (id: string) => Promise<void>;
   askDeleteProject: (id: string) => void;
+  setProjectHidden: (id: string, hidden: boolean) => Promise<void>;
   duplicateDoc: (doc: Doc) => Promise<void>;
   saveHistoryCopy: (id: string, version: { title?: string; body: string; savedAt: string }) => Promise<void>;
   copyDocManuscript: (doc: Doc, rawMarkdown?: boolean, notify?: boolean) => Promise<void>;
@@ -651,6 +653,7 @@ export default function MobileShell({
                 }}
                 onOpenLastDoc={(id) => openLibraryProject(id, "workspace")}
                 askDeleteProject={askDeleteProject}
+                hideProject={(id) => setProjectHidden(id, true)}
                 setDialog={setDialog}
                 refresh={refresh}
                 changeLibrary={changeLibrary}
@@ -830,6 +833,7 @@ export default function MobileShell({
                 onOpenExport={() => setDialog({ type: "export" })}
                 chooseVault={chooseVault}
                 moveVault={moveVault}
+                setProjectHidden={setProjectHidden}
                 mobileDetailOpen={settingsDetailOpen}
                 onMobileDetailChange={setSettingsDetailOpen}
               />

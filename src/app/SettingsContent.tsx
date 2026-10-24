@@ -6,6 +6,8 @@ import {
   Code2,
   Copy,
   Download,
+  Eye,
+  EyeOff,
   FolderInput,
   FolderOpen,
   FolderSync,
@@ -76,6 +78,7 @@ type Props = {
   onOpenExport: () => void;
   chooseVault?: (options?: { internal?: boolean }) => Promise<void>;
   moveVault?: (options?: { internal?: boolean }) => Promise<void>;
+  setProjectHidden?: (id: string, hidden: boolean) => Promise<void>;
   mobileDetailOpen?: boolean;
   onMobileDetailChange?: (open: boolean) => void;
 };
@@ -119,6 +122,7 @@ export default function SettingsContent({
   onOpenExport,
   chooseVault,
   moveVault,
+  setProjectHidden,
   mobileDetailOpen: controlledDetailOpen,
   onMobileDetailChange,
 }: Props) {
@@ -142,6 +146,7 @@ export default function SettingsContent({
   // 설정 영역을 다시 만들지 않고 메뉴를 바꿀 때 스크롤만 처음으로 되돌린다.
   const contentRef = useRef<HTMLDivElement>(null);
   const [confirm, confirmDialog] = useConfirm();
+  const hiddenProjects = lib.projects.filter((p) => p.hidden);
   useLayoutEffect(() => { if (contentRef.current) contentRef.current.scrollTop = 0; }, [settingsPage]);
 
   return (
@@ -424,6 +429,38 @@ export default function SettingsContent({
               {isMobile && lib.isInternal && " 내부 저장소를 쓰는 동안에는 공용 메모도 서재와 함께 내부 저장소에 두며 위치를 바꿀 수 없습니다."}
             </p>
           </section>
+          {setProjectHidden && (
+            <section className="settings-section" hidden={settingsPage !== "storage"}>
+              <h3>
+                <EyeOff size={17} />
+                숨긴 작품
+              </h3>
+              <p className="settings-description">
+                내 서재 목록에서 숨긴 작품입니다. 원고와 파일은 지우지 않고 그대로 보관하며, 숨기기를 취소하면 내 서재에 다시 표시합니다.
+              </p>
+              {hiddenProjects.length ? (
+                hiddenProjects.map((p) => {
+                  const episodes = lib.documents.filter(
+                    (d) => d.projectId === p.id && d.kind === "episode" && !d.archived,
+                  ).length;
+                  return (
+                    <div key={p.id} className="connection hidden-project-connection">
+                      <div>
+                        <b>{p.title || "제목 없는 작품"}</b>
+                        <small>회차 {episodes}편</small>
+                      </div>
+                      <button onClick={attempt(() => setProjectHidden(p.id, false))}>
+                        <Eye size={15} />
+                        숨기기 취소
+                      </button>
+                    </div>
+                  );
+                })
+              ) : (
+                <p className="muted">숨긴 작품이 없습니다.</p>
+              )}
+            </section>
+          )}
           <section className="settings-section" hidden={settingsPage !== "storage"}>
             <h3>
               <Download size={17} />

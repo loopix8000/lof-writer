@@ -15,6 +15,7 @@ import {
   Copy,
   Download,
   Edit3,
+  EyeOff,
   Feather,
   FilePlus,
   FileText,
@@ -81,6 +82,7 @@ export default function MobileProjectView({
   onSelectProject,
   onOpenLastDoc,
   askDeleteProject,
+  hideProject,
   setDialog,
   refresh,
   changeLibrary,
@@ -111,6 +113,7 @@ export default function MobileProjectView({
   onSelectProject: (id: string) => Promise<void>;
   onOpenLastDoc: (id: string) => Promise<void>;
   askDeleteProject: (id: string) => void;
+  hideProject: (id: string) => Promise<void>;
   setDialog: React.Dispatch<React.SetStateAction<Dialog | null>>;
   refresh: () => Promise<Library | undefined>;
   changeLibrary: <T>(change: LibraryChange, run: () => Promise<T>) => Promise<T>;
@@ -957,6 +960,16 @@ export default function MobileProjectView({
         action: () => setDialog({ type: "export", value: p.id }),
       },
       "separator",
+      {
+        label: "작품 숨기기",
+        sublabel: "내 서재 목록에서 숨기고 원고는 그대로 보관",
+        icon: <EyeOff size={18} />,
+        action: attempt(async () => {
+          // 숨긴 작품 화면에 머물지 않도록 내 서재로 먼저 돌아간다.
+          await goLibrary();
+          await hideProject(p.id);
+        }),
+      },
       {
         label: "작품 삭제",
         icon: <Trash2 size={18} />,

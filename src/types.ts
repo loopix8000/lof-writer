@@ -36,6 +36,8 @@ export type Project = {
   writing?: WritingRules;
   // 이 작품에서 새로 만드는 회차의 줄바꿈 방식. 없으면 공통 설정을 따른다.
   manualLineBreak?: boolean;
+  // 내 서재 목록에서 숨긴 작품. 파일과 원고는 그대로 둔다.
+  hidden?: boolean;
   // 작품 번호(폴더 이름 앞의 001)와 도서관 안의 작품 폴더 이름.
   index?: number;
   folder?: string;

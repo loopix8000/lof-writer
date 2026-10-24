@@ -1,5 +1,6 @@
 import {
   BookOpen,
+  EyeOff,
   Feather,
   File,
   Plus,
@@ -31,12 +32,15 @@ export default function MobileLibraryView({
   projectReorder: ReturnType<typeof useProjectReorder>;
 }) {
   const scrollRef = useMobileProjectReorder(lib, loaded, busy, projectReorder, attempt);
+  // 숨긴 작품은 목록에서 빼되, 순서 변경은 전체 목록 기준으로 처리해 숨긴 작품의 자리를 지킨다.
+  const projects = lib.projects.filter((p) => !p.hidden);
+  const hiddenCount = lib.projects.length - projects.length;
   return (
     <div className="m-screen">
       <header className="m-topbar">
         <div className="m-topbar-title">
           <h1>내 서재</h1>
-          <span className="m-badge">{lib.projects.length}작품</span>
+          <span className="m-badge">{projects.length}작품</span>
         </div>
         <div className="m-topbar-actions">
           <button
@@ -54,6 +58,16 @@ export default function MobileLibraryView({
         {!loaded ? (
           <div className="m-empty-state">
             <p>내 서재를 불러오는 중...</p>
+          </div>
+        ) : projects.length === 0 && hiddenCount > 0 ? (
+          <div className="m-empty-state">
+            <div className="m-empty-icon">
+              <EyeOff size={36} />
+            </div>
+            <h2>모든 작품을 숨겼습니다</h2>
+            <p>
+              숨긴 작품 {hiddenCount}개는 설정의 보관 및 이력에서 다시 표시할 수 있습니다.
+            </p>
           </div>
         ) : lib.projects.length === 0 ? (
           <div className="m-empty-state">
@@ -77,7 +91,7 @@ export default function MobileLibraryView({
           </div>
         ) : (
           <div className="m-project-list">
-            {lib.projects.map((p, i) => {
+            {projects.map((p, i) => {
               const epCount = lib.documents.filter(
                 (d) => d.projectId === p.id && d.kind === "episode" && !d.archived,
               ).length;

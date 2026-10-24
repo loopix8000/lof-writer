@@ -370,7 +370,7 @@ export default function App() {
     if (!documentMove.current) pruneDocuments(new Set(data.documents.map((doc) => doc.id)));
     setLoaded(true);
     if (!projectRef.current && shown.projects.length) {
-      projectRef.current = shown.projects[0].id;
+      projectRef.current = (shown.projects.find((p) => !p.hidden) ?? shown.projects[0]).id;
       setProjectId(projectRef.current);
     }
     reconcileDocuments(data.documents);
@@ -696,6 +696,18 @@ export default function App() {
     setConfirmTitle("");
     setDialog({ type: "deleteProject", value: id });
   }
+  // 작품 숨기기: 파일은 그대로 두고 내 서재 목록에서만 뺀다. 설정의 보관 및 이력에서 다시 표시할 수 있다.
+  async function setProjectHidden(id: string, hidden: boolean) {
+    const target = libraryRef.current.projects.find((p) => p.id === id);
+    if (!target || !!target.hidden === hidden) return;
+    const name = target.title || "제목 없는 작품";
+    const saving = optimistic(patchProject(id, { hidden }), () => call("updateProject", { id, hidden }));
+    message(
+      hidden ? `'${name}' 작품을 숨겼습니다.` : `'${name}' 작품을 다시 표시합니다.`,
+      hidden ? { label: "되돌리기", run: () => void setProjectHidden(id, false).catch(report) } : undefined,
+    );
+    await saving;
+  }
   async function duplicateDoc(doc: Doc) {
     await flush();
     const source = await call<Doc>("readDocument", { id: doc.id });
@@ -807,7 +819,7 @@ export default function App() {
   // 파일 트리 위 작품 카드의 드롭다운: 다른 작품으로 바로 전환한다.
   function projectMenu(): MenuItem[] {
     return [
-      ...lib.projects.map((p) => ({
+      ...lib.projects.filter((p) => !p.hidden || p.id === projectId).map((p) => ({
         label: p.title || "제목 없는 작품",
         checked: p.id === projectId,
         action: attempt(() => switchProject(p.id)),
@@ -2002,6 +2014,7 @@ export default function App() {
         deleteDocs={deleteDocs}
         deleteProject={deleteProject}
         askDeleteProject={askDeleteProject}
+        setProjectHidden={setProjectHidden}
         duplicateDoc={duplicateDoc}
         saveHistoryCopy={saveHistoryCopy}
         copyDocManuscript={copyDocManuscript}
@@ -2314,6 +2327,7 @@ export default function App() {
             openProject={openLibraryProject}
             openMenu={openMenu}
             askDeleteProject={askDeleteProject}
+            hideProject={(id) => setProjectHidden(id, true)}
             setDialog={setDialog}
           />)}
           {view === "project" && project && (<ProjectPage
@@ -2951,6 +2965,7 @@ export default function App() {
               setSkillDownloading={setSkillDownloading}
               chooseVault={chooseVault}
               moveVault={moveVault}
+              setProjectHidden={setProjectHidden}
               onOpenExport={() =>
                 setDialog({ type: "export", returnToSettings: true })
               }

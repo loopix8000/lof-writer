@@ -534,6 +534,7 @@ const PROJECT_FIELDS: &[&str] = &[
     "writing",
     "manualLineBreak",
     "archivedDocFolders",
+    "hidden",
     "cover",
     "createdAt",
     "updatedAt",
@@ -3596,6 +3597,9 @@ impl Store {
         if let Some(mlb) = input.get("manualLineBreak").and_then(|v| v.as_bool()) {
             proj.insert("manualLineBreak".to_string(), json!(mlb));
         }
+        if input.get("hidden").and_then(|v| v.as_bool()) == Some(true) {
+            proj.insert("hidden".to_string(), json!(true));
+        }
         proj.insert("cover".to_string(), cover);
         proj.insert("createdAt".to_string(), json!(created_at));
         proj.insert("updatedAt".to_string(), json!(updated_at));
@@ -3684,6 +3688,14 @@ impl Store {
                 next.insert("manualLineBreak".to_string(), json!(b));
             } else {
                 next.remove("manualLineBreak");
+            }
+        }
+        // 숨긴 작품은 내 서재 목록에서만 빼고 파일은 그대로 둔다. 숨기지 않으면 값을 남기지 않는다.
+        if let Some(hidden_in) = input.as_object().and_then(|o| o.get("hidden")) {
+            if hidden_in.as_bool() == Some(true) {
+                next.insert("hidden".to_string(), json!(true));
+            } else {
+                next.remove("hidden");
             }
         }
         if let Some(cov_in) = input.as_object().and_then(|o| o.get("cover")) {
@@ -5991,6 +6003,10 @@ impl Store {
                     upd.insert(
                         "cover".to_string(),
                         p.get("cover").cloned().unwrap_or(Value::Null),
+                    );
+                    upd.insert(
+                        "hidden".to_string(),
+                        p.get("hidden").cloned().unwrap_or(Value::Null),
                     );
                     self.update_project_inner(&Value::Object(upd), true)?;
                     projects_updated.push(pid.to_string());

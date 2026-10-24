@@ -1,6 +1,7 @@
 import {
   BookOpen,
   ChevronRight,
+  EyeOff,
   Feather,
   Plus
 } from "lucide-react";
@@ -25,6 +26,7 @@ type Props = {
   openProject: (id: string) => Promise<void>;
   openMenu: (e: React.MouseEvent, items: MenuItem[], target?: string) => void;
   askDeleteProject: (id: string) => void;
+  hideProject: (id: string) => Promise<void>;
   setDialog: React.Dispatch<React.SetStateAction<Dialog | null>>;
 };
 
@@ -38,14 +40,18 @@ export default function LibraryPage({
   openProject,
   openMenu,
   askDeleteProject,
+  hideProject,
   setDialog,
 }: Props) {
+  // 숨긴 작품은 목록에서 빼되, 순서 변경은 전체 목록 기준으로 처리해 숨긴 작품의 자리를 지킨다.
+  const projects = lib.projects.filter((p) => !p.hidden);
+  const hiddenCount = lib.projects.length - projects.length;
 
   return (
     <>
       <div className="page-hero">
         <h1>
-          내 서재 <small>{lib.projects.length}작품</small>
+          내 서재 <small>{projects.length}작품</small>
         </h1>
         <p>이야기에 집중하세요.</p>
       </div>
@@ -53,7 +59,7 @@ export default function LibraryPage({
         <div className="empty-state">내 서재를 여는 중...</div>
       ) : (
         <div className="project-grid" aria-busy={projectReorder.saving || undefined}>
-          {lib.projects
+          {projects
             .map((p, i) => (
               <button
                 className={`project-card ${prefs.hideCovers ? "no-cover" : ""} ${menu?.target === "project:" + p.id ? "context-target" : ""} ${projectReorder.cardClass(p.id)}`}
@@ -70,6 +76,7 @@ export default function LibraryPage({
                         action: () => setDialog({ type: "export", value: p.id }),
                       },
                       "separator",
+                      { label: "작품 숨기기", action: attempt(() => hideProject(p.id)) },
                       {
                         label: "작품 삭제",
                         danger: true,
@@ -117,7 +124,7 @@ export default function LibraryPage({
               </button>
             ))}
           {/* 목록 맨 끝의 새 이야기 카드. 작품이 없으면 가운데의 '첫 이야기 만들기'만 보인다. */}
-          {lib.projects.length > 0 && (
+          {projects.length > 0 && (
             <button
               className={`project-card new-project-card ${prefs.hideCovers ? "no-cover" : ""} ${projectReorder.cardClass(null)}`}
               {...projectReorder.cardProps(null)}
@@ -131,6 +138,25 @@ export default function LibraryPage({
                 <small>시작하기</small>
               </div>
             </button>
+          )}
+          {!projects.length && hiddenCount > 0 && (
+            <div className="empty-state">
+              <div className="empty-icon">
+                <EyeOff size={38} />
+              </div>
+              <h2>모든 작품을 숨겼습니다</h2>
+              <p>
+                숨긴 작품 {hiddenCount}개는 설정의 보관 및 이력에서 다시 표시할 수 있습니다.
+              </p>
+              <button
+                className="primary"
+                onClick={() =>
+                  setDialog({ type: "newProject", value: "" })
+                }
+              >
+                <Plus size={16} />새 이야기 만들기
+              </button>
+            </div>
           )}
           {!lib.projects.length && (
             <div className="empty-state">

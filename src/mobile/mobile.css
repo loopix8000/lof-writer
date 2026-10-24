@@ -3142,7 +3142,8 @@
 }
 
 .mobile-app .vault-location-connection,
-.mobile-app .common-memo-connection {
+.mobile-app .common-memo-connection,
+.mobile-app .hidden-project-connection {
   display: flex !important;
   align-items: center !important;
   justify-content: space-between !important;
@@ -3155,13 +3156,15 @@
 }
 
 .mobile-app .vault-location-connection > div,
-.mobile-app .common-memo-connection > div {
+.mobile-app .common-memo-connection > div,
+.mobile-app .hidden-project-connection > div {
   flex: 1 1 auto !important;
   min-width: 0 !important;
 }
 
 .mobile-app .vault-location-connection button,
-.mobile-app .common-memo-connection button {
+.mobile-app .common-memo-connection button,
+.mobile-app .hidden-project-connection button {
   flex: 0 0 auto !important;
   min-height: 38px !important;
   padding: 0 12px !important;
