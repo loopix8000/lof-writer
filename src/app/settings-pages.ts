@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 
 export const settingPages = [
-  { id: "editor", label: "기본 설정", desc: "테마, 화면 표시, 에디터 동작 및 기호 치환", icon: Settings },
+  { id: "editor", label: "기본 설정", desc: "앱 시작, 테마, 화면 표시 및 에디터 동작", icon: Settings },
   { id: "typesetting", label: "조판 형식", desc: "글꼴, 글자 크기, 줄 간격 및 문단 여백", icon: Pilcrow },
   { id: "autocomplete", label: "자동 완성", desc: "자주 쓰는 단어·문장 추천 및 입력 보조", icon: Sparkles },
   { id: "defaults", label: "작품 기본값", desc: "새 작품 기본 플랫폼, 줄바꿈 및 사용자 속성", icon: BookOpen },

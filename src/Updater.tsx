@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { Update } from "@tauri-apps/plugin-updater";
 import { Download, RefreshCw, X } from "lucide-react";
 import { ReleaseNotesForVersion } from "./ReleaseNotes";
 
 type Phase = "idle" | "checking" | "current" | "available" | "downloading" | "saving" | "installing" | "error";
 type UpdateHandle = Pick<Update, "version" | "download" | "install" | "close">;
+type UpdateSnapshot = { phase: Phase; availableVersion: string | null; error: string; progress: number | null };
+type UpdateRequest = { id: string; session: string; action: "check" | "install"; channel: UpdateChannel; expectedVersion: string | null };
 export type UpdateChannel = "stable" | "rc" | "beta";
 export const updateChannel = (value: unknown): UpdateChannel => value === "rc" || value === "beta" ? value : "stable";
 const LIBRARY_CHECK_INTERVAL = 24 * 60 * 60 * 1000;
@@ -32,14 +35,31 @@ export function useAppUpdater({ loaded, autoCheck, channel, beforeInstall }: {
   const [configured, setConfigured] = useState<boolean | null>(null);
   const [platform, setPlatform] = useState("windows");
   const platformRef = useRef("windows");
-  const [phase, setPhase] = useState<Phase>("idle");
-  const [available, setAvailable] = useState<{ version: string } | null>(null);
-  const [error, setError] = useState("");
-  const [progress, setProgress] = useState<number | null>(null);
+  const [phase, setPhaseState] = useState<Phase>("idle");
+  const [available, setAvailableState] = useState<{ version: string } | null>(null);
+  const [error, setErrorState] = useState("");
+  const [progress, setProgressState] = useState<number | null>(null);
+  const snapshotRef = useRef<UpdateSnapshot>({ phase: "idle", availableVersion: null, error: "", progress: null });
+  const setPhase = (value: Phase) => { snapshotRef.current.phase = value; setPhaseState(value); };
+  const setAvailable = (value: { version: string } | null) => { snapshotRef.current.availableVersion = value?.version ?? null; setAvailableState(value); };
+  const setError = (value: string) => { snapshotRef.current.error = value; setErrorState(value); };
+  const setProgress = (value: number | null) => { snapshotRef.current.progress = value; setProgressState(value); };
   const [dismissed, setDismissed] = useState(false);
   const updateRef = useRef<UpdateHandle | null>(null);
   const selectedChannel = useRef(channel);
   selectedChannel.current = channel;
+  const mcpSession = useRef<{ id: string; sequence: number } | null>(null);
+  const mcpRegistration = useRef<Promise<void>>(Promise.resolve());
+  const mcpAction = useRef<(request: UpdateRequest) => Promise<void>>(async () => {});
+  const reportUpdate = useCallback(async (completed?: string, requestError?: string) => {
+    const session = mcpSession.current;
+    if (!session) return;
+    await invoke("desktop_update_report", {
+      session: session.id, sequence: ++session.sequence,
+      snapshot: { ...snapshotRef.current, channel: selectedChannel.current }, completed: completed ?? null,
+      requestError: requestError ?? null,
+    });
+  }, []);
   const candidateChannel = useRef<UpdateChannel | null>(null);
   const running = useRef<number | null>(null);
   const generation = useRef(0);
@@ -163,9 +183,11 @@ export function useAppUpdater({ loaded, autoCheck, channel, beforeInstall }: {
       lockRef.current = true;
       lockOwner.current = current;
       flushSync(() => setPhase("saving"));
+      await reportUpdate();
       await prepareRef.current();
       if (current !== generation.current || channel !== selectedChannel.current) return;
       setPhase("installing");
+      await reportUpdate();
       await update.install({ restartAfterInstall: true });
       if (current === generation.current && platformRef.current === "android") setPhase("available");
     } catch (e) {
@@ -179,6 +201,63 @@ export function useAppUpdater({ loaded, autoCheck, channel, beforeInstall }: {
       if (current !== generation.current) await update.close().catch(() => {});
     }
   }, []);
+
+  mcpAction.current = async (request) => {
+    if (!loaded || !configured || platformRef.current !== "windows") throw Error("PC 업데이트를 준비하는 중입니다.");
+    if (request.channel !== selectedChannel.current) throw Error("업데이트 채널이 바뀌었습니다. 다시 확인해 주세요.");
+    if (running.current !== null) throw Error("이미 업데이트 작업을 진행 중입니다.");
+    if (request.action === "check") await checkNow(true);
+    else {
+      if (!request.expectedVersion || updateRef.current?.version !== request.expectedVersion
+        || candidateChannel.current !== request.channel) throw Error("업데이트 후보가 달라졌습니다. 다시 확인해 주세요.");
+      await install();
+    }
+    if (request.channel !== selectedChannel.current) throw Error("업데이트 채널이 바뀌어 요청을 중단했습니다.");
+  };
+
+  useEffect(() => {
+    if (!loaded || !configured || platform !== "windows") return;
+    let disposed = false;
+    let session: string | null = null;
+    let unlisten: (() => void) | undefined;
+    mcpRegistration.current = mcpRegistration.current.catch(() => {}).then(async () => {
+      if (disposed) return;
+      unlisten = await listen<UpdateRequest>("lof:update-request", ({ payload: request }) => {
+        void (async () => {
+          if (disposed || mcpSession.current?.id !== request.session) return;
+          const claimed = await invoke<boolean>("desktop_update_claim", { session: request.session, requestId: request.id });
+          if (!claimed || disposed) return;
+          let requestError: string | undefined;
+          try {
+            await mcpAction.current(request);
+          } catch (error) {
+            requestError = String(error instanceof Error ? error.message : error);
+          } finally {
+            await reportUpdate(request.id, requestError);
+          }
+        })().catch(() => {});
+      });
+      if (disposed) { unlisten(); return; }
+      session = await invoke<string>("desktop_update_register");
+      if (disposed) { await invoke("desktop_update_unregister", { session }); return; }
+      mcpSession.current = { id: session, sequence: 0 };
+      await reportUpdate();
+    }).catch(() => {
+      unlisten?.();
+      if (session && mcpSession.current?.id === session) mcpSession.current = null;
+      if (session) void invoke("desktop_update_unregister", { session }).catch(() => {});
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+      if (session && mcpSession.current?.id === session) mcpSession.current = null;
+      if (session) void invoke("desktop_update_unregister", { session }).catch(() => {});
+    };
+  }, [loaded, configured, platform, reportUpdate]);
+
+  useEffect(() => {
+    void reportUpdate().catch(() => {});
+  }, [channel, phase, available, error, progress, reportUpdate]);
 
   return {
     configured, platform, phase, available, error, progress, dismissed, lockRef,

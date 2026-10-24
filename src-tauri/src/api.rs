@@ -20,10 +20,11 @@ const MCP_INSTRUCTIONS: &str = r#"Lof Writer의 작품, 회차, 플롯, 메모�
 - 문서 생성 시 kind를 episode(회차), plot(플롯), memo(메모) 중에서 지정하세요. 플롯과 메모의 folder는 doc/ 아래의 상대 경로이므로 doc/ 접두사 없이 전달하세요. 회차에 연결할 때는 해당 작품에 존재하는 회차의 id를 episodeId로 전달하세요.
 - 사용자가 요청한 본문과 메타데이터만 변경하고, 나머지 문장, Markdown 서식, 태그, 속성, 줄바꿈 설정은 보존하세요. 순서 변경과 이력 복원은 사용자의 요청 범위에 포함된 경우에 수행하세요.
 - 문서를 생성·수정·복원하거나 순서를 바꾸면 마지막 변경 2초 뒤에 자동으로 동기화하므로 sync_now를 따로 호출하지 않아도 됩니다. 동기화 상태는 sync_status로 확인하세요. 다른 장치에서 바뀐 내용을 먼저 받아야 할 때는 sync_now를 호출한 뒤, sync_status의 phase가 syncing 또는 pending이 아니게 될 때까지 확인하세요. 동기화 후에는 library_list와 document_read로 최신 revision을 다시 조회하세요. 연결 추가·삭제와 장치 페어링은 앱에서 진행하도록 안내하세요.
+- PC 앱 업데이트는 update_check로 확인을 요청하고 update_status로 결과를 조회하세요. 사용자가 설치를 요청한 경우에만 availableVersion을 expectedVersion으로 전달해 update_install을 호출하세요. 확인·설치는 비동기이므로 요청 접수만으로 완료했다고 안내하지 마세요. error와 lastRequest.error를 확인하세요. 설치 시 앱과 MCP 연결이 종료될 수 있으며, 다시 연결한 뒤 currentVersion이 요청한 버전인지 확인하세요.
 - 도구 응답의 isError와 오류 내용을 확인하고 성공한 작업만 완료했다고 안내하세요. 연결 오류가 나면 Lof Writer 앱의 실행 상태를 확인하도록 안내하세요."#;
 
 pub fn tool_definitions() -> Value {
-    json!([
+    let mut tools = json!([
         {
             "name": "library_list",
             "description": "작품과 문서 목록 및 revision 조회",
@@ -231,22 +232,26 @@ pub fn tool_definitions() -> Value {
                 "additionalProperties": false
             }
         }
-    ])
+    ]);
+    if cfg!(target_os = "windows") {
+        tools.as_array_mut().unwrap().extend(crate::mcp_updater::tool_definitions().as_array().unwrap().iter().cloned());
+    }
+    tools
 }
 
-// 동기화 도구는 앱 상태를 사용하므로 앱에서 처리기를 전달받는다.
-pub type SyncHandler = Arc<dyn Fn(&str, &Value) -> Result<Value, LofError> + Send + Sync>;
+// 동기화와 업데이트 도구는 앱 상태를 사용하므로 앱에서 처리기를 전달받는다.
+pub type AppToolHandler = Arc<dyn Fn(&str, &Value) -> Result<Value, LofError> + Send + Sync>;
 
 fn call_tool(
     store: &Arc<Mutex<Option<Store>>>,
     name: &str,
     args: &Value,
     on_mutate: &Arc<dyn Fn() + Send + Sync>,
-    on_sync: &SyncHandler,
+    on_app_tool: &AppToolHandler,
 ) -> Result<Value, LofError> {
-    // 동기화 작업은 서재를 직접 잠그므로 서재 잠금을 잡기 전에 넘긴다.
-    if name.starts_with("sync_") {
-        return on_sync(name, args);
+    // 앱 작업은 서재 잠금 없이 전달해 저장·설치 요청과 문서 작업이 서로 기다리지 않게 한다.
+    if name.starts_with("sync_") || name.starts_with("update_") {
+        return on_app_tool(name, args);
     }
     let mut guard = store
         .lock()
@@ -254,6 +259,9 @@ fn call_tool(
     let Some(ref mut st) = *guard else {
         return Err(fail("Store not initialized", "ERROR"));
     };
+    if matches!(name, "project_create" | "document_create" | "document_update" | "document_patch" | "document_apply_patch" | "document_reorder" | "history_restore") {
+        on_app_tool("update_write_guard", &json!({}))?;
+    }
     dispatch(st, name, args, &**on_mutate)
 }
 
@@ -465,7 +473,7 @@ fn handle_client(
     token: &str,
     store: &Arc<Mutex<Option<Store>>>,
     on_mutate: &Arc<dyn Fn() + Send + Sync>,
-    on_sync: &SyncHandler,
+    on_app_tool: &AppToolHandler,
 ) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(30)));
@@ -598,7 +606,7 @@ fn handle_client(
             return;
         }
         let args = data.get("arguments").cloned().unwrap_or_else(|| json!({}));
-        match call_tool(store, op_name, &args, on_mutate, on_sync) {
+        match call_tool(store, op_name, &args, on_mutate, on_app_tool) {
             Ok(result) => send_json(&mut stream, 200, Some(&json!({ "result": result }))),
             Err(e) => {
                 let status = if e.code == "CONFLICT" { 409 } else { 400 };
@@ -668,7 +676,7 @@ fn handle_client(
                 .get("arguments")
                 .cloned()
                 .unwrap_or_else(|| json!({}));
-            let res = call_tool(store, tname, &targs, on_mutate, on_sync);
+            let res = call_tool(store, tname, &targs, on_mutate, on_app_tool);
             match res {
                 Ok(val) => {
                     let text = serde_json::to_string(&val).unwrap_or_default();
@@ -722,7 +730,7 @@ fn handle_client(
 pub fn start_api(
     store: Arc<Mutex<Option<Store>>>,
     on_mutate: Arc<dyn Fn() + Send + Sync>,
-    on_sync: SyncHandler,
+    on_app_tool: AppToolHandler,
 ) -> Result<ApiServer, LofError> {
     let mut token_bytes = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut token_bytes);
@@ -737,9 +745,9 @@ pub fn start_api(
             let tok = token_clone.clone();
             let st = Arc::clone(&store);
             let cb = Arc::clone(&on_mutate);
-            let sync = Arc::clone(&on_sync);
+            let app_tool = Arc::clone(&on_app_tool);
             thread::spawn(move || {
-                handle_client(stream, &tok, &st, &cb, &sync);
+                handle_client(stream, &tok, &st, &cb, &app_tool);
             });
         }
     });

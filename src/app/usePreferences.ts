@@ -46,11 +46,13 @@ export function usePreferences() {
         },
       };
     }
+    const persistFirst = "launchAtStartup" in payload || "startInTray" in payload;
+    if (persistFirst) await call("setPreferences", payload);
     const next = { ...prefsRef.current, ...payload };
     prefsRef.current = next;
     prepareEditorFonts(next);
     setPrefs((old) => ({ ...old, ...payload }));
-    await call("setPreferences", payload);
+    if (!persistFirst) await call("setPreferences", payload);
   }
   async function saveKindPrefs(kind: Kind | "document", patch: Record<string, any>) {
     const targetKey = kind === "episode" ? "episode" : "document";

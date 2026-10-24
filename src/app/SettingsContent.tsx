@@ -126,6 +126,11 @@ export default function SettingsContent({
     : "editor";
   const [internalDetailOpen, setInternalDetailOpen] = useState(false);
   const [movingVault, setMovingVault] = useState<false | "folder" | "internal">(false);
+  const [startupSaving, setStartupSaving] = useState(false);
+  const saveStartup = (key: "launchAtStartup" | "startInTray", checked: boolean) => {
+    setStartupSaving(true);
+    void savePrefs({ [key]: checked }).catch(report).finally(() => setStartupSaving(false));
+  };
   const mobileDetailOpen = controlledDetailOpen ?? internalDetailOpen;
   const setMobileDetailOpen = (open: boolean) => {
     setInternalDetailOpen(open);
@@ -187,6 +192,19 @@ export default function SettingsContent({
             {settingsPage === "security" && <PinSettings />}
           </section>
           <section id="settings-editor" className="settings-section" hidden={settingsPage !== "editor"}>
+            {lib.platform === "windows" && <>
+              <h3>앱 시작</h3>
+              <div className="settings-toggles" aria-busy={startupSaving}>
+                <SettingsToggle label="Windows 시작 시 실행"
+                  description="Windows에 로그인하면 Lof Writer를 자동으로 실행합니다."
+                  checked={prefs.launchAtStartup === true} disabled={startupSaving}
+                  onChange={(checked) => saveStartup("launchAtStartup", checked)} />
+                <SettingsToggle label="트레이로 시작"
+                  description="다음에 앱을 실행할 때 창을 띄우지 않고 트레이에 표시합니다. 트레이 아이콘을 누르면 창이 열립니다."
+                  checked={prefs.startInTray === true} disabled={startupSaving}
+                  onChange={(checked) => saveStartup("startInTray", checked)} />
+              </div>
+            </>}
             <h3>화면과 글꼴</h3>
             <p className="settings-description">편하게 읽고 쓸 수 있도록 집필 화면을 조정하세요.</p>
             <div className="settings-grid">

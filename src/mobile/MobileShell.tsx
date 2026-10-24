@@ -477,9 +477,9 @@ export default function MobileShell({
     } else if (next === "search") {
       setMobileTab("search");
     } else if (next === "settings") {
-      await openSettingsData();
       setSettingsDetailOpen(false);
       setMobileTab("settings");
+      await openSettingsData();
     }
   };
 

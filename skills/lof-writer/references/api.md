@@ -21,6 +21,17 @@
 
 인증 키를 원고, 스킬 파일, 공유 자료에 기록하지 않는다. 이 다운로드 패키지에는 사용자별 인증 키나 서재 데이터가 포함되지 않는다.
 
+## PC 앱 업데이트
+
+MCP와 HTTP API에서 같은 `update_status`, `update_check`, `update_install` 도구를 사용한다. 앱 설정에서 선택한 업데이트 채널을 따르며, 설치는 사용자가 앱 업데이트를 요청한 경우에 실행한다.
+
+1. `{"name":"update_check","arguments":{}}`로 확인을 요청한다.
+2. `update_status`를 조회해 `phase`가 `pending` 또는 `checking`에서 벗어날 때까지 기다린다. `error`와 해당 요청의 `lastRequest.error`를 확인하고, 업데이트가 있으면 `availableVersion`을 읽는다. `ready:false`이면 앱 화면을 준비한 뒤 다시 요청한다.
+3. `{"name":"update_install","arguments":{"expectedVersion":"확인한 availableVersion"}}`로 설치를 요청한다. 후보 버전이 바뀌면 다시 확인해야 한다. 다운로드 후 열린 원고와 메모를 저장하며, 저장 실패 시 설치를 중단한다.
+4. 요청 응답의 `requested:true`는 접수만 뜻한다. `update_status`의 `phase`, `progress`, `lastRequest`로 진행과 오류를 확인한다. 설치 시 앱과 연결이 종료될 수 있으며, 다시 연결한 뒤 `currentVersion`이 요청한 버전인지 확인해야 완료로 판단한다.
+
+확인·설치는 즉시 접수 응답을 반환한다. 다른 업데이트 작업이 진행 중이면 `UPDATE_BUSY`, 업데이트 후보가 달라졌으면 `UPDATE_CHANGED` 오류를 반환한다. 설치 전 저장 단계부터 설치가 끝날 때까지 MCP 문서 변경은 `UPDATE_BUSY`로 거절한다.
+
 ## 문맥 패치
 
 MCP의 `document_apply_patch`와 HTTP API의 같은 이름 도구는 `id`, `expectedRevision`, `patch`를 받는다. `document_read`에서 확인한 원본 본문을 기준으로 여러 구간을 한 번에 수정한다.

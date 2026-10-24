@@ -8,6 +8,8 @@ mod android_storage;
 mod android_system_bars;
 mod android_updater;
 mod desktop_updater;
+mod desktop_startup;
+mod mcp_updater;
 mod background_sync;
 pub mod database;
 mod common_memo_history;
@@ -78,6 +80,7 @@ pub struct AppState {
     pub compact_applied: AtomicBool,
     pub closing: Arc<AtomicBool>,
     pub quit_requested: AtomicBool,
+    pub startup_notice_pending: AtomicBool,
     pub close_pending: Arc<AtomicBool>,
     pub close_seq: Arc<AtomicU64>,
     pub notify_seq: Arc<AtomicU64>,
@@ -473,7 +476,14 @@ fn api_sync_status(app: &AppHandle) -> Value {
 }
 
 // MCP 동기화 요청은 화면의 동기화 버튼과 같은 대기열을 사용하고 완료를 기다리지 않는다.
-fn api_sync(app: &AppHandle, name: &str, args: &Value) -> Result<Value, LofError> {
+fn api_app_tool(app: &AppHandle, name: &str, args: &Value) -> Result<Value, LofError> {
+    if name == "update_write_guard" { return mcp_updater::ensure_writable(app); }
+    if name.starts_with("update_") {
+        if name != "update_status" && app.state::<AppState>().closing.load(Ordering::SeqCst) {
+            return Err(fail("앱이 종료 중이라 업데이트를 요청할 수 없습니다.", "UPDATE_BUSY"));
+        }
+        return mcp_updater::tool(app, name, args);
+    }
     match name {
         "sync_status" => Ok(api_sync_status(app)),
         "sync_now" => {
@@ -663,6 +673,7 @@ fn dispatch_method(
             out.insert("drafts".to_string(), Value::Array(st.drafts()?));
             out.insert("localGit".to_string(), st.local_git.status());
             out.insert("preferences".to_string(), prefs);
+            out.insert("platform".to_string(), json!(std::env::consts::OS));
             out.insert(
                 "internalRoot".to_string(),
                 json!(android_library::internal_library_root(&state.user_dir)
@@ -1560,9 +1571,18 @@ fn dispatch_method(
             Ok(json!(true))
         }
         "settings" => {
-            let (store_root, common_root) = get_store_and_common()?;
-            let storage=state.store.lock().unwrap().as_ref().map(Store::storage_status);
-            let s_guard = state.settings.lock().unwrap();
+            let settings = state.settings.lock().unwrap().clone();
+            // 서재 색인·이력 작업 중에도 설정은 저장된 경로로 바로 조회한다.
+            let (store_root, storage) = {
+                let guard = state.store.try_lock().ok();
+                let store = guard.as_ref().and_then(|guard| guard.as_ref());
+                let root = store.map(|store| store.root.clone()).unwrap_or_else(|| {
+                    PathBuf::from(settings["vaultPath"].as_str().unwrap_or(""))
+                });
+                (root, store.map(Store::storage_status))
+            };
+            let common_root = common_memo_root_of(&store_root, &settings);
+            let s_guard = &settings;
             let conns: Vec<Value> = s_guard
                 .get("connections")
                 .and_then(|v| v.as_array())
@@ -1738,6 +1758,7 @@ fn dispatch_method(
             sync_res
         }
         "setPreferences" => {
+            desktop_startup::validate(&args)?;
             if let Some(value) = args.get("syncIntervalSeconds") {
                 if !value.as_u64().is_some_and(|seconds| (60..=3600).contains(&seconds)) {
                     return Err(fail_invalid("자동 동기화 주기는 1분부터 1시간 사이로 지정해 주세요."));
@@ -1776,10 +1797,16 @@ fn dispatch_method(
                     }
                 }
                 let prefs_val = Value::Object(prefs);
-                if let Some(obj) = s_guard.as_object_mut() {
+                let mut next = s_guard.clone();
+                if let Some(obj) = next.as_object_mut() {
                     obj.insert("preferences".to_string(), prefs_val.clone());
                 }
-                persist_settings(&state.config_file, &s_guard)?;
+                let startup_change = desktop_startup::apply(&args)?;
+                if let Err(error) = persist_settings(&state.config_file, &next) {
+                    if let Some(change) = startup_change { change.rollback()?; }
+                    return Err(error);
+                }
+                *s_guard = next;
                 let policy = history_policy_from_settings(&s_guard);
                 let manual_lb = default_manual_line_break_from_settings(&s_guard);
                 // 보관 규칙을 바꾸면 다음 날까지 기다리지 않고 바로 정리한다.
@@ -1953,7 +1980,7 @@ async fn lof_invoke(
     window: WebviewWindow,
 ) -> Result<Value, String> {
     let args_val = args.unwrap_or_else(|| json!({}));
-    let result = if method.starts_with("realtime") || matches!(method.as_str(), "adoptDocument" | "adoptMemo" | "finishDocumentSync" | "saveDraft" | "saveRecoveryCopy" | "recoveryCopies" | "readRecoveryCopy" | "deleteRecoveryCopy" | "restoreRecoveryCopy" | "sync" | "pinUnlock" | "pinSave" | "backupStorage" | "backupGitHistory" | "history" | "historyPage" | "historyRead" | "restore" | "checkpointDocument" | "countManuscript" | "downloadSkill" | "checkSyncUpdates" | "systemFonts" | "readUserFont" | "exportLibrary" | "exportProject" | "prepareAndroidLibrary" | "moveVault") {
+    let result = if method.starts_with("realtime") || matches!(method.as_str(), "settings" | "adoptDocument" | "adoptMemo" | "finishDocumentSync" | "saveDraft" | "saveRecoveryCopy" | "recoveryCopies" | "readRecoveryCopy" | "deleteRecoveryCopy" | "restoreRecoveryCopy" | "sync" | "pinUnlock" | "pinSave" | "backupStorage" | "backupGitHistory" | "history" | "historyPage" | "historyRead" | "restore" | "checkpointDocument" | "countManuscript" | "downloadSkill" | "checkSyncUpdates" | "systemFonts" | "readUserFont" | "exportLibrary" | "exportProject" | "prepareAndroidLibrary" | "moveVault") {
         tauri::async_runtime::spawn_blocking(move || {
             let state = app.state::<AppState>();
             if method == "pinUnlock" || method == "pinSave" {
@@ -2069,6 +2096,9 @@ fn show_main_window(app: &AppHandle) {
         let _ = window.set_focus();
         if was_hidden && window.is_visible().unwrap_or(false) {
             auto_sync::resume(app);
+            if app.state::<AppState>().startup_notice_pending.swap(false, Ordering::SeqCst) {
+                file_sync_reset::show_notice(app);
+            }
         }
     }
     #[cfg(target_os = "android")]
@@ -2235,7 +2265,7 @@ pub fn run() {
 
     let user_dir = get_user_dir();
     #[cfg(not(target_os = "android"))]
-    let instance = match single_instance::SingleInstance::acquire(&user_dir) {
+    let instance = match single_instance::SingleInstance::acquire(&user_dir, !desktop_startup::background_launch()) {
         Ok(Some(instance)) => instance,
         Ok(None) => return,
         Err(error) => {
@@ -2274,6 +2304,9 @@ pub fn run() {
     };
     if !settings.is_object() {
         settings = json!({});
+    }
+    if let Err(error) = desktop_startup::load(&mut settings) {
+        eprintln!("시작 프로그램 등록을 확인하지 못했습니다: {}", error.message);
     }
     if let Err(error) = library_sync_reset::migrate_settings(&config_file, &mut settings) {
         show_startup_error(format!("서버 연결 정보를 초기화하지 못했습니다: {}", error.message));
@@ -2403,7 +2436,7 @@ pub fn run() {
         Arc::new(move |name: &str, args: &Value| {
             let app = holder_for_sync.lock().ok().and_then(|guard| guard.clone());
             let app = app.ok_or_else(|| fail_invalid("앱을 준비하는 중입니다. 잠시 후 다시 시도해 주세요."))?;
-            api_sync(&app, name, args)
+            api_app_tool(&app, name, args)
         }),
     ) {
         Ok(srv) => srv,
@@ -2436,6 +2469,7 @@ pub fn run() {
         compact_applied: AtomicBool::new(false),
         closing: Arc::clone(&closing),
         quit_requested: AtomicBool::new(false),
+        startup_notice_pending: AtomicBool::new(false),
         close_pending: Arc::clone(&close_pending),
         close_seq: Arc::clone(&close_seq),
         notify_seq: Arc::clone(&notify_seq),
@@ -2464,6 +2498,7 @@ pub fn run() {
         .manage(realtime::Realtime::default())
         .manage(background_sync::BackgroundSync::default())
         .manage(git_worker::GitWorker::default())
+        .manage(mcp_updater::McpUpdater::default())
         .invoke_handler(tauri::generate_handler![
             lof_invoke,
             lof_flushed,
@@ -2474,6 +2509,10 @@ pub fn run() {
             window_start_dragging,
             updater_status,
             desktop_updater::desktop_update_check,
+            mcp_updater::desktop_update_register,
+            mcp_updater::desktop_update_unregister,
+            mcp_updater::desktop_update_claim,
+            mcp_updater::desktop_update_report,
             android_updater::android_update_check,
             android_updater::android_update_download,
             android_updater::android_update_install,
@@ -2532,6 +2571,7 @@ pub fn run() {
                 *h_guard = Some(handle.clone());
             }
             let st: State<AppState> = app.state();
+            let start_in_tray = desktop_startup::start_in_tray(&st.settings.lock().unwrap());
             let bg_color = {
                 let s_guard = st.settings.lock().unwrap();
                 let prefs = s_guard.get("preferences");
@@ -2642,9 +2682,14 @@ pub fn run() {
                     }
                 }
                 let _ = win.set_background_color(Some(bg_color));
-                restore_main_window(&handle);
+                if start_in_tray {
+                    st.startup_notice_pending.store(true, Ordering::SeqCst);
+                    hide_to_tray(&handle);
+                } else {
+                    restore_main_window(&handle);
+                }
             }
-            file_sync_reset::show_notice(&handle);
+            if !start_in_tray { file_sync_reset::show_notice(&handle); }
             auto_sync::start(&handle);
             realtime::start(&handle);
             git_worker::start(&handle);

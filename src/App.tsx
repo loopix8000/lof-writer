@@ -201,6 +201,7 @@ export default function App() {
     } | null>(null),
     [archive, setArchive] = useState(false),
     [connections, setConnections] = useState<SyncConnection[]>([]),
+    [settingsDataState, setSettingsDataState] = useState<"loading" | "ready" | "error">("loading"),
     [autoSync, setAutoSync] = useState<AutoSyncStatus>({ phase: "idle", message: "" }),
     [syncChecking, setSyncChecking] = useState(false),
     [syncAvailable, setSyncAvailable] = useState(false),
@@ -250,6 +251,7 @@ export default function App() {
   const projectRef = useRef("");
   const documentMove = useRef<Promise<void> | null>(null);
   const refreshSeq = useRef(0),
+    settingsRequest = useRef(0),
     initialized = useRef(false),
     navigationSeq = useRef(0),
     toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1021,19 +1023,30 @@ export default function App() {
   }
 
   async function loadSettingsData() {
-    await flush();
-    const s = await call("settings");
-    setConnections(s.connections);
-    if (s.autoSync) {
-      setAutoSync(s.autoSync);
-      if (s.autoSync.hasConnections !== undefined) setSyncAvailable(s.autoSync.hasConnections);
-    }
-    setCommonMemoPath(s.commonMemoPath || "");
+    const request = ++settingsRequest.current;
+    setSettingsDataState("loading");
     if (active?.kind) setTypesettingKind(active.kind === "episode" ? "episode" : "document");
+    try {
+      const s = await call("settings");
+      if (request !== settingsRequest.current) return;
+      setConnections(s.connections);
+      if (s.autoSync) {
+        setAutoSync(s.autoSync);
+        if (s.autoSync.hasConnections !== undefined) setSyncAvailable(s.autoSync.hasConnections);
+      }
+      setCommonMemoPath(s.commonMemoPath || "");
+      setSettingsDataState("ready");
+    } catch (error) {
+      if (request !== settingsRequest.current) return;
+      setSettingsDataState("error");
+      throw error;
+    }
   }
   async function openSettings(type: "settings" | "serverSync" = "settings") {
-    await loadSettingsData();
     setDialog({ type });
+    // 창을 먼저 열어 저장이나 정보 조회가 끝나기를 기다리지 않게 한다.
+    if (type === "settings") await Promise.all([flush(), loadSettingsData()]);
+    else await flush();
   }
   function updateProjectWriting(rules: WritingRules) {
     const id = projectId;
@@ -1054,6 +1067,11 @@ export default function App() {
     writingQueue.current.catch(() => {});
   }
   function renderSyncConnections() {
+    if (settingsDataState === "loading") return <p role="status">설정 정보를 불러오는 중입니다.</p>;
+    if (settingsDataState === "error") return <div>
+      <p role="alert">파일 저장소 설정을 불러오지 못했습니다.</p>
+      <button onClick={attempt(loadSettingsData)}>다시 불러오기</button>
+    </div>;
     return <SyncConnections connections={connections} setConnections={setConnections}
       autoSync={autoSync} intervalSeconds={prefs.syncIntervalSeconds ?? 300}
       onIntervalChange={(seconds) => savePrefs({ syncIntervalSeconds: seconds })}

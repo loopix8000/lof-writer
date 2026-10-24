@@ -98,6 +98,7 @@ export type SystemFontOption = {
   value: string;
 };
 export type Library = {
+  platform?: string;
   localGit?: { ready: boolean; message: string; head: string; importedHistory: number; path: string };
   root: string;
   internalRoot?: string;

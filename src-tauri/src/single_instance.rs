@@ -16,7 +16,7 @@ pub struct SingleInstance {
 
 impl SingleInstance {
     #[cfg(windows)]
-    pub fn acquire(user_dir: &Path) -> io::Result<Option<Self>> {
+    pub fn acquire(user_dir: &Path, restore_existing: bool) -> io::Result<Option<Self>> {
         use crate::error::hash_str;
         use windows_sys::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
         use windows_sys::Win32::System::Threading::{CreateEventW, CreateMutexW, SetEvent};
@@ -43,6 +43,7 @@ impl SingleInstance {
             let already_running = GetLastError() == ERROR_ALREADY_EXISTS;
             let mutex = OwnedHandle::from_raw_handle(mutex);
             if already_running {
+                if !restore_existing { return Ok(None); }
                 // 기존 앱이 자신의 창 상태와 PIN 잠금을 유지하며 앞으로 나오게 한다.
                 AllowSetForegroundWindow(ASFW_ANY);
                 if SetEvent(restore_event.as_raw_handle()) == 0 {
@@ -58,7 +59,7 @@ impl SingleInstance {
     }
 
     #[cfg(not(windows))]
-    pub fn acquire(_user_dir: &Path) -> io::Result<Option<Self>> {
+    pub fn acquire(_user_dir: &Path, _restore_existing: bool) -> io::Result<Option<Self>> {
         Ok(Some(Self {}))
     }
 
