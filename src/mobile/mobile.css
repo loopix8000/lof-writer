@@ -3606,10 +3606,10 @@
 
 .m-project-save-confirm .m-project-save-discard {
   margin-right: auto;
-  padding: 0 4px;
+  padding: 0 12px;
   min-height: 36px;
-  border-color: transparent;
-  background: transparent;
+  border-color: var(--danger-border);
+  background: var(--surface);
   color: var(--danger-text);
   box-shadow: none;
 }

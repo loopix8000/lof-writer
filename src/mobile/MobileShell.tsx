@@ -54,6 +54,7 @@ import MobileEditorView from "./MobileEditorView";
 import MobileEmptyEditorView from "./MobileEmptyEditorView";
 import MobileLibraryView from "./MobileLibraryView";
 import MobileMemoView from "./MobileMemoView";
+import type { OpenDocumentLink } from "../document-links";
 import MobileProjectView from "./MobileProjectView";
 import MobileSearchView from "./MobileSearchView";
 import MobileDialogPage from "./MobileDialogPage";
@@ -307,7 +308,7 @@ export default function MobileShell({
   copyDocManuscript: (doc: Doc, rawMarkdown?: boolean, notify?: boolean) => Promise<void>;
   openBinding: (id: string) => Promise<void>;
   bindDocument: (id: string, episodeId: string | null) => Promise<void>;
-  openNoteLink: (href: string, quote: string) => Promise<void>;
+  openNoteLink: OpenDocumentLink;
   openSearchResult: (
     r: SearchResult,
     m: SearchMatch,
@@ -343,6 +344,11 @@ export default function MobileShell({
   report: (e: any) => void;
 }) {
   const [mobileTab, setMobileTab] = useState<MobileTab>("library");
+  const followDocumentLink: OpenDocumentLink = async (href, quote, source) => {
+    const destination = await openNoteLink(href, quote, source);
+    if (destination) setMobileTab(destination === "memo" ? "memo" : "library");
+    return destination;
+  };
   const deleteProjectFormId = useId();
   const [inMemoEditor, setInMemoEditor] = useState(false);
   const closeMemoEditorRef = useRef<(() => void) | null>(null);
@@ -594,7 +600,7 @@ export default function MobileShell({
                 copyDocManuscript={copyDocManuscript}
                 openBinding={openBinding}
                 bindDocument={bindDocument}
-                openNoteLink={openNoteLink}
+                openNoteLink={followDocumentLink}
                 showHistory={showHistory}
                 projectMenu={projectMenu}
                 onUpdateProjectWriting={onUpdateProjectWriting}
@@ -709,13 +715,7 @@ export default function MobileShell({
           prefs={prefs}
           apiRef={memoApi}
           flushRef={memoFlush}
-          onOpenLink={(href, quote) =>
-            attempt(async () => {
-              await memoFlush.current?.();
-              setMobileTab("library");
-              await openNoteLink(href, quote);
-            })()
-          }
+          onOpenLink={(href, quote, source) => attempt(() => followDocumentLink(href, quote, source))()}
           message={message}
           report={report}
           onDetailStateChange={handleMemoDetailState}
@@ -1207,7 +1207,7 @@ export default function MobileShell({
                   setDialog(null);
                   const targetLabel = dialog.value ? "작품을" : "서재를";
                   message(
-                    `${targetLabel} 내보냈습니다 (파일 ${res.fileCount}개)`,
+                    `${targetLabel} 내보냈습니다 (파일 ${res.fileCount}개)\n${res.path}`,
                   );
                 }}
               />

@@ -35,6 +35,7 @@ import { notifyRemoteUpdate, resolveSyncedFile, saveRecoveryCopy } from "../sync
 import SyncIssueBanner from "../SyncIssueBanner";
 import { useSyncFileUpdates } from "../useSyncFileUpdates";
 import Writer from "../Writer";
+import { memoLinkSource, type DocumentLinkSource } from "../document-links";
 import MobileEditorToolbar, { MobileEditorMenuActions } from "./MobileEditorToolbar";
 import {
   MobileActionSheet,
@@ -93,7 +94,7 @@ export default function MobileMemoView({
     open: (space: string, path: string, pinned?: boolean) => Promise<void>;
   } | null>;
   flushRef: React.MutableRefObject<((options?: { closing?: boolean }) => Promise<void>) | null>;
-  onOpenLink: (href: string, quote: string) => void;
+  onOpenLink: (href: string, quote: string, source: DocumentLinkSource) => void;
   message: (text: string, action?: { label: string; run: () => void }, duration?: number) => void;
   report: (e: any) => void;
   onDetailStateChange?: (inEditor: boolean, closeEditor: () => void) => void;
@@ -853,7 +854,7 @@ export default function MobileMemoView({
               copyWithBlankLines={prefs.copyWithBlankLines === true}
               tables={true}
               links={true}
-              onOpenLink={onOpenLink}
+              onOpenLink={(href, quote) => onOpenLink(href, quote, memoLinkSource(memo.space, memo.path))}
               onChange={(body) => editBody(body)}
               fontSize={normStyle.fontSize}
               lineHeight={normStyle.lineHeight}

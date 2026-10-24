@@ -9,7 +9,11 @@ export const noteLink = (id: string) => PREFIX + encodeURIComponent(id);
 
 export function noteLinkTarget(href: string | null | undefined): string | null {
   if (!href?.startsWith(PREFIX)) return null;
-  return decodeURIComponent(href.slice(PREFIX.length).split(/[?#]/)[0]) || null;
+  try {
+    return decodeURIComponent(href.slice(PREFIX.length).split(/[?#]/)[0]) || null;
+  } catch {
+    return null;
+  }
 }
 
 // 메모 Markdown의 첫 인용 줄. 원고에서 이 글을 찾아 메모 위치로 삼는다.

@@ -91,7 +91,8 @@ import SyncIssueBanner from "./SyncIssueBanner";
 import HistoryDialog from "./HistoryDialog";
 import MemoSession from "./MemoSession";
 import MobilePreview from "./MobilePreview";
-import { noteLinkTarget, type NoteMark } from "./note-links";
+import type { NoteMark } from "./note-links";
+import { resolveDocumentLink, type DocumentLinkSource } from "./document-links";
 import PlatformCount from "./PlatformCount";
 import PlatformPicker from "./PlatformPicker";
 import QuickNote, { quickNoteMarkdown, quickNoteTitle, type QuickNoteSource } from "./QuickNote";
@@ -1286,17 +1287,25 @@ export default function App() {
     });
   }
   searchActions.current = { openQuick: () => openQuick().catch(report), openSearch };
-  // 메모의 문서 링크(lof://doc/)를 누르면 그 문서를 열고, 메모가 인용한 문장을 찾아 보여 준다.
-  async function openNoteLink(href: string, quote: string) {
-    const id = noteLinkTarget(href);
-    if (!id || !libraryRef.current.documents.some((d) => d.id === id)) {
+  // 상대 경로는 링크가 있는 문서의 폴더를 기준으로 찾는다.
+  async function openNoteLink(href: string, quote: string, source: DocumentLinkSource): Promise<"document" | "memo" | null> {
+    const target = resolveDocumentLink(href, source, libraryRef.current);
+    if (!target) {
       message("연결된 문서를 찾을 수 없습니다.");
-      return;
+      return null;
     }
     await flush();
+    if (target.kind === "memo") {
+      if (!memoApi.current) return null;
+      await memoApi.current.open(target.space, target.path, true);
+      setMemoOpen(true);
+      return "memo";
+    }
+    const id = target.id;
     await openDoc(id, true);
-    if (!quote || session.currentId() !== id) return;
-    setReveal({ docId: id, query: quote, index: 0, caseSensitive: true, seq: Date.now() });
+    if (quote && session.currentId() === id)
+      setReveal({ docId: id, query: quote, index: 0, caseSensitive: true, seq: Date.now() });
+    return "document";
   }
   // 원고 이미지: 작품의 assets/에 저장하고, 원고에는 원고 파일 기준 상대 경로(예: ../assets/그림.png)로 쓴다.
   // 화면에 그릴 data URL은 경로마다 한 번만 읽고, 찾지 못한 경로는 다음에 다시 찾는다.
@@ -1659,7 +1668,7 @@ export default function App() {
                       })
               }
               links={active.kind === "memo" || active.kind === "plot"}
-              onOpenLink={(href, quote) => attempt(() => openNoteLink(href, quote))()}
+              onOpenLink={(href, quote) => attempt(() => openNoteLink(href, quote, { projectId: active.projectId, docPath: active.relPath || "" }))()}
               notes={isMobile ? undefined : noteMarks[active.id]}
               onOpenNotes={isMobile ? undefined : openNotes}
               contextMenu={!isMobile}
@@ -2183,12 +2192,7 @@ export default function App() {
             manualSaveRef={memoManualSave}
             message={message}
             report={report}
-            onOpenLink={(href, quote) =>
-              attempt(async () => {
-                await memoFlush.current?.();
-                await openNoteLink(href, quote);
-              })()
-            }
+            onOpenLink={(href, quote, source) => attempt(() => openNoteLink(href, quote, source))()}
           />
           <div
             className="content-shell"

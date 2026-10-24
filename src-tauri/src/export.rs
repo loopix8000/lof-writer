@@ -512,13 +512,30 @@ fn export_common_memos(
     Ok(written)
 }
 
+fn pick_export_destination(args: &Value, title: &str) -> Result<Option<PathBuf>, LofError> {
+    if let Some(path) = args.get("path").and_then(Value::as_str).filter(|p| !p.is_empty()) {
+        return Ok(Some(PathBuf::from(path)));
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        Ok(FileDialog::new().set_title(title).pick_folder())
+    }
+    #[cfg(target_os = "android")]
+    {
+        let _ = title;
+        Err(fail_invalid("내보낼 폴더를 먼저 선택해 주세요."))
+    }
+}
+
 fn validate_export_destination(
     picked: &Path,
     store_root: &Path,
     common_root: &Path,
 ) -> Result<PathBuf, LofError> {
-    let clean_picked =
-        strip_verbatim_prefix(&fs::canonicalize(picked).unwrap_or_else(|_| picked.to_path_buf()));
+    if !picked.is_absolute() || !picked.is_dir() {
+        return Err(fail_invalid("내보낼 폴더를 확인할 수 없습니다. 다른 폴더를 선택해 주세요."));
+    }
+    let clean_picked = strip_verbatim_prefix(&fs::canonicalize(picked)?);
     let clean_store = strip_verbatim_prefix(
         &fs::canonicalize(store_root).unwrap_or_else(|_| store_root.to_path_buf()),
     );
@@ -566,18 +583,9 @@ pub fn export_library_or_project(
             .unwrap_or("제목 없는 작품")
             .to_string();
 
-        #[cfg(not(target_os = "android"))]
-        let Some(picked) = FileDialog::new()
-            .set_title(format!("'{}' 내보낼 폴더 선택", proj_title))
-            .pick_folder()
+        let Some(picked) = pick_export_destination(args, &format!("'{}' 내보낼 폴더 선택", proj_title))?
         else {
             return Ok(Value::Null);
-        };
-        #[cfg(target_os = "android")]
-        let picked = {
-            let dir = crate::get_user_dir().join("Exports");
-            fs::create_dir_all(&dir)?;
-            dir
         };
         let parent_dir = validate_export_destination(&picked, &store_root, common_root)?;
         let mut taken_dirs = HashSet::new();
@@ -631,18 +639,9 @@ pub fn export_library_or_project(
         (store.root.clone(), store.default_manual_line_break, projects)
     };
 
-    #[cfg(not(target_os = "android"))]
-    let Some(picked) = FileDialog::new()
-        .set_title("서재를 내보낼 폴더 선택")
-        .pick_folder()
+    let Some(picked) = pick_export_destination(args, "서재를 내보낼 폴더 선택")?
     else {
         return Ok(Value::Null);
-    };
-    #[cfg(target_os = "android")]
-    let picked = {
-        let dir = crate::get_user_dir().join("Exports");
-        fs::create_dir_all(&dir)?;
-        dir
     };
     let parent_dir = validate_export_destination(&picked, &store_root, common_root)?;
     let vault_name = store_root

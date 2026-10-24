@@ -18,6 +18,7 @@ import {
   X,
 } from "lucide-react";
 import Writer from "./Writer";
+import { memoLinkSource, type DocumentLinkSource } from "./document-links";
 import { memoImageScope, useImages } from "./app/useDocumentImages";
 import EditorScroll, { type EditorScrollPositions } from "./EditorScroll";
 import RetainedTab from "./RetainedTab";
@@ -157,7 +158,7 @@ export default function MemoSession({
   message: SyncMessage;
   report: (e: any) => void;
   // 메모의 문서 링크(퀵 노트 출처)를 누르면 집필 창에서 그 문서를 열고 인용한 문장으로 간다.
-  onOpenLink: (href: string, quote: string) => void;
+  onOpenLink: (href: string, quote: string, source: DocumentLinkSource) => void;
 }) {
   const images = useImages(report);
   const [historyTarget, setHistoryTarget] = useState<(Memo & { id: string }) | null>(null);
@@ -1348,7 +1349,12 @@ export default function MemoSession({
                   }}
                   editorStyle={mainBox.kindPrefs}
                   links={kindOf(memo) !== "episode"}
-                  onOpenLink={onOpenLink}
+                  onOpenLink={(href, quote) => {
+                    const doc = docOf(memo);
+                    onOpenLink(href, quote, doc
+                      ? { projectId: doc.projectId, docPath: doc.relPath || "" }
+                      : memoLinkSource(memo.space, memo.path));
+                  }}
                   images={memoImages(memo)}
                 />
               </article>

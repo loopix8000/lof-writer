@@ -45,6 +45,7 @@ import { paragraphCountDelta, type ManuscriptCounts } from "./manuscript-counts"
 import { MarkdownImage } from "./image-extension";
 import { NoteMarks, notePluginKey } from "./note-extension";
 import { NOTE_LINK_PROTOCOL, noteLinkTarget, type NoteMark } from "./note-links";
+import { isRelativeDocumentLink } from "./document-links";
 import LineBreakControl from "./LineBreakControl";
 import { Fragment, Slice, type Node as PMNode } from "@tiptap/pm/model";
 import { NodeSelection, TextSelection } from "@tiptap/pm/state";
@@ -502,8 +503,8 @@ export default function Writer({
   // 본문을 고르고 우클릭한 메뉴의 '메모 추가'. 있을 때만 고른 글에 우클릭 메뉴를 띄운다.
   // at은 우클릭한 화면 위치로, 퀵 노트 창을 그 근처에 연다.
   onQuickNote?: (text: string, at: { x: number; y: number }) => void;
-  // Markdown 링크를 원문 편집 없이 보여 준다(플롯·메모). 문서 링크(lof://doc/)를 누르면 onOpenLink에
-  // 링크 주소와, 링크 뒤 첫 인용문의 글(퀵 노트의 선택한 본문)을 넘긴다.
+  // Markdown 링크를 원문 편집 없이 보여 준다(플롯·메모). 문서 링크나 상대 경로를 누르면 onOpenLink에
+  // 링크 주소를 넘긴다. 퀵 노트의 문서 링크는 뒤따르는 첫 인용문도 함께 넘긴다.
   links?: boolean;
   onOpenLink?: (href: string, quote: string) => void;
   // 이 원고를 인용한 메모. 인용한 문단의 왼쪽 여백에 메모 아이콘을 달고, 누르면 onOpenNotes를 부른다.
@@ -666,14 +667,15 @@ export default function Writer({
           spellcheck: "false",
         },
         handleDOMEvents: {
-          // 본문 안의 링크를 눌러도 앱 화면이 그 주소로 넘어가지 않게 막고, 문서 링크면 그 문서로 간다.
+          // 링크를 앱 안에서 열어 WebView가 다른 페이지로 이동하지 않도록 한다.
           click: (view, event) => {
             const anchor = (event.target as HTMLElement).closest?.("a[href]");
             if (!anchor || !view.dom.contains(anchor)) return false;
             event.preventDefault();
             const href = anchor.getAttribute("href") || "";
-            if (!noteLinkTarget(href) || !onOpenLinkRef.current) return true;
-            onOpenLinkRef.current(href, quoteAfter(view.state.doc, view.posAtDOM(anchor, 0)));
+            const id = noteLinkTarget(href);
+            if ((!id && !isRelativeDocumentLink(href)) || !onOpenLinkRef.current) return true;
+            onOpenLinkRef.current(href, id ? quoteAfter(view.state.doc, view.posAtDOM(anchor, 0)) : "");
             return true;
           },
           auxclick: (view, event) => {

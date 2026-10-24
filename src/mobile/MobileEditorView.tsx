@@ -1,4 +1,5 @@
 import SyncIssueBanner from "../SyncIssueBanner";
+import type { OpenDocumentLink } from "../document-links";
 import {
   Archive,
   ArrowDown01,
@@ -196,7 +197,7 @@ export default function MobileEditorView({
   copyDocManuscript: (doc: Doc, rawMarkdown?: boolean, notify?: boolean) => Promise<void>;
   openBinding: (id: string) => Promise<void>;
   bindDocument: (id: string, episodeId: string | null) => Promise<void>;
-  openNoteLink: (href: string, quote: string) => Promise<void>;
+  openNoteLink: OpenDocumentLink;
   showHistory: () => Promise<void>;
   projectMenu: () => MenuItem[];
   onUpdateProjectWriting: (rules: WritingRules) => void;
@@ -1160,7 +1161,7 @@ export default function MobileEditorView({
             }
             links={active.kind === "memo" || active.kind === "plot"}
             onOpenLink={(href, quote) =>
-              attempt(() => openNoteLink(href, quote))()
+              attempt(() => openNoteLink(href, quote, { projectId: active.projectId, docPath: active.relPath || "" }))()
             }
             notes={undefined}
             onOpenNotes={undefined}
