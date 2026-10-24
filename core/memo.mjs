@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { atomic, hash, fail, validRel, safeName, memoId, abs, matchLines } from "./store.mjs";
+import { atomic, hash, fail, validRel, safeName, memoId, abs, matchLines, searchHit, searchRegex } from "./store.mjs";
 import { readMarkdown, writeMarkdown, markdownEntry } from "./markdown.mjs";
 
 // 메모 공간: 공용 메모 폴더(사용자가 위치를 정함)와 각 작품의 doc/ 폴더.
@@ -285,8 +285,7 @@ export class Memos {
     const raw = String(query ?? "").trim();
     if (!raw || raw.startsWith("#")) return { files: [], results: [] };
     const space = await this._space(spaceId);
-    const norm = (t) => (caseSensitive ? t : t.toLocaleLowerCase()),
-      q = norm(raw);
+    const re = searchRegex(raw, caseSensitive);
     const files = [],
       results = [];
     const cache = this.store.index.common;
@@ -294,7 +293,7 @@ export class Memos {
     let changed = false;
     for (const e of await this._walk(space)) {
       if (e.type !== "file") continue;
-      if (norm(e.path).includes(q)) files.push({ space: space.id, path: e.path, name: e.name });
+      if (searchHit(re, e.path)) files.push({ space: space.id, path: e.path, name: e.name });
       const file = abs(space.root, e.path), stamp = await this.store._stamp(file);
       let indexed = cache.files[e.path];
       if (!indexed || indexed.stamp !== stamp) {

@@ -12,6 +12,7 @@ import { markdownImage } from "./image-extension";
 import { textCounts, type ManuscriptCounts } from "./manuscript-counts";
 import type { WritingRules } from "./types";
 import type { FindRange } from "./EditorFind";
+import { searchLine, searchPattern } from "./search-pattern";
 import { readEditorSelection, saveEditorSelection, type EditorSession } from "./workspace-state";
 import type { UndoState } from "./useUndoState";
 
@@ -248,17 +249,17 @@ const SourceEditor = forwardRef<SourceEditorHandle, Props>(function SourceEditor
     reveal(query, index, caseSensitive) {
       const view = viewRef.current;
       if (!view || !query) return;
-      const text = caseSensitive ? view.state.doc.toString() : view.state.doc.toString().toLocaleLowerCase();
-      const target = caseSensitive ? query : query.toLocaleLowerCase();
-      let found = -1;
-      for (let i = 0, from = 0; i <= index; i++) {
-        const next = text.indexOf(target, from);
-        if (next < 0) break;
-        found = next; from = next + target.length;
+      const pattern = searchPattern(query, caseSensitive);
+      const hits: [number, number][] = [];
+      let offset = 0;
+      for (const line of view.state.doc.toString().split("\n")) {
+        for (const [from, to] of searchLine(line, pattern)) hits.push([offset + from, offset + to]);
+        offset += line.length + 1;
       }
-      if (found < 0) return;
-      view.dispatch({ selection: { anchor: found, head: found + target.length },
-        effects: EditorView.scrollIntoView(found, { y: "center" }) });
+      const hit = hits[index] ?? hits[hits.length - 1];
+      if (!hit) return;
+      view.dispatch({ selection: { anchor: hit[0], head: hit[1] },
+        effects: EditorView.scrollIntoView(hit[0], { y: "center" }) });
       view.focus();
     },
   });

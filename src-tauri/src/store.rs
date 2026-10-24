@@ -17,7 +17,7 @@ use crate::platforms::normalize_writing;
 use crate::text::{character_count, count_for_writing, manuscript_stats};
 use base64::Engine;
 use chrono::DateTime;
-use regex::Regex;
+use regex::{Regex, RegexBuilder};
 use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, OpenOptions};
@@ -439,85 +439,53 @@ pub fn fingerprint(d: &Value, body: &str) -> String {
     hash_str(&format!("{}\n{}", json_arr, body))
 }
 
-pub fn match_lines(
-    body: &str,
-    query: &str,
-    case_sensitive: bool,
-    max: usize,
-) -> (Vec<Value>, bool) {
-    let norm = |t: &str| -> String {
-        if case_sensitive {
-            t.to_string()
-        } else {
-            t.to_lowercase()
-        }
+// 검색어는 rg처럼 정규식으로 해석한다. 정규식으로 올바르지 않은 검색어(예: 여는 괄호만 입력한 중간 상태)는 입력한 글자 그대로 찾는다.
+pub fn search_regex(query: &str, case_sensitive: bool) -> Regex {
+    let build = |pattern: &str| {
+        RegexBuilder::new(pattern)
+            .case_insensitive(!case_sensitive)
+            .multi_line(true)
+            .build()
     };
-    let needle = norm(query);
-    if needle.is_empty() {
-        return (Vec::new(), false);
-    }
-    let hay = norm(body);
-    // 검색어가 없는 문서는 위치 계산용 UTF-16 변환을 하지 않는다.
-    if !hay.contains(needle.as_str()) {
-        return (Vec::new(), false);
-    }
-    let body_u16: Vec<u16> = body.encode_utf16().collect();
-    let hay_u16: Vec<u16> = hay.encode_utf16().collect();
-    let needle_u16: Vec<u16> = needle.encode_utf16().collect();
-    if needle_u16.is_empty() || hay_u16.len() < needle_u16.len() {
-        return (Vec::new(), false);
-    }
+    build(query).unwrap_or_else(|_| build(&regex::escape(query)).expect("이스케이프한 검색어는 항상 올바른 정규식이다"))
+}
 
+// `a*`처럼 빈 문자열에도 일치하는 패턴이 모든 항목에 일치하지 않도록 길이가 있는 일치만 인정한다.
+pub fn search_hit(re: &Regex, text: &str) -> bool {
+    re.find_iter(text).any(|m| !m.is_empty())
+}
+
+// 정규식은 줄 단위로 적용하므로 줄 경계를 넘는 일치는 없다. index는 본문 안에서 몇 번째 일치인지,
+// start·length는 text 안의 UTF-16 위치다.
+pub fn match_lines(body: &str, re: &Regex, max: usize) -> (Vec<Value>, bool) {
     let mut matches = Vec::new();
-    let mut line: usize = 1;
-    let mut scanned: usize = 0;
     let mut index: usize = 0;
-    let mut pos: usize = 0;
-
-    while pos + needle_u16.len() <= hay_u16.len() {
-        let Some(rel_at) = hay_u16[pos..]
-            .windows(needle_u16.len())
-            .position(|w| w == needle_u16.as_slice())
-        else {
-            break;
-        };
-        let at = pos + rel_at;
-        if matches.len() >= max {
-            return (matches, true);
-        }
-        for &ch in &body_u16[scanned..at.min(body_u16.len())] {
-            if ch == b'\n' as u16 {
-                line += 1;
+    for (number, raw_line) in body.split('\n').enumerate() {
+        let line = raw_line.strip_suffix('\r').unwrap_or(raw_line);
+        let mut units: Option<Vec<u16>> = None;
+        for found in re.find_iter(line) {
+            if found.is_empty() {
+                continue;
             }
+            if matches.len() >= max {
+                return (matches, true);
+            }
+            let units = units.get_or_insert_with(|| line.encode_utf16().collect());
+            let at = line[..found.start()].encode_utf16().count();
+            let length = found.as_str().encode_utf16().count();
+            let from = at.saturating_sub(40);
+            let to = units.len().min(at + length + 100);
+            let cut = if from > 0 { "…" } else { "" };
+            matches.push(json!({
+                "index": index,
+                "line": number + 1,
+                "text": format!("{}{}", cut, String::from_utf16_lossy(&units[from..to])),
+                "start": cut.encode_utf16().count() + at - from,
+                "length": length,
+            }));
+            index += 1;
         }
-        scanned = at;
-        let line_start = body_u16[..at.min(body_u16.len())]
-            .iter()
-            .rposition(|&c| c == b'\n' as u16)
-            .map(|i| i + 1)
-            .unwrap_or(0);
-        let line_end = body_u16[at.min(body_u16.len())..]
-            .iter()
-            .position(|&c| c == b'\n' as u16)
-            .map(|i| at + i)
-            .unwrap_or(body_u16.len());
-
-        let from = line_start.max(at.saturating_sub(40));
-        let to = line_end.min(at + needle_u16.len() + 100);
-        let cut = if from > line_start { "…" } else { "" };
-        let cut_len = if from > line_start { 1 } else { 0 };
-        let slice_str = String::from_utf16_lossy(&body_u16[from..to.min(body_u16.len())]);
-        matches.push(json!({
-            "index": index,
-            "line": line,
-            "text": format!("{}{}", cut, slice_str),
-            "start": cut_len + at - from,
-            "length": needle_u16.len(),
-        }));
-        index += 1;
-        pos = at + needle_u16.len();
     }
-
     (matches, false)
 }
 
@@ -4890,6 +4858,7 @@ impl Store {
         if query.trim().is_empty() {
             return Ok(json!({ "results": [], "total": 0, "truncated": false }));
         }
+        let re = search_regex(query, case_sensitive);
         let pid_filter = project_id.filter(|s| !s.is_empty());
         let list = self.list()?;
         let docs = list
@@ -4927,7 +4896,7 @@ impl Store {
                     .to_string()
             };
             let max_here = 100.min(2000usize.saturating_sub(total));
-            let (found_matches, is_trunc) = match_lines(&body, query, case_sensitive, max_here);
+            let (found_matches, is_trunc) = match_lines(&body, &re, max_here);
             if is_trunc {
                 truncated = true;
             }
@@ -4973,22 +4942,16 @@ impl Store {
         if raw.is_empty() {
             return Ok(empty);
         }
-        let norm = |t: &str| -> String {
-            if case_sensitive {
-                t.to_string()
-            } else {
-                t.to_lowercase()
-            }
-        };
         let tag_only = raw.starts_with('#');
-        let q = norm(if tag_only {
+        let pattern = if tag_only {
             raw.trim_start_matches('#')
         } else {
             raw
-        });
-        if q.is_empty() {
+        };
+        if pattern.is_empty() {
             return Ok(empty);
         }
+        let re = search_regex(pattern, case_sensitive);
 
         let list = self.list()?;
         let mut projects = Vec::new();
@@ -5000,7 +4963,7 @@ impl Store {
                     .map(|arr| {
                         arr.iter()
                             .filter_map(|t| t.as_str())
-                            .filter(|t| norm(t).contains(&q))
+                            .filter(|t| search_hit(&re, t))
                             .map(|t| t.to_string())
                             .collect()
                     })
@@ -5013,10 +4976,10 @@ impl Store {
                         fields.push("태그");
                     }
                 } else {
-                    if norm(title).contains(&q) {
+                    if search_hit(&re, title) {
                         fields.push("제목");
                     }
-                    if norm(desc).contains(&q) {
+                    if search_hit(&re, desc) {
                         fields.push("소개");
                     }
                     if !tags.is_empty() {
@@ -5059,7 +5022,7 @@ impl Store {
                     .map(|arr| {
                         arr.iter()
                             .filter_map(|t| t.as_str())
-                            .filter(|t| norm(t).contains(&q))
+                            .filter(|t| search_hit(&re, t))
                             .map(|t| t.to_string())
                             .collect()
                     })
@@ -5070,8 +5033,8 @@ impl Store {
                 let matched = if tag_only {
                     !tags.is_empty()
                 } else {
-                    norm(title).contains(&q)
-                        || norm(&searchable_rel).contains(&q)
+                    search_hit(&re, title)
+                        || search_hit(&re, &searchable_rel)
                         || !tags.is_empty()
                 };
                 if matched {

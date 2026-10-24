@@ -4,7 +4,7 @@ use crate::error::{
 use crate::file_index::CommonIndexedFile;
 use crate::markdown::{markdown_entry, read_markdown, write_markdown};
 use crate::store::{
-    abs, atomic_write_str, match_lines, memo_id, rename_with_retry, safe_name, skipped_name,
+    abs, atomic_write_str, match_lines, memo_id, rename_with_retry, safe_name, search_hit, search_regex, skipped_name,
     strip_verbatim_prefix, valid_rel, Store,
 };
 use serde_json::{json, Value};
@@ -1023,14 +1023,7 @@ impl Memos {
             return Ok(json!({ "files": [], "results": [] }));
         }
         let space = Self::resolve_space(store, common_root, space_id)?;
-        let norm = |t: &str| -> String {
-            if case_sensitive {
-                t.to_string()
-            } else {
-                t.to_lowercase()
-            }
-        };
-        let q = norm(raw);
+        let re = search_regex(raw, case_sensitive);
         let mut files = Vec::new();
         let mut results = Vec::new();
 
@@ -1047,7 +1040,7 @@ impl Memos {
             }
             let epath = e.get("path").and_then(|v| v.as_str()).unwrap_or("");
             let ename = e.get("name").and_then(|v| v.as_str()).unwrap_or("");
-            if norm(epath).contains(&q) {
+            if search_hit(&re, epath) {
                 files.push(json!({
                     "space": space.id,
                     "path": epath,
@@ -1096,7 +1089,7 @@ impl Memos {
                 }
             };
 
-            let (found_matches, _) = match_lines(&body, raw, case_sensitive, 50);
+            let (found_matches, _) = match_lines(&body, &re, 50);
             if !found_matches.is_empty() {
                 results.push(json!({
                     "space": space.id,

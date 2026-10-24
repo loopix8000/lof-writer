@@ -52,6 +52,7 @@ import { NodeSelection, TextSelection } from "@tiptap/pm/state";
 import type { EditorProps, EditorView } from "@tiptap/pm/view";
 import { createCachedMarkdown } from "./cached-markdown";
 import EditorFind, { FindHighlights } from "./EditorFind";
+import { searchLine, searchPattern } from "./search-pattern";
 import { readEditorSelection, saveEditorSelection, type EditorSession } from "./workspace-state";
 import type { UndoState } from "./useUndoState";
 
@@ -1180,16 +1181,14 @@ export default function Writer({
   }, [editor, visible, inactive, source, protectedSource, manualLineBreak]);
   useEffect(() => {
     if (!reveal?.query) return;
-    const norm = (t: string) => (reveal.caseSensitive ? t : t.toLocaleLowerCase()),
-      q = norm(reveal.query);
+    const pattern = searchPattern(reveal.query, reveal.caseSensitive);
     if (source || protectedSource) return;
     if (!editor || editor.isDestroyed) return;
     const hits: [number, number][] = [];
     editor.state.doc.descendants((node, pos) => {
       if (!node.isTextblock) return true;
-      const text = norm(node.textContent);
-      for (let o = text.indexOf(q); o >= 0; o = text.indexOf(q, o + q.length))
-        hits.push([offsetToPos(node, pos, o), offsetToPos(node, pos, o + q.length)]);
+      for (const [from, to] of searchLine(node.textContent, pattern))
+        hits.push([offsetToPos(node, pos, from), offsetToPos(node, pos, to)]);
       return false;
     });
     const hit = hits[reveal.index] ?? hits[hits.length - 1];

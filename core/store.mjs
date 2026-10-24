@@ -196,34 +196,45 @@ export function fingerprint(d, body) {
       body,
   );
 }
-// 본문에서 query와 일치한 곳을 줄 단위로 찾는다. 결과의 index는 본문 안에서 몇 번째 일치인지,
-// text는 일치한 곳 앞뒤를 자른 줄, start·length는 text 안의 일치 위치다.
+// 검색어는 rg처럼 정규식으로 해석한다. 정규식으로 올바르지 않으면 입력한 글자 그대로 찾는다.
+export function searchRegex(query, caseSensitive = false) {
+  const flags = caseSensitive ? "gmu" : "gimu";
+  try {
+    return new RegExp(String(query), flags);
+  } catch {
+    return new RegExp(String(query).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), flags);
+  }
+}
+// `a*`처럼 빈 문자열에도 일치하는 패턴이 모든 항목에 일치하지 않도록 길이가 있는 일치만 인정한다.
+export const searchHit = (re, text) => {
+  for (const m of String(text ?? "").matchAll(re)) if (m[0]) return true;
+  return false;
+};
+// 본문에서 query와 일치한 곳을 줄 단위로 찾는다. 정규식은 줄마다 적용하므로 줄 경계를 넘는 일치는 없다.
+// 결과의 index는 본문 안에서 몇 번째 일치인지, text는 일치한 곳 앞뒤를 자른 줄, start·length는 text 안의 일치 위치다.
 export function matchLines(body, query, caseSensitive = false, max = 100) {
-  const norm = (t) => (caseSensitive ? t : t.toLocaleLowerCase()),
-    needle = norm(String(query)),
-    hay = norm(body),
-    matches = [];
-  if (!needle) return { matches, truncated: false };
-  let line = 1,
-    scanned = 0,
-    index = 0;
-  for (let at = hay.indexOf(needle); at >= 0; at = hay.indexOf(needle, at + needle.length), index++) {
-    if (matches.length >= max) return { matches, truncated: true };
-    for (let i = scanned; i < at; i++) if (body[i] === "\n") line++;
-    scanned = at;
-    const lineStart = body.lastIndexOf("\n", at - 1) + 1;
-    let lineEnd = body.indexOf("\n", at);
-    if (lineEnd < 0) lineEnd = body.length;
-    const from = Math.max(lineStart, at - 40),
-      to = Math.min(lineEnd, at + needle.length + 100),
-      cut = from > lineStart ? "…" : "";
-    matches.push({
-      index,
-      line,
-      text: cut + body.slice(from, to),
-      start: cut.length + at - from,
-      length: needle.length,
-    });
+  const matches = [];
+  if (!String(query)) return { matches, truncated: false };
+  const re = searchRegex(query, caseSensitive);
+  let index = 0;
+  const lines = body.split("\n");
+  for (let n = 0; n < lines.length; n++) {
+    const line = lines[n].replace(/\r$/, "");
+    for (const m of line.matchAll(re)) {
+      if (!m[0]) continue;
+      if (matches.length >= max) return { matches, truncated: true };
+      const at = m.index,
+        from = Math.max(0, at - 40),
+        to = Math.min(line.length, at + m[0].length + 100),
+        cut = from > 0 ? "…" : "";
+      matches.push({
+        index: index++,
+        line: n + 1,
+        text: cut + line.slice(from, to),
+        start: cut.length + at - from,
+        length: m[0].length,
+      });
+    }
   }
   return { matches, truncated: false };
 }
@@ -1575,19 +1586,19 @@ export class Store extends EventEmitter {
     const raw = String(query ?? "").trim();
     const empty = { projects: [], files: [], results: [], total: 0, truncated: false };
     if (!raw) return empty;
-    const norm = (t) => (caseSensitive ? String(t ?? "") : String(t ?? "").toLocaleLowerCase());
     const tagOnly = raw.startsWith("#"),
-      q = norm(tagOnly ? raw.replace(/^#+/, "") : raw);
-    if (!q) return empty;
+      pattern = tagOnly ? raw.replace(/^#+/, "") : raw;
+    if (!pattern) return empty;
+    const re = searchRegex(pattern, caseSensitive);
     const list = await this.list();
     const projects = [];
     for (const p of list.projects) {
-      const tags = (p.tags || []).filter((t) => norm(t).includes(q)),
+      const tags = (p.tags || []).filter((t) => searchHit(re, t)),
         fields = tagOnly
           ? tags.length ? ["태그"] : []
           : [
-              ...(norm(p.title).includes(q) ? ["제목"] : []),
-              ...(norm(p.description).includes(q) ? ["소개"] : []),
+              ...(searchHit(re, p.title) ? ["제목"] : []),
+              ...(searchHit(re, p.description) ? ["소개"] : []),
               ...(tags.length ? ["태그"] : []),
             ];
       if (fields.length)
@@ -1597,11 +1608,11 @@ export class Store extends EventEmitter {
     const files = [];
     for (const d of list.documents) {
       if (projectId && d.projectId !== projectId) continue;
-      const tags = (d.tags || []).filter((t) => norm(t).includes(q));
+      const tags = (d.tags || []).filter((t) => searchHit(re, t));
       if (
         tagOnly
           ? !tags.length
-          : !(norm(d.title).includes(q) || norm(innerPath(d.relPath)).includes(q) || tags.length)
+          : !(searchHit(re, d.title) || searchHit(re, innerPath(d.relPath)) || tags.length)
       )
         continue;
       files.push({
