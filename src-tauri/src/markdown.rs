@@ -200,8 +200,31 @@ fn extras_of(properties: &Map<String, Value>, kind: &str) -> Map<String, Value> 
     out
 }
 
+// 색인에 이미 메타데이터가 검증·보관된 원고는 YAML을 다시 해석하지 않고 본문만 바로 잘라낸다.
+pub fn read_markdown_body(raw: &str, has_frontmatter: bool) -> Result<String, LofError> {
+    let source = raw.strip_prefix('\u{feff}').unwrap_or(raw);
+    if !has_frontmatter {
+        return Ok(source.to_string());
+    }
+    static START_RE: OnceLock<Regex> = OnceLock::new();
+    let start_re = START_RE.get_or_init(|| Regex::new(r"^---[ \t]*\r?\n").unwrap());
+    static END_RE: OnceLock<Regex> = OnceLock::new();
+    let end_re = END_RE.get_or_init(|| Regex::new(r"(?m)^---[ \t]*(?:\r?\n|$)").unwrap());
+    if let Some(start_match) = start_re.find(source) {
+        let rest = &source[start_match.end()..];
+        if let Some(end_match) = end_re.find(rest) {
+            return Ok(source[start_match.end() + end_match.end()..].to_string());
+        }
+    }
+    Ok(read_markdown(raw)?.body)
+}
+
 pub fn markdown_entry(raw: &str, fallback: &Value) -> Result<Value, LofError> {
     let parsed = read_markdown(raw)?;
+    markdown_entry_with_parsed(&parsed, fallback)
+}
+
+pub fn markdown_entry_with_parsed(parsed: &ParsedMarkdown, fallback: &Value) -> Result<Value, LofError> {
     let fb_obj = fallback.as_object().cloned().unwrap_or_default();
 
     let mut source = Map::new();
@@ -506,7 +529,7 @@ pub fn write_markdown(body: &str, doc: &Value, previous_raw: &str) -> Result<Str
         }
         properties = ordered;
     }
-    write_properties(body, &properties, previous_raw)
+    write_properties_with_parsed(body, &properties, previous_raw, &parsed)
 }
 
 fn format_yaml_key(k: &str) -> String {
@@ -589,6 +612,15 @@ pub fn write_properties(
     previous_raw: &str,
 ) -> Result<String, LofError> {
     let parsed = read_markdown(previous_raw)?;
+    write_properties_with_parsed(body, properties, previous_raw, &parsed)
+}
+
+fn write_properties_with_parsed(
+    body: &str,
+    properties: &Map<String, Value>,
+    previous_raw: &str,
+    parsed: &ParsedMarkdown,
+) -> Result<String, LofError> {
     if parsed.has_properties && &parsed.properties == properties {
         return Ok(format!("{}{}", parsed.prefix, body));
     }

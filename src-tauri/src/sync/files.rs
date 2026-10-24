@@ -73,10 +73,24 @@ pub(crate) fn inventory(
     // 서재 전체를 훑는 동안 잠금을 계속 쥐면 저장과 문서 열기가 기다린다.
     // 목록만 잠근 채 받고, 원고 확인은 문서마다 잠금을 잡았다 놓으며, 디스크 목록과 해시는 잠금 밖에서 계산한다.
     // 이후 전송 단계가 잠금 안에서 해시를 다시 확인하므로 그 사이에 바뀐 파일은 다음 주기에 다시 맞춘다.
-    let disk = crate::store::disk_inventory(root)?;
+    let is_internal = crate::android_library::is_internal_root(root);
+    let disk = if is_internal {
+        None
+    } else {
+        Some(crate::store::disk_inventory(root)?)
+    };
     let (deferred_paths, documents) = with_store(store, root, |st| {
         st.require_database()?;
-        st.poll_disk_with(disk)?;
+        if let Some(disk) = disk {
+            st.poll_disk_with(disk)?;
+        } else if st.has_pending_disk_changes()? || st.has_busy_files() {
+            st.poll_disk()?;
+        } else {
+            if let Some(db) = &st.index.database {
+                crate::project_order::load(&st.root, db)?;
+            }
+            st.refresh_index(false)?;
+        }
         let deferred = st.sync_deferred_paths()?;
         let list = st.list()?;
         let documents: HashMap<String, String> = list["documents"].as_array().into_iter().flatten()

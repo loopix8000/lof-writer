@@ -1984,7 +1984,7 @@ async fn lof_invoke(
     window: WebviewWindow,
 ) -> Result<Value, String> {
     let args_val = args.unwrap_or_else(|| json!({}));
-    let result = if method.starts_with("realtime") || matches!(method.as_str(), "settings" | "adoptDocument" | "adoptMemo" | "finishDocumentSync" | "saveDraft" | "saveRecoveryCopy" | "recoveryCopies" | "readRecoveryCopy" | "deleteRecoveryCopy" | "restoreRecoveryCopy" | "sync" | "pinUnlock" | "pinSave" | "backupStorage" | "backupGitHistory" | "history" | "historyPage" | "historyRead" | "restore" | "checkpointDocument" | "countManuscript" | "downloadSkill" | "checkSyncUpdates" | "systemFonts" | "readUserFont" | "exportLibrary" | "exportProject" | "prepareAndroidLibrary" | "moveVault") {
+    let result = if method.starts_with("realtime") || matches!(method.as_str(), "settings" | "searchText" | "search" | "adoptDocument" | "adoptMemo" | "finishDocumentSync" | "saveDraft" | "saveRecoveryCopy" | "recoveryCopies" | "readRecoveryCopy" | "deleteRecoveryCopy" | "restoreRecoveryCopy" | "sync" | "pinUnlock" | "pinSave" | "backupStorage" | "backupGitHistory" | "history" | "historyPage" | "historyRead" | "restore" | "checkpointDocument" | "countManuscript" | "downloadSkill" | "checkSyncUpdates" | "systemFonts" | "readUserFont" | "exportLibrary" | "exportProject" | "prepareAndroidLibrary" | "moveVault") {
         tauri::async_runtime::spawn_blocking(move || {
             let state = app.state::<AppState>();
             if method == "pinUnlock" || method == "pinSave" {

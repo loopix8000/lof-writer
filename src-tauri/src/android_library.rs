@@ -44,6 +44,27 @@ pub fn is_internal(user_dir: &Path, path: &Path) -> bool {
     false
 }
 
+/// Android 앱 전용 내부 저장소(`/data/...` 또는 앱 `files/` 아래) 경로인지 확인한다.
+pub fn is_internal_root(path: &Path) -> bool {
+    #[cfg(target_os = "android")]
+    {
+        if path.starts_with("/data") {
+            return true;
+        }
+        let s = path.to_string_lossy();
+        if s.contains("/local.lof.writer/files") || s.starts_with("/data/") {
+            return true;
+        }
+        if let Ok(clean) = fs::canonicalize(path) {
+            if clean.starts_with("/data") {
+                return true;
+            }
+        }
+    }
+    let _ = path;
+    false
+}
+
 /// Android에서 설정된 서재(기본값: 앱 내부 저장소)를 연다.
 pub fn prepare(state: &AppState, app: &AppHandle, args: &Value) -> Result<Value, LofError> {
     let _guard = PREPARE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());

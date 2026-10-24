@@ -3,6 +3,9 @@ use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+const CATALOG_SAVE_DELAY: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone)]
 pub struct CommonIndexCache {
@@ -47,6 +50,8 @@ pub struct FileIndex {
     pub common: CommonIndexCache,
     pub database: Option<crate::database::LibraryDb>,
     pub database_error: String,
+    pending: Option<Value>,
+    saved_at: Option<Instant>,
 }
 
 impl FileIndex {
@@ -62,6 +67,8 @@ impl FileIndex {
             },
             database: None,
             database_error: String::new(),
+            pending: None,
+            saved_at: None,
         }
     }
 
@@ -258,7 +265,7 @@ impl FileIndex {
         Ok(content)
     }
 
-    pub fn save(&self, vault_id: &str, catalog: &Catalog) -> Result<(), LofError> {
+    pub fn save(&mut self, vault_id: &str, catalog: &Catalog) -> Result<(), LofError> {
         let projects_json: Vec<Value> = catalog
             .projects
             .iter()
@@ -317,6 +324,23 @@ impl FileIndex {
             "warnings": catalog.warnings,
         });
 
+        // 색인은 다음 시작 때 파일 크기·시각으로 다시 맞추는 캐시라서 바뀔 때마다 바로 쓰지 않는다.
+        // 원고 저장마다 서재 전체 색인을 직렬화해 기록하지 않도록 모아 두었다가 잠시 뒤 한 번에 쓴다.
+        self.pending = Some(payload);
+        Ok(())
+    }
+
+    // 모아 둔 색인을 일정 간격으로만 기록한다. 서재를 닫거나 옮길 때는 바로 기록한다.
+    pub fn flush_due(&mut self) -> Result<(), LofError> {
+        if self.pending.is_some() && self.saved_at.is_none_or(|at| at.elapsed() >= CATALOG_SAVE_DELAY) {
+            self.flush()?;
+        }
+        Ok(())
+    }
+
+    pub fn flush(&mut self) -> Result<(), LofError> {
+        let Some(payload) = self.pending.take() else { return Ok(()) };
+        self.saved_at = Some(Instant::now());
         // 관리 DB는 내용이 같으면 다시 쓰지 않는다. 문자열로 바꿨다가 다시 해석하지 않고 그대로 넘긴다.
         if let Some(db) = &self.database { db.set("catalog", &payload) }
         else if self.database_error.is_empty() { crate::store::atomic_write_str(&self.file, &payload.to_string()) }
@@ -328,5 +352,12 @@ impl FileIndex {
             Ok(db) => { self.database = Some(db); self.database_error.clear(); }
             Err(error) => { self.database_error = format!("SQLite 전환을 완료하지 못했습니다. 원본 파일은 보존되며 편집·동기화를 중단합니다: {}", error.message); }
         }
+    }
+}
+
+// 서재를 닫거나 바꿀 때 모아 둔 색인을 남긴다.
+impl Drop for FileIndex {
+    fn drop(&mut self) {
+        let _ = self.flush();
     }
 }

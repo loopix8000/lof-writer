@@ -56,6 +56,7 @@ export function useDocumentSession(options: Options) {
   const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const conflictRef = useRef(false);
   const activeId = useRef("");
+  const freshReadId = useRef("");
   // 앱에서 문서를 처음 열었을 때의 글자 수를 문서별로 유지한다.
   const sessionStarts = useRef(new Map<string, number>());
   const scrollPositions = useRef<EditorScrollPositions>(new Map());
@@ -351,7 +352,14 @@ export function useDocumentSession(options: Options) {
       return d ? { doc: d.doc, version: `${d.seq}:${d.doc.revision}` } : null;
     },
     beforeRead: () => saveChain.current,
-    read: (doc: Doc) => call<Doc>("readDocument", { id: doc.id }),
+    read: (doc: Doc) => {
+      // 문서를 열면서 방금 읽은 원고는 첫 자동 확인에서 다시 읽지 않는다.
+      if (freshReadId.current === doc.id) {
+        freshReadId.current = "";
+        return Promise.resolve(doc);
+      }
+      return call<Doc>("readDocument", { id: doc.id });
+    },
     reconcile: (doc) => {
       const d = draft.current;
       // 마지막 저장 원고와 비교해 위치만 갱신하고, 저장하지 않은 입력은 그대로 남긴다.
@@ -423,6 +431,7 @@ export function useDocumentSession(options: Options) {
       const meta = documents.find((x) => x.id === d.doc.id);
       if (meta && (meta.revision !== d.doc.revision ||
           (meta.fingerprint !== d.doc.fingerprint && d.seq === d.saved))) {
+        freshReadId.current = "";
         void checkOpenDocument().catch(report);
       } else if (meta && d.seq === d.saved &&
           (meta.title !== d.doc.title || meta.path !== d.doc.path || meta.relPath !== d.doc.relPath)) {
@@ -492,6 +501,7 @@ export function useDocumentSession(options: Options) {
       edited: keepOlder,
     };
     if (keepOlder) void call("saveDraft", { ...doc, expectedRevision: doc.revision }).catch(report);
+    freshReadId.current = keepOlder ? "" : doc.id;
     activeId.current = doc.id;
     setActive(doc);
     setSaveStatus(keepOlder ? "외부 변경 있음" : "저장됨");
@@ -523,6 +533,7 @@ export function useDocumentSession(options: Options) {
   function closeDocument() {
     detachDocument();
     activeId.current = "";
+    freshReadId.current = "";
   }
 
   function resetVault() {

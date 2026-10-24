@@ -51,7 +51,7 @@ pub fn start(app: &AppHandle) {
                         retry_root = store.root.clone();
                         retry_after = Instant::now();
                     }
-                    if Instant::now() >= retry_after {
+                    let changed = if Instant::now() >= retry_after {
                         let before = store.local_git.status();
                         if store.git_tick(false, editing).is_err() {
                             retry_after = Instant::now() + Duration::from_secs(30);
@@ -59,7 +59,12 @@ pub fn start(app: &AppHandle) {
                         before != store.local_git.status()
                     } else {
                         false
+                    };
+                    // 모아 둔 서재 색인은 Git 기록 재시도와 상관없이 일정 간격으로 남긴다.
+                    if let Err(error) = store.index.flush_due() {
+                        eprintln!("서재 색인을 기록하지 못했습니다: {}", error.message);
                     }
+                    changed
                 } else {
                     false
                 }

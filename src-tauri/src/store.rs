@@ -10,7 +10,8 @@ use crate::error::{
 };
 use crate::file_index::{Catalog, CatalogProject, FileIndex, IndexedFileRecord};
 use crate::markdown::{
-    document_properties, markdown_entry, read_markdown, write_markdown, write_properties,
+    document_properties, markdown_entry, markdown_entry_with_parsed, read_markdown,
+    read_markdown_body, write_markdown, write_properties,
 };
 use crate::platforms::normalize_writing;
 use crate::text::{character_count, count_for_writing, manuscript_stats};
@@ -677,8 +678,8 @@ fn read_project_from_dir(dir: &Path) -> Result<Option<(Value, bool)>, LofError> 
 }
 
 fn doc_of(dir: &Path, project_id: &str, entry: &Value, raw: &str) -> Result<Value, LofError> {
-    let entry = markdown_entry(raw, entry)?;
     let parsed = read_markdown(raw)?;
+    let entry = markdown_entry_with_parsed(&parsed, entry)?;
     let body = parsed.body;
     let eobj = entry.as_object().cloned().unwrap_or_default();
     let kind = eobj
@@ -901,6 +902,8 @@ pub struct Store {
     last_snapshot: HashMap<String, Option<SnapshotEntry>>,
     // 목록을 새로 그릴 때마다 표지를 다시 읽어 인코딩하지 않도록 크기·수정 시각이 같으면 재사용한다.
     cover_cache: HashMap<PathBuf, (u64, Option<SystemTime>, Value)>,
+    // 변경이 없을 때 서재 목록 전체를 매번 다시 조립·정렬하지 않도록 캐시한다.
+    list_cache: Option<((u64, u64), Value)>,
     pub history_policy: HistoryPolicy,
     pub default_manual_line_break: bool,
 }
@@ -1143,6 +1146,7 @@ impl Store {
             migration_warning: String::new(),
             last_snapshot: HashMap::new(),
             cover_cache: HashMap::new(),
+            list_cache: None,
             history_policy,
             default_manual_line_break,
         };
@@ -1214,6 +1218,7 @@ impl Store {
         }
         #[cfg(not(target_os = "android"))]
         if trash::delete(file).is_ok() {
+            record_change(file);
             return Ok(());
         }
         if file.is_dir() {
@@ -1221,6 +1226,7 @@ impl Store {
         } else {
             fs::remove_file(file)?;
         }
+        record_change(file);
         Ok(())
     }
 
@@ -1269,9 +1275,10 @@ impl Store {
             .to_string();
         if let Some(obj) = full_doc.as_object_mut() {
             obj.remove("body");
-            let chars = character_count(&body, false);
+            let stats = manuscript_stats(&body);
+            let chars = stats.utf16_without_spaces;
             let writing = normalize_writing(project.get("writing"));
-            let pchars = count_for_writing(&manuscript_stats(&body), &writing);
+            let pchars = count_for_writing(&stats, &writing);
             obj.insert("characters".to_string(), json!(chars));
             obj.insert("platformCharacters".to_string(), json!(pchars));
         }
@@ -1483,13 +1490,8 @@ impl Store {
         if !self.index_enabled || self.catalog.is_none() {
             return Ok(());
         }
-        // A disconnected or unreadable vault must never become a deletion snapshot.
-        let _=fs::read_dir(&self.root)?;
-        let mut cat = self.catalog.take().unwrap();
-        let before_projects:Vec<(String,PathBuf)>=cat.projects.iter().filter_map(|p|
-            p.project["id"].as_str().map(|id|(id.to_string(),p.dir.clone()))).collect();
-        let res = (|| -> Result<(), LofError> {
-            let cur_seq = CHANGE_SEQUENCE.load(Ordering::SeqCst);
+        let cur_seq = CHANGE_SEQUENCE.load(Ordering::SeqCst);
+        if cur_seq > self.index_sequence {
             if let Ok(map) = changed_paths_map().lock() {
                 for (file, &seq) in map.iter() {
                     if seq > self.index_sequence {
@@ -1503,7 +1505,18 @@ impl Store {
                 }
             }
             self.index_sequence = cur_seq;
-
+        }
+        // 변경된 경로가 없고 전체 스캔 요청도 아니면 디스크를 읽지 않고 바로 끝낸다.
+        if !inventory && self.index.dirty.is_empty() {
+            return Ok(());
+        }
+        self.list_cache = None;
+        // A disconnected or unreadable vault must never become a deletion snapshot.
+        let _=fs::read_dir(&self.root)?;
+        let mut cat = self.catalog.take().unwrap();
+        let before_projects:Vec<(String,PathBuf)>=cat.projects.iter().filter_map(|p|
+            p.project["id"].as_str().map(|id|(id.to_string(),p.dir.clone()))).collect();
+        let res = (|| -> Result<(), LofError> {
             if inventory {
                 for p in &cat.projects {
                     if let Some(name) = p.dir.file_name().and_then(|n| n.to_str()) {
@@ -1571,7 +1584,14 @@ impl Store {
                 }
 
                 let mut p_idx = cat.projects.iter().position(|x| x.dir == dir);
-                if p_idx.is_none() || paths.contains("") || paths.contains("project.json") {
+                let cur_proj_stamp = self.stamp(&dir.join("project.json")).ok().flatten();
+                let proj_unchanged = p_idx.is_some_and(|i| {
+                    cur_proj_stamp.is_some()
+                        && cat.projects[i].project_stamp == cur_proj_stamp
+                        && !cat.projects[i].errors.contains_key("project")
+                        && cat.projects[i].project.get("fileCentric").and_then(Value::as_bool) == Some(true)
+                });
+                if p_idx.is_none() || paths.contains("project.json") || (paths.contains("") && !proj_unchanged) {
                     match read_project_from_dir(&dir) {
                         Ok(None) => {
                             if let Some(idx) = p_idx {
@@ -1723,6 +1743,10 @@ impl Store {
                                 cat.warnings.push(format!("{}: {}", folder, e.message));
                             }
                         }
+                    }
+                } else if paths.contains("") {
+                    if let Some(idx) = p_idx {
+                        self.refresh_project_files(&mut cat.projects[idx], true);
                     }
                 }
 
@@ -2121,7 +2145,16 @@ impl Store {
             let same = |entry: &Value| entry.get("id").and_then(|v| v.as_str()) == Some(id);
             let listed = p.project.get("documents").and_then(|v| v.as_array()).into_iter().flatten()
                 .filter(|entry| same(entry)).cloned();
-            for entry in listed.chain(self.doc_files(p).into_iter().filter(|entry| same(entry))) {
+            let doc_entries: Vec<Value> = if self.index_enabled && !p.files.is_empty() {
+                p.files
+                    .iter()
+                    .filter(|(rel, f)| rel.starts_with("doc/") && same(&f.entry))
+                    .map(|(_, f)| f.entry.clone())
+                    .collect()
+            } else {
+                self.doc_files(p).into_iter().filter(|entry| same(entry)).collect()
+            };
+            for entry in listed.chain(doc_entries) {
                 if found.is_some() {
                     return Err(fail(
                         "같은 문서 ID를 가진 파일이 여러 개 있습니다. 사본에는 새 ID를 지정해 주세요.",
@@ -2261,21 +2294,33 @@ impl Store {
             self.database()?,
             ids.iter().filter_map(Value::as_str).map(str::to_string).collect(),
         )?;
+        self.list_cache = None;
         Ok(true)
     }
 
     pub fn list(&mut self) -> Result<Value, LofError> {
-        let cat = self.scan()?;
-        let projects_out = self.ordered_projects(&cat.projects)?;
-        let mut documents = Vec::new();
-        let mut unlinked = Vec::new();
-        let mut missing_files = Vec::new();
-        let mut warnings = cat.warnings.clone();
-        if !self.migration_warning.is_empty() {
-            warnings.push(self.migration_warning.clone());
-        }
-
-        if self.index_enabled {
+        if self.index_enabled && self.catalog.is_some() {
+            self.refresh_index(false)?;
+            let rev = self.sync_revision();
+            if let Some((cached_rev, cached_val)) = &self.list_cache {
+                if *cached_rev == rev {
+                    return Ok(cached_val.clone());
+                }
+            }
+            let cat = self.catalog.as_ref().unwrap();
+            let projects_out = self.ordered_projects(&cat.projects)?;
+            let mut documents = Vec::new();
+            let unlinked: Vec<Value> = Vec::new();
+            let missing_files: Vec<Value> = Vec::new();
+            let mut warnings = cat.warnings.clone();
+            for p in &cat.projects {
+                for err in p.errors.values() {
+                    warnings.push(err.clone());
+                }
+            }
+            if !self.migration_warning.is_empty() {
+                warnings.push(self.migration_warning.clone());
+            }
             let mut ids = HashSet::new();
             for p in &cat.projects {
                 for file in p.files.values() {
@@ -2308,7 +2353,7 @@ impl Store {
                         ia.cmp(ib)
                     })
             });
-            return Ok(json!({
+            let out = json!({
                 "root": self.root.to_string_lossy().to_string(),
                 "vault": self.vault,
                 "projects": projects_out,
@@ -2316,7 +2361,19 @@ impl Store {
                 "unlinked": unlinked,
                 "missing": missing_files,
                 "warnings": warnings,
-            }));
+            });
+            self.list_cache = Some((self.sync_revision(), out.clone()));
+            return Ok(out);
+        }
+
+        let cat = self.scan()?;
+        let projects_out = self.ordered_projects(&cat.projects)?;
+        let mut documents = Vec::new();
+        let mut unlinked = Vec::new();
+        let mut missing_files = Vec::new();
+        let mut warnings = cat.warnings.clone();
+        if !self.migration_warning.is_empty() {
+            warnings.push(self.migration_warning.clone());
         }
 
         for p in &cat.projects {
@@ -2437,6 +2494,63 @@ impl Store {
     }
 
     pub fn read(&mut self, id: &str) -> Result<Value, LofError> {
+        if !valid_id(id) {
+            return Err(fail_invalid("잘못된 문서 ID"));
+        }
+        // 색인이 활성화된 경우 메타 정보는 DB/색인에서 가져오고 본문만 마크다운 원문 파일에서 직접 읽는다.
+        // 원문 해시가 색인의 revision과 같으면 YAML 재해석과 관찰 DB 재기록을 건너뛴다.
+        if self.index_enabled && self.catalog.is_some() {
+            self.refresh_index(false)?;
+            let mut found: Option<(PathBuf, String, Value, bool)> = None;
+            let mut matches = 0usize;
+            if let Some(cat) = self.catalog.as_ref() {
+                for p in &cat.projects {
+                    let same = |entry: &Value| entry.get("id").and_then(|v| v.as_str()) == Some(id);
+                    let listed_count = p.project.get("documents").and_then(|v| v.as_array()).into_iter().flatten()
+                        .filter(|entry| same(entry)).count();
+                    let doc_count = p.files.iter()
+                        .filter(|(rel, f)| rel.starts_with("doc/") && same(&f.entry))
+                        .count();
+                    matches += listed_count + doc_count;
+                    if matches == 1 && found.is_none() {
+                        if let Some((rel, rec)) = p.files.iter().find(|(_, f)| same(&f.entry)) {
+                            if !rec.stamp.is_empty() && !p.errors.contains_key(rel) {
+                                let file = abs(&p.dir, rel);
+                                let rev = rec.doc.get("revision").and_then(Value::as_str).unwrap_or("").to_string();
+                                let has_fm = rec.entry.get("_markdown").and_then(Value::as_bool) == Some(true);
+                                found = Some((file, rev, rec.doc.clone(), has_fm));
+                            }
+                        }
+                    }
+                }
+            }
+            if matches > 1 {
+                return Err(fail(
+                    "같은 문서 ID를 가진 파일이 여러 개 있습니다. 사본에는 새 ID를 지정해 주세요.",
+                    "DUPLICATE",
+                ));
+            }
+            if let Some((file, expected_rev, mut doc, has_fm)) = found {
+                let (raw, stat) = read_document_file(&file)?;
+                if !expected_rev.is_empty() && hash_str(&raw) == expected_rev {
+                    let body = read_markdown_body(&raw, has_fm)?;
+                    if let Some(obj) = doc.as_object_mut() {
+                        obj.remove("characters");
+                        obj.remove("platformCharacters");
+                        obj.insert("body".to_string(), json!(body));
+                    }
+                    return Ok(doc);
+                }
+                // 파일 내용이 색인과 달라졌으면(외부 편집 등) 메타데이터와 관찰 DB를 다시 맞춘다.
+                let (p, entry, _) = self.find_doc(id)?;
+                let proj_id = p.project.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                let doc = doc_of(&p.dir, proj_id, &entry, &raw)?;
+                if let Some(db) = &self.index.database {
+                    return db.observe_file(&doc, &sys_time_to_iso(stat.modified()?), is_app_write(&file, &raw, &stat));
+                }
+                return Ok(doc);
+            }
+        }
         let (p, entry, file) = self.find_doc(id)?;
         let (raw, stat) = read_document_file(&file)?;
         let proj_id = p.project.get("id").and_then(|v| v.as_str()).unwrap_or("");
@@ -3151,6 +3265,7 @@ impl Store {
             self.index.dirty.clear();
             self.index.save(&vault_id, &fresh_cat)?;
             self.catalog = Some(fresh_cat);
+            self.list_cache = None;
             self.index_enabled = true;
             self.index_sequence = CHANGE_SEQUENCE.load(Ordering::SeqCst);
 
@@ -4153,7 +4268,14 @@ impl Store {
             &abs(&f_proj.dir, entry_path),
             &write_markdown(&body, &f_entry, &raw)?,
         )?;
-        self.write_project(&f_proj)?;
+        let file_centric = f_proj
+            .project
+            .get("fileCentric")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        if !file_centric || !changed.is_empty() {
+            self.write_project(&f_proj)?;
+        }
         self.read(id)
     }
 
@@ -4397,16 +4519,8 @@ impl Store {
         if !valid_id(id) {
             return Err(fail_invalid("잘못된 ID"));
         }
-        let (f_proj, f_entry, f_file) = self.find_doc(id)?;
-        let raw = fs::read_to_string(&f_file)?;
-        let proj_id = f_proj
-            .project
-            .get("id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let current = doc_of(&f_proj.dir, &proj_id, &f_entry, &raw)?;
         if self.local_git.ready {
+            let current = self.read(id)?;
             let body = current.get("body").and_then(|v| v.as_str()).unwrap_or("");
             let recorded = self.local_git.capture_document(id, &current, if force { "수동 저장한 원고 기록" } else { "원고 이력 기록" })?;
             if recorded {
@@ -4417,6 +4531,15 @@ impl Store {
             }
             return Ok(recorded);
         }
+        let (f_proj, f_entry, f_file) = self.find_doc(id)?;
+        let raw = fs::read_to_string(&f_file)?;
+        let proj_id = f_proj
+            .project
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let current = doc_of(&f_proj.dir, &proj_id, &f_entry, &raw)?;
         let body = current.get("body").and_then(|v| v.as_str()).unwrap_or("");
         let latest = self.database()?.latest_history(id)?;
         if latest.as_ref().is_some_and(|(_, previous)| crate::database::same_history_content(previous, &current)) {

@@ -1,20 +1,27 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { firstQuote, noteLink, type NoteMark } from "../note-links";
 import { call, type Doc, type Library } from "../types";
 
 export function useDocumentNotes(active: Doc | null, lib: Library) {
   const [noteMarks, setNoteMarks] = useState<Record<string, NoteMark[]>>({});
+  const scannedRef = useRef<Record<string, string>>({});
   // 지금 원고를 출처 링크로 인용한 메모를 찾는다. 다른 플롯·메모가 바뀌면 다시 찾는다.
   const noteScan = active
     ? lib.documents
-      .filter((d) => d.projectId === active.projectId && d.kind !== "episode" && d.id !== active.id)
-      .map((d) => d.id + d.updatedAt + d.archived)
+      .filter((d) => d.projectId === active.projectId && d.kind !== "episode" && !d.archived && d.id !== active.id)
+      .map((d) => d.id + d.updatedAt)
       .join()
     : "";
   useEffect(() => {
     const id = active?.id,
       projectId = active?.projectId;
     if (!id) return;
+    if (scannedRef.current[id] === noteScan) return;
+    if (!noteScan) {
+      scannedRef.current[id] = noteScan;
+      setNoteMarks((previous) => (previous[id]?.length ? { ...previous, [id]: [] } : previous));
+      return;
+    }
     let canceled = false;
     (async () => {
       const found = await call<{ results: { id: string; archived: boolean }[] }>("searchText", {
@@ -29,7 +36,10 @@ export function useDocumentNotes(active: Doc | null, lib: Library) {
         const text = firstQuote(doc.body);
         if (text) list.push({ id: doc.id, title: doc.title, text });
       }
-      if (!canceled) setNoteMarks((previous) => ({ ...previous, [id]: list }));
+      if (!canceled) {
+        scannedRef.current[id] = noteScan;
+        setNoteMarks((previous) => ({ ...previous, [id]: list }));
+      }
     })().catch(() => { });
     return () => {
       canceled = true;

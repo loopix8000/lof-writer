@@ -363,6 +363,14 @@ impl LocalWatch {
             .unwrap_or("")
             .to_string();
         let source = (root.clone(), common_setting);
+        // 앱 내부 저장소는 외부 앱이 접근할 수 없고 앱 내부 변경은 직접 기록하므로 OS 폴더 감시를 켜지 않는다.
+        if crate::android_library::is_internal_root(root) {
+            self.watcher = None;
+            self.roots.clear();
+            self.source = Some(source);
+            self.error = None;
+            return Ok(());
+        }
         // 설정이 같으면 경로 정규화와 존재 확인조차 반복하지 않는다.
         if self.source.as_ref() == Some(&source)
             && (self.watcher.is_some() || Instant::now() < self.retry_at)
@@ -590,6 +598,25 @@ fn poll_local(
     let Some(root) = state.store.lock().unwrap().as_ref().map(|store| store.root.clone()) else {
         return Ok((false, false));
     };
+    // 앱 내부 저장소는 외부 파일 변경이 없으므로 전체 폴더를 훑지 않고 앱 내부 변경만 색인에 반영한다.
+    if crate::android_library::is_internal_root(&root) {
+        let (vault_changed, recheck) = {
+            let mut guard = state.store.lock().unwrap();
+            let Some(store) = guard.as_mut().filter(|store| store.root == root) else {
+                return Ok((false, false));
+            };
+            let before = store.sync_revision();
+            store.refresh_index(false)?;
+            (
+                before != store.sync_revision(),
+                store.has_pending_disk_changes()? || store.has_busy_files(),
+            )
+        };
+        if vault_changed {
+            schedule_notify(app, &state.notify_seq);
+        }
+        return Ok((vault_changed, recheck));
+    }
     // 서재 파일 목록은 잠금 밖에서 만들어 저장·문서 열기를 막지 않는다.
     let files = crate::store::disk_inventory(&root)?;
     let (vault_changed, recheck) = {

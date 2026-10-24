@@ -315,6 +315,7 @@ pub fn move_library(state: &AppState, app: &AppHandle, args: &Value) -> Result<V
     let mut promoted = false;
     let result = (|| -> Result<Store, LofError> {
         copy_files(&source, &staging, &files)?;
+        store.index.flush()?;
         store
             .database()?
             .backup(&staging.join(".lof/library.sqlite"))?;
