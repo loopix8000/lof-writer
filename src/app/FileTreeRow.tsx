@@ -4,6 +4,7 @@ import { normalizeStatus } from "../../core/episode.mjs";
 import type { Doc } from "../types";
 import type { TreeRowOptions } from "./file-tree-model";
 import type { FileTreeController } from "./useFileTree";
+import TreeRow, { TreeRowAction, treeRowStyle } from "./TreeRow";
 
 export const documentIcon = (doc: Doc) => doc.kind === "memo" ? <StickyNote size={15} /> : <FileText size={15} />;
 
@@ -13,15 +14,15 @@ export default function FileTreeRow({ doc, marker, options = {}, tree }: {
   options?: TreeRowOptions;
   tree: FileTreeController;
 }) {
-  const style = options.depth ? { paddingLeft: 8 + options.depth * 16 } : undefined;
+  const style = treeRowStyle(options.depth);
   const dropMark = tree.episodeDrop?.id === doc.id
     ? tree.episodeDrop.after ? "drop-after" : "drop-before"
     : doc.kind === "episode" && tree.treeDrop === doc.id ? "drop-target" : "";
   const selected = tree.treeSelection.length > 1 && tree.treeSelection.includes(doc.id);
   const completed = doc.kind === "episode" && normalizeStatus(doc.status) === "completed";
-  const className = `tree-item ${completed ? "is-completed" : ""} ${doc.id === tree.currentId ? "current" : ""} ${selected ? "multi-selected" : ""} ${tree.menuTarget === doc.id ? "context-target" : ""} ${dropMark}`;
+  const className = `${completed ? "is-completed" : ""} ${doc.id === tree.currentId ? "current" : ""} ${selected ? "multi-selected" : ""} ${tree.menuTarget === doc.id ? "context-target" : ""} ${dropMark}`;
   if (tree.renaming?.id === doc.id && !tree.renaming.widget) return (
-    <div className={`${className} renaming`} style={style}>
+    <div className={`tree-item ${className} renaming`} style={style}>
       {marker}
       <input className="tree-rename" aria-label="새 이름" autoFocus value={tree.renaming.value}
         onFocus={event => event.currentTarget.select()}
@@ -35,21 +36,15 @@ export default function FileTreeRow({ doc, marker, options = {}, tree }: {
     </div>
   );
   return (
-    <button className={className} style={style} data-doc-id={doc.id} aria-selected={selected || undefined}
+    <TreeRow className={className} depth={options.depth} data-doc-id={doc.id} aria-selected={selected || undefined}
       aria-label={completed ? `${tree.numberOf(doc)} ${doc.title} 집필 완료` : undefined}
-      {...tree.rowProps(doc, options.dropFolder)}>
-      {marker}
-      <span>{doc.title}</span>
-      {options.badge && <small className="tree-badge" title={`${options.badge}화에 연결됨`}>{options.badge}화</small>}
-      <span className="tree-actions">
-        <span className="tree-action" role="button" tabIndex={-1}
+      {...tree.rowProps(doc, options.dropFolder)} marker={marker} label={doc.title}
+      badge={options.badge && <small className="tree-badge" title={`${options.badge}화에 연결됨`}>{options.badge}화</small>}
+      actions={<TreeRowAction
           title={doc.archived ? "보관 해제" : "보관함으로 이동"}
-          aria-label={`${doc.title} ${doc.archived ? "보관 해제" : "보관"}`}
-          onClick={event => { event.stopPropagation(); tree.attempt(() => tree.archiveDoc(doc))(); }}
-          onDoubleClick={event => event.stopPropagation()}>
+          label={`${doc.title} ${doc.archived ? "보관 해제" : "보관"}`}
+          onAction={() => tree.attempt(() => tree.archiveDoc(doc))()}>
           {doc.archived ? <ArchiveRestore size={14} /> : <Archive size={14} />}
-        </span>
-      </span>
-    </button>
+        </TreeRowAction>} />
   );
 }

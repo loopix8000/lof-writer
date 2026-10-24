@@ -6,6 +6,7 @@ import RecoveryCopies from "./RecoveryCopies";
 import { memoEntriesInView, type MemoEntry } from "./memo-tree";
 import { call } from "./types";
 import { MobileActionSheet } from "./mobile/MobileActionSheet";
+import TreeRow, { TreeRowAction } from "./app/TreeRow";
 
 export default function MemoArchiveDialog({ space, title, mobile = false, onClose, openDoc, openMemo, flush, onRemoved }: {
   space: string;
@@ -107,14 +108,14 @@ export default function MemoArchiveDialog({ space, title, mobile = false, onClos
     return (index < 0 ? "" : entry.path.slice(0, index)) === parent;
   }).map(entry => {
     const folder = entry.type === "folder", open = expanded.has(entry.path);
-    const icon = folder ? open ? <FolderOpen size={16} /> : <Folder size={16} />
-      : entry.kind === "plot" ? mobile ? <FilePlus size={16} /> : <FileText size={15} className="memo-file-icon" />
-        : <StickyNote size={16} className={mobile ? undefined : "memo-file-icon"} />;
+    const icon = folder ? open ? <FolderOpen size={mobile ? 16 : 15} /> : <Folder size={mobile ? 16 : 15} />
+      : entry.kind === "plot" ? mobile ? <FilePlus size={16} /> : <FileText size={15} />
+        : <StickyNote size={mobile ? 16 : 15} />;
     return <div key={entry.path} className={mobile ? "m-tree-node" : undefined}>
       <div className={mobile ? `m-tree-row ${folder ? "m-tree-folder" : "m-doc-tree-item"}` : "memo-archive-entry"}
         onContextMenu={mobile ? undefined : event => { event.preventDefault(); setMenu({ entry, x: event.clientX, y: event.clientY }); }}>
-        <button type="button" className={mobile ? "m-tree-row-main" : "tree-item memo-row"}
-          style={mobile ? undefined : { paddingLeft: 8 + depth * 14 }} disabled={busy}
+        {mobile ? <>
+        <button type="button" className="m-tree-row-main" disabled={busy}
           aria-expanded={folder ? open : undefined} onClick={() => openEntry(entry)}>
           {folder && (mobile ? <span className="m-tree-chevron">{open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</span>
             : open ? <ChevronDown size={14} /> : <ChevronRight size={14} />)}
@@ -122,13 +123,21 @@ export default function MemoArchiveDialog({ space, title, mobile = false, onClos
           <span className={mobile ? "m-tree-label" : undefined}>{entry.name}</span>
           {mobile && entry.updatedAt && <span className="m-tree-meta">{new Date(entry.updatedAt).toLocaleDateString("ko-KR")}</span>}
         </button>
-        <button type="button" className={mobile ? "m-tree-action-btn" : "memo-archive-menu"} disabled={busy}
+        <button type="button" className="m-tree-action-btn" disabled={busy}
           aria-label={`${entry.name} 메뉴`} aria-haspopup={mobile ? "dialog" : "menu"}
           onClick={event => {
             menuTrigger.current = event.currentTarget;
             if (mobile) setActionEntry(entry);
             else { const rect = event.currentTarget.getBoundingClientRect(); setMenu({ entry, x: rect.right, y: rect.bottom }); }
           }}><MoreVertical size={17} /></button>
+        </> : <TreeRow folder={folder} depth={depth} label={entry.name} disabled={busy}
+          aria-expanded={folder ? open : undefined} title={entry.path} onClick={() => openEntry(entry)}
+          marker={<>
+            {folder && (open ? <ChevronDown size={14} /> : <ChevronRight size={14} />)}
+            {icon}
+          </>}
+          actions={<TreeRowAction title="보관 해제" label={`${entry.name} 보관 해제`} disabled={busy}
+            onAction={() => void changeEntry(entry)}><ArchiveRestore size={14} /></TreeRowAction>} />}
       </div>
       {folder && open && <div className={mobile ? "m-tree-children" : undefined}>{rows(entry.path, depth + 1)}</div>}
     </div>;

@@ -15,7 +15,6 @@ import {
   History,
   Search,
   StickyNote,
-  BookOpen,
   X,
 } from "lucide-react";
 import Writer from "./Writer";
@@ -38,6 +37,10 @@ import { call, type AutoSyncStatus, type Doc, type Kind } from "./types";
 import SyncStatus from "./SyncStatus";
 import HistoryDialog from "./HistoryDialog";
 import MemoArchiveDialog from "./MemoArchiveDialog";
+import TreeRow, { TreeRowAction, treeRowStyle } from "./app/TreeRow";
+import { documentIcon } from "./app/FileTreeRow";
+import { episodeNumber } from "./app/file-tree-model";
+import { episodeNumbers, normalizeStatus } from "../core/episode.mjs";
 import { normalizeEditorStyle, resolveKindPrefs } from "../core/typesetting.mjs";
 import ResizableSidebar from "./ResizableSidebar";
 
@@ -846,9 +849,15 @@ export default function MemoSession({
     const e = entries.find((x) => x.path === selected);
     return !e ? "" : e.type === "folder" ? e.path : parentOf(e.path);
   }
-  async function newMemo(folder = targetFolder()) {
-    const m = await call<Memo>("memoCreate", { space, folder, title: "새 메모" });
-    showCreatedEntry({ path: m.path, name: m.title, type: "file" });
+  async function newMemo(folder = targetFolder(), kind: "memo" | "plot" = "memo") {
+    let m: Pick<Memo, "path" | "title">;
+    if (kind === "plot" && space !== COMMON) {
+      const doc = await call<Doc>("createDocument", { projectId: space, folder, kind, title: "새 플롯" });
+      if (!doc.relPath?.startsWith("doc/")) throw Error("만든 문서의 경로를 확인할 수 없습니다.");
+      m = { path: doc.relPath.slice(4), title: doc.title };
+    } else m = await call<Memo>("memoCreate", { space, folder, title: "새 메모" });
+    if (space !== COMMON) setFilter(old => new Set([...old, kind]));
+    showCreatedEntry({ path: m.path, name: m.title, type: "file", kind });
     await openMemo(m.path, space, true);
     setRenaming({ path: m.path, value: m.title });
   }
@@ -950,17 +959,31 @@ export default function MemoSession({
     );
     message("보관함으로 옮겼습니다.");
   }
+  async function archiveTreeDocument(doc: Doc) {
+    await flush();
+    const current = await call<Doc>("readDocument", { id: doc.id });
+    await call("saveDocument", { id: doc.id, expectedRevision: current.revision, archived: true });
+    const matches = (tab: MemoTab) => tab.space === doc.projectId &&
+      (tab.path === DOC + doc.id || !!doc.relPath?.startsWith("doc/") && tab.path === doc.relPath.slice(4));
+    if (memoRef.current && matches(memoRef.current)) closeCurrent();
+    area.mapTabs(tab => matches(tab) ? null : tab);
+    message("보관함으로 옮겼습니다.");
+  }
   function openMenu(e: React.MouseEvent, items: MenuItem[], target: string) {
     e.preventDefault();
     e.stopPropagation();
     setMenu({ x: e.clientX, y: e.clientY, items, target });
   }
+  const documentCreateMenu = (folder: string): MenuItem[] => [
+    ...(space === COMMON ? [] : [{ label: "새 플롯", action: attempt(() => newMemo(folder, "plot")) }]),
+    { label: "새 메모", action: attempt(() => newMemo(folder)) },
+  ];
   function entryMenu(entry: Entry): MenuItem[] {
     const folder = entry.type === "folder";
     return [
       ...(folder
         ? ([
-            { label: "새 메모", action: attempt(() => newMemo(entry.path)) },
+            ...documentCreateMenu(entry.path),
             { label: "새 폴더", action: attempt(() => newFolder(entry.path)) },
             "separator",
           ] as MenuItem[])
@@ -1033,7 +1056,7 @@ export default function MemoSession({
     ];
   }
   const rootMenu = (): MenuItem[] => [
-    { label: "새 메모", action: attempt(() => newMemo("")) },
+    ...documentCreateMenu(""),
     { label: "새 폴더", action: attempt(() => newFolder("")) },
     "separator",
     { label: "파일 탐색기에서 열기", action: attempt(() => call("memoReveal", { space })) },
@@ -1432,16 +1455,17 @@ export default function MemoSession({
       .sort((a, b) => (a.relPath || "").localeCompare(b.relPath || "", "ko", { numeric: true }));
     const inner = (d: Doc) => (d.relPath || "").split("/").slice(1);
     const folders = [...new Set(list.map((d) => inner(d).slice(0, -1).join("/")).filter(Boolean))];
+    const numbers = episodeNumbers(list.filter(doc => doc.kind === "episode"));
     const item = (d: Doc, depth: number) => {
       const t = { space, path: DOC + d.id },
-        memoLike = d.kind === "memo";
+        completed = d.kind === "episode" && normalizeStatus(d.status) === "completed";
       return (
-        <button
+        <TreeRow
           key={d.id}
-          className={`tree-item memo-row ${openHere(t.path) ? "current" : ""} ${
+          className={`${completed ? "is-completed" : ""} ${openHere(t.path) ? "current" : ""} ${
             menu?.target === "doc:" + d.id ? "context-target" : ""
           }`}
-          style={{ paddingLeft: 8 + depth * 14 }}
+          depth={depth}
           title={d.relPath}
           draggable
           onDragStart={(e) => {
@@ -1465,34 +1489,31 @@ export default function MemoSession({
                 { label: "옆으로 열기", action: attempt(() => openMemoBeside(t)) },
                 "separator",
                 { label: "집필 창에서 열기", action: () => onOpenDoc(d.id) },
+                "separator",
+                { label: "보관함으로 이동", icon: <Archive size={15} />, action: attempt(() => archiveTreeDocument(d)) },
               ],
               "doc:" + d.id,
             )
           }
-        >
-          {kind === "episode" ? (
-            <BookOpen size={15} className="memo-file-icon" />
-          ) : memoLike ? (
-            <StickyNote size={15} className="memo-file-icon" />
-          ) : (
-            <FileText size={15} className="memo-file-icon" />
-          )}
-          <span>{d.title || "제목 없음"}</span>
-        </button>
+          marker={kind === "episode" ? <span className="episode-number">{numbers.get(d.id) ?? ""}</span> : documentIcon(d)}
+          label={d.title || "제목 없음"}
+          actions={<TreeRowAction title="보관함으로 이동" label={`${d.title} 보관`}
+            onAction={() => attempt(() => archiveTreeDocument(d))()}><Archive size={14} /></TreeRowAction>}
+        />
       );
     };
     return (
       <>
-        <div className="memo-tree-heading">{kind === "plot" ? "플롯" : "에피소드"}</div>
+        <div className="tree-heading">{kind === "plot" ? "플롯" : "에피소드"}</div>
         {list.filter((d) => inner(d).length === 1).map((d) => item(d, 0))}
         {folders.map((f) => {
           const key = kind + ":" + f,
             open = !docCollapsed.has(key);
           return (
             <Fragment key={key}>
-              <button
-                className="tree-item memo-row"
+              <TreeRow folder
                 title={f}
+                aria-expanded={open}
                 onClick={() =>
                   setDocCollapsed((old) => {
                     const next = new Set(old);
@@ -1501,11 +1522,10 @@ export default function MemoSession({
                     return next;
                   })
                 }
-              >
+                marker={<>
                 {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                 {open ? <FolderOpen size={15} /> : <Folder size={15} />}
-                <span>{f}</span>
-              </button>
+                </>} label={f} />
               {open &&
                 list.filter((d) => inner(d).slice(0, -1).join("/") === f).map((d) => item(d, 1))}
             </Fragment>
@@ -1521,11 +1541,12 @@ export default function MemoSession({
     const folder = entry.type === "folder",
       open = expanded.has(entry.path),
       multi = picked.length > 1 && picked.includes(entry.path),
-      style = { paddingLeft: 8 + depth * 14 };
+      style = treeRowStyle(depth);
+    const linkedEpisode = entry.episodeId ? documents.find(doc => doc.id === entry.episodeId && doc.kind === "episode") : undefined;
     if (renaming?.path === entry.path)
       return (
-        <div className="tree-item renaming memo-row" style={style}>
-          {folder ? <Folder size={15} /> : <FileText size={15} />}
+        <div className="tree-item renaming" style={style}>
+          {folder ? <Folder size={15} /> : entry.kind === "plot" ? <FileText size={15} /> : <StickyNote size={15} />}
           <input
             className="tree-rename"
             autoFocus
@@ -1535,6 +1556,7 @@ export default function MemoSession({
             onChange={(e) => setRenaming({ path: entry.path, value: e.target.value })}
             onBlur={attempt(commitRename)}
             onKeyDown={(e) => {
+              e.stopPropagation();
               if (e.key === "Enter") e.currentTarget.blur();
               if (e.key === "Escape") setRenaming(null);
             }}
@@ -1542,16 +1564,15 @@ export default function MemoSession({
         </div>
       );
     return (
-      <button
-        className={`tree-item memo-row ${openHere(entry.path) ? "current" : ""} ${
-          selected === entry.path && !openHere(entry.path) && !multi ? "selected" : ""
-        } ${multi ? "multi-selected" : ""} ${dropTarget === entry.path ? "drop-target" : ""} ${
+      <TreeRow
+        className={`${openHere(entry.path) ? "current" : ""} ${multi ? "multi-selected" : ""} ${dropTarget === entry.path ? "drop-target" : ""} ${
           menu?.target === entry.path ? "context-target" : ""
         }`}
-        style={style}
+        depth={depth} folder={folder}
         title={entry.path}
         data-path={entry.path}
         aria-selected={multi || undefined}
+        aria-expanded={folder ? open : undefined}
         draggable
         onDragStart={(e) => {
           const list = pickedFor(entry);
@@ -1569,7 +1590,9 @@ export default function MemoSession({
           area.clearDropZone();
         }}
         onDragOver={folder ? (e) => dragOver(e, entry.path) : undefined}
-        onDragLeave={() => setDropTarget((t) => (t === entry.path ? null : t))}
+        onDragLeave={event => {
+          if (!event.currentTarget.contains(event.relatedTarget as Node)) setDropTarget(target => target === entry.path ? null : target);
+        }}
         onDrop={folder ? (e) => drop(e, entry.path) : undefined}
         // Shift+클릭은 범위를 고르고, Ctrl+클릭은 한 줄씩 넣고 뺀다. 그냥 누르면 고른 것을 풀고 연다.
         onMouseDown={(e) => {
@@ -1616,19 +1639,30 @@ export default function MemoSession({
             attempt(() => archiveEntries(list))();
           }
         }}
-      >
-        {folder ? (
+        marker={folder ? (
           <>
             {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
             {open ? <FolderOpen size={15} /> : <Folder size={15} />}
           </>
         ) : entry.kind === "plot" ? (
-          <FileText size={15} className="memo-file-icon" />
+          <FileText size={15} />
         ) : (
-          <StickyNote size={15} className="memo-file-icon" />
-        )}
-        <span>{entry.name}</span>
-      </button>
+          <StickyNote size={15} />
+        )} label={entry.name}
+        badge={linkedEpisode && <small className="tree-badge" title={`${episodeNumber(linkedEpisode)}화에 연결됨`}>{episodeNumber(linkedEpisode)}화</small>}
+        actions={<>
+          {folder && <>
+            <TreeRowAction title="문서 추가" label={`${entry.name} 폴더에 문서 추가`}
+              onAction={event => {
+                if (space === COMMON) attempt(() => newMemo(entry.path))();
+                else openMenu(event, documentCreateMenu(entry.path), entry.path);
+              }}><FilePlus size={14} /></TreeRowAction>
+            <TreeRowAction title="폴더 추가" label={`${entry.name} 폴더 안에 폴더 추가`}
+              onAction={() => attempt(() => newFolder(entry.path))()}><FolderPlus size={14} /></TreeRowAction>
+          </>}
+          <TreeRowAction title="보관함으로 이동" label={`${entry.name} ${folder ? "폴더 " : ""}보관`}
+            onAction={() => attempt(() => archiveEntries([entry]))()}><Archive size={14} /></TreeRowAction>
+        </>} />
     );
   }
   // 작품 스페이스에서는 필터로 고른 타입(플롯·메모)의 문서만 보인다. 폴더는 늘 보인다.
@@ -1695,7 +1729,11 @@ export default function MemoSession({
               await flush();
               setArchiveOpen(true);
             })}><Archive size={15} /></button>
-            <button title="새 메모" aria-label="새 메모" onClick={attempt(() => newMemo())}>
+            <button title={space === COMMON ? "새 메모" : "문서 추가"} aria-label={space === COMMON ? "새 메모" : "문서 추가"}
+              onClick={event => {
+                if (space === COMMON) attempt(() => newMemo())();
+                else openMenu(event, documentCreateMenu(targetFolder()), "doc-add");
+              }}>
               <FilePlus size={15} />
             </button>
             <button title="새 폴더" aria-label="새 폴더" onClick={attempt(() => newFolder())}>
@@ -1773,7 +1811,7 @@ export default function MemoSession({
         >
           {(space === COMMON || filter.has("memo") || filter.has("plot")) && (
             <>
-              {space !== COMMON && filter.has("episode") && <div className="memo-tree-heading">문서</div>}
+              {space !== COMMON && filter.has("episode") && <div className="tree-heading">문서</div>}
               {level("", 0)}
               {!entries.length && (
                 <div className="tree-empty">

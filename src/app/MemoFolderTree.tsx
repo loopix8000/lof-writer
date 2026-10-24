@@ -15,6 +15,7 @@ import type * as React from "react";
 import { episodeNumber, type RenderTreeRow } from "./file-tree-model";
 import { documentIcon as docIcon } from "./FileTreeRow";
 import type { FileTreeController } from "./useFileTree";
+import TreeRow, { TreeRowAction, treeRowStyle } from "./TreeRow";
 
 export default function MemoFolderTree({ tree, treeRow }: { tree: FileTreeController; treeRow: RenderTreeRow }) {
   const {
@@ -34,7 +35,7 @@ export default function MemoFolderTree({ tree, treeRow }: { tree: FileTreeContro
       <>
         {subFolders.map((f) => {
           const open = !!query.trim() || memoOpenFolders.has(f.path),
-            style = { paddingLeft: 8 + depth * 16 };
+            style = treeRowStyle(depth);
           if (folderRenaming?.path === f.path)
             return (
               <div key={"folder-" + f.path} className="tree-item renaming" style={style}>
@@ -61,9 +62,9 @@ export default function MemoFolderTree({ tree, treeRow }: { tree: FileTreeContro
             );
           return (
             <Fragment key={"folder-" + f.path}>
-              <button
-                className={`tree-item memo-folder ${tree.menuTarget === "folder-" + f.path ? "context-target" : ""} ${treeDrop === "folder:" + f.path ? "drop-target" : ""}`}
-                style={style}
+              <TreeRow
+                className={`${tree.menuTarget === "folder-" + f.path ? "context-target" : ""} ${treeDrop === "folder:" + f.path ? "drop-target" : ""}`}
+                depth={depth} folder aria-expanded={open}
                 title={f.path}
                 {...tree.folderDragProps(f.path)}
                 {...tree.folderDropProps(f.path)}
@@ -79,54 +80,34 @@ export default function MemoFolderTree({ tree, treeRow }: { tree: FileTreeContro
                   }
                 }}
                 onContextMenu={(e) => openMenu(e, tree.folderMenu(f), "folder-" + f.path)}
-              >
+                marker={<>
                 {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                 {open ? <FolderOpen size={15} /> : <Folder size={15} />}
-                <span>{f.name}</span>
-                <span className="tree-actions">
+                </>} label={f.name} actions={<>
                   {!tree.archive && <>
-                  <span
-                    className="tree-action"
-                    role="button"
-                    tabIndex={-1}
+                  <TreeRowAction
                     title="문서 추가"
-                    aria-label={`${f.name} 폴더에 문서 추가`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      openMenu(e, docCreateMenu(f.path), "folder-" + f.path);
-                    }}
+                    label={`${f.name} 폴더에 문서 추가`}
+                    onAction={(e) => openMenu(e, docCreateMenu(f.path), "folder-" + f.path)}
                   >
                     <FilePlus size={14} />
-                  </span>
-                  <span
-                    className="tree-action"
-                    role="button"
-                    tabIndex={-1}
+                  </TreeRowAction>
+                  <TreeRowAction
                     title="폴더 추가"
-                    aria-label={`${f.name} 폴더 안에 폴더 추가`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      attempt(() => addMemoFolder(f.path))();
-                    }}
+                    label={`${f.name} 폴더 안에 폴더 추가`}
+                    onAction={() => attempt(() => addMemoFolder(f.path))()}
                   >
                     <FolderPlus size={14} />
-                  </span>
+                  </TreeRowAction>
                   </>}
-                  <span
-                    className="tree-action"
-                    role="button"
-                    tabIndex={-1}
+                  <TreeRowAction
                     title={tree.archive ? "보관 해제" : "보관함으로 이동"}
-                    aria-label={`${f.name} 폴더 ${tree.archive ? "보관 해제" : "보관함으로 이동"}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      attempt(() => archiveMemoFolder(f.path, !tree.archive))();
-                    }}
+                    label={`${f.name} 폴더 ${tree.archive ? "보관 해제" : "보관함으로 이동"}`}
+                    onAction={() => attempt(() => archiveMemoFolder(f.path, !tree.archive))()}
                   >
                     {tree.archive ? <ArchiveRestore size={14} /> : <Archive size={14} />}
-                  </span>
-                </span>
-              </button>
+                  </TreeRowAction>
+                </>} />
               {open && level(f.path, depth + 1)}
             </Fragment>
           );

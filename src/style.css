@@ -3756,37 +3756,14 @@ select:not([multiple]) {
   color: var(--accent);
   background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
-.memo-tree-heading {
-  padding: 10px 8px 4px;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.3px;
-  color: var(--muted);
-}
 .memo-tree {
   flex: 1;
-  padding: 4px 8px 16px;
+  padding: 0 11px 17px;
   overflow: auto;
 }
 .memo-tree.drop-target {
   outline: 1px dashed var(--accent);
   outline-offset: -4px;
-}
-.memo-row {
-  min-height: 28px;
-  padding-top: 5px;
-  padding-bottom: 5px;
-  gap: 5px;
-}
-.memo-row.selected {
-  background: var(--hover);
-}
-.memo-row.drop-target {
-  outline: 1px dashed var(--accent);
-  outline-offset: -1px;
-}
-.memo-row .memo-file-icon {
-  margin-left: 19px;
 }
 .memo-head {
   height: 39px;
@@ -6715,5 +6692,3 @@ input.property-text {
 .memo-archive-body { min-height: 0; overflow-y: auto; }
 .memo-archive-entry { display: flex; align-items: center; min-width: 0; }
 .memo-archive-entry > .tree-item { flex: 1; min-width: 0; }
-.memo-archive-menu { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 28px; width: 28px; height: 28px; padding: 0; border: 0; background: transparent; color: var(--muted); }
-.memo-archive-menu:hover { background: var(--hover); color: var(--text); }
