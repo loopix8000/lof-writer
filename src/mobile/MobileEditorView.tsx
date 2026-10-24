@@ -1084,7 +1084,6 @@ export default function MobileEditorView({
             favoriteTags={prefs.favoriteTags}
             key={active.id}
             doc={active}
-            readOnly={isProtected}
             open={!!prefs.episodeInfoOpen}
             onToggle={() =>
               savePrefs({ episodeInfoOpen: !prefs.episodeInfoOpen }).catch(
