@@ -1364,7 +1364,8 @@ export default function MobileProjectView({
                       });
                     })}
                   >
-                    새 {labels[activeTab]}
+                    <Plus size={15} aria-hidden="true" />
+                    <span>새 {labels[activeTab]}</span>
                   </button>
                 </div>
               )}
