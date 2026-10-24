@@ -154,8 +154,8 @@ export default function FileTree({
           <Search size={14} />
           <input
             value={treeQuery[treeTab]}
-            placeholder={treeTab === "memo" ? "문서 검색" : "에피소드 검색"}
-            aria-label={treeTab === "memo" ? "문서 검색" : "에피소드 검색"}
+            placeholder="제목·내용·#태그 검색"
+            aria-label="제목·내용·태그 검색"
             onChange={(e) => {
               const value = e.target.value;
               tree.updateQuery(treeTab, value);
@@ -197,6 +197,11 @@ export default function FileTree({
         )}
       </div>
       {/* 탭을 바꿔도 끌던 문서가 이어지도록 두 탭 모두 그려 두고 숨긴다. */}
+      {(tree.treeSearch.pending || tree.treeSearch.error) && (
+        <p className="document-search-status" role="status">
+          {tree.treeSearch.error || "본문 검색 중..."}
+        </p>
+      )}
       <div className="tree-scroll">
         <section
           className="tree-section tree-panel"
@@ -235,7 +240,7 @@ export default function FileTree({
             : treeEpisodes.map((d) =>
               treeRow(d, <span className="episode-number">{numberOf(d)}</span>),
             )}
-          {!treeEpisodes.length && (
+          {!treeEpisodes.length && !tree.treeSearch.pending && !tree.treeSearch.error && (
             <div className="tree-empty">
               {treeQuery.episode.trim() ? "검색 결과가 없습니다" : "아직 에피소드가 없습니다"}
             </div>
@@ -251,7 +256,7 @@ export default function FileTree({
             <>
               {folderTree}
               {treeQuery.memo.trim()
-                ? !treeDocs.length && <div className="tree-empty">검색 결과가 없습니다</div>
+                ? !treeDocs.length && !tree.treeSearch.pending && !tree.treeSearch.error && <div className="tree-empty">검색 결과가 없습니다</div>
                 : count("plot") + count("memo") === 0 &&
                 !memoEntries.some((e) => e.type === "folder") && (
                   <div className="tree-empty">아직 문서가 없습니다</div>

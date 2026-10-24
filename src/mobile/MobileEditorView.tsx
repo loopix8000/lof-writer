@@ -67,6 +67,7 @@ import {
 } from "../types";
 import { workspaceKey } from "../workspace-state";
 import { useUndoState } from "../useUndoState";
+import useDocumentSearch from "../useDocumentSearch";
 import Writer from "../Writer";
 import type { QuickNoteSource } from "../QuickNote";
 import MobileEditorToolbar, { MobileEditorMenuActions } from "./MobileEditorToolbar";
@@ -217,6 +218,7 @@ export default function MobileEditorView({
     active.kind === "episode" ? "episode" : "document",
   );
   const [treeFilter, setTreeFilter] = useState("");
+  const documentSearch = useDocumentSearch(treeFilter, active.projectId, lib, leftDrawerOpen);
   const { sort: episodeSort, toggleSort: toggleEpisodeSort } = useEpisodeSort();
   const { sort: documentSort, toggleSort: toggleDocumentSort } = useDocumentSort();
   const [collapsedPaths, setCollapsedPaths] = useState<Record<string, boolean>>({});
@@ -652,7 +654,7 @@ export default function MobileEditorView({
     : episodeSort === "desc" ? Math.max(0, Math.ceil(episodes.length / EPISODE_GROUP) - 1) * EPISODE_GROUP : 0;
   const { isGroupOpen, toggleGroup } = useEpisodeGroups(lib.root, active.projectId, defaultGroupStart);
   const filteredEpisodes = (episodeSort === "desc" ? [...episodes].reverse() : episodes)
-    .filter((ep) => !treeFilter.trim() || (ep.title || "").toLowerCase().includes(treeFilter.trim().toLowerCase()));
+    .filter(ep => documentSearch.matches(ep.id === active.id ? active : ep, numberOf(ep)));
 
   // 상단 제목 표시줄의 < > 버튼과 좌우 슬라이드로 이전·다음 회차를 연다.
   const episodeIndex = episodes.findIndex((ep) => ep.id === active.id);
@@ -1411,11 +1413,8 @@ export default function MobileEditorView({
                   <input
                     type="search"
                     className="m-filter-input"
-                    placeholder={
-                      treeTab === "episode"
-                        ? "에피소드 검색..."
-                        : "플롯·메모 검색..."
-                    }
+                    placeholder="제목·내용·#태그 검색..."
+                    aria-label="제목·내용·태그 검색"
                     value={treeFilter}
                     onChange={(e) => setTreeFilter(e.target.value)}
                   />
@@ -1446,6 +1445,11 @@ export default function MobileEditorView({
             </div>
 
             <div className="m-drawer-body m-tree-scroll">
+              {(documentSearch.pending || documentSearch.error) && (
+                <p className="document-search-status" role="status">
+                  {documentSearch.error || "본문 검색 중..."}
+                </p>
+              )}
               {treeTab === "episode" ? (
                 <div className="m-tree-container">
                   {!treeFilter.trim() && episodes.length > EPISODE_GROUP
@@ -1485,11 +1489,7 @@ export default function MobileEditorView({
                 <div className="m-tree-container">
                   {treeFilter.trim()
                     ? docItems
-                        .filter((d) =>
-                          (d.title || "")
-                            .toLowerCase()
-                            .includes(treeFilter.trim().toLowerCase()),
-                        )
+                        .filter(d => documentSearch.matches(d.id === active.id ? active : d))
                         .map((d) => {
                           const isCur = d.id === active.id;
                           const isPlot = d.kind === "plot";

@@ -4867,6 +4867,33 @@ impl Store {
         Ok(Value::Array(results))
     }
 
+    pub fn search_document_ids(&mut self, query: &str, project_id: &str) -> Result<Value, LofError> {
+        let q = query.trim().to_lowercase();
+        if q.is_empty() || project_id.is_empty() {
+            return Ok(json!([]));
+        }
+        let list = self.list()?;
+        let mut ids = Vec::new();
+        if let Some(docs) = list.get("documents").and_then(Value::as_array) {
+            for doc in docs {
+                if doc.get("projectId").and_then(Value::as_str) != Some(project_id) {
+                    continue;
+                }
+                let Some(id) = doc.get("id").and_then(Value::as_str) else { continue };
+                let body = if self.index_enabled {
+                    self.cached_body(project_id, id).unwrap_or_default()
+                } else {
+                    let Ok(document) = self.read(id) else { continue };
+                    document.get("body").and_then(Value::as_str).unwrap_or("").to_string()
+                };
+                if body.to_lowercase().contains(&q) {
+                    ids.push(id.to_string());
+                }
+            }
+        }
+        Ok(json!(ids))
+    }
+
     pub fn search_text(
         &mut self,
         query: &str,

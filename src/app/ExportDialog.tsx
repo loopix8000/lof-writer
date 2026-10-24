@@ -2,6 +2,7 @@ import { Download } from "lucide-react";
 import { useState } from "react";
 import { call, type Library } from "../types";
 import SettingsToggle from "./SettingsToggle";
+import DialogFooter from "../DialogFooter";
 
 type Props = {
   lib: Library;
@@ -205,7 +206,7 @@ export default function ExportDialog({
         )}
       </div>
 
-      <div className="modal-footer" style={{ marginTop: 18 }}>
+      <DialogFooter style={{ marginTop: 18 }}>
         <button type="button" disabled={busy} onClick={onCancel}>
           취소
         </button>
@@ -218,7 +219,7 @@ export default function ExportDialog({
           <Download size={15} />
           {busy ? "내보내는 중…" : "폴더 선택 후 내보내기"}
         </button>
-      </div>
+      </DialogFooter>
     </div>
   );
 }

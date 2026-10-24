@@ -2,6 +2,7 @@ import { useState } from "react";
 import { BookOpen, Check, Search, Unlink } from "lucide-react";
 import type { Doc } from "./types";
 import { episodeNumbers } from "../core/episode.mjs";
+import DialogFooter from "./DialogFooter";
 
 export default function EpisodeBindingPicker({ doc, documents, onSelect, onCancel }: {
   doc: Doc;
@@ -57,10 +58,10 @@ export default function EpisodeBindingPicker({ doc, documents, onSelect, onCance
         {!filtered.length && <p className="binding-empty">{episodes.length ? "검색 결과가 없습니다." : "연결할 에피소드가 없습니다. 먼저 에피소드를 만들어 주세요."}</p>}
       </div>
       {error && <p className="binding-error" role="alert">{error}</p>}
-      <div className="modal-footer">
+      <DialogFooter>
         {saving && <span className="muted" role="status">연결 저장 중…</span>}
         <button type="button" onClick={onCancel} disabled={saving}>취소</button>
-      </div>
+      </DialogFooter>
     </div>
   );
 }

@@ -1523,6 +1523,18 @@ export class Store extends EventEmitter {
     }
     return results.slice(0, 100);
   }
+  async searchDocumentIds(query, projectId) {
+    const q = String(query ?? "").trim().toLocaleLowerCase();
+    if (!q || !projectId) return [];
+    const ids = [];
+    for (const doc of (await this.list()).documents.filter(d => d.projectId === projectId)) {
+      const body = this.indexEnabled
+        ? await this._cachedBody(doc.projectId, doc.id).catch(() => "")
+        : (await this.read(doc.id).catch(() => null))?.body ?? "";
+      if (body.toLocaleLowerCase().includes(q)) ids.push(doc.id);
+    }
+    return ids;
+  }
   // VS Code식 본문 검색: 문서마다 일치한 줄과 위치를 돌려준다.
   // index는 그 문서 안에서 몇 번째 일치인지(편집기에서 그 위치를 고를 때 쓴다).
   async searchText(query, projectId, { caseSensitive = false } = {}) {

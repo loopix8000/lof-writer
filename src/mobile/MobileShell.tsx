@@ -16,7 +16,7 @@ import {
   X,
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useId, useRef, useState } from "react";
 import { normalizeWriting } from "../../core/platforms.mjs";
 import BookmarksPage from "../app/BookmarksPage";
 import ExportDialog from "../app/ExportDialog";
@@ -28,6 +28,7 @@ import SettingsContent from "../app/SettingsContent";
 import type { FileTreeController } from "../app/useFileTree";
 import { ImageViewer } from "../CoverImage";
 import { ConfirmBox } from "../ConfirmDialog";
+import DialogFooter from "../DialogFooter";
 import type { LargeDocumentMode } from "../app/useLargeDocumentMode";
 import type { EditorScrollPositions } from "../EditorScroll";
 import type { MenuItem } from "../ContextMenu";
@@ -55,6 +56,7 @@ import MobileLibraryView from "./MobileLibraryView";
 import MobileMemoView from "./MobileMemoView";
 import MobileProjectView from "./MobileProjectView";
 import MobileSearchView from "./MobileSearchView";
+import MobileDialogPage from "./MobileDialogPage";
 import "./mobile.css";
 
 type MobileTab = "library" | "bookmarks" | "memo" | "search" | "settings";
@@ -341,6 +343,7 @@ export default function MobileShell({
   report: (e: any) => void;
 }) {
   const [mobileTab, setMobileTab] = useState<MobileTab>("library");
+  const deleteProjectFormId = useId();
   const [inMemoEditor, setInMemoEditor] = useState(false);
   const closeMemoEditorRef = useRef<(() => void) | null>(null);
   const [settingsDetailOpen, setSettingsDetailOpen] = useState(false);
@@ -956,41 +959,20 @@ export default function MobileShell({
 
       {/* 모바일 전용 전체 화면 서브 다이얼로그 (새 작품, 소설 관리, 변경 이력, 내보내기 등) */}
       {dialog && !["settings", "serverSync", "deleteDoc"].includes(dialog.type) && (
-        <div className="m-dialog-page" role="dialog" aria-modal="true">
-          <header className="m-topbar m-topbar-centered">
-            {dialog.type !== "setup" ? (
-              <button
-                type="button"
-                className="m-back-btn"
-                onClick={requestCloseDialog}
-              >
-                <ArrowLeft size={18} />
-                <span>닫기</span>
-              </button>
-            ) : (
-              <div />
-            )}
-            <div className="m-topbar-title">
-              <h1>
-                {
-                  {
-                    newProject: "새 이야기 만들기",
-                    editProject: "소설 관리",
-                    history: "변경 이력",
-                    document: "문서 관리",
-                    deleteProject: "작품 삭제",
-                    linkEpisode: "회차에 연결",
-                    recovery: "임시 원고 복구",
-                    setup: "처음 집필 환경 설정",
-                    export: dialog.value ? "작품 내보내기" : "서재 내보내기",
-                  }[dialog.type]
-                }
-              </h1>
-            </div>
-            <div className="m-topbar-actions" />
-          </header>
-
-          <div className="m-dialog-body">
+        <MobileDialogPage
+          onClose={dialog.type === "setup" ? undefined : requestCloseDialog}
+          title={{
+            newProject: "새 이야기 만들기",
+            editProject: "소설 관리",
+            history: "변경 이력",
+            document: "문서 관리",
+            deleteProject: "작품 삭제",
+            linkEpisode: "회차에 연결",
+            recovery: "임시 원고 복구",
+            setup: "처음 집필 환경 설정",
+            export: dialog.value ? "작품 내보내기" : "서재 내보내기",
+          }[dialog.type] ?? ""}
+        >
             {dialog.type === "setup" && (
               <div className="setup-content">
                 <section className="setup-vault">
@@ -1030,25 +1012,27 @@ export default function MobileShell({
                   value={dialog.writing || normalizeWriting()}
                   onChange={(writing) => setDialog({ ...dialog, writing })}
                 />
-                <button
-                  type="button"
-                  className="m-btn-primary m-btn-full"
-                  disabled={busy || !lib.root}
-                  onClick={attempt(async () => {
-                    setBusy(true);
-                    try {
-                      await savePrefs({
-                        setupComplete: true,
-                        defaultWriting: dialog.writing || normalizeWriting(),
-                      });
-                      setDialog(null);
-                    } finally {
-                      setBusy(false);
-                    }
-                  })}
-                >
-                  이 설정으로 시작
-                </button>
+                <DialogFooter>
+                  <button
+                    type="button"
+                    className="m-btn-primary m-btn-full"
+                    disabled={busy || !lib.root}
+                    onClick={attempt(async () => {
+                      setBusy(true);
+                      try {
+                        await savePrefs({
+                          setupComplete: true,
+                          defaultWriting: dialog.writing || normalizeWriting(),
+                        });
+                        setDialog(null);
+                      } finally {
+                        setBusy(false);
+                      }
+                    })}
+                  >
+                    이 설정으로 시작
+                  </button>
+                </DialogFooter>
               </div>
             )}
 
@@ -1122,6 +1106,7 @@ export default function MobileShell({
                 ).length;
                 return (
                   <form
+                    id={deleteProjectFormId}
                     className="m-confirm-box"
                     onSubmit={(e) => {
                       e.preventDefault();
@@ -1144,7 +1129,7 @@ export default function MobileShell({
                         onChange={(e) => setConfirmTitle(e.target.value)}
                       />
                     </label>
-                    <div className="m-prompt-footer">
+                    <DialogFooter className="m-prompt-footer">
                       <button
                         type="button"
                         className="m-btn-secondary"
@@ -1154,13 +1139,14 @@ export default function MobileShell({
                       </button>
                       <button
                         type="submit"
+                        form={deleteProjectFormId}
                         className="m-btn-danger"
                         disabled={confirmTitle !== name}
                       >
                         <Trash2 size={16} />
                         <span>작품 삭제</span>
                       </button>
-                    </div>
+                    </DialogFooter>
                   </form>
                 );
               })()}
@@ -1226,8 +1212,7 @@ export default function MobileShell({
                 }}
               />
             )}
-          </div>
-        </div>
+        </MobileDialogPage>
       )}
 
       <UpdateNotice

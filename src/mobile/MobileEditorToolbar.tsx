@@ -32,7 +32,9 @@ const formatTools = [
   { action: "italic", label: "기울임", icon: Italic },
   { action: "strike", label: "취소선", icon: Strikethrough },
   { action: "heading", label: "소제목", icon: Heading2 },
-  { action: "taskList", label: "체크박스 추가", icon: ListTodo },
+  { action: "taskList", label: "체크리스트", icon: ListTodo },
+  { action: "image", label: "이미지 삽입", icon: ImagePlus },
+  { action: "comment", label: "주석 추가", icon: MessageSquareCode },
   { action: "divider", label: "장면 구분선", icon: Minus },
 ] as const;
 
@@ -166,12 +168,6 @@ export function MobileEditorMenuActions({
   manualLineBreak: boolean;
   onClose: () => void;
 }) {
-  const actions = [
-    { action: "taskList", label: "체크리스트", icon: ListTodo },
-    { action: "image", label: "이미지 삽입", icon: ImagePlus },
-    ...(tables ? [{ action: "table", label: "표 삽입", icon: Table2 }] : []),
-    { action: "comment", label: "주석 추가", icon: MessageSquareCode },
-  ];
   return (
     <div className="m-floating-popup-section">
       <button
@@ -201,9 +197,8 @@ export function MobileEditorMenuActions({
         <Replace size={16} />
         <span>바꾸기</span>
       </button>
-      {actions.map(({ action, label, icon: Icon }) => (
+      {tables && (
         <button
-          key={action}
           type="button"
           className="m-floating-popup-item"
           role="menuitem"
@@ -211,13 +206,13 @@ export function MobileEditorMenuActions({
           onMouseDown={(event) => event.preventDefault()}
           onClick={() => {
             onClose();
-            editorAction(action);
+            editorAction("table");
           }}
         >
-          <Icon size={16} />
-          <span>{label}</span>
+          <Table2 size={16} />
+          <span>표 삽입</span>
         </button>
-      ))}
+      )}
       <button
         type="button"
         className="m-floating-popup-item"

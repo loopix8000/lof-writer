@@ -37,6 +37,7 @@ const methods = [
   "adoptMemo",
   "search",
   "searchText",
+  "searchDocumentIds",
   "history",
   "historyPage",
   "historyRead",

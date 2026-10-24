@@ -3,6 +3,7 @@ import { CopyPlus, RotateCcw, Trash2 } from "lucide-react";
 import { useConfirm } from "./ConfirmDialog";
 import PillTabs from "./PillTabs";
 import { call } from "./types";
+import DialogFooter from "./DialogFooter";
 
 type Entry = { name: string; savedAt: string; title: string; kind: string; commit?: string };
 type Page = { entries: Entry[]; anchor: string | null; nextOffset: number | null; migrating: boolean };
@@ -134,7 +135,7 @@ export default function HistoryDialog({ documentId, memoContext, isMobile = fals
               <span className="history-diff-added"><span className="muted">현재: </span>{metadataValue(change, change.current, change.currentExists)}</span></dd>
           </div>)}
         </dl>}
-        <div className="history-actions">
+        <DialogFooter className="history-actions">
           <button className="primary" disabled={busy} onClick={async () => {
             setRestoring(true);
             try { await onRestore(documentId, preview.name); }
@@ -158,7 +159,7 @@ export default function HistoryDialog({ documentId, memoContext, isMobile = fals
             <Trash2 size={16} />
             {deleting && <span>삭제 중…</span>}
           </button>
-        </div>
+        </DialogFooter>
       </> : <p>왼쪽에서 변경 이력을 선택하세요.</p>}
     </div>
     {confirmDialog}

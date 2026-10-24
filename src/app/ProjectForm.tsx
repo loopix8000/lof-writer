@@ -10,6 +10,7 @@ import { normalizeWriting } from "../../core/platforms.mjs";
 import CoverImage from "../CoverImage";
 import PlatformPicker from "../PlatformPicker";
 import TagInput from "../TagInput";
+import DialogFooter from "../DialogFooter";
 import {
   call,
   type Library,
@@ -18,7 +19,7 @@ import {
 import { insertProject, patchProject, type LibraryChange } from "./library-changes";
 import { type Destination, type Dialog } from "./model";
 
-import { useEffect, useRef, useState, type MutableRefObject } from "react";
+import { useEffect, useId, useRef, useState, type MutableRefObject } from "react";
 import { createPortal } from "react-dom";
 import type * as React from "react";
 
@@ -58,6 +59,7 @@ export default function ProjectForm({
   closeRef,
 }: Props) {
   const formRef = useRef<HTMLFormElement>(null);
+  const formId = useId();
   const [closePrompt, setClosePrompt] = useState(false);
   const snapshot = JSON.stringify({
     title: dialog.value || "",
@@ -92,6 +94,7 @@ export default function ProjectForm({
   return (
     <>
       <form
+        id={formId}
         ref={formRef}
         onSubmit={(e) => {
           e.preventDefault();
@@ -242,7 +245,7 @@ export default function ProjectForm({
             </div>
           </div>
         )}
-        <div className="modal-footer">
+        <DialogFooter>
           {dialog.type === "editProject" && !mobile && (
             <button
               type="button"
@@ -256,10 +259,10 @@ export default function ProjectForm({
           <button type="button" onClick={requestClose}>
             취소
           </button>
-          <button type="submit" className="primary">
+          <button type="submit" form={formId} className="primary">
             {dialog.type === "editProject" ? "저장" : "만들기"}
           </button>
-        </div>
+        </DialogFooter>
       </form>
     {closePrompt && createPortal(
       <div className="modal-backdrop confirm-backdrop m-project-save-confirm">

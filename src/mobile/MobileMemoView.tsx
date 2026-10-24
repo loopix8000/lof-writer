@@ -23,6 +23,7 @@ import { normalizeTextReplacements } from "../../core/typing.mjs";
 import { plainText } from "../../core/text.mjs";
 import EditorScroll, { type EditorScrollPositions } from "../EditorScroll";
 import HistoryDialog from "../HistoryDialog";
+import MobileDialogPage from "./MobileDialogPage";
 import MemoArchiveDialog from "../MemoArchiveDialog";
 import { useUndoState } from "../useUndoState";
 import SyncStatus from "../SyncStatus";
@@ -1040,14 +1041,7 @@ export default function MobileMemoView({
           onClose={() => setPromptTarget(null)}
         />
         {historyTarget && (
-          <div className="m-dialog-page" role="dialog" aria-modal="true" aria-label="메모 변경 이력">
-            <header className="m-topbar m-topbar-centered">
-              <button type="button" className="m-back-btn" onClick={() => setHistoryTarget(null)}>
-                <ArrowLeft size={18} /><span>메모</span>
-              </button>
-              <div className="m-topbar-title"><h1>변경 이력</h1></div>
-            </header>
-            <div className="m-dialog-body">
+          <MobileDialogPage title="변경 이력" aria-label="메모 변경 이력" closeLabel="메모" onClose={() => setHistoryTarget(null)}>
               <HistoryDialog
                 isMobile
                 documentId={historyTarget.id}
@@ -1073,8 +1067,7 @@ export default function MobileMemoView({
                   message(restored.historyWarning ?? "이전 메모를 복원했습니다.");
                 }}
               />
-            </div>
-          </div>
+          </MobileDialogPage>
         )}
       </div>
     );

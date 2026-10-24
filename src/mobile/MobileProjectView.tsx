@@ -45,6 +45,7 @@ import { patchDocuments, patchProject, reorderDocuments, type LibraryChange } fr
 import { type Dialog } from "../app/model";
 import type { FileTreeController } from "../app/useFileTree";
 import TagAddPopup from "../TagAddPopup";
+import useDocumentSearch from "../useDocumentSearch";
 import { call, type Doc, type Kind, type Library, type Project } from "../types";
 import {
   MobileActionSheet,
@@ -121,6 +122,7 @@ export default function MobileProjectView({
   // 작품 화면은 에피소드 / 플롯 / 메모 3탭으로 구분
   const activeTab: Kind = tab === "plot" ? "plot" : tab === "memo" ? "memo" : "episode";
   const [filterQuery, setFilterQuery] = useState("");
+  const documentSearch = useDocumentSearch(filterQuery, project.id, lib);
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const [docScope, setDocScope] = useState<"all" | "byEpisode">("all");
   const [closedFolders, setClosedFolders] = useState<Set<string>>(() => new Set());
@@ -316,15 +318,8 @@ export default function MobileProjectView({
   );
 
   const filteredEpisodes = useMemo(() => {
-    const q = filterQuery.trim().toLowerCase();
-    if (!q) return episodes;
-    return episodes.filter((d) => {
-      const num = String(numberOf(d) || "").toLowerCase();
-      const title = (d.title || "").toLowerCase();
-      const tags = (d.tags || []).join(" ").toLowerCase();
-      return num.includes(q) || title.includes(q) || tags.includes(q);
-    });
-  }, [episodes, filterQuery, numberOf]);
+    return episodes.filter(d => documentSearch.matches(d, numberOf(d)));
+  }, [episodes, documentSearch.matches, numberOf]);
 
   const sortedEpisodes = useMemo(
     () => (episodeSort === "desc" ? [...filteredEpisodes].reverse() : filteredEpisodes),
@@ -332,15 +327,9 @@ export default function MobileProjectView({
   );
 
   const filteredKindDocs = useMemo(() => {
-    const q = filterQuery.trim().toLowerCase();
-    return currentKindDocs.filter((d) => {
-      if (!q) return true;
-      const title = (d.title || "").toLowerCase();
-      const rel = (d.relPath || "").toLowerCase();
-      const tags = (d.tags || []).join(" ").toLowerCase();
-      return title.includes(q) || rel.includes(q) || tags.includes(q);
-    }).sort((a, b) => compareNames(a.title || "제목 없음", b.title || "제목 없음", documentSort));
-  }, [currentKindDocs, filterQuery, documentSort]);
+    return currentKindDocs.filter(d => documentSearch.matches(d))
+      .sort((a, b) => compareNames(a.title || "제목 없음", b.title || "제목 없음", documentSort));
+  }, [currentKindDocs, documentSearch.matches, documentSort]);
 
   const unlinkedKindDocs = useMemo(() => {
     const episodeIds = new Set(projectEpisodes.map((ep) => ep.id));
@@ -1096,7 +1085,7 @@ export default function MobileProjectView({
                         })
                     : sortedEpisodes.map((d) => renderEpisodeRow(d))}
 
-                  {filteredEpisodes.length === 0 && (
+                  {filteredEpisodes.length === 0 && !documentSearch.pending && !documentSearch.error && (
                     <div className="m-empty-state">
                       <BookOpen size={30} />
                       <h3>
@@ -1160,7 +1149,7 @@ export default function MobileProjectView({
                 <>
                   {renderDocTreeLevel("", 0)}
 
-                  {filteredKindDocs.length === 0 && (
+                  {filteredKindDocs.length === 0 && !documentSearch.pending && !documentSearch.error && (
                     <div className="m-empty-state">
                       {activeTab === "plot" ? <FileText size={30} /> : <StickyNote size={30} />}
                       <h3>
@@ -1311,7 +1300,8 @@ export default function MobileProjectView({
                 <input
                   type="text"
                   className="m-filter-input"
-                  placeholder="제목·#태그 검색..."
+                  placeholder="제목·내용·#태그 검색..."
+                  aria-label="제목·내용·태그 검색"
                   value={filterQuery}
                   onChange={(e) => setFilterQuery(e.target.value)}
                 />
@@ -1372,6 +1362,11 @@ export default function MobileProjectView({
             </div>
 
             {/* 플롯/메모 탭 보기 방식 전환 (전체 트리 / 회차별 연결 문서) */}
+            {(documentSearch.pending || documentSearch.error) && (
+              <p className="document-search-status" role="status">
+                {documentSearch.error || "본문 검색 중..."}
+              </p>
+            )}
             <div
               className={`m-project-scope-wrap ${showDocScope ? "is-visible" : ""}`}
               aria-hidden={!showDocScope}

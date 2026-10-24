@@ -1,4 +1,4 @@
-import { ArchiveRestore, ArrowLeft, ChevronDown, ChevronRight, FilePlus, FileText, Folder, FolderOpen, MoreVertical, StickyNote, Trash2, X } from "lucide-react";
+import { ArchiveRestore, ChevronDown, ChevronRight, FilePlus, FileText, Folder, FolderOpen, MoreVertical, StickyNote, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import ContextMenu, { type MenuItem } from "./ContextMenu";
 import { useConfirm } from "./ConfirmDialog";
@@ -7,6 +7,7 @@ import { memoEntriesInView, type MemoEntry } from "./memo-tree";
 import { call } from "./types";
 import { MobileActionSheet } from "./mobile/MobileActionSheet";
 import TreeRow, { TreeRowAction } from "./app/TreeRow";
+import MobileDialogPage from "./mobile/MobileDialogPage";
 
 export default function MemoArchiveDialog({ space, title, mobile = false, onClose, openDoc, openMemo, flush, onRemoved }: {
   space: string;
@@ -75,10 +76,10 @@ export default function MemoArchiveDialog({ space, title, mobile = false, onClos
     setBusy(true);
     setError("");
     try {
-      if (remove && !await confirm({ title: entry.type === "folder" ? "폴더 삭제" : "메모 삭제",
-        message: `'${entry.name}'${entry.type === "folder" ? " 폴더의 보관된 메모와 하위 폴더를" : " 메모를"} 휴지통으로 옮길까요?`,
-        detail: entry.type === "folder" ? "일반 목록에 있는 메모는 유지됩니다." : undefined,
-        confirmLabel: "삭제", danger: true })) return;
+      if (remove && !await confirm({ title: `${entry.type === "folder" ? "폴더" : "메모"} ${mobile ? "완전 삭제" : "삭제"}`,
+        message: `'${entry.name}'${entry.type === "folder" ? " 폴더의 보관된 메모와 하위 폴더를" : " 메모를"} ${mobile ? "완전히 삭제할까요?" : "휴지통으로 옮길까요?"}`,
+        detail: [entry.type === "folder" ? "일반 목록에 있는 메모는 유지됩니다." : "", mobile ? "삭제 후에는 되돌릴 수 없습니다." : ""].filter(Boolean).join(" ") || undefined,
+        confirmLabel: mobile ? "완전 삭제" : "삭제", danger: true })) return;
       await flush();
       await call(remove ? "memoRemove" : "memoArchive", { space, path: entry.path, archived: remove });
       if (remove) onRemoved(entry.path);
@@ -100,7 +101,7 @@ export default function MemoArchiveDialog({ space, title, mobile = false, onClos
       icon: entry.type === "folder" ? <FolderOpen size={18} /> : <StickyNote size={18} />, disabled: busy, action: () => openEntry(entry) },
     { label: "보관함에서 꺼내기", icon: <ArchiveRestore size={18} />, disabled: busy, action: () => void changeEntry(entry) },
     "separator",
-    { label: entry.type === "folder" ? "폴더 삭제" : "메모 삭제", icon: <Trash2 size={18} />,
+    { label: `${entry.type === "folder" ? "폴더" : "메모"} ${mobile ? "완전 삭제" : "삭제"}`, icon: <Trash2 size={18} />,
       disabled: busy, danger: true, action: () => void changeEntry(entry, true) },
   ];
   const rows = (parent = "", depth = 0): React.ReactNode => entries.filter(entry => {
@@ -157,27 +158,33 @@ export default function MemoArchiveDialog({ space, title, mobile = false, onClos
     </div>}
   </>;
   const heading = `${title} 보관함`;
-  const dialog = <div className={mobile ? "m-dialog-page" : "modal wide memo-archive-dialog"}
-    ref={panel} tabIndex={-1} role="dialog" aria-modal="true" aria-label={heading} onKeyDown={event => {
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
       if (event.key === "Escape" && !document.querySelector(".confirm-backdrop")) {
         event.stopPropagation();
         if (actionEntry || menu) closeMenu(); else onClose();
       }
-    }}>
-    <header className={mobile ? "m-topbar m-topbar-centered" : "modal-header"}>
-      {mobile && <button type="button" className="m-back-btn" onClick={onClose}><ArrowLeft size={18} /><span>메모</span></button>}
-      {mobile ? <div className="m-topbar-title"><h1>{heading}</h1></div> : <h2>{heading}</h2>}
-      {!mobile && <button type="button" aria-label="보관함 닫기" onClick={onClose}><X size={18} /></button>}
-    </header>
-    <div className={mobile ? "m-dialog-body m-tree-scroll" : "memo-archive-body memo-tree"}>
-      {mobile ? <div className="m-tree-container">{content}</div> : content}
-    </div>
+  };
+  const overlays = <>
     {mobile && <MobileActionSheet open={!!actionEntry} title={actionEntry?.name || "메모 메뉴"}
       items={actionEntry ? entryItems(actionEntry) : []} onClose={closeMenu} />}
     {menu && <ContextMenu x={menu.x} y={menu.y} align="end" items={entryItems(menu.entry)} onClose={closeMenu} />}
     {confirmDialog}
-  </div>;
-  return mobile ? dialog : <div className="modal-backdrop" onMouseDown={event => {
+  </>;
+  if (mobile) return <MobileDialogPage title={heading} closeLabel="메모" onClose={onClose}
+    panelRef={panel} tabIndex={-1} onKeyDown={handleKeyDown} bodyClassName="m-tree-scroll" overlays={overlays}>
+    <div className="m-tree-container">{content}</div>
+  </MobileDialogPage>;
+  return <div className="modal-backdrop" onMouseDown={event => {
     if (event.target === event.currentTarget) onClose();
-  }}>{dialog}</div>;
+  }}>
+    <div className="modal wide memo-archive-dialog" ref={panel} tabIndex={-1}
+      role="dialog" aria-modal="true" aria-label={heading} onKeyDown={handleKeyDown}>
+      <header className="modal-header">
+        <h2>{heading}</h2>
+        <button type="button" aria-label="보관함 닫기" onClick={onClose}><X size={18} /></button>
+      </header>
+      <div className="memo-archive-body memo-tree">{content}</div>
+      {overlays}
+    </div>
+  </div>;
 }

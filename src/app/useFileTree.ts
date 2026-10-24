@@ -5,7 +5,8 @@ import type { ConfirmOptions } from "../ConfirmDialog";
 import type { MenuItem } from "../ContextMenu";
 import { statusItems } from "../EpisodeProperties";
 import { call, type Doc, type Kind, type Library } from "../types";
-import { EPISODE_GROUP, episodeNumber, parentOfRel, treeMatch, type FolderEntry } from "./file-tree-model";
+import { EPISODE_GROUP, episodeNumber, parentOfRel, type FolderEntry } from "./file-tree-model";
+import useDocumentSearch from "../useDocumentSearch";
 import { patchDocuments, removeDocuments, reorderDocuments, type LibraryChange } from "./library-changes";
 
 type FolderChange = (entries: FolderEntry[]) => FolderEntry[];
@@ -88,6 +89,9 @@ export function useFileTree(options: Options) {
   const [folderRenaming, setFolderRenaming] = useState<{ path: string; value: string } | null>(null);
   const [treeTab, setTreeTab] = useState<"episode" | "memo">("episode");
   const [treeQuery, setTreeQuery] = useState({ episode: "", memo: "" });
+  const episodeSearch = useDocumentSearch(treeQuery.episode, projectId, lib, treeTab === "episode");
+  const memoSearch = useDocumentSearch(treeQuery.memo, projectId, lib, treeTab === "memo");
+  const treeSearch = treeTab === "episode" ? episodeSearch : memoSearch;
   const [docScope, setDocScope] = useState<"all" | "episode">("all");
   const [treeEpisodeId, setTreeEpisodeId] = useState("");
   const [closedDocGroups, setClosedDocGroups] = useState<Set<Kind>>(new Set());
@@ -537,15 +541,15 @@ export function useFileTree(options: Options) {
   useEffect(() => {
     setTreeSelection([]);
   }, [projectId, treeTab, archive, docScope]);
-  // 파일 트리 검색어에 맞는 에피소드(번호나 제목)와 문서(제목). Enter를 누르면 첫 번째 것을 연다.
+  // 번호·제목·태그·본문을 검색하고 Enter를 누르면 첫 번째 문서를 연다.
   const treeEpisodes = docs.filter(
-    (d) => d.kind === "episode" && (!treeQuery.episode.trim() || treeMatch(`${numberOf(d)} ${d.title}`, treeQuery.episode)),
+    d => d.kind === "episode" && episodeSearch.matches(d.id === active?.id ? active : d, numberOf(d)),
   ),
     treeDocs = docs.filter(
       (d) =>
         d.kind !== "episode" &&
         (docScope === "all" || d.episodeId === treeEpisodeId) &&
-        (!treeQuery.memo.trim() || treeMatch(d.title, treeQuery.memo)),
+        memoSearch.matches(d.id === active?.id ? active : d),
     );
   const allFolders = memoEntries.filter(entry => entry.type === "folder");
   const matchingFolders = treeQuery.memo.trim() ? [] : allFolders.filter(entry => !!entry.archived === archive);
@@ -666,7 +670,7 @@ export function useFileTree(options: Options) {
   }, []);
   return {
     docs, documents: lib.documents, archive, count, numberOf, currentId: active?.id, menuTarget: options.menuTarget,
-    treeTab, treeQuery, docScope, treeEpisodeId, treeEpisodes, treeDocs,
+    treeTab, treeQuery, treeSearch, docScope, treeEpisodeId, treeEpisodes, treeDocs,
     memoEntries, folderEntries, boundEpisode, boundDocuments, memoOpenFolders, folderRenaming, closedDocGroups, openEpisodeGroups,
     treeDrop, episodeDrop, treeSelection, renaming,
     setTab, setScope, updateQuery, searchKey, clearSelection,

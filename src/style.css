@@ -4891,6 +4891,11 @@ input.property-text {
 .property-control .tag-chips:empty + .tag-entry {
   margin-top: 0;
 }
+.document-search-status {
+  margin: 4px 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
 .episode-tags {
   display: flex;
   flex-wrap: wrap;
