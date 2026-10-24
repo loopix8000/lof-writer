@@ -31,6 +31,8 @@ function mark(doc: PMNode, pos: number) {
 
 // 마우스가 문단 왼쪽 바깥(여백의 북마크 자리)에 있으면 그 문단의 위치, 아니면 -1.
 function gutterBlock(view: EditorView, event: MouseEvent) {
+  // 모바일 가장자리 터치·스와이프는 북마크 동작으로 처리하지 않는다.
+  if (view.dom.closest(".mobile-app")) return -1;
   let el = event.target as HTMLElement | null;
   while (el && el.parentElement !== view.dom) el = el.parentElement;
   const left = el?.getBoundingClientRect().left ?? 0;
