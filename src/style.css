@@ -916,6 +916,10 @@ h1 small {
     color: var(--text);
   }
 }
+/* 칸이 좁아도 아이콘은 줄어들지 않게 한다. 긴 이름의 탭만 아이콘이 작아 보이지 않도록. */
+.m-pill-tab > svg {
+  flex-shrink: 0;
+}
 .m-pill-tab small {
   font-size: 11px;
   font-weight: 600;

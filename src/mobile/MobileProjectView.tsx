@@ -39,7 +39,7 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "re
 import { STATUS_SHORT, normalizeStatus } from "../../core/episode.mjs";
 import { normalizeWriting } from "../../core/platforms.mjs";
 import CoverImage from "../CoverImage";
-import { icons, labels } from "../app/document-ui";
+import { labels } from "../app/document-ui";
 import { EPISODE_GROUP, parentOfRel, type FolderEntry } from "../app/file-tree-model";
 import { patchDocuments, patchProject, reorderDocuments, type LibraryChange } from "../app/library-changes";
 import { type Dialog } from "../app/model";
@@ -1311,13 +1311,7 @@ export default function MobileProjectView({
                 <input
                   type="text"
                   className="m-filter-input"
-                  placeholder={
-                    activeTab === "episode"
-                      ? "에피소드 제목·번호·#태그 검색..."
-                      : activeTab === "plot"
-                        ? "플롯 제목·폴더·#태그 검색..."
-                        : "메모 제목·폴더·#태그 검색..."
-                  }
+                  placeholder="제목·#태그 검색..."
                   value={filterQuery}
                   onChange={(e) => setFilterQuery(e.target.value)}
                 />
@@ -1361,8 +1355,6 @@ export default function MobileProjectView({
                   <button
                     type="button"
                     className="m-btn-primary m-btn-sm m-project-doc-create"
-                    aria-label={`새 ${labels[activeTab]}`}
-                    title={`새 ${labels[activeTab]}`}
                     onClick={attempt(async () => {
                       if (activeTab === "episode") await createDoc("episode");
                       else setRenameTarget({
@@ -1372,8 +1364,7 @@ export default function MobileProjectView({
                       });
                     })}
                   >
-                    <Plus size={14} />
-                    {React.createElement(icons[activeTab], { size: 15 })}
+                    새 {labels[activeTab]}
                   </button>
                 </div>
               )}
