@@ -128,7 +128,7 @@ export default function TagAddPopup({
         <input
           ref={inputRef}
           type="text"
-          className="tag-add-popup-input"
+          className="floating-input tag-add-popup-input"
           aria-label="새 태그 입력"
           placeholder="태그 입력 후 Enter 또는 쉼표"
           value={value}

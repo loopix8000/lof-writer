@@ -202,7 +202,7 @@ export default function FileTree({
           className="tree-section tree-panel"
           hidden={treeTab !== "episode"}
           onContextMenu={(e) =>
-            openMenu(e, [{ label: "새 회차", disabled: archive, action: attempt(() => createDoc("episode")) }])
+            openMenu(e, [{ label: "새 에피소드", disabled: archive, action: attempt(() => createDoc("episode")) }])
           }
         >
           {!treeQuery.episode.trim() && treeEpisodes.length > EPISODE_GROUP
@@ -267,7 +267,7 @@ export default function FileTree({
         {treeTab === "episode" && !archive && (
           <button className="episode-add" onClick={attempt(() => createDoc("episode"))}>
             <Plus size={16} />
-            새 회차
+            새 에피소드
           </button>
         )}
         <button

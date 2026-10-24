@@ -140,6 +140,22 @@ textarea:focus-visible {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--focus-ring);
 }
+/* 작은 플로팅 팝업의 입력칸. 전역 포커스 링 대신 테두리 색만 은은하게 바꾼다. */
+.floating-input {
+  height: 30px;
+  padding: 0 9px;
+  font-size: 12.5px;
+  border: 1px solid var(--border, var(--line));
+  border-radius: 6px;
+  background: var(--bg, var(--panel, var(--surface)));
+  color: var(--text, var(--ink));
+  outline: none;
+}
+.floating-input:focus,
+.floating-input:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border, var(--line)));
+  box-shadow: none;
+}
 input::placeholder,
 textarea::placeholder {
   color: var(--placeholder);
@@ -944,6 +960,10 @@ h1 small {
   color: var(--text) !important;
   font-weight: 600;
   box-shadow: 0 1px 3px #00000014;
+}
+.project-tabs .project-doc-create {
+  gap: 4px;
+  padding: 7px 11px;
 }
 .episode-list {
   padding: 12px 0 40px;
@@ -4918,17 +4938,6 @@ input.property-text {
   flex: 1 1 auto;
   min-width: 0;
   width: 0;
-  height: 30px;
-  padding: 0 9px;
-  font-size: 12.5px;
-  border: 1px solid var(--border, var(--line));
-  border-radius: 6px;
-  background: var(--bg, var(--panel, var(--surface)));
-  color: var(--text, var(--ink));
-  outline: none;
-}
-.tag-add-popup-input:focus {
-  border-color: var(--accent);
 }
 .tag-add-popup-btn {
   flex: 0 0 30px;

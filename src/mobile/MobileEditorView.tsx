@@ -1541,7 +1541,7 @@ export default function MobileEditorView({
                   }}
                 >
                   <Plus size={17} />
-                  <span>새 회차</span>
+                  <span>새 에피소드</span>
                 </button>
               ) : (
                 <button

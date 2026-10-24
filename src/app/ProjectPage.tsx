@@ -225,11 +225,16 @@ export default function ProjectPage({
             <Search size={17} />
           </button>
           <button
-            className="primary"
+            className="primary project-doc-create"
+            title={`새 ${labels[tab]}`}
+            aria-label={`새 ${labels[tab]}`}
             onClick={attempt(() => createDoc(tab))}
           >
-            <Plus size={16} />
-            {tab === "episode" ? "새 에피소드 쓰기" : `${labels[tab]} 추가`}
+            <Plus size={15} />
+            {(() => {
+              const Icon = icons[tab];
+              return <Icon size={16} />;
+            })()}
           </button>
         </div>
       </div>
