@@ -72,7 +72,6 @@ export default function ProjectPage({
 
   return (
     <div className="project-page">
-      {archive && <RecoveryCopies projectId={project.id} openDoc={openDoc} />}
       <button
         className="back-link"
         onClick={attempt(() => goView("library"))}

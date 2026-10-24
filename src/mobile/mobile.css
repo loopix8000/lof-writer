@@ -1234,6 +1234,14 @@
   gap: 2px;
 }
 
+.m-tree-container > .recovery-copies {
+  margin: 4px 6px 8px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+}
+
 .m-tree-node {
   display: flex;
   flex-direction: column;
