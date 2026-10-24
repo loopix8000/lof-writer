@@ -1078,7 +1078,7 @@ export default function App() {
       await refresh();
       await loadSettingsData();
       if (options?.internal) {
-        message("서재 위치를 앱 내부 저장소로 지정했습니다.");
+        message("내부 저장소의 서재를 열었습니다.");
       }
     } finally {
       setBusy(false);
@@ -1093,21 +1093,42 @@ export default function App() {
       const toInternal = Boolean(options?.internal);
       const destination = toInternal ? (lib.internalRoot || "앱 내부 저장소") : await call<string | null>("pickVaultDestination");
       if (!destination) return;
-      if (!await confirm({
-        title: toInternal ? "앱 내부 저장소로 서재 이동" : "서재 이동",
-        message: toInternal
-          ? "현재 서재의 파일과 변경 이력, 동기화 연결을 앱 내부 저장소로 옮길까요? 앱 내부 저장소의 서재는 앱을 삭제하면 함께 삭제됩니다."
-          : "현재 서재의 파일과 변경 이력, 동기화 연결을 아래 폴더로 옮길까요?",
-        detail: destination,
-        confirmLabel: "이동",
-      })) return;
-      const result = await call<{ root: string; source: string; sourceRetained: boolean }>("moveVault", toInternal ? {
-        internal: true,
-        expectedRoot: lib.root,
+      if (!await confirm(toInternal ? {
+        title: "내부 저장소로 전환",
+        message: <>
+          지금 서재를 앱 내부 저장소로 옮깁니다. 작품·메모·변경 이력·동기화 연결은 그대로 유지되고, 옮긴 뒤 공유 저장소의 원래 폴더는 정리됩니다.
+          <br /><br />
+          내부 저장소는 파일 관리자나 다른 앱에서 보이지 않고, 앱을 삭제하면 서재도 함께 삭제됩니다. 동기화 연결이나 내보내기로 백업해 두세요.
+        </>,
+        detail: `현재 위치: ${lib.root}`,
+        confirmLabel: "내부 저장소로 전환",
       } : {
-        path: destination,
-        expectedRoot: lib.root,
-      });
+        title: "서재 옮기기",
+        message: "지금 서재를 선택한 폴더로 옮깁니다. 작품·메모·변경 이력·동기화 연결은 그대로 유지되고, 옮긴 뒤 원래 폴더는 정리됩니다.",
+        detail: `옮길 위치: ${destination}`,
+        confirmLabel: "옮기기",
+      })) return;
+      let result: { root: string; source: string; sourceRetained: boolean };
+      try {
+        result = await call("moveVault", toInternal ? {
+          internal: true,
+          expectedRoot: lib.root,
+        } : {
+          path: destination,
+          expectedRoot: lib.root,
+        });
+      } catch (error: any) {
+        // 내부 저장소에 예전 서재가 남아 있으면 합치지 않고 그 서재를 열지 묻는다.
+        if (!toInternal || error?.code !== "INTERNAL_LIBRARY_EXISTS") throw error;
+        if (!await confirm({
+          title: "내부 저장소에 서재가 있습니다",
+          message: "내부 저장소에 이전에 쓰던 서재가 있어 지금 서재를 옮겨 합칠 수 없습니다. 지금 서재는 그대로 두고 내부 저장소의 서재를 열까요?",
+          detail: `지금 서재는 ${lib.root}에 그대로 남으며, '다른 서재 열기'로 다시 열 수 있습니다.`,
+          confirmLabel: "내부 저장소 서재 열기",
+        })) return;
+        await chooseVault({ internal: true });
+        return;
+      }
       const data = await refresh();
       if (data) {
         setPrefs((current) => ({ ...current, ...data.preferences }));
@@ -1118,10 +1139,10 @@ export default function App() {
       }
       await loadSettingsData();
       message(result.sourceRetained
-        ? `서재를 이동했습니다. 정리하지 못한 원본 파일은 '${result.source}'에 남겨 두었습니다.`
+        ? `서재를 옮겼습니다. 정리하지 못한 원본 파일은 '${result.source}'에 남겨 두었습니다.`
         : toInternal
-          ? "서재를 앱 내부 저장소로 이동했습니다."
-          : "서재를 이동했습니다.");
+          ? "서재를 내부 저장소로 옮겼습니다."
+          : "서재를 옮겼습니다.");
     } finally {
       setBusy(false);
     }

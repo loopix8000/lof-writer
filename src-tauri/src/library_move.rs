@@ -190,8 +190,9 @@ fn prepare_internal_target(raw_target: &Path, store: &Store) -> Result<PathBuf, 
             if entry.file_name() == ".lof" {
                 has_lof = true;
             } else {
-                return Err(fail_invalid(
+                return Err(fail(
                     "앱 내부 저장소에 이미 서재 파일이 있어 이동할 수 없습니다. 기존 서재와 합칠 수 없습니다.",
+                    "INTERNAL_LIBRARY_EXISTS",
                 ));
             }
         }
@@ -199,8 +200,9 @@ fn prepare_internal_target(raw_target: &Path, store: &Store) -> Result<PathBuf, 
             let lof_dir = raw_target.join(".lof");
             for subdir in ["drafts", "backups", "file-conflicts"] {
                 if fs::read_dir(lof_dir.join(subdir)).is_ok_and(|mut d| d.next().is_some()) {
-                    return Err(fail_invalid(
+                    return Err(fail(
                         "앱 내부 저장소에 이미 서재 데이터가 있어 이동할 수 없습니다. 기존 서재와 합칠 수 없습니다.",
+                        "INTERNAL_LIBRARY_EXISTS",
                     ));
                 }
             }
@@ -215,8 +217,9 @@ fn prepare_internal_target(raw_target: &Path, store: &Store) -> Result<PathBuf, 
                 let has_docs = list["documents"].as_array().is_some_and(|a| !a.is_empty());
                 drop(existing);
                 if has_projects || has_docs {
-                    return Err(fail_invalid(
+                    return Err(fail(
                         "앱 내부 저장소에 이미 작품이나 원고가 있어 이동할 수 없습니다. 기존 서재와 합칠 수 없습니다.",
+                        "INTERNAL_LIBRARY_EXISTS",
                     ));
                 }
             }

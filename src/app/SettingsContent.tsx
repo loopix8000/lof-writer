@@ -19,6 +19,7 @@ import {
   lineBreakLabel
 } from "../../core/episode.mjs";
 import { normalizeWriting } from "../../core/platforms.mjs";
+import { useConfirm } from "../ConfirmDialog";
 import OpenSourceLicenses from "../OpenSourceLicenses";
 import PinSettings from "../PinSettings";
 import PlatformPicker from "../PlatformPicker";
@@ -77,9 +78,8 @@ type Props = {
   onMobileDetailChange?: (open: boolean) => void;
 };
 
-function formatStoragePath(rawPath: string | undefined, fallbackLabel: string, isInternal?: boolean): string {
+function formatStoragePath(rawPath: string | undefined, fallbackLabel: string): string {
   if (!rawPath) return fallbackLabel;
-  if (isInternal) return `앱 내부 저장소 (${rawPath})`;
   return rawPath;
 }
 
@@ -134,6 +134,7 @@ export default function SettingsContent({
   const currentSetting = settingPages.find((item) => item.id === settingsPage);
   // 설정 영역을 다시 만들지 않고 메뉴를 바꿀 때 스크롤만 처음으로 되돌린다.
   const contentRef = useRef<HTMLDivElement>(null);
+  const [confirm, confirmDialog] = useConfirm();
   useLayoutEffect(() => { if (contentRef.current) contentRef.current.scrollTop = 0; }, [settingsPage]);
 
   return (
@@ -312,42 +313,21 @@ export default function SettingsContent({
                 </h3>
                 <div className="connection vault-location-connection">
                   <div>
-                    <b>현재 서재 폴더</b>
-                    <small>{formatStoragePath(lib.root, "앱 기본 서재 폴더", isMobile && lib.isInternal)}</small>
+                    <b>{isMobile ? (lib.isInternal ? "앱 내부 저장소" : "공유 저장소") : "현재 서재 폴더"}</b>
+                    <small title={lib.root}>{lib.root || "앱 기본 서재 폴더"}</small>
                   </div>
-                  <button disabled={busy} onClick={attempt(() => chooseVault())}>
-                    <FolderOpen size={15} />
-                    서재 변경
-                  </button>
                 </div>
-                {isMobile && (
-                  <div className="history-actions">
-                    <button
-                      disabled={busy || Boolean(lib.isInternal)}
-                      onClick={attempt(() => chooseVault({ internal: true }))}
-                    >
-                      <HardDrive size={15} />
-                      앱 내부 저장소로 지정
-                    </button>
-                  </div>
-                )}
-                <p className="muted">
-                  {isMobile
-                    ? "서재 변경으로 공유 저장소 폴더의 서재를 열거나, 앱 내부 저장소를 서재 위치로 지정합니다."
-                    : "서재 변경으로 다른 폴더의 서재를 엽니다."}
-                </p>
+                {/* 서재 옮기기는 지금 서재를 새 위치로 가져가고, 다른 서재 열기는 파일을 그대로 둔 채 열 서재만 바꾼다. */}
                 {moveVault && (
-                  <>
-                    <div className="history-actions">
-                      <button disabled={busy} onClick={attempt(async () => {
-                        setMovingVault("folder");
-                        try { await moveVault(); } finally { setMovingVault(false); }
-                      })}>
-                        <FolderInput size={15} />
-                        {movingVault === "folder" ? "서재 이동 중…" : "서재 이동"}
-                      </button>
+                  <div className="vault-action">
+                    <div className="vault-action-text">
+                      <b>서재 옮기기</b>
+                      <p>지금 서재의 작품·메모·변경 이력·동기화 연결을 그대로 새 위치로 옮깁니다.</p>
+                    </div>
+                    <div className="vault-action-buttons">
                       {isMobile && (
                         <button
+                          className={lib.isInternal ? undefined : "primary"}
                           disabled={busy || Boolean(lib.isInternal)}
                           onClick={attempt(async () => {
                             setMovingVault("internal");
@@ -355,16 +335,46 @@ export default function SettingsContent({
                           })}
                         >
                           <HardDrive size={15} />
-                          {movingVault === "internal" ? "서재 이동 중…" : "앱 내부 저장소로 이동"}
+                          {movingVault === "internal" ? "옮기는 중…" : lib.isInternal ? "내부 저장소 사용 중" : "내부 저장소로 전환"}
                         </button>
                       )}
+                      <button disabled={busy} onClick={attempt(async () => {
+                        setMovingVault("folder");
+                        try { await moveVault(); } finally { setMovingVault(false); }
+                      })}>
+                        <FolderInput size={15} />
+                        {movingVault === "folder" ? "옮기는 중…" : isMobile ? "공유 저장소로 옮기기" : "다른 폴더로 옮기기"}
+                      </button>
                     </div>
-                    <p className="muted">
-                      {isMobile
-                        ? "현재 서재의 파일·변경 이력·동기화 연결을 유지한 채 선택한 공유 저장소 빈 폴더나 앱 내부 저장소로 옮깁니다. 앱 내부 저장소의 서재는 앱을 삭제하면 함께 삭제됩니다."
-                        : "현재 서재의 파일·변경 이력·동기화 연결을 유지한 채 새 위치로 옮깁니다. 이동할 빈 폴더를 선택하세요."}
-                    </p>
-                  </>
+                  </div>
+                )}
+                <div className="vault-action">
+                  <div className="vault-action-text">
+                    <b>다른 서재 열기</b>
+                    <p>파일을 옮기지 않고 다른 폴더에 있는 서재로 바꿔 엽니다. 지금 서재는 원래 위치에 그대로 남습니다.</p>
+                  </div>
+                  <div className="vault-action-buttons">
+                    <button disabled={busy} onClick={attempt(async () => {
+                      if (!await confirm({
+                        title: "다른 서재 열기",
+                        message: "파일은 옮기지 않고, 다음 화면에서 고른 폴더의 서재로 바꿔 엽니다. 지금 서재는 지워지지 않고 원래 위치에 그대로 남습니다.",
+                        detail: isMobile && lib.isInternal
+                          ? "지금 서재는 내부 저장소에 남으며, 나중에 '내부 저장소로 전환'을 누르면 다시 열 수 있습니다."
+                          : `지금 서재: ${lib.root}`,
+                        confirmLabel: "폴더 고르기",
+                      })) return;
+                      await chooseVault();
+                    })}>
+                      <FolderOpen size={15} />
+                      다른 서재 열기
+                    </button>
+                  </div>
+                </div>
+                {isMobile && (
+                  <p className="muted">
+                    내부 저장소는 저장이 빠르지만 파일 관리자나 다른 앱에서 보이지 않고, 앱을 삭제하면 함께 삭제됩니다.
+                    공유 저장소는 파일 관리자에서 직접 볼 수 있지만 저장이 느릴 수 있습니다.
+                  </p>
                 )}
               </div>
             )}
@@ -621,6 +631,7 @@ export default function SettingsContent({
         <span>Lof Writer {lib.version}</span>
         <span className="settings-footer-root" title={lib.root}>내 서재 · {lib.root}</span>
       </footer>
+      {confirmDialog}
     </>
   );
 }

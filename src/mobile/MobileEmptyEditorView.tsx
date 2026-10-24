@@ -85,7 +85,7 @@ export default function MobileEmptyEditorView({ root, project, tree, openDoc, go
     {documents.filter(doc => folderOf(doc) === parent).map(row)}
   </>;
 
-  return <div className="m-screen m-editor-screen">
+  return <div className={`m-screen m-editor-screen${drawerOpen ? " m-drawer-push-left" : ""}`}>
     <header className="m-topbar m-editor-topbar">
       <button type="button" className="m-icon-btn" aria-label="파일 트리 열기" onClick={() => setDrawerOpen(true)}>
         <PanelLeft size={19} />

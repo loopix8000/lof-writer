@@ -2760,6 +2760,40 @@ body.sidebar-resizing * {
   font-size: 13px;
   padding: 7px;
 }
+.vault-action {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+.vault-action-text {
+  flex: 1;
+  min-width: 0;
+}
+.vault-action-text b {
+  display: block;
+  font-size: 13px;
+}
+.vault-action-text p {
+  margin: 5px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.vault-action-buttons {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.vault-action-buttons button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  padding: 7px 10px;
+}
 .connection-conflict-policy {
   display: flex;
   flex-wrap: wrap;

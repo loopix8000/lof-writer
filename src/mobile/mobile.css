@@ -2169,8 +2169,26 @@
     background-color: transparent;
   }
   to {
-    background-color: rgba(0, 0, 0, 0.42);
+    background-color: rgba(0, 0, 0, 0.2);
   }
+}
+
+/* 서랍을 열면 본문을 덮지 않고 서랍 너비만큼 옆으로 민다. 밀려난 본문은 옅게 어둡게 보인다. */
+.m-editor-screen {
+  --m-drawer-left-width: min(86vw, 340px);
+  --m-drawer-right-width: min(88vw, 360px);
+}
+
+.m-editor-screen > :is(.m-editor-topbar, .sync-issue-banner, .m-editor-sync-anchor, .editor-scroll, .m-floating-pill-wrap, .m-empty-state) {
+  transition: transform 0.2s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.m-editor-screen.m-drawer-push-left > :is(.m-editor-topbar, .sync-issue-banner, .m-editor-sync-anchor, .editor-scroll, .m-floating-pill-wrap, .m-empty-state) {
+  transform: translateX(var(--m-drawer-left-width));
+}
+
+.m-editor-screen.m-drawer-push-right > :is(.m-editor-topbar, .sync-issue-banner, .m-editor-sync-anchor, .editor-scroll, .m-floating-pill-wrap, .m-empty-state) {
+  transform: translateX(calc(-1 * var(--m-drawer-right-width)));
 }
 
 .m-drawer-backdrop {
@@ -2178,7 +2196,7 @@
   --drawer-ease: cubic-bezier(0.22, 0.61, 0.36, 1);
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.42);
+  background: rgba(0, 0, 0, 0.2);
   z-index: 280;
   display: flex;
   animation: mDrawerBackdropIn var(--drawer-duration) var(--drawer-ease) both;
@@ -2194,7 +2212,7 @@
 }
 
 .m-slide-drawer.left {
-  width: min(86vw, 340px);
+  width: var(--m-drawer-left-width, min(86vw, 340px));
   border-radius: 0 !important;
   border-right: 1px solid var(--line);
   animation: mSlideInLeft var(--drawer-duration) var(--drawer-ease) both;
@@ -2202,7 +2220,7 @@
 
 .m-slide-drawer.right {
   margin-left: auto;
-  width: min(88vw, 360px);
+  width: var(--m-drawer-right-width, min(88vw, 360px));
   border-radius: 0 !important;
   border-left: 1px solid var(--line);
   animation: mSlideInRight var(--drawer-duration) var(--drawer-ease) both;
@@ -2213,6 +2231,10 @@
   .m-slide-drawer.left,
   .m-slide-drawer.right {
     animation: none;
+  }
+
+  .m-editor-screen > * {
+    transition: none !important;
   }
 }
 
@@ -3080,6 +3102,30 @@
   display: inline-flex !important;
   align-items: center !important;
   gap: 6px !important;
+}
+
+.mobile-app .vault-action {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg);
+  margin-bottom: 8px;
+}
+
+.mobile-app .vault-action-buttons {
+  flex-direction: column;
+}
+
+.mobile-app .vault-action-buttons button {
+  justify-content: center;
+  min-height: 44px;
+  padding: 0 12px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
 }
 
 /* 설정 상세 화면 내부 컨트롤 모바일 최적화 */

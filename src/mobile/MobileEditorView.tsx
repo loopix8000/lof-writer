@@ -895,7 +895,7 @@ export default function MobileEditorView({
 
   return (
     <div
-      className="m-screen m-editor-screen"
+      className={`m-screen m-editor-screen${leftDrawerOpen ? " m-drawer-push-left" : rightDrawerOpen ? " m-drawer-push-right" : ""}`}
       ref={screenRef}
     >
       {/* 심플하고 깔끔한 상단 헤더 */}
