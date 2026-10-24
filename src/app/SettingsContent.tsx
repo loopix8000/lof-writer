@@ -192,19 +192,6 @@ export default function SettingsContent({
             {settingsPage === "security" && <PinSettings />}
           </section>
           <section id="settings-editor" className="settings-section" hidden={settingsPage !== "editor"}>
-            {lib.platform === "windows" && <>
-              <h3>앱 시작</h3>
-              <div className="settings-toggles" aria-busy={startupSaving}>
-                <SettingsToggle label="Windows 시작 시 실행"
-                  description="Windows에 로그인하면 Lof Writer를 자동으로 실행합니다."
-                  checked={prefs.launchAtStartup === true} disabled={startupSaving}
-                  onChange={(checked) => saveStartup("launchAtStartup", checked)} />
-                <SettingsToggle label="트레이로 시작"
-                  description="다음에 앱을 실행할 때 창을 띄우지 않고 트레이에 표시합니다. 트레이 아이콘을 누르면 창이 열립니다."
-                  checked={prefs.startInTray === true} disabled={startupSaving}
-                  onChange={(checked) => saveStartup("startInTray", checked)} />
-              </div>
-            </>}
             <h3>화면과 글꼴</h3>
             <p className="settings-description">편하게 읽고 쓸 수 있도록 집필 화면을 조정하세요.</p>
             <div className="settings-grid">
@@ -274,7 +261,7 @@ export default function SettingsContent({
                 onChange={(checked) => savePrefs({ hideCovers: checked }).catch(report)}
               />
             </div>
-            <h3 style={{ marginTop: 24 }}>내 서재</h3>
+            <h3>내 서재</h3>
             <div className="settings-grid">
               <label>
                 작품 클릭 시 이동할 화면
@@ -291,6 +278,19 @@ export default function SettingsContent({
             {prefs.libraryProjectOpenTarget !== "project" && (
               <p className="settings-note">집필 기록이 없는 작품은 작품 정보 화면으로 이동합니다.</p>
             )}
+            {lib.platform === "windows" && <>
+              <h3>앱 시작</h3>
+              <div className="settings-toggles" aria-busy={startupSaving}>
+                <SettingsToggle label="Windows 시작 시 실행"
+                  description="Windows에 로그인하면 Lof Writer를 자동으로 실행합니다."
+                  checked={prefs.launchAtStartup === true} disabled={startupSaving}
+                  onChange={(checked) => saveStartup("launchAtStartup", checked)} />
+                <SettingsToggle label="트레이로 시작"
+                  description="다음에 앱을 실행할 때 창을 띄우지 않고 트레이에 표시합니다. 트레이 아이콘을 누르면 창이 열립니다."
+                  checked={prefs.startInTray === true} disabled={startupSaving}
+                  onChange={(checked) => saveStartup("startInTray", checked)} />
+              </div>
+            </>}
             <PropertyPresetSettings presets={prefs.propertyPresets} tags={prefs.favoriteTags} onChange={savePrefs} />
           </section>
           <section id="settings-typesetting" className="settings-section" hidden={settingsPage !== "typesetting"}>

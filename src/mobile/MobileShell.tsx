@@ -969,11 +969,14 @@ export default function MobileShell({
                   </p>
                   <div className="setup-vault-picker">
                     <output title={lib.root}>
-                      {lib.isInternal || /^\/data\/(?:data|user\/\d+)\/local\.lof\.writer\//i.test(
-                        lib.root || "",
-                      )
-                        ? `앱 내부 저장소 (${lib.root})`
-                        : lib.root}
+                      <b>
+                        {lib.isInternal || /^\/data\/(?:data|user\/\d+)\/local\.lof\.writer\//i.test(
+                          lib.root || "",
+                        )
+                          ? "앱 내부 저장소"
+                          : "공유 저장소"}
+                      </b>
+                      <small>{lib.root}</small>
                     </output>
                     <button
                       type="button"

@@ -2462,6 +2462,9 @@ body.sidebar-resizing * {
   font-weight: 600;
   color: var(--text);
 }
+.settings-content .settings-section > h3:not(:first-child) {
+  margin-top: 24px;
+}
 .settings-content .settings-description {
   margin: 0 0 20px;
   font-size: 12px;

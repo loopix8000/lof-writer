@@ -192,7 +192,7 @@ fn finish_pair(app: &AppHandle, id: &str, own: &str, result: Result<(Group, Memb
             }
             Ok(())
         })?;
-        Ok(peer_value(&inviter, &job.root, &Value::Null))
+        Ok(peer_value(&inviter, &job.root))
     });
     match committed {
         Ok(peer) => {
@@ -437,16 +437,9 @@ fn sync_own_name(app: &AppHandle, notify: bool) -> Result<(), LofError> {
     }
     Ok(())
 }
-fn aliases(app: &AppHandle, root: &Path) -> Value {
-    app.state::<AppState>().settings.lock().unwrap()["realtimeGroups"]
-        .as_array()
-        .and_then(|list| list.iter().find(|entry| same_root(entry, root)))
-        .map(|entry| entry["aliases"].clone())
-        .unwrap_or(Value::Null)
-}
-fn peer_value(member: &Member, root: &Path, aliases: &Value) -> Value {
+fn peer_value(member: &Member, root: &Path) -> Value {
     json!({"id":format!("{}:{}",member.endpoint,member.vault),"endpoint":member.endpoint,"remoteVault":member.vault,
-        "root":root,"name":aliases[&member.endpoint].as_str().unwrap_or(&member.name),"storage":member.storage})
+        "root":root,"name":member.name,"storage":member.storage})
 }
 /// 이 장치를 제외한 현재 그룹 구성원.
 fn peers(app: &AppHandle) -> Vec<Value> {
@@ -460,10 +453,9 @@ fn peers(app: &AppHandle) -> Vec<Value> {
             .unwrap_or_default())
     })
     .unwrap_or_default();
-    let aliases = aliases(app, &current);
     members
         .iter()
-        .map(|member| peer_value(member, &current, &aliases))
+        .map(|member| peer_value(member, &current))
         .collect()
 }
 fn daemon_protocol(app: &AppHandle, peer: &Value, supported: bool) {
@@ -619,18 +611,35 @@ fn absorb(app: &AppHandle, incoming: &[Member]) -> Result<bool, LofError> {
     if incoming.is_empty() {
         return Ok(false);
     }
+    let mut renamed = None;
     let changed = with_group(app, |group| {
         let Some(current) = group.as_mut() else {
             return Ok(false);
         };
+        let previous_name = current.member(&own).map(|me| me.name.clone());
         if !current.merge(incoming, false) {
             return Ok(false);
         }
-        if current.member(&own).is_none() {
-            *group = None;
+        match current.member(&own) {
+            Some(me) => {
+                if previous_name.as_deref() != Some(me.name.as_str()) {
+                    renamed = Some(me.name.clone());
+                }
+            }
+            None => *group = None,
         }
         Ok(true)
     })?;
+    if let Some(name) = renamed {
+        let state = app.state::<AppState>();
+        let mut settings = state.settings.lock().unwrap();
+        if settings["realtimeDeviceName"].as_str() != Some(name.as_str()) {
+            let mut next = settings.clone();
+            next["realtimeDeviceName"] = json!(name);
+            crate::persist_settings(&state.config_file, &next)?;
+            *settings = next;
+        }
+    }
     if changed {
         wake(app);
     }
@@ -640,10 +649,34 @@ fn announce(app: &AppHandle, announcement: Announcement) {
     let rt = app.state::<Realtime>();
     let handle = rt.runtime.lock().unwrap().as_ref().map(|(h, _)| h.clone());
     let sender = rt.announcer.lock().unwrap().clone();
-    if let (Some(handle), Some(sender)) = (handle, sender) {
-        handle.spawn(async move {
-            let _ = sender.announce(&announcement).await;
-        });
+    if let Some(handle) = handle {
+        if let Announcement::Members { ref members } = announcement {
+            if let Ok(local_vault) = vault(app) {
+                let live: Vec<_> = rt
+                    .live
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .map(|(id, conn)| (id.clone(), conn.clone()))
+                    .collect();
+                for (id, conn) in live {
+                    let target = id.split(':').nth(1).unwrap_or("").to_string();
+                    let meta = json!({"op":"members","vault":local_vault,"target":target,"members":members});
+                    handle.spawn(async move {
+                        let _ = tokio::time::timeout(
+                            Duration::from_secs(3),
+                            lof_realtime::request(&conn, Message::json(meta)),
+                        )
+                        .await;
+                    });
+                }
+            }
+        }
+        if let Some(sender) = sender {
+            handle.spawn(async move {
+                let _ = sender.announce(&announcement).await;
+            });
+        }
     }
 }
 fn gossip_event(app: &AppHandle, event: Event) {
@@ -847,7 +880,7 @@ fn join(app: &AppHandle, peer: &str, message: &Message) -> Result<Message, LofEr
         let joined = group.update(&key, peer, remote_vault, &name, storage, false);
         Ok((group.clone(), joined))
     })?;
-    invite.as_mut().unwrap().peer = Some(peer_value(&joined, &current, &Value::Null));
+    invite.as_mut().unwrap().peer = Some(peer_value(&joined, &current));
     drop(invite);
     announce(
         app,
@@ -2012,26 +2045,60 @@ pub fn command(app: &AppHandle, method: &str, args: &Value) -> Result<Value, Lof
         if name.is_empty() || name.chars().count() > 100 {
             return Err(fail_invalid("장치 이름은 1~100자로 입력해 주세요."));
         }
-        let mut peer = peers(app)
+        let key = rt
+            .key
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or_else(|| fail_invalid("실시간 연결을 준비 중입니다."))?;
+        let target = peers(app)
             .into_iter()
             .find(|p| p["id"] == args["id"])
+            .and_then(|p| p["endpoint"].as_str().map(str::to_owned))
             .ok_or_else(|| fail_invalid("그룹 구성원을 찾을 수 없습니다."))?;
-        let endpoint = peer["endpoint"].as_str().unwrap_or("").to_string();
-        // 장치 이름은 이 장치에서만 쓰는 별칭으로 저장한다.
-        let state = app.state::<AppState>();
-        let mut settings = state.settings.lock().unwrap();
-        let mut next = settings.clone();
-        let entry = next["realtimeGroups"]
-            .as_array_mut()
-            .and_then(|list| list.iter_mut().find(|entry| same_root(entry, &current)))
-            .ok_or_else(|| fail_invalid("그룹 구성원을 찾을 수 없습니다."))?;
-        if !entry["aliases"].is_object() {
-            entry["aliases"] = json!({});
+        // 구성원 이름을 새 버전으로 서명해 그룹의 다른 기기에도 함께 반영한다.
+        let (peer, list) = with_group(app, |group| {
+            let current_group = group
+                .as_mut()
+                .ok_or_else(|| fail_invalid("그룹 구성원을 찾을 수 없습니다."))?;
+            let member = current_group
+                .member(&target)
+                .cloned()
+                .ok_or_else(|| fail_invalid("그룹 구성원을 찾을 수 없습니다."))?;
+            let updated = current_group.update(
+                &key,
+                &member.endpoint,
+                &member.vault,
+                name,
+                member.storage,
+                false,
+            );
+            Ok((
+                peer_value(&updated, &current),
+                current_group.members.clone(),
+            ))
+        })?;
+        announce(app, Announcement::Members { members: list });
+        if let Some(invite_peer) = rt
+            .invite
+            .lock()
+            .unwrap()
+            .as_mut()
+            .and_then(|i| i.peer.as_mut())
+            .filter(|p| p["id"] == args["id"])
+        {
+            invite_peer["name"] = json!(peer["name"]);
         }
-        entry["aliases"][&endpoint] = json!(name);
-        crate::persist_settings(&state.config_file, &next)?;
-        *settings = next;
-        peer["name"] = json!(name);
+        if let Some(pairing) = rt
+            .pairing
+            .lock()
+            .unwrap()
+            .as_mut()
+            .filter(|p| p.result["phase"] == "connected" && p.result["peer"]["id"] == args["id"])
+        {
+            pairing.result["peer"]["name"] = json!(peer["name"]);
+        }
+        wake(app);
         return Ok(peer);
     }
     if method == "realtimeRemove" {
