@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import ContextMenu, { type MenuItem } from "./ContextMenu";
 import { useConfirm } from "./ConfirmDialog";
 import RecoveryCopies from "./RecoveryCopies";
-import { memoEntriesInView, type MemoEntry } from "./memo-tree";
+import type { MemoEntry } from "./memo-tree";
 import { call } from "./types";
 import { MobileActionSheet } from "./mobile/MobileActionSheet";
 import TreeRow, { TreeRowAction } from "./app/TreeRow";
@@ -37,7 +37,8 @@ export default function MemoArchiveDialog({ space, title, mobile = false, onClos
     const seq = ++loadSeq.current;
     try {
       const result = await call<{ entries: MemoEntry[] }>("memoTree", { space });
-      if (seq === loadSeq.current) { setEntries(memoEntriesInView(result.entries, true)); setLoaded(true); }
+      // 보관한 항목만 보여 준다. 보관하지 않은 상위 폴더까지 띄우면 그 폴더를 여기서 꺼내거나 지울 수 있게 된다.
+      if (seq === loadSeq.current) { setEntries(result.entries.filter(entry => entry.archived)); setLoaded(true); }
     } catch (error: any) { if (seq === loadSeq.current) { setError(error.message); setLoaded(true); } }
   }, [space]);
   useEffect(() => {
@@ -104,11 +105,17 @@ export default function MemoArchiveDialog({ space, title, mobile = false, onClos
     { label: `${entry.type === "folder" ? "폴더" : "메모"} ${mobile ? "완전 삭제" : "삭제"}`, icon: <Trash2 size={18} />,
       disabled: busy, danger: true, action: () => void changeEntry(entry, true) },
   ];
-  const rows = (parent = "", depth = 0): React.ReactNode => entries.filter(entry => {
-    const index = entry.path.lastIndexOf("/");
-    return (index < 0 ? "" : entry.path.slice(0, index)) === parent;
-  }).map(entry => {
+  // 상위 폴더가 보관되지 않았으면 그 항목은 가장 가까운 보관 폴더(없으면 맨 위)에 두고 원래 위치를 함께 표시한다.
+  const shownPaths = new Set(entries.map(entry => entry.path));
+  const parentOf = (path: string) => path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
+  const shownParent = (path: string) => {
+    for (let parent = parentOf(path); parent; parent = parentOf(parent)) if (shownPaths.has(parent)) return parent;
+    return "";
+  };
+  const rows = (parent = "", depth = 0): React.ReactNode => entries.filter(entry => shownParent(entry.path) === parent).map(entry => {
     const folder = entry.type === "folder", open = expanded.has(entry.path);
+    const realParent = parentOf(entry.path);
+    const location = realParent === parent ? "" : parent ? realParent.slice(parent.length + 1) : realParent;
     const icon = folder ? open ? <FolderOpen size={mobile ? 16 : 15} /> : <Folder size={mobile ? 16 : 15} />
       : entry.kind === "plot" ? mobile ? <FilePlus size={16} /> : <FileText size={15} />
         : <StickyNote size={mobile ? 16 : 15} />;
@@ -122,7 +129,9 @@ export default function MemoArchiveDialog({ space, title, mobile = false, onClos
             : open ? <ChevronDown size={14} /> : <ChevronRight size={14} />)}
           {mobile ? <span className={`m-tree-icon ${folder ? "folder" : entry.kind || "memo"}`}>{icon}</span> : icon}
           <span className={mobile ? "m-tree-label" : undefined}>{entry.name}</span>
-          {mobile && entry.updatedAt && <span className="m-tree-meta">{new Date(entry.updatedAt).toLocaleDateString("ko-KR")}</span>}
+          {mobile && (location || entry.updatedAt) && <span className="m-tree-meta">
+            {[location, entry.updatedAt && new Date(entry.updatedAt).toLocaleDateString("ko-KR")].filter(Boolean).join(" · ")}
+          </span>}
         </button>
         <button type="button" className="m-tree-action-btn" disabled={busy}
           aria-label={`${entry.name} 메뉴`} aria-haspopup={mobile ? "dialog" : "menu"}
@@ -133,6 +142,7 @@ export default function MemoArchiveDialog({ space, title, mobile = false, onClos
           }}><MoreVertical size={17} /></button>
         </> : <TreeRow folder={folder} depth={depth} label={entry.name} disabled={busy}
           aria-expanded={folder ? open : undefined} title={entry.path} onClick={() => openEntry(entry)}
+          badge={location && <small className="tree-badge" title={`원래 위치: ${location}`}>{location}</small>}
           marker={<>
             {folder && (open ? <ChevronDown size={14} /> : <ChevronRight size={14} />)}
             {icon}

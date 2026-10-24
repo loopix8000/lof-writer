@@ -90,6 +90,30 @@ impl Memos {
             .collect()
     }
 
+    // 보관함에서 꺼낸 항목이 보관된 폴더 안에 남지 않도록 상위 폴더의 보관을 푼다.
+    fn release_archived_ancestors(store: &mut Store, space: &SpaceInfo, rel: &str) -> Result<(), LofError> {
+        let lower = rel.to_lowercase();
+        let outside = |folder: &String| !lower.starts_with(&format!("{}/", folder.to_lowercase()));
+        if let Some(pid) = space.project_id.as_deref() {
+            let mut p = store.get_project(pid)?;
+            let folders = Self::archived_folders(&p.project);
+            let kept: Vec<String> = folders.iter().filter(|folder| outside(folder)).cloned().collect();
+            if kept.len() != folders.len() {
+                Self::set_archived_folders(&mut p.project, kept);
+                store.write_project(&p)?;
+            }
+        } else {
+            let mut metadata = Self::common_folders(space)?;
+            let folders = Self::archived_folders(&metadata);
+            let kept: Vec<String> = folders.iter().filter(|folder| outside(folder)).cloned().collect();
+            if kept.len() != folders.len() {
+                Self::set_archived_folders(&mut metadata, kept);
+                Self::write_common_folders(space, &metadata)?;
+            }
+        }
+        Ok(())
+    }
+
     fn set_archived_folders(project: &mut Value, folders: Vec<String>) {
         if let Some(obj) = project.as_object_mut() {
             if folders.is_empty() {
@@ -585,10 +609,12 @@ impl Memos {
             return Err(fail_invalid("폴더만 보관할 수 있습니다."));
         }
         let Some(pid) = space.project_id.as_deref() else {
-            let mut metadata = Self::common_folders(&space)?;
             for rel in Self::files_under(&space, path)? {
                 Self::archive(store, common_root, &json!({"space": space_id, "path": rel, "archived": archived}))?;
             }
+            // 메모를 꺼내며 폴더 정보가 바뀌었을 수 있으므로 처리한 뒤에 다시 읽는다.
+            if !archived { Self::release_archived_ancestors(store, &space, path)?; }
+            let mut metadata = Self::common_folders(&space)?;
             let prefix = format!("{path}/");
             let mut folders = Self::archived_folders(&metadata);
             folders.retain(|folder| folder != path && !folder.starts_with(&prefix));
@@ -621,6 +647,7 @@ impl Memos {
             let current = store.read(id)?;
             store.save(&json!({ "id": id, "expectedRevision": current.get("revision"), "archived": archived }))?;
         }
+        if !archived { Self::release_archived_ancestors(store, &space, path)?; }
         let mut p = store.get_project(pid)?;
         let prefix = format!("{}/", path);
         let mut folders = Self::archived_folders(&p.project);
@@ -664,6 +691,7 @@ impl Memos {
             doc["updatedAt"] = json!(now_iso());
             atomic_write_str(&file, &write_markdown(&parsed.body, &doc, &raw)?)?;
         }
+        if !archived { Self::release_archived_ancestors(store, &space, rel)?; }
         Ok(true)
     }
 

@@ -275,6 +275,12 @@ export default function MobileMemoView({
     loadTree(space).catch(report);
   }, [space, loadSpaces, loadTree, report]);
 
+  // 보관함에서 꺼내기·동기화처럼 이 화면 밖에서 바뀐 내용도 목록에 반영한다.
+  useEffect(() => window.lof.onChange(() => {
+    loadSpaces().catch(report);
+    loadTree().catch(report);
+  }), [loadSpaces, loadTree, report]);
+
   const save = useCallback((auto = false) => {
     const run = async () => {
       const m = memoRef.current;
@@ -627,7 +633,8 @@ export default function MobileMemoView({
     const inside = (p: string) => p === entry.path || p.startsWith(entry.path + "/");
     await flush();
     await changeEntries(
-      (list) => list.filter((e) => !inside(e.path)),
+      // 꺼낼 때는 목록에서 빼지 않고, 처리 후 다시 읽은 목록에 나타나게 한다.
+      (list) => (archived ? list.filter((e) => !inside(e.path)) : list),
       async () => {
         await call("memoArchive", { space, path: entry.path, archived });
         if (memoRef.current?.space === space && inside(memoRef.current.path)) {
