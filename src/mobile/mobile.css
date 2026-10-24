@@ -3568,14 +3568,23 @@
 
 .m-dialog-footer-host > .m-dialog-footer {
   margin: 0;
-  padding: 12px 16px max(12px, env(safe-area-inset-bottom));
+  padding: 6px 16px max(6px, env(safe-area-inset-bottom));
   border-top: 1px solid var(--line);
   background: var(--bg);
 }
 
-.m-dialog-footer.modal-footer {
+.m-dialog-footer.modal-footer,
+.m-dialog-footer.m-prompt-footer {
+  display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.mobile-app .m-dialog-footer-host .m-dialog-footer button {
+  min-height: 36px;
+  padding: 0 12px;
+  border-radius: 8px;
 }
 
 .m-dialog-footer .m-btn-full {
@@ -3588,6 +3597,29 @@
 
 .m-project-save-confirm {
   z-index: 300;
+}
+
+.m-project-save-confirm .modal-footer {
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.m-project-save-confirm .m-project-save-discard {
+  margin-right: auto;
+  padding: 0 4px;
+  min-height: 36px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--danger-text);
+  box-shadow: none;
+}
+
+.m-project-save-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
 }
 
 .m-dialog-body form {

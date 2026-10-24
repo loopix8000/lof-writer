@@ -270,12 +270,14 @@ export default function ProjectForm({
           <div className="modal-header"><h2>변경 사항을 저장할까요?</h2></div>
           <p>소설 관리에서 변경한 내용을 저장하고 닫을 수 있습니다.</p>
           <div className="modal-footer">
-            <button type="button" onClick={() => setDialog(null)}>저장 안 함</button>
-            <button type="button" autoFocus onClick={() => setClosePrompt(false)}>계속 편집</button>
-            <button type="button" className="primary" onClick={() => {
-              setClosePrompt(false);
-              formRef.current?.requestSubmit();
-            }}>저장</button>
+            <button type="button" className="m-project-save-discard" onClick={() => setDialog(null)}>저장 안 함</button>
+            <div className="m-project-save-actions">
+              <button type="button" autoFocus onClick={() => setClosePrompt(false)}>계속 편집</button>
+              <button type="button" className="primary" onClick={() => {
+                setClosePrompt(false);
+                formRef.current?.requestSubmit();
+              }}>저장</button>
+            </div>
           </div>
         </div>
       </div>,
