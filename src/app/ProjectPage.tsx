@@ -226,15 +226,10 @@ export default function ProjectPage({
           </button>
           <button
             className="primary project-doc-create"
-            title={`새 ${labels[tab]}`}
-            aria-label={`새 ${labels[tab]}`}
             onClick={attempt(() => createDoc(tab))}
           >
-            <Plus size={15} />
-            {(() => {
-              const Icon = icons[tab];
-              return <Icon size={16} />;
-            })()}
+            <Plus size={15} aria-hidden="true" />
+            <span>새 {labels[tab]}</span>
           </button>
         </div>
       </div>
