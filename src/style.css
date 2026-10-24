@@ -3483,6 +3483,26 @@ body.sidebar-resizing * {
   border-color: var(--danger-border);
   font-size: 13px;
 }
+.document-export-formats {
+  display: grid;
+  gap: 8px;
+}
+.document-export-formats > button {
+  justify-content: flex-start;
+  gap: 12px;
+  padding: 12px;
+  text-align: left;
+}
+.document-export-formats > button > svg {
+  flex-shrink: 0;
+}
+.document-export-formats > button > span {
+  display: grid;
+  gap: 4px;
+}
+.document-export-formats small {
+  color: var(--muted);
+}
 .focus-mode .rail,
 .focus-mode .widget-sidebar,
 .focus-mode .workspace-header {

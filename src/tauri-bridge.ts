@@ -315,9 +315,9 @@ export function installTauriBridge() {
               // ignore clipboard fallback failure
             }
           }
-          if (name === "exportDocument" && res.data?.content && res.data?.fileName) {
+          if (name === "exportDocument" && typeof res.data?.content === "string" && res.data?.fileName) {
             try {
-              const blob = new Blob([res.data.content], { type: "text/markdown;charset=utf-8" });
+              const blob = new Blob([res.data.content], { type: res.data.mimeType || "text/markdown;charset=utf-8" });
               const url = URL.createObjectURL(blob);
               const a = document.createElement("a");
               a.href = url;

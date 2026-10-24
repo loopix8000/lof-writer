@@ -1122,43 +1122,18 @@ impl Store {
         Ok(crate::local_git::Snapshot { documents, projects, assets, deleted: json!(self.deleted()?) })
     }
 
-    fn git_snapshot_for_reset(&mut self) -> Result<crate::local_git::Snapshot, LofError> {
-        let list = self.list()?;
-        let projects: Vec<_> = list["projects"].as_array().into_iter().flatten().map(project_fields).collect();
-        let mut documents = Vec::new();
-        for entry in list["documents"].as_array().into_iter().flatten() {
-            if let Some(id) = entry["id"].as_str() {
-                if let Ok(doc) = self.read(id) {
-                    documents.push(doc);
-                }
-            }
-        }
-        let mut assets = Vec::new();
-        for project in list["projects"].as_array().into_iter().flatten() {
-            let id = project["id"].as_str().unwrap_or("");
-            if let Some(folder) = project["folder"].as_str() {
-                let _ = crate::local_git::collect_assets(id, &self.root.join(folder), &mut assets);
-            }
-        }
-        Ok(crate::local_git::Snapshot {
-            documents,
-            projects,
-            assets,
-            deleted: json!(self.deleted().unwrap_or_default()),
-        })
-    }
-
     pub fn reset_history(&mut self, common_memo_root: &Path) -> Result<(), LofError> {
         self.require_database()?;
         let vault_id = self.vault["id"].as_str().unwrap_or("").to_string();
-        let snapshot = self.git_snapshot_for_reset()?;
+        let snapshot = self.git_snapshot()?;
+        let common_snapshot = crate::common_memo_history::snapshot_for_reset(common_memo_root)?;
         let db = self.index.database.as_ref().unwrap();
         self.local_git.reset(&vault_id, db, &snapshot)?;
         self.local_git.observe(self.sync_revision());
         let lof = self.root.join(".lof");
         crate::local_git::remove_dir_force(&lof.join("history"))?;
         crate::local_git::remove_dir_force(&lof.join("migrations"))?;
-        crate::local_git::LocalHistory::reset_common_memos(common_memo_root)?;
+        crate::local_git::LocalHistory::reset_common_memos(common_memo_root, &common_snapshot)?;
         self.last_snapshot.clear();
         Ok(())
     }

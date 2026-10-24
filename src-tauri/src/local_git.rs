@@ -407,12 +407,7 @@ impl LocalHistory {
         Ok(())
     }
 
-    pub fn reset(
-        &mut self,
-        vault_id: &str,
-        db: &LibraryDb,
-        snapshot: &Snapshot,
-    ) -> Result<(), LofError> {
+    fn reset_repository(&self, vault_id: &str, snapshot: &Snapshot) -> Result<Oid, LofError> {
         remove_dir_force(&self.path)?;
         let repo = self.repository()?;
         let owner_path = repo.path().join("lof-owner.json");
@@ -433,6 +428,17 @@ impl LocalHistory {
             &[],
         )?;
         repo.set_head(MAIN)?;
+        Ok(oid)
+    }
+
+    pub fn reset(
+        &mut self,
+        vault_id: &str,
+        db: &LibraryDb,
+        snapshot: &Snapshot,
+    ) -> Result<(), LofError> {
+        let oid = self.reset_repository(vault_id, snapshot)?;
+        let repo = self.repository()?;
         repo.reference(MIGRATION, oid, true, "변경 이력 초기화")?;
         db.reset_history_state(&oid.to_string())?;
         self.ready = true;
@@ -445,11 +451,11 @@ impl LocalHistory {
         Ok(())
     }
 
-    pub fn reset_common_memos(root: &Path) -> Result<(), LofError> {
-        let git_dir = root.join(".lof").join("common-memo-git");
-        remove_dir_force(&git_dir)?;
+    pub fn reset_common_memos(root: &Path, snapshot: &Snapshot) -> Result<(), LofError> {
         if root.try_exists()? {
-            let _ = Self::common_memos(root)?;
+            let mut history = Self::new(root);
+            history.path = root.join(".lof").join("common-memo-git");
+            history.reset_repository("common-memos", snapshot)?;
         }
         Ok(())
     }

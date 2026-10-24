@@ -92,6 +92,16 @@ pub fn same_history_content(left: &Value, right: &Value) -> bool {
     left.get("body") == right.get("body") && history_metadata(left) == history_metadata(right)
 }
 
+pub(crate) fn history_metadata_key(doc: &Value) -> String {
+    let mut metadata = history_metadata(doc);
+    metadata.sort_all_objects();
+    hash_str(&metadata.to_string())
+}
+
+fn history_content_key(doc: &Value) -> String {
+    format!("{}:{}", hash_str(doc["body"].as_str().unwrap_or("")), history_metadata_key(doc))
+}
+
 fn legacy_history(id: &str, name: &str, raw: &str) -> Result<Value, LofError> {
     let millis = name
         .split('-')
@@ -599,20 +609,33 @@ impl LibraryDb {
             "INSERT INTO history(doc_id,name,data,saved_at) VALUES(?1,?2,?3,?4)",
             params![id, name, encode(value)?, saved],
         )?;
+        if value["manual"].as_bool() == Some(true) {
+            self.discard_automatic_duplicates(id, value)?;
+        }
         Ok(())
     }
 
+    fn discard_automatic_duplicates(&self, id: &str, manual: &Value) -> Result<usize, LofError> {
+        let mut query = self.connection.prepare("SELECT name,data FROM history WHERE doc_id=?1")?;
+        let mut rows = query.query([id])?;
+        let mut duplicates = Vec::new();
+        while let Some(row) = rows.next()? {
+            let value = decode(&row.get::<_, Vec<u8>>(1)?)?;
+            if value["manual"].as_bool() != Some(true) && value["recordKind"].as_str() != Some("restore")
+                && same_history_content(&value, manual) {
+                duplicates.push(row.get::<_, String>(0)?);
+            }
+        }
+        drop(rows);
+        drop(query);
+        for name in &duplicates {
+            self.connection.execute("DELETE FROM history WHERE doc_id=?1 AND name=?2", params![id, name])?;
+        }
+        Ok(duplicates.len())
+    }
+
     pub fn history(&self, id: &str) -> Result<Value, LofError> {
-        let mut query = self.connection.prepare(
-            "SELECT name FROM history WHERE doc_id=?1 ORDER BY saved_at DESC,name DESC LIMIT 100",
-        )?;
-        let names = query
-            .query_map([id], |row| row.get::<_, String>(0))?
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(json!(names
-            .into_iter()
-            .map(|name| json!({"name":name}))
-            .collect::<Vec<_>>()))
+        Ok(self.legacy_history_page(id, 0, 100)?["entries"].clone())
     }
 
     // 고정된 백업에서 조금씩 읽으므로 이관 중의 새 저장이나 이력 정리에 영향을 받지 않는다.
@@ -664,16 +687,24 @@ impl LibraryDb {
     }
 
     pub fn legacy_history_page(&self, id: &str, offset: usize, limit: usize) -> Result<Value, LofError> {
-        let mut query = self.connection.prepare("SELECT name,data,saved_at FROM history WHERE doc_id=?1 ORDER BY saved_at DESC,name DESC LIMIT ?2 OFFSET ?3")?;
-        let mut rows = query.query(params![id, (limit + 1) as i64, offset as i64])?;
-        let mut entries = Vec::new();
+        let mut query = self.connection.prepare("SELECT name,data,saved_at FROM history WHERE doc_id=?1 ORDER BY saved_at DESC,name DESC")?;
+        let mut rows = query.query([id])?;
+        let mut candidates = Vec::new();
+        let mut manual_contents = std::collections::HashSet::new();
         while let Some(row) = rows.next()? {
             let name: String = row.get(0)?;
             let bytes: Vec<u8> = row.get(1)?;
             let doc = decode(&bytes)?;
-            entries.push(json!({"name":name,"savedAt":row.get::<_,String>(2)?,"title":doc["title"],
-                "kind":if doc["manual"].as_bool()==Some(true){"manual"}else{"legacy"}}));
+            let manual = doc["manual"].as_bool() == Some(true);
+            let key = history_content_key(&doc);
+            if manual { manual_contents.insert(key.clone()); }
+            let automatic = !manual && doc["recordKind"].as_str() != Some("restore");
+            candidates.push((json!({"name":name,"savedAt":row.get::<_,String>(2)?,"title":doc["title"],
+                "kind":if manual{"manual"}else{"legacy"}}), key, automatic));
         }
+        let mut entries: Vec<_> = candidates.into_iter()
+            .filter(|(_, key, automatic)| !automatic || !manual_contents.contains(key))
+            .skip(offset).take(limit.saturating_add(1)).map(|(entry, _, _)| entry).collect();
         let more = entries.len() > limit;
         entries.truncate(limit);
         Ok(json!({"entries":entries,"nextOffset":if more{Some(offset+limit)}else{None},"anchor":Value::Null,"migrating":true}))
@@ -953,14 +984,14 @@ impl LibraryDb {
             return Ok(false);
         };
         let mut doc = decode(&bytes)?;
-        if doc["manual"].as_bool() == Some(true) {
-            return Ok(false);
+        let updated = doc["manual"].as_bool() != Some(true);
+        if updated {
+            doc["manual"] = json!(true);
+            self.connection.execute(
+                "UPDATE history SET data=?1 WHERE doc_id=?2 AND name=?3",
+                params![encode(&doc)?, id, name],
+            )?;
         }
-        doc["manual"] = json!(true);
-        self.connection.execute(
-            "UPDATE history SET data=?1 WHERE doc_id=?2 AND name=?3",
-            params![encode(&doc)?, id, name],
-        )?;
-        Ok(true)
+        Ok(self.discard_automatic_duplicates(id, &doc)? > 0 || updated)
     }
 }

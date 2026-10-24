@@ -89,6 +89,7 @@ import EpisodeBindingPicker from "./EpisodeBindingPicker";
 import EpisodeProperties, { statusItems } from "./EpisodeProperties";
 import SyncIssueBanner from "./SyncIssueBanner";
 import HistoryDialog from "./HistoryDialog";
+import DocumentExportDialog from "./DocumentExportDialog";
 import MemoSession from "./MemoSession";
 import MobilePreview from "./MobilePreview";
 import type { NoteMark } from "./note-links";
@@ -874,11 +875,8 @@ export default function App() {
         action: attempt(() => copyDocManuscript(d, rawCopy)),
       },
       {
-        label: "Markdown 내보내기",
-        action: attempt(async () => {
-          await flush();
-          if (await call("exportDocument", { id: d.id })) message("원고를 내보냈습니다.");
-        }),
+        label: "내보내기",
+        action: () => setDialog({ type: "exportDocument", value: d.id }),
       },
       "separator",
       d.archived
@@ -1554,10 +1552,8 @@ export default function App() {
               onClick={(event) => {
                 const rect = event.currentTarget.getBoundingClientRect();
                 setMenu({ x: rect.right, y: rect.bottom + 4, align: "end", target: `document-actions:${active.id}`, items: [
-                  { label: "Markdown 내보내기", icon: <Download size={15} />, action: attempt(async () => {
-                    await flush();
-                    if (await call("exportDocument", { id: active.id })) message("원고를 내보냈습니다.");
-                  }) },
+                  { label: "내보내기", icon: <Download size={15} />,
+                    action: () => setDialog({ type: "exportDocument", value: active.id }) },
                   "separator",
                   { label: active.archived ? "보관 해제" : "보관함으로 이동", icon: <Archive size={15} />,
                     action: attempt(() => archiveDoc(active)) },
@@ -2641,7 +2637,9 @@ export default function App() {
         </button>
       )}
       {confirmDialog}
-      {dialog && (
+      {dialog?.type === "exportDocument" && dialog.value && <DocumentExportDialog documentId={dialog.value}
+        flush={flush} onClose={() => setDialog(null)} message={message} report={report} />}
+      {dialog && dialog.type !== "exportDocument" && (
         <div
           // 삭제를 묻는 창은 배경을 어둡게 하지 않는다.
           className={`modal-backdrop${["deleteDoc", "deleteProject"].includes(dialog.type) ? " plain-backdrop" : ""}`}

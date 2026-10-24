@@ -34,6 +34,7 @@ import type { EditorScrollPositions } from "../EditorScroll";
 import type { MenuItem } from "../ContextMenu";
 import EpisodeBindingPicker from "../EpisodeBindingPicker";
 import HistoryDialog from "../HistoryDialog";
+import DocumentExportDialog from "../DocumentExportDialog";
 import PlatformPicker from "../PlatformPicker";
 import QuickNote, { type QuickNoteSource } from "../QuickNote";
 import { ReleaseNotesDialog, ReleaseNotice } from "../ReleaseNotes";
@@ -958,7 +959,9 @@ export default function MobileShell({
       })()}
 
       {/* 모바일 전용 전체 화면 서브 다이얼로그 (새 작품, 소설 관리, 변경 이력, 내보내기 등) */}
-      {dialog && !["settings", "serverSync", "deleteDoc"].includes(dialog.type) && (
+      {dialog?.type === "exportDocument" && dialog.value && <DocumentExportDialog isMobile documentId={dialog.value}
+        flush={flush} onClose={() => setDialog(null)} message={message} report={report} />}
+      {dialog && !["settings", "serverSync", "deleteDoc", "exportDocument"].includes(dialog.type) && (
         <MobileDialogPage
           onClose={dialog.type === "setup" ? undefined : requestCloseDialog}
           title={{

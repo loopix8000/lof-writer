@@ -236,6 +236,7 @@ export default function MobileEditorView({
     align?: "left" | "center";
     drawer?: boolean;
     project?: boolean;
+    compact?: boolean;
     items: Array<
       | "separator"
       | {
@@ -249,6 +250,7 @@ export default function MobileEditorView({
         }
     >;
   } | null>(null);
+  const propPopupWidth = propPopup?.compact ? 200 : 220;
   const [, setTypesettingKind] = useState<"episode" | "document">(
     active.kind === "episode" ? "episode" : "document",
   );
@@ -1066,6 +1068,7 @@ export default function MobileEditorView({
                 x: rect.left,
                 y: rect.bottom + 6,
                 align: "left",
+                compact: true,
                 items: items.map((item: any) =>
                   item === "separator"
                     ? "separator"
@@ -1252,16 +1255,11 @@ export default function MobileEditorView({
                 role="menuitem"
                 onClick={() => {
                   setMoreMenuOpen(false);
-                  attempt(async () => {
-                    await flush();
-                    if (await call("exportDocument", { id: active.id })) {
-                      message("원고를 내보냈습니다.");
-                    }
-                  })();
+                  setDialog({ type: "exportDocument", value: active.id });
                 }}
               >
                 <Download size={16} />
-                <span>Markdown 내보내기</span>
+                <span>내보내기</span>
               </button>
               <button
                 type="button"
@@ -1754,7 +1752,7 @@ export default function MobileEditorView({
           role="presentation"
         >
           <div
-            className={`m-floating-anchor-popup${propPopup.drawer ? " m-drawer-document-menu" : ""}${propPopup.project ? " m-drawer-project-menu" : ""}`}
+            className={`m-floating-anchor-popup${propPopup.drawer ? " m-drawer-document-menu" : ""}${propPopup.project ? " m-drawer-project-menu" : ""}${propPopup.compact ? " m-property-popup" : ""}`}
             role="menu"
             aria-label={propPopup.project ? "작품 및 서재 메뉴" : propPopup.drawer ? "문서 관리" : "속성 선택 팝업"}
             style={{
@@ -1766,8 +1764,8 @@ export default function MobileEditorView({
                 top: `${Math.max(52, Math.min(propPopup.y, window.innerHeight - 280))}px`,
                 left:
                   propPopup.align === "center"
-                    ? `${Math.max(12, Math.min(propPopup.x - 110, window.innerWidth - 232))}px`
-                    : `${Math.max(12, Math.min(propPopup.x, window.innerWidth - 232))}px`,
+                    ? `${Math.max(12, Math.min(propPopup.x - propPopupWidth / 2, window.innerWidth - propPopupWidth - 12))}px`
+                    : `${Math.max(12, Math.min(propPopup.x, window.innerWidth - propPopupWidth - 12))}px`,
               }),
             }}
             onClick={(e) => e.stopPropagation()}
@@ -1793,7 +1791,7 @@ export default function MobileEditorView({
                     item.action();
                   }}
                 >
-                  {item.icon}
+                  {item.icon && <span className="m-floating-popup-icon">{item.icon}</span>}
                   <span>{item.label}</span>
                   {item.badge && (
                     <small className="m-floating-popup-badge">

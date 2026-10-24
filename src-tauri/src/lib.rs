@@ -1587,6 +1587,7 @@ fn dispatch_method(
         }
         "exportDocument" => {
             let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            let format = if args.get("format").and_then(Value::as_str) == Some("txt") { "txt" } else { "md" };
             let (title, body, md_content) = {
                 let mut guard = state.store.lock().unwrap();
                 let st = guard
@@ -1618,11 +1619,13 @@ fn dispatch_method(
                 .collect();
             #[cfg(not(target_os = "android"))]
             {
-                let picked = FileDialog::new()
-                    .set_file_name(format!("{}.md", safe_title))
-                    .add_filter("Markdown", &["md"])
-                    .add_filter("텍스트", &["txt"])
-                    .save_file();
+                let dialog = FileDialog::new().set_file_name(format!("{}.{}", safe_title, format));
+                let dialog = if format == "txt" {
+                    dialog.add_filter("텍스트", &["txt"]).add_filter("Markdown", &["md"])
+                } else {
+                    dialog.add_filter("Markdown", &["md"]).add_filter("텍스트", &["txt"])
+                };
+                let picked = dialog.save_file();
                 let Some(file_path) = picked else {
                     return Ok(json!(false));
                 };
@@ -1642,14 +1645,15 @@ fn dispatch_method(
             {
                 let exports_dir = state.user_dir.join("Exports");
                 fs::create_dir_all(&exports_dir)?;
-                let file_name = format!("{}.md", safe_title);
+                let file_name = format!("{}.{}", safe_title, format);
                 let file_path = exports_dir.join(&file_name);
-                atomic_write_str(&file_path, &md_content)?;
+                let content = if format == "txt" { plain_text(&body) } else { md_content };
+                atomic_write_str(&file_path, &content)?;
                 Ok(json!({
                     "path": file_path.to_string_lossy().to_string(),
                     "fileName": file_name,
-                    "content": md_content,
-                    "txtContent": plain_text(&body),
+                    "content": content,
+                    "mimeType": if format == "txt" { "text/plain;charset=utf-8" } else { "text/markdown;charset=utf-8" },
                 }))
             }
         }

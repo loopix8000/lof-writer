@@ -2064,12 +2064,21 @@
   color: var(--muted);
 }
 
-.m-floating-popup-item span {
+.m-floating-popup-item > span:not(.m-floating-popup-icon) {
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  text-align: left;
+}
+
+.m-floating-popup-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 16px;
+  width: 16px;
 }
 
 .m-floating-popup-item:active {
@@ -2130,6 +2139,16 @@
   box-shadow:
     0 12px 32px rgba(0, 0, 0, 0.52),
     0 2px 8px rgba(0, 0, 0, 0.32);
+}
+
+.m-property-popup {
+  width: 200px;
+  max-width: calc(100vw - 24px);
+}
+
+.m-property-popup .m-floating-popup-item {
+  padding-inline: 8px;
+  gap: 8px;
 }
 
 .m-drawer-project-menu {

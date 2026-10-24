@@ -7,7 +7,7 @@ import DialogFooter from "./DialogFooter";
 
 type Entry = { name: string; savedAt: string; title: string; kind: string; commit?: string };
 type Page = { entries: Entry[]; anchor: string | null; nextOffset: number | null; migrating: boolean };
-const labels: Record<string, string> = { manual: "수동 저장", restore: "복원", beforeRestore: "복원 전", legacy: "기존 기록", auto: "자동 기록" };
+const labels: Record<string, string> = { initial: "최초 이력", manual: "수동 저장", restore: "복원", beforeRestore: "복원 전", legacy: "기존 기록", auto: "자동 기록" };
 type MetadataChange = { key: string; property: boolean; previous: unknown; current: unknown; previousExists: boolean; currentExists: boolean };
 const fieldLabels: Record<string, string> = {
   title: "제목", status: "상태", kind: "문서 유형", order: "순서", archived: "보관",

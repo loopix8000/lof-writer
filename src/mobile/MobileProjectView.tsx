@@ -601,13 +601,9 @@ export default function MobileProjectView({
         action: attempt(() => duplicateDoc(d)),
       },
       {
-        label: "Markdown 파일 내보내기",
+        label: "내보내기",
         icon: <Download size={18} />,
-        action: attempt(async () => {
-          if (await call("exportDocument", { id: d.id })) {
-            message("원고를 내보냈습니다.");
-          }
-        }),
+        action: () => setDialog({ type: "exportDocument", value: d.id }),
       },
       "separator",
       {

@@ -31,10 +31,44 @@ fn changed(commit: &Commit<'_>, id: &str) -> Result<bool, LofError> {
     let Some(current) = document_tree(commit, id)? else {
         return Ok(false);
     };
-    if commit.parent_count() == 0 && commit.message() == Ok("변경 이력 초기화") {
-        return Ok(false);
-    }
     Ok(commit.parent_count() == 0 || document_tree(&commit.parent(0)?, id)? != Some(current))
+}
+
+fn content_key(commit: &Commit<'_>, id: &str, metadata: &Value) -> Result<String, LofError> {
+    let body = commit.tree()?.get_path(Path::new(&format!("documents/{id}/body.md")))?.id();
+    Ok(format!("{}:{}", body, crate::database::history_metadata_key(metadata)))
+}
+
+// Git 커밋은 다른 문서와 공유하므로 중복 자동 기록만 문서별 삭제 표시로 정리한다.
+fn discard_automatic_duplicates(repo: &Repository, id: &str, manual: &Commit<'_>) -> Result<usize, LofError> {
+    let metadata = read_json(repo, &manual.tree()?, &format!("documents/{id}/metadata.json"))?;
+    let key = content_key(manual, id, &metadata)?;
+    let mut duplicates = Vec::new();
+    for oid in walk(repo, latest(repo)?.id())? {
+        let commit = repo.find_commit(oid?)?;
+        if commit.id() == manual.id() || !changed(&commit, id)? || is_deleted(repo, id, commit.id())?
+            || (commit.parent_count() == 0 && commit.message() == Ok("변경 이력 초기화")) {
+            continue;
+        }
+        let mut marked = false;
+        for kind in ["manual", "restore", "before-restore"] {
+            match repo.find_reference(&format!("refs/lof/{kind}/{id}/{}", commit.id())) {
+                Ok(_) => { marked = true; break; }
+                Err(error) if error.code() == git2::ErrorCode::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        if marked { continue; }
+        let metadata = read_json(repo, &commit.tree()?, &format!("documents/{id}/metadata.json"))?;
+        if metadata["manual"].as_bool() == Some(true) || metadata["recordKind"].as_str() == Some("restore") {
+            continue;
+        }
+        if content_key(&commit, id, &metadata)? == key { duplicates.push(commit.id()); }
+    }
+    for oid in &duplicates {
+        repo.reference(&deleted_ref(id, *oid), *oid, false, "수동 저장본과 중복된 자동 기록 정리")?;
+    }
+    Ok(duplicates.len())
 }
 
 fn walk(repo: &Repository, head: Oid) -> Result<git2::Revwalk<'_>, LofError> {
@@ -112,16 +146,11 @@ impl LocalHistory {
         }
         let keep_count = policy.keep_count.max(1);
         let cutoff = chrono::Utc::now() - chrono::Duration::days(policy.keep_days.max(1));
-        let mut entries = Vec::new();
-        let mut skipped = 0;
-        let mut total_for_doc = 0;
+        let mut candidates = Vec::new();
+        let mut manual_contents = HashSet::new();
         for oid in walk(&repo, head)? {
             let commit = repo.find_commit(oid?)?;
-            let is_manual_reset = commit.parent_count() == 0
-                && commit.message() == Ok("변경 이력 초기화")
-                && manual.contains(&commit.id())
-                && document_tree(&commit, id)?.is_some();
-            if deleted.contains(&commit.id()) || (!changed(&commit, id)? && !is_manual_reset) {
+            if deleted.contains(&commit.id()) || !changed(&commit, id)? {
                 continue;
             }
             let value = read_json(
@@ -135,20 +164,14 @@ impl LocalHistory {
             } else {
                 time(&commit)
             };
-            if total_for_doc >= keep_count {
-                break;
-            }
             if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(&saved_at) {
                 if parsed.with_timezone(&chrono::Utc) < cutoff {
                     break;
                 }
             }
-            total_for_doc += 1;
-            if skipped < offset {
-                skipped += 1;
-                continue;
-            }
-            let kind = if manual.contains(&commit.id()) || value["manual"].as_bool() == Some(true) {
+            let kind = if commit.parent_count() == 0 && commit.message() == Ok("변경 이력 초기화") {
+                "initial"
+            } else if manual.contains(&commit.id()) || value["manual"].as_bool() == Some(true) {
                 "manual"
             } else if restored.contains(&commit.id())
                 || value["recordKind"].as_str() == Some("restore")
@@ -161,12 +184,17 @@ impl LocalHistory {
             } else {
                 "auto"
             };
-            entries.push(json!({"name":format!("git-{}",commit.id()),"commit":commit.id().to_string(),
-                "savedAt":saved_at,"title":value["title"],"kind":kind}));
-            if entries.len() > limit {
-                break;
-            }
+            // 본문 blob과 정규화한 속성을 비교해 저장 시각·경로만 다른 기록도 묶는다.
+            let key = content_key(&commit, id, &value)?;
+            if kind == "manual" { manual_contents.insert(key.clone()); }
+            candidates.push((json!({"name":format!("git-{}",commit.id()),"commit":commit.id().to_string(),
+                "savedAt":saved_at,"title":value["title"],"kind":kind}), key, matches!(kind, "auto" | "legacy")));
         }
+        // 중복 제거 뒤 보관 개수와 페이지를 계산해야 페이지 사이에 자동 기록이 다시 나타나지 않는다.
+        let mut entries: Vec<_> = candidates.into_iter()
+            .filter(|(_, key, automatic)| !automatic || !manual_contents.contains(key))
+            .take(keep_count).skip(offset).take(limit.saturating_add(1))
+            .map(|(entry, _, _)| entry).collect();
         let more = entries.len() > limit;
         entries.truncate(limit);
         Ok(
@@ -188,10 +216,7 @@ impl LocalHistory {
         }
         for oid in walk(&repo, head.id())? {
             let commit = repo.find_commit(oid?)?;
-            let is_reset_base = commit.parent_count() == 0
-                && commit.message() == Ok("변경 이력 초기화")
-                && document_tree(&commit, id)?.is_some();
-            if !changed(&commit, id)? && !is_reset_base {
+            if !changed(&commit, id)? {
                 continue;
             }
             let doc = read_document(&repo, &commit.tree()?, id)?;
@@ -226,20 +251,25 @@ impl LocalHistory {
         let repo = self.repository()?;
         for oid in walk(&repo, latest(&repo)?.id())? {
             let commit = repo.find_commit(oid?)?;
-            let is_reset_base = commit.parent_count() == 0
-                && commit.message() == Ok("변경 이력 초기화")
-                && document_tree(&commit, id)?.is_some();
-            if !changed(&commit, id)? && !is_reset_base {
+            if !changed(&commit, id)? {
                 continue;
             }
             let reference = format!("refs/lof/{kind}/{id}/{}", commit.id());
-            match repo.find_reference(&reference) {
-                Ok(_) => return Ok(false),
-                Err(error) if error.code() == git2::ErrorCode::NotFound => {}
+            let marked = match repo.find_reference(&reference) {
+                Ok(_) => true,
+                Err(error) if error.code() == git2::ErrorCode::NotFound => false,
                 Err(error) => return Err(error.into()),
+            };
+            if !marked { repo.reference(&reference, commit.id(), false, "원고 기록 종류 표시")?; }
+            let mut updated = !marked;
+            if kind == "manual" {
+                if is_deleted(&repo, id, commit.id())? {
+                    repo.find_reference(&deleted_ref(id, commit.id()))?.delete()?;
+                    updated = true;
+                }
+                updated |= discard_automatic_duplicates(&repo, id, &commit)? > 0;
             }
-            repo.reference(&reference, commit.id(), false, "원고 기록 종류 표시")?;
-            return Ok(true);
+            return Ok(updated);
         }
         Ok(false)
     }
@@ -251,10 +281,7 @@ impl LocalHistory {
         }
         let repo = self.repository()?;
         let commit = checked_commit(&repo, name)?;
-        let is_reset_base = commit.parent_count() == 0
-            && commit.message() == Ok("변경 이력 초기화")
-            && document_tree(&commit, id)?.is_some();
-        if (!changed(&commit, id)? && !is_reset_base) || is_deleted(&repo, id, commit.id())? {
+        if !changed(&commit, id)? || is_deleted(&repo, id, commit.id())? {
             return Ok(false);
         }
         repo.reference(&deleted_ref(id, commit.id()), commit.id(), false, "원고 기록 지움 표시")?;

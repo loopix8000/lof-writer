@@ -1,5 +1,5 @@
 use crate::error::{fail, fail_invalid, hash_str, now_iso, valid_id, LofError};
-use crate::local_git::LocalHistory;
+use crate::local_git::{LocalHistory, Snapshot};
 use crate::markdown::{markdown_entry, read_markdown, write_markdown};
 use crate::store::{atomic_write_str, memo_id, HistoryPolicy};
 use serde_json::{json, Value};
@@ -25,6 +25,24 @@ fn document(path: &str, raw: &str) -> Result<Value, LofError> {
     // markdown_entry는 메타정보만 반환하므로 이력에 저장할 본문을 따로 포함한다.
     value["body"] = json!(body);
     Ok(value)
+}
+
+// 이력을 지우기 전에 현재 공용 메모를 모두 읽어 최초 기록으로 보존한다.
+pub(crate) fn snapshot_for_reset(root: &Path) -> Result<Snapshot, LofError> {
+    let mut documents = Vec::new();
+    if root.try_exists()? {
+        let mut paths: Vec<_> = crate::store::disk_inventory(root)?.into_iter()
+            .filter_map(|(path, (_, _, _, directory))| (!directory
+                && path.extension().and_then(|ext| ext.to_str()).is_some_and(|ext| ext.eq_ignore_ascii_case("md"))).then_some(path))
+            .collect();
+        paths.sort();
+        for path in paths {
+            let relative = path.to_string_lossy().replace('\\', "/");
+            let file = crate::sync::file_remote::safe_path(root, &relative)?;
+            documents.push(document(&relative, &fs::read_to_string(file)?)?);
+        }
+    }
+    Ok(Snapshot { documents, projects: Vec::new(), assets: Vec::new(), deleted: json!({}) })
 }
 
 pub(crate) fn record(
