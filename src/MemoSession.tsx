@@ -2,6 +2,7 @@ import { notifyRemoteUpdate, resolveSyncedFile, saveRecoveryCopy, type SyncMessa
 import SyncIssueBanner from "./SyncIssueBanner";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Archive,
   ChevronDown,
   ChevronRight,
   Columns2,
@@ -37,6 +38,7 @@ import { useGitActivity } from "./useGitActivity";
 import { call, type AutoSyncStatus, type Doc, type Kind } from "./types";
 import SyncStatus from "./SyncStatus";
 import HistoryDialog from "./HistoryDialog";
+import MemoArchiveDialog from "./MemoArchiveDialog";
 import { normalizeEditorStyle, resolveKindPrefs } from "../core/typesetting.mjs";
 import ResizableSidebar from "./ResizableSidebar";
 
@@ -164,6 +166,7 @@ export default function MemoSession({
 }) {
   const images = useImages(report);
   const [historyTarget, setHistoryTarget] = useState<(Memo & { id: string }) | null>(null);
+  const [archiveOpen, setArchiveOpen] = useState(false);
   // 처리 중인 트리 변경. 처리 도중 다시 읽은 트리에도 덧씌운다.
   const entryChanges = useRef(new Set<EntryChange>()),
     treeSeq = useRef(0);
@@ -1667,6 +1670,9 @@ export default function MemoSession({
   return (
     <div className="memo-session" style={active ? undefined : { display: "none" }}>
       {confirmDialog}
+      {active && archiveOpen && <MemoArchiveDialog space={space} title={spaceTitle} documents={documents}
+        onClose={() => setArchiveOpen(false)} openDoc={async id => { await onOpenDoc(id); }}
+        openMemo={async (targetSpace, path) => { await openMemo(path, targetSpace, true); }} />}
       {historyTarget && <div className="modal-backdrop" onMouseDown={event => {
         if (event.target === event.currentTarget) setHistoryTarget(null);
       }}>
@@ -1705,6 +1711,10 @@ export default function MemoSession({
             메모
           </span>
           <span className="caption-actions">
+            <button title="보관함" aria-label="메모 보관함 열기" onClick={attempt(async () => {
+              await flush();
+              setArchiveOpen(true);
+            })}><Archive size={15} /></button>
             <button title="새 메모" aria-label="새 메모" onClick={attempt(() => newMemo())}>
               <FilePlus size={15} />
             </button>

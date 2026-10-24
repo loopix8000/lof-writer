@@ -21,6 +21,18 @@
 
 인증 키를 원고, 스킬 파일, 공유 자료에 기록하지 않는다. 이 다운로드 패키지에는 사용자별 인증 키나 서재 데이터가 포함되지 않는다.
 
+## 스킬 설치·업데이트
+
+이 앱이 제공하는 Lof Writer 스킬만 다룬다. 스킬 패키지는 실행 중인 앱에 포함된 안내문과 현재 도구 스키마로 구성되며 인증 키나 원고를 담지 않는다. 앱을 업데이트한 뒤 새 스킬이 포함됐는지 확인할 수 있다.
+
+- `skill_status {}`는 패키지의 `version`, 내용 기준 SHA-256 `revision`, 파일 목록을 반환한다.
+- `skill_get {}`는 `files`에 상대 `path`와 UTF-8 `content`를 반환한다. 클라이언트가 기억한 `knownRevision`을 전달해 같으면 `unchanged:true`이고 파일 내용 전송을 생략한다.
+- PC의 `skill_status {"skillsDirectory":"AI의 스킬 폴더 절대 경로"}`는 그 아래 `lof-writer` 설치본의 `installed.exists`, `installed.revision`, `installed.version`, `installed.upToDate`도 반환한다. ZIP으로 수동 설치한 기존 스킬도 내용으로 비교한다. 설치 기록이 없으면 `installed.version`은 `null`일 수 있다.
+- PC의 `skill_install`에는 확인한 `skillsDirectory`와 패키지 `revision`을 `expectedRevision`으로 전달한다. 기존 폴더가 있으면 `installed.revision`도 `expectedInstalledRevision`으로 전달한다. 확인 후 내용이 바뀌면 `SKILL_CHANGED`를 반환하므로 다시 조회한다. 같으면 `changed:false`로 건너뛴다.
+- 업데이트는 기존 `lof-writer` 폴더 전체를 스킬 검색 경로 밖에 백업한 뒤 공식 파일로 교체한다. 사용자 지정 파일도 `backupPath`에 남으며 자동 삭제하지 않는다. 결과의 `installed.upToDate`가 `true`인지 확인한다. 교체 실패 시 기존 설치본으로 되돌린다.
+
+`skillsDirectory`는 **앱이 실행 중인 기기의 경로**다. AI 클라이언트의 실제 스킬 경로를 확인하고, 사용자 요청에 따라 설치·업데이트한다. 경로를 추측하거나 개인 설정을 임의로 변경하지 않는다. 앱과 다른 기기에서 실행되는 AI나 Android 연결에서는 `skill_get`으로 파일을 받은 뒤 AI 쪽의 스킬 폴더에 설치한다. 받은 파일은 상대 경로와 `content`의 개행을 유지해 UTF-8(BOM 없음)으로 저장하고 `sha256`을 비교한다. 설치한 내용은 스킬 새로고침 또는 새 세션부터 적용된다.
+
 ## PC 앱 업데이트
 
 MCP와 HTTP API에서 같은 `update_status`, `update_check`, `update_install` 도구를 사용한다. 앱 설정에서 선택한 업데이트 채널을 따르며, 설치는 사용자가 앱 업데이트를 요청한 경우에 실행한다.

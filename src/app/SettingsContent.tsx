@@ -361,7 +361,7 @@ export default function SettingsContent({
                         try { await moveVault(); } finally { setMovingVault(false); }
                       })}>
                         <FolderInput size={15} />
-                        {movingVault === "folder" ? "옮기는 중…" : isMobile ? "공유 저장소로 옮기기" : "다른 폴더로 옮기기"}
+                        {movingVault === "folder" ? "옮기는 중…" : isMobile ? "사용자 폴더로 옮기기" : "다른 폴더로 옮기기"}
                       </button>
                     </div>
                   </div>

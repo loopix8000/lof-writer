@@ -475,8 +475,14 @@ fn api_sync_status(app: &AppHandle) -> Value {
     status
 }
 
-// MCP 동기화 요청은 화면의 동기화 버튼과 같은 대기열을 사용하고 완료를 기다리지 않는다.
+// MCP 앱 작업은 기능별 처리기로 전달한다. 동기화는 화면과 같은 대기열을 사용한다.
 fn api_app_tool(app: &AppHandle, name: &str, args: &Value) -> Result<Value, LofError> {
+    if name.starts_with("skill_") {
+        if name == "skill_install" && app.state::<AppState>().closing.load(Ordering::SeqCst) {
+            return Err(fail("앱이 종료 중이라 스킬을 설치할 수 없습니다.", "SKILL_BUSY"));
+        }
+        return skills::tool(name, args, &app.package_info().version.to_string());
+    }
     if name == "update_write_guard" { return mcp_updater::ensure_writable(app); }
     if name.starts_with("update_") {
         if name != "update_status" && app.state::<AppState>().closing.load(Ordering::SeqCst) {
@@ -1328,6 +1334,9 @@ fn dispatch_method(
             Ok(res)
         }
         "saveRecoveryCopy" | "recoveryCopies" | "readRecoveryCopy" | "deleteRecoveryCopy" | "restoreRecoveryCopy" => {
+            let common_root = if method == "restoreRecoveryCopy" && args["space"].as_str() == Some(memo::COMMON) {
+                Some(get_store_and_common()?.1)
+            } else { None };
             let mut guard = state.store.lock().unwrap();
             let st = guard.as_mut().ok_or_else(|| fail_invalid("서재가 열려 있지 않습니다."))?;
             let result = match method {
@@ -1335,7 +1344,10 @@ fn dispatch_method(
                 "recoveryCopies" => st.recovery_copies(),
                 "readRecoveryCopy" => st.read_recovery_copy(args["key"].as_str().unwrap_or("")),
                 "deleteRecoveryCopy" => st.remove_recovery_copy(args["key"].as_str().unwrap_or("")),
-                _ => st.restore_recovery_copy(&args),
+                _ => match common_root {
+                    Some(root) => Memos::restore_common_copy(st, &root, args["key"].as_str().unwrap_or("")),
+                    None => st.restore_recovery_copy(&args),
+                },
             };
             drop(guard);
             if result.is_ok() && !matches!(method, "recoveryCopies" | "readRecoveryCopy") { schedule_notify(app, &state.notify_seq); }

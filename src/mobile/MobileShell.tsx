@@ -679,6 +679,12 @@ export default function MobileShell({
 
         <MobileMemoView
           active={mobileTab === "memo"}
+          documents={lib.documents}
+          openDoc={async id => {
+            await memoFlush.current?.();
+            await openDoc(id, true);
+            setMobileTab("library");
+          }}
           syncStatus={autoSync}
           syncChecking={syncChecking}
           syncAvailable={syncAvailable}

@@ -445,6 +445,32 @@ impl Memos {
         Ok(f)
     }
 
+    pub fn restore_common_copy(
+        store: &mut Store,
+        common_root: &Path,
+        key: &str,
+    ) -> Result<Value, LofError> {
+        let copy = store.read_recovery_copy(key)?;
+        let document = &copy["document"];
+        let body = document["body"].as_str().ok_or_else(|| fail_invalid("복구 사본의 본문을 읽을 수 없습니다."))?;
+        let space = Self::resolve_space(store, common_root, COMMON)?;
+        let title = format!("{} (복구 사본)", document["title"].as_str().unwrap_or("제목 없음"));
+        let rel = Self::unique_in_space(&space, "", &safe_name(&title, "복구 사본"), ".md");
+        let path = Self::space_abs(&space, &rel)?;
+        let mut fields = document.as_object().cloned().unwrap_or_default();
+        for key in ["body", "projectId", "space", "path", "relPath", "revision", "expectedRevision", "historyWarning"] {
+            fields.remove(key);
+        }
+        fields.insert("id".into(), json!(Uuid::new_v4().to_string()));
+        fields.insert("kind".into(), json!("memo"));
+        fields.insert("title".into(), json!(title));
+        fields.insert("archived".into(), json!(false));
+        fields.insert("createdAt".into(), json!(now_iso()));
+        fields.insert("updatedAt".into(), json!(now_iso()));
+        atomic_write_str(&path, &write_markdown(body, &Value::Object(fields), "")?)?;
+        Self::read(store, common_root, COMMON, &rel)
+    }
+
     pub fn create(
         store: &mut Store,
         common_root: &Path,

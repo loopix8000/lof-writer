@@ -6700,7 +6700,23 @@ input.property-text {
 .sync-issue-banner small { display: block; }
 .recovery-copies { padding: 16px; overflow-wrap: anywhere; }
 .recovery-copies > p { color: var(--muted); font-size: 13px; }
-.recovery-copies details { margin: 12px 0; }
-.recovery-copies summary { cursor: pointer; }
-.recovery-copies textarea { width: 100%; box-sizing: border-box; resize: vertical; margin: 10px 0; }
+.recovery-copies details { border-bottom: 1px solid var(--border); }
+.recovery-copies summary { cursor: pointer; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px 0; list-style: none; }
+.recovery-copies summary::-webkit-details-marker { display: none; }
+.recovery-copies summary > svg { flex-shrink: 0; color: var(--muted); }
+.recovery-copy-title { flex: 1 1 160px; min-width: 0; overflow-wrap: anywhere; }
+.recovery-copy-label { padding: 2px 6px; border-radius: 4px; background: var(--sidebar); color: var(--muted); font-size: 12px; }
+.recovery-copies summary time { color: var(--muted); font-size: 12px; }
+.recovery-copies details[open] .recovery-copy-chevron { transform: rotate(90deg); }
+.recovery-copy-preview { margin: 0 0 12px; max-height: 320px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.7; }
+.recovery-copies details[open] { padding-bottom: 12px; }
 .recovery-copies .conflict-actions { flex-wrap: wrap; }
+.memo-archive-dialog { max-height: 85dvh; display: flex; flex-direction: column; }
+.memo-archive-body { min-height: 0; overflow-y: auto; }
+.memo-archive-documents { padding: 16px; }
+.memo-archive-documents > p { color: var(--muted); font-size: 13px; }
+.memo-archive-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.memo-archive-row > button { display: inline-flex; align-items: center; gap: 6px; white-space: normal; }
+.memo-archive-row > .memo-archive-open { flex: 1 1 180px; min-width: 0; text-align: left; }
+.memo-archive-open span { overflow-wrap: anywhere; }
+.memo-archive-row svg { flex-shrink: 0; }

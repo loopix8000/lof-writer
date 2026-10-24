@@ -21,6 +21,7 @@ const MCP_INSTRUCTIONS: &str = r#"Lof Writer의 작품, 회차, 플롯, 메모�
 - 사용자가 요청한 본문과 메타데이터만 변경하고, 나머지 문장, Markdown 서식, 태그, 속성, 줄바꿈 설정은 보존하세요. 순서 변경과 이력 복원은 사용자의 요청 범위에 포함된 경우에 수행하세요.
 - 문서를 생성·수정·복원하거나 순서를 바꾸면 마지막 변경 2초 뒤에 자동으로 동기화하므로 sync_now를 따로 호출하지 않아도 됩니다. 동기화 상태는 sync_status로 확인하세요. 다른 장치에서 바뀐 내용을 먼저 받아야 할 때는 sync_now를 호출한 뒤, sync_status의 phase가 syncing 또는 pending이 아니게 될 때까지 확인하세요. 동기화 후에는 library_list와 document_read로 최신 revision을 다시 조회하세요. 연결 추가·삭제와 장치 페어링은 앱에서 진행하도록 안내하세요.
 - PC 앱 업데이트는 update_check로 확인을 요청하고 update_status로 결과를 조회하세요. 사용자가 설치를 요청한 경우에만 availableVersion을 expectedVersion으로 전달해 update_install을 호출하세요. 확인·설치는 비동기이므로 요청 접수만으로 완료했다고 안내하지 마세요. error와 lastRequest.error를 확인하세요. 설치 시 앱과 MCP 연결이 종료될 수 있으며, 다시 연결한 뒤 currentVersion이 요청한 버전인지 확인하세요.
+- Lof Writer 스킬의 설치·업데이트는 skill_status로 앱에 포함된 패키지를 확인하세요. AI 클라이언트의 실제 스킬 디렉터리를 확인한 뒤 앱과 같은 기기이면 skill_install을 사용하세요. skillsDirectory는 앱 기기의 절대 경로입니다. expectedRevision은 패키지 revision이고, 기존 설치본이 있으면 installed.revision도 expectedInstalledRevision으로 전달하세요. 원격 AI는 skill_get으로 받은 파일을 자기 기기에 설치하세요. 앱 업데이트 후 패키지가 바뀌었는지 다시 확인할 수 있으며, 설치 후 스킬 새로고침이나 새 세션이 필요합니다.
 - 도구 응답의 isError와 오류 내용을 확인하고 성공한 작업만 완료했다고 안내하세요. 연결 오류가 나면 Lof Writer 앱의 실행 상태를 확인하도록 안내하세요."#;
 
 pub fn tool_definitions() -> Value {
@@ -236,10 +237,11 @@ pub fn tool_definitions() -> Value {
     if cfg!(target_os = "windows") {
         tools.as_array_mut().unwrap().extend(crate::mcp_updater::tool_definitions().as_array().unwrap().iter().cloned());
     }
+    tools.as_array_mut().unwrap().extend(crate::skills::tool_definitions().as_array().unwrap().iter().cloned());
     tools
 }
 
-// 동기화와 업데이트 도구는 앱 상태를 사용하므로 앱에서 처리기를 전달받는다.
+// 서재와 별도로 처리하는 앱 도구의 실행기를 전달받는다.
 pub type AppToolHandler = Arc<dyn Fn(&str, &Value) -> Result<Value, LofError> + Send + Sync>;
 
 fn call_tool(
@@ -250,7 +252,7 @@ fn call_tool(
     on_app_tool: &AppToolHandler,
 ) -> Result<Value, LofError> {
     // 앱 작업은 서재 잠금 없이 전달해 저장·설치 요청과 문서 작업이 서로 기다리지 않게 한다.
-    if name.starts_with("sync_") || name.starts_with("update_") {
+    if name.starts_with("sync_") || name.starts_with("update_") || name.starts_with("skill_") {
         return on_app_tool(name, args);
     }
     let mut guard = store

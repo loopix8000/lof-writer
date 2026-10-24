@@ -1,4 +1,5 @@
 import {
+  Archive,
   ArrowLeft,
   ChevronDown,
   ChevronRight,
@@ -23,9 +24,10 @@ import { plainText } from "../../core/text.mjs";
 import { useConfirm } from "../ConfirmDialog";
 import EditorScroll, { type EditorScrollPositions } from "../EditorScroll";
 import HistoryDialog from "../HistoryDialog";
+import MemoArchiveDialog from "../MemoArchiveDialog";
 import { useUndoState } from "../useUndoState";
 import SyncStatus from "../SyncStatus";
-import { call, type AutoSyncStatus } from "../types";
+import { call, type AutoSyncStatus, type Doc } from "../types";
 import { autoSaveCondition } from "../app/auto-save";
 import { memoImageScope, useImages } from "../app/useDocumentImages";
 import { clearMemoDraft, readMemoDraft, saveMemoDraft } from "../memo-drafts";
@@ -83,7 +85,11 @@ export default function MobileMemoView({
   message,
   report,
   onDetailStateChange,
+  documents,
+  openDoc,
 }: {
+  documents: Doc[];
+  openDoc: (id: string) => Promise<void>;
   active: boolean;
   syncStatus: AutoSyncStatus;
   syncChecking: boolean;
@@ -110,6 +116,7 @@ export default function MobileMemoView({
   const [memo, setMemo] = useState<Memo | null>(null);
   const [titleInput, setTitleInput] = useState<string>("");
   const [historyTarget, setHistoryTarget] = useState<(Memo & { id: string }) | null>(null);
+  const [archiveOpen, setArchiveOpen] = useState(false);
   const { undoState, onUndoStateChange } = useUndoState(memo ? `${memo.space}\n${memo.path}` : "");
   const [status, setStatus] = useState<string>("저장됨");
 
@@ -1214,6 +1221,8 @@ export default function MobileMemoView({
             <ChevronDown size={18} className="m-modern-title-chevron" />
           </button>
           <div className="m-topbar-actions">
+            <button type="button" className="m-icon-btn" aria-label="메모 보관함 열기" title="보관함"
+              onClick={() => setArchiveOpen(true)}><Archive size={18} /></button>
             <button
               type="button"
               className="m-btn-secondary m-btn-sm"
@@ -1304,6 +1313,9 @@ export default function MobileMemoView({
           )}
         </div>
       </div>
+
+      {archiveOpen && <MemoArchiveDialog mobile space={space} title={currentSpaceTitle} documents={documents}
+        onClose={() => setArchiveOpen(false)} openDoc={openDoc} openMemo={openMemoFile} />}
 
       {/* 메모 공간 전환 시트 (내부 경로 표시 제거) */}
       <MobileActionSheet
