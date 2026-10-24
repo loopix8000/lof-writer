@@ -4950,9 +4950,15 @@ impl Store {
         }
     }
 
-    pub(crate) fn preserve_sync_draft(&mut self, raw: &[u8]) -> Result<Option<String>, LofError> {
-        let parsed = read_markdown(std::str::from_utf8(raw).map_err(|_| fail_invalid("원고 인코딩 오류"))?)?;
+    pub(crate) fn preserve_sync_document(&mut self, raw: &[u8]) -> Result<Option<String>, LofError> {
+        let raw = std::str::from_utf8(raw).map_err(|_| fail_invalid("원고 인코딩 오류"))?;
+        let parsed = read_markdown(raw)?;
         let Some(id) = parsed.properties.get("id").and_then(Value::as_str).filter(|id| valid_id(id)) else { return Ok(None); };
+        // 교체 직전 파일의 본문과 속성을 먼저 기록한다. 실패하면 원본을 바꾸지 않는다.
+        let (project, entry, _) = self.find_doc(id)?;
+        let project_id = project.project["id"].as_str().unwrap_or("");
+        let current = doc_of(&project.dir, project_id, &entry, raw)?;
+        self.write_history(id, &current, raw)?;
         if let Some(input) = self.stored_draft(id)? {
             if self.archive_document_draft(&input).is_err() {
                 let mut document = self.read(id).unwrap_or_else(|_| input.clone());

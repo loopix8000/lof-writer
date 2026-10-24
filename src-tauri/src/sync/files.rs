@@ -94,7 +94,7 @@ pub(crate) fn inventory(
         deferred.insert(&path);
         files.insert(path, Info::unavailable());
     }
-    // 덮어쓰기 전에 읽을 수 있는 원고만 로컬 이력에 기록한다.
+    // 읽을 수 없는 원고는 덮어쓰지 않도록 전송을 보류한다.
     for (id, relative) in documents {
         if deferred.contains(&relative) { continue; }
         if let Err(error) = with_store(store, root, |st| st.read(&id).map(|_| ())) {
@@ -280,7 +280,7 @@ pub(crate) fn apply_local(
             return Err(retry());
         }
         let preserved_draft = if path.to_ascii_lowercase().ends_with(".md") {
-            old.as_deref().map(|raw| st.preserve_sync_draft(raw)).transpose()?.flatten()
+            old.as_deref().map(|raw| st.preserve_sync_document(raw)).transpose()?.flatten()
         } else { None };
         if path == crate::project_order::FILE
             && crate::project_order::receive(root, st.database()?, bytes)?
