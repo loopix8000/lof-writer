@@ -46,10 +46,13 @@ export function quickNoteMarkdown(source: QuickNoteSource, memo: string): string
 
 export default function QuickNote({
   source,
+  centered = false,
   onSave,
   onClose,
 }: {
   source: QuickNoteSource;
+  // 켜면 고른 곳 대신 화면 가운데에 연다(모바일).
+  centered?: boolean;
   onSave: (memo: string, title: string) => Promise<void>;
   onClose: () => void;
 }) {
@@ -70,7 +73,10 @@ export default function QuickNote({
     };
   };
   useLayoutEffect(() => {
-    setPos(clamp(source.at.x + 12, source.at.y + 12));
+    if (centered) {
+      const { width, height } = ref.current!.getBoundingClientRect();
+      setPos(clamp((window.innerWidth - width) / 2, (window.innerHeight - height) / 2));
+    } else setPos(clamp(source.at.x + 12, source.at.y + 12));
     textRef.current?.focus({ preventScroll: true });
     const onResize = () => {
       if (!ref.current) return;
@@ -78,7 +84,7 @@ export default function QuickNote({
     };
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
-  }, [source]);
+  }, [source, centered]);
   async function save() {
     if (saving) return;
     setSaving(true);

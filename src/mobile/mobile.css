@@ -3960,14 +3960,36 @@
 }
 
 .m-toast-action {
-  margin-left: auto;
-  padding: 4px 10px;
-  border-radius: 6px;
+  position: relative;
+  margin: -4px -6px -4px 6px;
+  padding: 4px 8px 4px 13px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   border: none;
-  background: var(--accent);
-  color: #fff;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
   font-size: 12.5px;
   font-weight: 700;
+  white-space: nowrap;
+}
+
+/* 메시지와 버튼 사이의 옅은 구분선 */
+.m-toast-action::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 1px;
+  height: 14px;
+  transform: translateY(-50%);
+  background: currentColor;
+  opacity: 0.25;
+}
+
+.m-toast-action:active {
+  background: color-mix(in srgb, currentColor 14%, transparent);
 }
 
 .m-error-banner {

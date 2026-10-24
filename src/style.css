@@ -4900,8 +4900,8 @@ input.property-text {
   z-index: 1200;
   width: 228px;
   max-width: calc(100vw - 16px);
-  padding: 8px;
-  border-radius: 9px;
+  padding: 4px;
+  border-radius: 8px;
   border: 1px solid var(--border, var(--line));
   background: var(--surface);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
@@ -4912,7 +4912,7 @@ input.property-text {
 .tag-add-popup-row {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
 }
 .tag-add-popup-input {
   flex: 1 1 auto;

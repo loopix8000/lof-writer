@@ -12,6 +12,7 @@ import {
   StickyNote,
   Sun,
   Trash2,
+  Undo2,
   X,
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
@@ -907,6 +908,7 @@ export default function MobileShell({
                 run();
               }}
             >
+              <Undo2 size={15} strokeWidth={2.4} />
               {toastAction.label}
             </button>
           )}
@@ -921,6 +923,7 @@ export default function MobileShell({
       {quickNote && (
         <QuickNote
           source={quickNote}
+          centered
           onSave={(memo, title) => saveQuickNote(quickNote, memo, title).catch(report)}
           onClose={() => setQuickNote(null)}
         />
