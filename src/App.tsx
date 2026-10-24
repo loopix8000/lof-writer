@@ -1580,7 +1580,8 @@ export default function App() {
           </div>
         </div>
         {focused && (session.syncIssue || conflict) && <SyncIssueBanner issue={session.syncIssue || "다른 곳에서 바뀐 원고와 이 기기의 임시본을 정리합니다."} retry={session.retrySync} />}
-        <EditorScroll key={active.id} documentId={`${side}\n${active.id}`} scope={workspaceKey(lib.root, active.projectId)} positions={session.scrollPositions} visible={visible}>
+        <EditorScroll key={active.id} documentId={`${side}\n${active.id}`} scope={workspaceKey(lib.root, active.projectId)} positions={session.scrollPositions} visible={visible}
+          interrupt={focused ? Math.max(reveal?.docId === active.id ? reveal.seq : 0, bookmarkJump?.docId === active.id ? bookmarkJump.seq : 0) : 0}>
           <article className={manuscriptClassName} style={manuscriptStyle}>
             <div className="document-kind">
               {labels[active.kind]} · {numberOf(active)}

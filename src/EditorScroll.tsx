@@ -11,15 +11,18 @@ type ScrollPosition = {
 export type EditorScrollPositions = Map<string, ScrollPosition>;
 
 // 문서마다 스크롤을 기억하고, 편집기 내용이 붙은 뒤 화면을 그리기 전에 복원한다.
-export default function EditorScroll({ documentId, positions, scope, visible = true, children }: {
+// interrupt가 바뀌면(출처 링크·북마크로 특정 위치로 이동) 남은 복원을 멈춰 이동한 위치를 덮어쓰지 않는다.
+export default function EditorScroll({ documentId, positions, scope, visible = true, interrupt, children }: {
   documentId: string;
   positions: EditorScrollPositions;
   scope?: string;
   visible?: boolean;
+  interrupt?: number | null;
   children: ReactNode;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const restoring = useRef(false);
+  const cancelRestore = useRef<(() => void) | null>(null);
   const remember = useCallback(() => {
     const element = ref.current;
     // 메모 화면이나 PIN 화면에 가려진 동안의 높이 0을 저장하지 않는다.
@@ -89,6 +92,7 @@ export default function EditorScroll({ documentId, positions, scope, visible = t
       if (frame !== undefined) cancelAnimationFrame(frame);
       clearTimeout(timeout);
     }
+    cancelRestore.current = stopRestoring;
     element?.addEventListener("wheel", stopRestoring, { passive: true });
     element?.addEventListener("pointerdown", stopRestoring, { passive: true });
     element?.addEventListener("keydown", stopRestoring);
@@ -100,9 +104,15 @@ export default function EditorScroll({ documentId, positions, scope, visible = t
       element?.removeEventListener("pointerdown", stopRestoring);
       element?.removeEventListener("keydown", stopRestoring);
       element?.removeEventListener("touchstart", stopRestoring);
+      if (cancelRestore.current === stopRestoring) cancelRestore.current = null;
       if (!wasRestoring) remember();
     };
   }, [documentId, positions, scope, visible, remember]);
+
+  // 편집기가 지정 위치로 스크롤하는 효과보다 먼저 실행되어, 남은 복원이 그 위치를 덮어쓰지 않게 한다.
+  useLayoutEffect(() => {
+    if (interrupt) cancelRestore.current?.();
+  }, [interrupt]);
 
   return <div ref={ref} className="editor-scroll" onScrollCapture={remember}>{children}</div>;
 }

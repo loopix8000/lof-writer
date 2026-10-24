@@ -1023,6 +1023,7 @@ export default function MobileEditorView({
         scope={workspaceKey(lib.root, active.projectId)}
         positions={scrollPositions}
         visible={true}
+        interrupt={Math.max(reveal?.docId === active.id ? reveal.seq : 0, bookmarkJump?.docId === active.id ? bookmarkJump.seq : 0)}
       >
         <article
           className="m-manuscript-sheet"
