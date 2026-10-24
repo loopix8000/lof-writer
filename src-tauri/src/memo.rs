@@ -60,6 +60,25 @@ pub struct SpaceInfo {
 pub struct Memos;
 
 impl Memos {
+    fn common_folders(space: &SpaceInfo) -> Result<Value, LofError> {
+        match fs::read_to_string(space.root.join("lof-memo-folders.json")) {
+            Ok(raw) => {
+                let value: Value = serde_json::from_str(&raw)
+                    .map_err(|_| fail_invalid("메모 폴더 정보를 읽을 수 없습니다."))?;
+                if !value.is_object() { return Err(fail_invalid("메모 폴더 정보를 읽을 수 없습니다.")); }
+                Ok(value)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(json!({})),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    fn write_common_folders(space: &SpaceInfo, value: &Value) -> Result<(), LofError> {
+        let raw = serde_json::to_string_pretty(value)
+            .map_err(|_| fail_invalid("메모 폴더 정보를 저장할 수 없습니다."))?;
+        atomic_write_str(&space.root.join("lof-memo-folders.json"), &raw)
+    }
+
     fn archived_folders(project: &Value) -> Vec<String> {
         project
             .get("archivedDocFolders")
@@ -252,6 +271,7 @@ impl Memos {
                             if let Some(k) = m.get("kind") {
                                 eobj.insert("kind".to_string(), k.clone());
                             }
+                            eobj.insert("archived".to_string(), json!(m["archived"].as_bool().unwrap_or(false)));
                             if let Some(ep_id) = m
                                 .get("episodeId")
                                 .and_then(|v| v.as_str())
@@ -262,6 +282,20 @@ impl Memos {
                         }
                     }
                 }
+            }
+        } else {
+            let folders = Self::archived_folders(&Self::common_folders(&space)?);
+            for entry in &mut entries {
+                let path = entry["path"].as_str().unwrap_or("");
+                let archived = if entry["type"] == "folder" {
+                    folders.iter().any(|folder| folder.eq_ignore_ascii_case(path))
+                } else {
+                    fs::read_to_string(Self::space_abs(&space, path)?).ok()
+                        .and_then(|raw| read_markdown(&raw).ok())
+                        .and_then(|parsed| parsed.properties.get("archived").and_then(Value::as_bool))
+                        .unwrap_or(false)
+                };
+                entry["archived"] = json!(archived);
             }
         }
 
@@ -312,6 +346,7 @@ impl Memos {
             "title": strip_md_ext(name_of(rel)),
             "body": parsed.body,
             "manualLineBreak": mlb,
+            "archived": parsed.properties.get("archived").and_then(Value::as_bool).unwrap_or(false),
             "revision": hash_str(&raw),
             "updatedAt": updated_at,
         });
@@ -549,10 +584,24 @@ impl Memos {
         if !fs::metadata(Self::space_abs(&space, path)?)?.is_dir() {
             return Err(fail_invalid("폴더만 보관할 수 있습니다."));
         }
-        let pid = space
-            .project_id
-            .as_deref()
-            .ok_or_else(|| fail_invalid("작품의 문서 폴더만 보관할 수 있습니다."))?;
+        let Some(pid) = space.project_id.as_deref() else {
+            let mut metadata = Self::common_folders(&space)?;
+            for rel in Self::files_under(&space, path)? {
+                Self::archive(store, common_root, &json!({"space": space_id, "path": rel, "archived": archived}))?;
+            }
+            let prefix = format!("{path}/");
+            let mut folders = Self::archived_folders(&metadata);
+            folders.retain(|folder| folder != path && !folder.starts_with(&prefix));
+            if archived {
+                folders.push(path.to_string());
+                folders.extend(Self::walk_space(&space, path).into_iter()
+                    .filter(|entry| entry["type"] == "folder")
+                    .filter_map(|entry| entry["path"].as_str().map(str::to_string)));
+            }
+            Self::set_archived_folders(&mut metadata, folders);
+            Self::write_common_folders(&space, &metadata)?;
+            return Ok(true);
+        };
         let p = store.get_project(pid)?;
         let prefix = format!("doc/{}/", path);
         for doc in store.doc_files(&p) {
@@ -587,6 +636,34 @@ impl Memos {
         }
         Self::set_archived_folders(&mut p.project, folders);
         store.write_project(&p)?;
+        Ok(true)
+    }
+
+    pub fn archive(store: &mut Store, common_root: &Path, input: &Value) -> Result<bool, LofError> {
+        let space_id = input["space"].as_str().unwrap_or("");
+        let rel = input["path"].as_str().unwrap_or("");
+        let archived = input["archived"].as_bool().ok_or_else(|| fail_invalid("잘못된 보관 상태"))?;
+        let space = Self::resolve_space(store, common_root, space_id)?;
+        let file = Self::space_abs(&space, rel)?;
+        if fs::metadata(&file)?.is_dir() { return Self::archive_folder(store, common_root, input); }
+        if !is_md(rel) { return Err(fail_invalid("Markdown 메모만 보관할 수 있습니다.")); }
+        if space.project_id.is_some() {
+            let current = Self::read(store, common_root, space_id, rel)?;
+            store.save(&json!({"id": current["id"], "expectedRevision": current["revision"], "archived": archived}))?;
+        } else {
+            let raw = fs::read_to_string(&file)?;
+            let parsed = read_markdown(&raw)?;
+            if parsed.properties.get("archived").and_then(Value::as_bool).unwrap_or(false) == archived { return Ok(true); }
+            crate::common_memo_history::record(&space.root, rel, &raw, None)?;
+            let mut doc = markdown_entry(&raw, &json!({"id": memo_id(COMMON, &format!("doc/{rel}")),
+                "kind": "memo", "title": strip_md_ext(name_of(rel))}))?;
+            if !doc["id"].as_str().is_some_and(valid_id) {
+                doc["id"] = json!(memo_id(COMMON, &format!("doc/{rel}")));
+            }
+            doc["archived"] = json!(archived);
+            doc["updatedAt"] = json!(now_iso());
+            atomic_write_str(&file, &write_markdown(&parsed.body, &doc, &raw)?)?;
+        }
         Ok(true)
     }
 
@@ -669,6 +746,7 @@ impl Memos {
         to: &str,
     ) -> Result<(), LofError> {
         let before = Self::files_under(space, from)?;
+        let mut common_metadata = if space.project_id.is_none() { Some(Self::common_folders(space)?) } else { None };
         if space.project_id.is_none() {
             for path in &before {
                 crate::common_memo_history::prepare_move(&space.root, path)?;
@@ -697,6 +775,17 @@ impl Memos {
             store.invalidate_path(&format!("{}/doc/{}", proj_folder, to));
         }
 
+        if let Some(ref mut metadata) = common_metadata {
+            let prefix = format!("{from}/");
+            let previous = Self::archived_folders(metadata);
+            let folders: Vec<String> = previous.iter().map(|path| {
+                if path == from || path.starts_with(&prefix) { format!("{to}{}", &path[from.len()..]) } else { path.clone() }
+            }).collect();
+            if folders != previous {
+                Self::set_archived_folders(metadata, folders);
+                Self::write_common_folders(space, metadata)?;
+            }
+        }
         if let Some(ref pid) = space.project_id {
             let mut p = store.get_project(pid)?;
             let mut changed =
@@ -762,6 +851,20 @@ impl Memos {
             .get("archived")
             .and_then(Value::as_bool)
             .unwrap_or(false);
+        if space.project_id.is_none() && !is_folder {
+            let raw = fs::read_to_string(&file)?;
+            let current = read_markdown(&raw)?.properties.get("archived").and_then(Value::as_bool).unwrap_or(false);
+            if current != archived { return Err(fail("메모의 보관 상태가 바뀌었습니다. 목록을 다시 확인해 주세요.", "CONFLICT")); }
+        }
+        if space.project_id.is_none() && is_folder {
+            let tree = Self::tree(store, common_root, space_id)?;
+            for entry in tree["entries"].as_array().into_iter().flatten() {
+                let rel = entry["path"].as_str().unwrap_or("");
+                if rel.starts_with(&format!("{path}/")) && entry["archived"].as_bool().unwrap_or(false) != archived {
+                    protected.insert(rel.to_string());
+                }
+            }
+        }
         if let Some(ref pid) = space.project_id {
             let p = store.get_project(pid)?;
             let docs = store.doc_files(&p);
@@ -790,6 +893,9 @@ impl Memos {
                     .or_else(|| entry.and_then(|d| d.get("archived")))
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
+                if !is_folder && is_archived != archived {
+                    return Err(fail("메모의 보관 상태가 바뀌었습니다. 목록을 다시 확인해 주세요.", "CONFLICT"));
+                }
                 if is_folder && is_archived != archived {
                     protected.insert(rel.clone());
                     continue;
@@ -808,6 +914,14 @@ impl Memos {
 
         let mut retained_folders = Vec::new();
         Self::trash_except(store, &space, path, &protected, &mut retained_folders)?;
+        if space.project_id.is_none() && is_folder {
+            let mut metadata = Self::common_folders(&space)?;
+            let prefix = format!("{path}/");
+            let mut folders = Self::archived_folders(&metadata);
+            folders.retain(|folder| (folder != path && !folder.starts_with(&prefix)) || protected.contains(folder));
+            Self::set_archived_folders(&mut metadata, folders);
+            Self::write_common_folders(&space, &metadata)?;
+        }
         if let Some(ref pid) = space.project_id {
             if let Some(proj_folder) = space
                 .root

@@ -15,12 +15,13 @@ function Preview({ copyKey }: { copyKey: string }) {
   }, [copyKey]);
   return error ? <p role="alert">{error}</p> : <pre className="recovery-copy-preview" aria-label="사본 내용" tabIndex={0}>{body}</pre>;
 }
-export default function RecoveryCopies({ projectId, openDoc, common = false, showEmpty = false, restore }: {
+export default function RecoveryCopies({ projectId, openDoc, common = false, showEmpty = false, restore, onCountChange }: {
   projectId: string;
   openDoc: (id: string, pinned?: boolean) => Promise<void>;
   common?: boolean;
   showEmpty?: boolean;
   restore?: (copy: RecoveryCopy) => Promise<void>;
+  onCountChange?: (count: number) => void;
 }) {
   const [copies, setCopies] = useState<Copy[]>([]);
   const [error, setError] = useState("");
@@ -69,11 +70,12 @@ export default function RecoveryCopies({ projectId, openDoc, common = false, sho
   };
   const shown = copies.filter(copy => common ? !copy.document.projectId : showAll || !copy.document.projectId || copy.document.projectId === projectId);
   const hasOtherCopies = !common && copies.some(copy => copy.document.projectId && copy.document.projectId !== projectId);
-  if (!common && !showEmpty && !shown.length && !hasOtherCopies && !error && !busy && !dialog) return null;
+  useEffect(() => { if (loaded) onCountChange?.(shown.length); }, [loaded, shown.length, onCountChange]);
+  if (loaded && !showEmpty && !shown.length && !hasOtherCopies && !error && !busy && !dialog) return null;
   return <section className="recovery-copies" aria-label="보관된 사본">
     {hasOtherCopies && <button onClick={() => setShowAll(value => !value)}>{showAll ? "이 작품의 사본만 보기" : "다른 작품의 사본도 보기"}</button>}
     {!loaded && <p role="status">불러오는 중…</p>}
-    {loaded && common && !shown.length && !error && <p>보관함이 비어 있습니다.</p>}
+    {loaded && showEmpty && common && !shown.length && !error && <p>보관함이 비어 있습니다.</p>}
     {error && <p role="alert">{error}</p>}
     {shown.map(copy => <details key={copy.key} open={expanded === copy.key} onToggle={event => { if (event.currentTarget.open) setExpanded(copy.key); else setExpanded(current => current === copy.key ? "" : current); }}>
       <summary>

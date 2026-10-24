@@ -16,7 +16,6 @@ import {
   Search,
   StickyNote,
   BookOpen,
-  Trash2,
   X,
 } from "lucide-react";
 import Writer from "./Writer";
@@ -30,9 +29,9 @@ import SplitArea from "./split/SplitArea";
 import { splitMenuItems } from "./split/menu";
 import { copyWorkspaceScroll, readWorkspaceState, saveWorkspaceState, workspaceKey } from "./workspace-state";
 import ContextMenu, { type MenuItem } from "./ContextMenu";
-import { useConfirm } from "./ConfirmDialog";
 import { autoSaveCondition } from "./app/auto-save";
 import { clearMemoDraft, readMemoDraft, saveMemoDraft } from "./memo-drafts";
+import { memoEntriesInView, type MemoEntry } from "./memo-tree";
 import { readFileForClose, useSyncFileUpdates } from "./useSyncFileUpdates";
 import { useGitActivity } from "./useGitActivity";
 import { call, type AutoSyncStatus, type Doc, type Kind } from "./types";
@@ -44,14 +43,7 @@ import ResizableSidebar from "./ResizableSidebar";
 
 type Space = { id: string; title: string; root: string };
 // 작품 스페이스(doc/)의 파일에는 문서 타입(플롯/메모)과 연결된 회차가 붙어 온다.
-type Entry = {
-  path: string;
-  name: string;
-  type: "file" | "folder";
-  updatedAt?: string;
-  kind?: "plot" | "memo";
-  episodeId?: string;
-};
+type Entry = MemoEntry;
 type EntryChange = (entries: Entry[]) => Entry[];
 type Memo = {
   id?: string;
@@ -123,7 +115,7 @@ const ancestors = (p: string) => {
 };
 
 // 메모 세션: 공용 메모(기본)와 각 작품의 memo/ 폴더를 스페이스로 바꿔 가며 관리한다.
-// 왼쪽은 폴더 트리(만들기·이름 바꾸기·끌어서 옮기기·삭제), 오른쪽은 메모 편집기다.
+// 왼쪽은 폴더 트리, 오른쪽은 메모 편집기다.
 export default function MemoSession({
   active,
   workspaceRoot,
@@ -221,7 +213,6 @@ export default function MemoSession({
   spaceRef.current = space;
   prefsRef.current = prefs;
   conflictRef.current = conflict;
-  const [confirm, confirmDialog] = useConfirm();
   const setCurrent = (m: Memo | null) => {
     if (m) retainedMemos.current.set(`${m.space}\n${m.path}`, m);
     memoRef.current = m;
@@ -492,7 +483,7 @@ export default function MemoSession({
     const seq = ++treeSeq.current;
     const r = await call<{ entries: Entry[] }>("memoTree", { space: id });
     if (seq !== treeSeq.current || id !== spaceRef.current) return;
-    let next = r.entries;
+    let next = memoEntriesInView(r.entries, false);
     for (const change of entryChanges.current) next = change(next);
     setEntries(next);
   }, []);
@@ -937,22 +928,11 @@ export default function MemoSession({
   // 고른 폴더 안에 든 항목은 폴더와 함께 다뤄지므로 빼고, 바깥쪽 항목만 남긴다.
   const outermost = <T extends { path: string }>(list: T[]) =>
     list.filter((x) => !list.some((y) => y !== x && x.path.startsWith(y.path + "/")));
-  // 메모·폴더를 휴지통으로 옮긴다. 여러 개면 한 번만 묻고, 고른 폴더 안에 든 것은 폴더와 함께 지운다.
-  async function remove(targets: Entry[]) {
+  // 메모·폴더를 보관하고 열려 있는 해당 항목의 탭을 정리한다.
+  async function archiveEntries(targets: Entry[]) {
     const top = outermost(targets);
     if (!top.length) return;
-    const ok = await confirm({
-      title: "삭제",
-      message:
-        top.length > 1
-          ? `고른 항목 ${top.length}개를 휴지통으로 옮길까요?`
-          : `'${top[0].name}' ${top[0].type === "folder" ? "폴더와 그 안의 메모를" : "메모를"} 휴지통으로 옮길까요?`,
-      detail: top.length > 1 && top.some((x) => x.type === "folder") ? "폴더 안의 메모도 함께 옮겨집니다." : undefined,
-      confirmLabel: "휴지통으로 옮기기",
-      danger: true,
-      icon: <Trash2 size={15} />,
-    });
-    if (!ok) return;
+    await flush();
     const gone = (p: string) => top.some((entry) => p === entry.path || p.startsWith(entry.path + "/"));
     setSelected("");
     setPicked([]);
@@ -962,16 +942,13 @@ export default function MemoSession({
         for (const entry of top) {
           const inside = (t: MemoTab) =>
             t.space === space && (t.path === entry.path || t.path.startsWith(entry.path + "/"));
-          if (touchesOpen(entry.path)) {
-            clearTimeout(timer.current);
-            await chain.current;
-            closeCurrent();
-          }
-          await call("memoRemove", { space, path: entry.path });
+          await call("memoArchive", { space, path: entry.path, archived: true });
+          if (touchesOpen(entry.path)) closeCurrent();
           area.mapTabs((t) => (inside(t) ? null : t));
         }
       },
     );
+    message("보관함으로 옮겼습니다.");
   }
   function openMenu(e: React.MouseEvent, items: MenuItem[], target: string) {
     e.preventDefault();
@@ -1009,7 +986,7 @@ export default function MemoSession({
         action: attempt(() => call("memoReveal", { space, path: entry.path })),
       },
       "separator",
-      { label: "삭제", shortcut: "Delete", danger: true, action: attempt(() => remove([entry])) },
+      { label: "보관함으로 이동", shortcut: "Delete", icon: <Archive size={15} />, action: attempt(() => archiveEntries([entry])) },
     ];
   }
   // 트리 다중 선택. entry가 고른 줄 가운데 하나이고 둘 이상 골랐으면 고른 항목 전부, 아니면 entry 하나를 다룬다.
@@ -1052,7 +1029,7 @@ export default function MemoSession({
         }),
       },
       "separator",
-      { label: "삭제", shortcut: "Delete", danger: true, action: attempt(() => remove(list)) },
+      { label: "보관함으로 이동", shortcut: "Delete", icon: <Archive size={15} />, action: attempt(() => archiveEntries(list)) },
     ];
   }
   const rootMenu = (): MenuItem[] => [
@@ -1636,7 +1613,7 @@ export default function MemoSession({
             setRenaming({ path: entry.path, value: entry.name });
           } else if (e.key === "Delete") {
             e.preventDefault();
-            attempt(() => remove(list))();
+            attempt(() => archiveEntries(list))();
           }
         }}
       >
@@ -1669,8 +1646,11 @@ export default function MemoSession({
   const projectSpaces = spaces.filter((s) => s.id !== COMMON);
   return (
     <div className="memo-session" style={active ? undefined : { display: "none" }}>
-      {confirmDialog}
-      {active && archiveOpen && <MemoArchiveDialog space={space} title={spaceTitle} documents={documents}
+      {active && archiveOpen && <MemoArchiveDialog space={space} title={spaceTitle} flush={flush}
+        onRemoved={path => {
+          if (touchesOpen(path)) closeCurrent();
+          area.mapTabs(tab => tab.space === space && (tab.path === path || tab.path.startsWith(path + "/")) ? null : tab);
+        }}
         onClose={() => setArchiveOpen(false)} openDoc={async id => { await onOpenDoc(id); }}
         openMemo={async (targetSpace, path) => { await openMemo(path, targetSpace, true); }} />}
       {historyTarget && <div className="modal-backdrop" onMouseDown={event => {

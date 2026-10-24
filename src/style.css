@@ -6713,10 +6713,7 @@ input.property-text {
 .recovery-copies .conflict-actions { flex-wrap: wrap; }
 .memo-archive-dialog { max-height: 85dvh; display: flex; flex-direction: column; }
 .memo-archive-body { min-height: 0; overflow-y: auto; }
-.memo-archive-documents { padding: 16px; }
-.memo-archive-documents > p { color: var(--muted); font-size: 13px; }
-.memo-archive-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 0; border-bottom: 1px solid var(--border); }
-.memo-archive-row > button { display: inline-flex; align-items: center; gap: 6px; white-space: normal; }
-.memo-archive-row > .memo-archive-open { flex: 1 1 180px; min-width: 0; text-align: left; }
-.memo-archive-open span { overflow-wrap: anywhere; }
-.memo-archive-row svg { flex-shrink: 0; }
+.memo-archive-entry { display: flex; align-items: center; min-width: 0; }
+.memo-archive-entry > .tree-item { flex: 1; min-width: 0; }
+.memo-archive-menu { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 28px; width: 28px; height: 28px; padding: 0; border: 0; background: transparent; color: var(--muted); }
+.memo-archive-menu:hover { background: var(--hover); color: var(--text); }

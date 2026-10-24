@@ -1,5 +1,6 @@
 import {
   Archive,
+  ArchiveRestore,
   ArrowLeft,
   ChevronDown,
   ChevronRight,
@@ -14,14 +15,12 @@ import {
   Plus,
   Search,
   StickyNote,
-  Trash2,
   X,
 } from "lucide-react";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { normalizeEditorStyle, replaceManuscriptSymbols, resolveKindPrefs } from "../../core/typesetting.mjs";
 import { normalizeTextReplacements } from "../../core/typing.mjs";
 import { plainText } from "../../core/text.mjs";
-import { useConfirm } from "../ConfirmDialog";
 import EditorScroll, { type EditorScrollPositions } from "../EditorScroll";
 import HistoryDialog from "../HistoryDialog";
 import MemoArchiveDialog from "../MemoArchiveDialog";
@@ -31,6 +30,7 @@ import { call, type AutoSyncStatus, type Doc } from "../types";
 import { autoSaveCondition } from "../app/auto-save";
 import { memoImageScope, useImages } from "../app/useDocumentImages";
 import { clearMemoDraft, readMemoDraft, saveMemoDraft } from "../memo-drafts";
+import { memoEntriesInView, type MemoEntry } from "../memo-tree";
 import { notifyRemoteUpdate, resolveSyncedFile, saveRecoveryCopy } from "../sync-recovery";
 import SyncIssueBanner from "../SyncIssueBanner";
 import { useSyncFileUpdates } from "../useSyncFileUpdates";
@@ -44,17 +44,11 @@ import {
 } from "./MobileActionSheet";
 
 type Space = { id: string; title: string; root: string };
-type Entry = {
-  path: string;
-  name: string;
-  type: "file" | "folder";
-  updatedAt?: string;
-  kind?: "plot" | "memo";
-  episodeId?: string;
-};
+type Entry = MemoEntry;
 type EntryChange = (entries: Entry[]) => Entry[];
 
 type Memo = {
+  archived?: boolean;
   id?: string;
   space: string;
   path: string;
@@ -133,7 +127,6 @@ export default function MobileMemoView({
     initialValue: string;
   } | null>(null);
 
-  const [confirm, confirmDialog] = useConfirm();
   const scrollPositions = useRef<EditorScrollPositions>(new Map());
   const memoRef = useRef<Memo | null>(null);
   const spaceRef = useRef<string>(space);
@@ -257,7 +250,7 @@ export default function MobileMemoView({
     const seq = ++treeSeq.current;
     const r = await call<{ entries: Entry[] }>("memoTree", { space: targetSpace });
     if (seq === treeSeq.current && targetSpace === spaceRef.current) {
-      let next = r.entries;
+      let next = memoEntriesInView(r.entries, false);
       for (const change of entryChanges.current) next = change(next);
       setEntries(next);
     }
@@ -629,25 +622,25 @@ export default function MobileMemoView({
     await moving;
   };
 
-  const removeEntry = async (entry: Entry) => {
-    const ok = await confirm({
-      title: entry.type === "folder" ? "폴더 삭제" : "메모 삭제",
-      message: `'${entry.name}' ${entry.type === "folder" ? "폴더와 내부 메모를" : "메모를"} 휴지통으로 옮길까요?`,
-      confirmLabel: "삭제",
-      danger: true,
-    });
-    if (!ok) return;
+  const archiveEntry = async (entry: Entry, archived = true) => {
     const inside = (p: string) => p === entry.path || p.startsWith(entry.path + "/");
-    const removing = changeEntries(
+    await flush();
+    await changeEntries(
       (list) => list.filter((e) => !inside(e.path)),
       async () => {
-        await flush();
-        await call("memoRemove", { space, path: entry.path });
-        if (memoRef.current && inside(memoRef.current.path)) setCurrentMemo(null);
+        await call("memoArchive", { space, path: entry.path, archived });
+        if (memoRef.current?.space === space && inside(memoRef.current.path)) {
+          if (archived) setCurrentMemo(null);
+          else setCurrentMemo(await call<Memo>("memoRead", { space, path: memoRef.current.path }));
+        }
       },
     );
-    message("삭제했습니다.");
-    await removing;
+    message(archived ? "보관함으로 옮겼습니다." : "보관함에서 꺼냈습니다.");
+  };
+  const archiveCurrentMemo = async () => {
+    await commitTitleRename(titleInput);
+    const current = memoRef.current;
+    if (current) await archiveEntry({ path: current.path, name: current.title, type: "file" }, !current.archived);
   };
 
   const allFolderEntries = useMemo(
@@ -743,10 +736,9 @@ export default function MobileMemoView({
         },
         "separator",
         {
-          label: "폴더 삭제",
-          icon: <Trash2 size={18} />,
-          danger: true,
-          action: () => void removeEntry(entry),
+          label: "보관함으로 이동",
+          icon: <Archive size={18} />,
+          action: () => void archiveEntry(entry).catch(report),
         },
       ];
     }
@@ -774,10 +766,9 @@ export default function MobileMemoView({
       },
       "separator",
       {
-        label: "메모 삭제",
-        icon: <Trash2 size={18} />,
-        danger: true,
-        action: () => void removeEntry(entry),
+        label: "보관함으로 이동",
+        icon: <Archive size={18} />,
+        action: () => void archiveEntry(entry).catch(report),
       },
     ];
   };
@@ -1006,19 +997,15 @@ export default function MobileMemoView({
               <div className="m-floating-popup-section">
                 <button
                   type="button"
-                  className="m-floating-popup-item danger"
+                  className="m-floating-popup-item"
                   role="menuitem"
                   onClick={() => {
                     setEditorMenuOpen(false);
-                    void removeEntry({
-                      path: memo.path,
-                      name: memo.title,
-                      type: "file",
-                    });
+                    void archiveCurrentMemo().catch(report);
                   }}
                 >
-                  <Trash2 size={16} />
-                  <span>메모 삭제</span>
+                  {memo.archived ? <ArchiveRestore size={16} /> : <Archive size={16} />}
+                  <span>{memo.archived ? "보관함에서 꺼내기" : "보관함으로 이동"}</span>
                 </button>
               </div>
             </div>
@@ -1088,7 +1075,6 @@ export default function MobileMemoView({
             </div>
           </div>
         )}
-        {confirmDialog}
       </div>
     );
   }
@@ -1314,7 +1300,11 @@ export default function MobileMemoView({
         </div>
       </div>
 
-      {archiveOpen && <MemoArchiveDialog mobile space={space} title={currentSpaceTitle} documents={documents}
+      {archiveOpen && <MemoArchiveDialog mobile space={space} title={currentSpaceTitle} flush={flush}
+        onRemoved={path => {
+          const current = memoRef.current;
+          if (current?.space === space && (current.path === path || current.path.startsWith(path + "/"))) setCurrentMemo(null);
+        }}
         onClose={() => setArchiveOpen(false)} openDoc={openDoc} openMemo={openMemoFile} />}
 
       {/* 메모 공간 전환 시트 (내부 경로 표시 제거) */}
@@ -1378,7 +1368,6 @@ export default function MobileMemoView({
         onClose={() => setPromptTarget(null)}
       />
 
-      {confirmDialog}
     </div>
   );
 }

@@ -529,7 +529,7 @@ fn handle_method(
         "createProject" | "updateProject" | "chooseCover" | "removeCover" | "createDocument" |
         "saveDocument" | "reorderDocuments" | "reorderProjects" | "deleteProject" | "repair" | "relinkDocument" |
         "adoptFile" | "forgetDocument" | "memoSave" | "memoCreate" | "memoCreateFolder" |
-        "memoRename" | "memoMove" | "memoArchiveFolder" | "memoRemove" | "restore" | "deleteDocument" | "importFiles")
+        "memoRename" | "memoMove" | "memoArchive" | "memoArchiveFolder" | "memoRemove" | "restore" | "deleteDocument" | "importFiles")
     {
         let store=state.store.lock().unwrap();
         store.as_ref().ok_or_else(||fail_invalid("서재가 열려 있지 않습니다."))?.require_database()?;
@@ -539,7 +539,7 @@ fn handle_method(
         "createProject" | "updateProject" | "chooseCover" | "removeCover" | "createDocument" |
         "saveDocument" | "reorderDocuments" | "reorderProjects" | "deleteProject" | "repair" | "relinkDocument" |
         "adoptFile" | "forgetDocument" | "memoSave" | "memoCreate" | "memoCreateFolder" |
-        "memoRename" | "memoMove" | "memoArchiveFolder" | "memoRemove" | "restore" | "deleteDocument" | "importFiles" |
+        "memoRename" | "memoMove" | "memoArchive" | "memoArchiveFolder" | "memoRemove" | "restore" | "deleteDocument" | "importFiles" |
         "saveConnection" | "chooseVault" | "moveVault")
     {
         auto_sync::request(app);
@@ -1130,12 +1130,13 @@ fn dispatch_method(
             schedule_notify(app, &state.notify_seq);
             Ok(res)
         }
-        "memoArchiveFolder" => {
+        "memoArchive" | "memoArchiveFolder" => {
             let (_, common_root) = get_store_and_common()?;
             let res = {
                 let mut guard = state.store.lock().unwrap();
                 let st = guard.as_mut().ok_or_else(|| fail_invalid("서재가 열려 있지 않습니다."))?;
-                Memos::archive_folder(st, &common_root, &args)?
+                if method == "memoArchiveFolder" { Memos::archive_folder(st, &common_root, &args)? }
+                else { Memos::archive(st, &common_root, &args)? }
             };
             schedule_notify(app, &state.notify_seq);
             Ok(json!(res))
