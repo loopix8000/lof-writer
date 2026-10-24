@@ -162,7 +162,22 @@ impl LocalHistory {
             &read_json(&repo, &current.tree()?, "format.json")?,
             vault_id,
         )?;
-        if current.id() != anchor.id() && !repo.graph_descendant_of(current.id(), anchor.id())? {
+        // 지난번에 이어짐을 확인한 커밋부터 새로 쌓인 커밋만 따라간다. 저장할 때마다 늘어나는 전체 기록을 매번 거슬러 오르지 않는다.
+        // 기억한 커밋에서 이어지지 않으면 처음 이관 기록부터 다시 확인한다.
+        let verified = db.get("gitVerifiedHead")?.as_ref().and_then(Value::as_str)
+            .and_then(|id| Oid::from_str(id).ok())
+            .filter(|id| repo.find_commit(*id).is_ok());
+        let connected = |base: Oid| -> Result<bool, LofError> {
+            Ok(current.id() == base || repo.graph_descendant_of(current.id(), base)?)
+        };
+        let linked = match verified {
+            Some(base) if connected(base)? => true,
+            _ => connected(anchor.id())?,
+        };
+        if linked && verified != Some(current.id()) {
+            db.set("gitVerifiedHead", &json!(current.id().to_string()))?;
+        }
+        if !linked {
             return Err(fail(
                 "현재 Git 기록이 기존 이관 이력과 연결되지 않습니다. 기존 기록은 보존됩니다.",
                 "LOCAL_GIT",

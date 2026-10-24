@@ -986,9 +986,10 @@ impl Store {
         if changed {
             self.sync_sequence.fetch_add(1, Ordering::SeqCst);
             // 밀리초 단위 캐시 값이 같아도 더 정밀한 수정 시각이 달라졌다면 본문을 다시 읽는다.
-            if let Some(catalog) = self.catalog.as_mut() {
+            // 비교할 이전 목록이 없으면 저장된 색인의 크기·시각 비교를 믿고 서재 전체를 다시 읽지 않는다.
+            if let (Some(catalog), Some(previous)) = (self.catalog.as_mut(), self.disk_inventory.as_ref()) {
                 for (path, stamp) in &files {
-                    if stamp.3 || self.disk_inventory.as_ref().and_then(|files| files.get(path)) == Some(stamp) { continue; }
+                    if stamp.3 || previous.get(path) == Some(stamp) { continue; }
                     let relative = path.to_string_lossy().replace('\\', "/");
                     let Some((folder, relative)) = relative.split_once('/') else { continue };
                     if let Some(project) = catalog.projects.iter_mut().find(|project| project.dir == self.root.join(folder)) {
@@ -1184,6 +1185,9 @@ impl Store {
         }
 
         let init_res: Result<(), LofError> = (|| {
+            // 디스크 목록을 먼저 받아 두고 색인을 맞춘다. 첫 동기화 확인은 이 목록과 비교해 바뀐 경로만 다시 읽는다.
+            // 그 사이에 바뀐 파일은 목록과 달라지므로 첫 확인에서 잡힌다.
+            let files = disk_inventory(&self.root).ok();
             if let Some(cat) = self.index.load(&vault_id) {
                 self.catalog = Some(cat);
                 self.index_enabled = true;
@@ -1194,6 +1198,7 @@ impl Store {
                 self.catalog=Some(cat);
                 self.index_enabled=true;
             }
+            self.disk_inventory = files;
             Ok(())
         })();
 
