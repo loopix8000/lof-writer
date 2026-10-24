@@ -402,6 +402,7 @@ export default function Writer({
   typingOptions,
   revision,
   readOnly = false,
+  allowReadOnlyAnnotations = false,
   inactive = false,
   visible = true,
   reveal = null,
@@ -438,6 +439,8 @@ export default function Writer({
   session?: EditorSession;
   // 원고 보호 여부와 그룹 포커스를 분리해 도구 막대 구성을 그대로 유지한다.
   readOnly?: boolean;
+  // 본문을 잠근 상태에서도 북마크와 퀵노트를 사용할 수 있게 한다.
+  allowReadOnlyAnnotations?: boolean;
   inactive?: boolean;
   visible?: boolean;
   // 검색 결과로 열었을 때 본문에서 index번째 일치를 골라 보여 준다. seq가 바뀔 때마다 다시 한다.
@@ -531,6 +534,9 @@ export default function Writer({
   const editable = !readOnly && !inactive;
   const editableRef = useRef(editable);
   editableRef.current = editable;
+  const annotationsEnabled = !inactive && visible && (!readOnly || allowReadOnlyAnnotations);
+  const annotationsEnabledRef = useRef(annotationsEnabled);
+  annotationsEnabledRef.current = annotationsEnabled;
   const cursorLineRef = useRef(onCursorLine);
   cursorLineRef.current = onCursorLine;
   const reportsCursor = !inactive && visible;
@@ -567,7 +573,7 @@ export default function Writer({
           ? [MarkdownImage.configure({ resolve: (src) => imagesRef.current?.resolve(src) ?? Promise.resolve(null) })]
           : []),
         TypingAssist.configure({ getOptions: () => optionsRef.current }),
-        Bookmarks.configure({ canToggle: () => editableRef.current && !!onBookmarksRef.current }),
+        Bookmarks.configure({ canToggle: () => annotationsEnabledRef.current && !!onBookmarksRef.current }),
         NoteMarks.configure({
           onOpen: (list, event) => onOpenNotesRef.current?.(list, { x: event.clientX, y: event.clientY }),
         }),
@@ -1041,7 +1047,7 @@ export default function Writer({
             {
               label: "메모 추가",
               icon: <NotebookPen size={15} />,
-              disabled: !selected,
+              disabled: !selected || !annotationsEnabled,
               action: () => onQuickNote(text, { x: e.clientX, y: e.clientY }),
             },
           ]
@@ -1371,9 +1377,15 @@ export default function Writer({
         style={contentVars}
         onContextMenu={(e) => {
           const { from, to } = editor.state.selection;
-          const text = manualLineBreak
+          const nativeSelection = readOnly && allowReadOnlyAnnotations ? editor.view.dom.ownerDocument.getSelection() : null;
+          const nativeText = readOnly && allowReadOnlyAnnotations
+            ? nativeSelection?.anchorNode && nativeSelection.focusNode &&
+              editor.view.dom.contains(nativeSelection.anchorNode) && editor.view.dom.contains(nativeSelection.focusNode)
+              ? nativeSelection.toString() : ""
+            : undefined;
+          const text = nativeText ?? (manualLineBreak
             ? editor.state.doc.textBetween(from, to, "\n")
-            : editor.view.serializeForClipboard(editor.state.selection.content()).text;
+            : editor.view.serializeForClipboard(editor.state.selection.content()).text);
           openEditorMenu(e, text, {
             cut: () => editor.chain().focus().deleteSelection().run(),
             selectAll: () => editor.chain().focus().selectAll().run(),
@@ -1383,7 +1395,7 @@ export default function Writer({
               editor.view.pasteText(text);
             },
             insertImage: (img) => placeImage(editor.view, img),
-          }, from !== to);
+          }, nativeText !== undefined ? !!nativeSelection && !nativeSelection.isCollapsed : from !== to);
         }}
       />
       {selectionMenu}

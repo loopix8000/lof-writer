@@ -1602,6 +1602,7 @@ export default function App() {
             <Writer
               key="writer"
               readOnly={isProtected}
+              allowReadOnlyAnnotations={!isMobile}
               inactive={!focused}
               visible={visible}
               manualLineBreak={!!active.manualLineBreak}
