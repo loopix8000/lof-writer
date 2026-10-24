@@ -356,7 +356,7 @@ export default function SettingsContent({
                           {movingVault === "internal" ? "옮기는 중…" : lib.isInternal ? "내부 저장소 사용 중" : "내부 저장소로 전환"}
                         </button>
                       )}
-                      <button disabled={busy || (isMobile && Boolean(lib.isInternal))} onClick={attempt(async () => {
+                      <button disabled={busy} onClick={attempt(async () => {
                         setMovingVault("folder");
                         try { await moveVault(); } finally { setMovingVault(false); }
                       })}>
@@ -404,6 +404,7 @@ export default function SettingsContent({
                 <small>{formatStoragePath(commonMemoPath, "앱 기본 공용 메모 폴더")}</small>
               </div>
               <button
+                disabled={isMobile && Boolean(lib.isInternal)}
                 onClick={attempt(async () => {
                   const next = await call<string | null>("chooseCommonMemo");
                   if (next) {
@@ -418,6 +419,7 @@ export default function SettingsContent({
             </div>
             <p className="muted">
               여러 작품에서 함께 쓰는 메모를 공용 메모 공간에 Markdown 파일로 보관합니다.
+              {isMobile && lib.isInternal && " 내부 저장소를 쓰는 동안에는 공용 메모도 서재와 함께 내부 저장소에 두며 위치를 바꿀 수 없습니다."}
             </p>
           </section>
           <section className="settings-section" hidden={settingsPage !== "storage"}>

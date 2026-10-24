@@ -397,23 +397,39 @@ export default function MobileEditorView({
       longPressRef.current = null;
     };
   }, [leftDrawerOpen]);
-  // 문서를 고르면 읽기와 서랍 닫기를 함께 시작한다. 서랍은 조금 천천히 닫혀 그사이 새 본문으로 바뀐다.
+  // 새 문서가 화면에 그려진 뒤 서랍을 닫는다. 먼저 닫으면 이전 본문이 밀려 들어왔다가 바뀌면서 깜빡인다.
   const [leftDrawerClosing, setLeftDrawerClosing] = useState(false);
   const drawerCloseTimer = useRef<number | undefined>(undefined);
+  const drawerOpenSeq = useRef(0);
   useEffect(() => () => window.clearTimeout(drawerCloseTimer.current), []);
   const openLeftDrawer = () => {
+    drawerOpenSeq.current++;
     window.clearTimeout(drawerCloseTimer.current);
     setLeftDrawerClosing(false);
     setLeftDrawerOpen(true);
   };
-  const openFromDrawer = (id: string) => {
-    if (id !== active.id) void attempt(() => openDoc(id, false))();
+  const closeLeftDrawer = () => {
     window.clearTimeout(drawerCloseTimer.current);
     setLeftDrawerClosing(true);
     drawerCloseTimer.current = window.setTimeout(() => {
       setLeftDrawerOpen(false);
       setLeftDrawerClosing(false);
-    }, 300);
+    }, 200);
+  };
+  const openFromDrawer = (id: string) => {
+    const seq = ++drawerOpenSeq.current;
+    if (id === active.id) {
+      closeLeftDrawer();
+      return;
+    }
+    void attempt(async () => {
+      try {
+        await openDoc(id, false);
+        await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+      } finally {
+        if (seq === drawerOpenSeq.current) closeLeftDrawer();
+      }
+    })();
   };
   const drawerLongPress = (doc: Doc) => ({
     onPointerDown: (e: React.PointerEvent) => {

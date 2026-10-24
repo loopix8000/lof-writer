@@ -2191,11 +2191,7 @@
   transform: translateX(calc(-1 * var(--m-drawer-right-width)));
 }
 
-/* 서랍에서 문서를 고르면 새 문서를 읽는 동안 서랍과 본문이 조금 더 천천히 제자리로 돌아온다. */
-.m-editor-screen.m-drawer-closing > :is(.m-editor-topbar, .sync-issue-banner, .m-editor-sync-anchor, .editor-scroll, .m-floating-pill-wrap, .m-empty-state) {
-  transition-duration: 0.3s;
-}
-
+/* 서랍에서 문서를 고르면 새 본문이 그려진 뒤 서랍이 열릴 때와 같은 속도로 미끄러져 닫힌다. */
 @keyframes mSlideOutLeft {
   from {
     transform: translateX(0);
@@ -2216,11 +2212,11 @@
 
 .m-drawer-backdrop.closing {
   pointer-events: none;
-  animation: mDrawerBackdropOut 0.3s var(--drawer-ease) both;
+  animation: mDrawerBackdropOut var(--drawer-duration) var(--drawer-ease) both;
 }
 
 .m-slide-drawer.left.closing {
-  animation: mSlideOutLeft 0.3s var(--drawer-ease) both;
+  animation: mSlideOutLeft var(--drawer-duration) var(--drawer-ease) both;
 }
 
 .m-drawer-backdrop {
@@ -3169,6 +3165,33 @@
   border-radius: 14px;
   padding: 16px 8px !important;
   margin-bottom: 14px;
+}
+
+/* 한 화면에 섹션이 여러 개면 둥근 테두리 조각 없이 곧은 선으로만 나눈다. */
+.m-settings-host .settings-content .settings-section {
+  border: 0;
+  border-radius: 0;
+}
+
+.m-settings-host .settings-content .settings-section:not([hidden]) ~ .settings-section:not([hidden]) {
+  margin-top: 6px;
+  padding-top: 22px !important;
+  border-top: 1px solid var(--line);
+}
+
+.m-settings-host .settings-content .settings-section .settings-description {
+  margin: 0 0 14px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.m-settings-host .settings-content .settings-section .settings-grid + .settings-description {
+  margin-top: 12px;
+}
+
+.m-settings-host .settings-content .settings-section > p[role="status"] {
+  margin: 0 0 6px;
+  font-size: 13px;
 }
 
 .m-settings-host .settings-section h3 {

@@ -1166,6 +1166,10 @@ fn dispatch_method(
         }
         "chooseCommonMemo" => {
             let (store_root, current_common) = get_store_and_common()?;
+            #[cfg(target_os = "android")]
+            if android_library::is_internal(&state.user_dir, &store_root) {
+                return Err(fail_invalid("내부 저장소를 쓰는 동안에는 공용 메모 위치를 바꿀 수 없습니다."));
+            }
             let folder = if let Some(custom_path) = args
                 .get("path")
                 .and_then(Value::as_str)
