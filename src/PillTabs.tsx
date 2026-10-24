@@ -5,6 +5,8 @@ export type PillTabItem<T extends string> = {
   label: string;
   icon?: ReactNode;
   count?: number;
+  /** 탭 너비 비율. 기본값 1이며 모두 같으면 균등하게 나눈다. */
+  weight?: number;
   onDragEnter?: () => void;
 };
 
@@ -22,6 +24,10 @@ export default function PillTabs<T extends string>({
   className?: string;
 }) {
   const selectedIndex = items.findIndex((item) => item.value === value);
+  const index = Math.max(0, selectedIndex);
+  const weights = items.map((item) => item.weight ?? 1);
+  const total = weights.reduce((sum, weight) => sum + weight, 0) || 1;
+  const start = weights.slice(0, index).reduce((sum, weight) => sum + weight, 0);
   return (
     <div
       className={`m-pill-tabs${className ? ` ${className}` : ""}`}
@@ -30,7 +36,10 @@ export default function PillTabs<T extends string>({
       style={
         {
           "--pill-count": items.length,
-          "--pill-index": Math.max(0, selectedIndex),
+          "--pill-index": index,
+          "--pill-columns": weights.map((weight) => `minmax(0, ${weight}fr)`).join(" "),
+          "--pill-start": start / total,
+          "--pill-span": (weights[index] ?? 1) / total,
         } as CSSProperties
       }
     >

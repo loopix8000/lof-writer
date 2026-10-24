@@ -944,7 +944,7 @@
   position: relative;
   isolation: isolate;
   display: grid;
-  grid-template-columns: repeat(var(--pill-count, 2), minmax(0, 1fr));
+  grid-template-columns: var(--pill-columns, repeat(var(--pill-count, 2), minmax(0, 1fr)));
   gap: 4px;
   padding: 3px;
   border-radius: 12px;
@@ -955,14 +955,16 @@
   position: absolute;
   top: 3px;
   bottom: 3px;
-  left: 3px;
-  width: calc((100% - 6px - (var(--pill-count) - 1) * 4px) / var(--pill-count));
+  /* 탭 칸 너비(여백·간격 제외)에 비율을 곱해 선택한 탭의 위치와 너비를 맞춘다. */
+  left: calc(3px + (100% - 6px - (var(--pill-count) - 1) * 4px) * var(--pill-start, 0) + var(--pill-index) * 4px);
+  width: calc((100% - 6px - (var(--pill-count) - 1) * 4px) * var(--pill-span, 1));
   border-radius: 9px;
   border: none;
   background: var(--surface);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-  transform: translateX(calc(var(--pill-index) * (100% + 4px)));
-  transition: transform 0.25s cubic-bezier(0.22, 0.61, 0.36, 1);
+  transition:
+    left 0.25s cubic-bezier(0.22, 0.61, 0.36, 1),
+    width 0.25s cubic-bezier(0.22, 0.61, 0.36, 1);
   pointer-events: none;
 }
 
