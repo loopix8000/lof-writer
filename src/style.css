@@ -3408,6 +3408,9 @@ body.sidebar-resizing * {
 .history-actions .history-delete {
   margin-left: auto;
 }
+.history-actions + .history-actions {
+  margin-top: 8px;
+}
 .history-preview {
   flex: 1;
   min-width: 0;

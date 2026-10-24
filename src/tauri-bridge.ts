@@ -13,6 +13,7 @@ const methods = [
   "gitEditing",
   "backupStorage",
   "backupGitHistory",
+  "importGitHistory",
   "resetHistory",
   "pinStatus",
   "pinUnlock",
@@ -208,6 +209,16 @@ export function installTauriBridge() {
         if (android) {
           if (name === "pickVaultDestination") {
             return { ok: true, data: await pickAndroidFolder() };
+          }
+          if (name === "backupGitHistory" && payload.pick && !payload.path) {
+            const folder = await pickAndroidFolder();
+            if (!folder) return { ok: true, data: null };
+            return invoke("lof_invoke", { method: name, args: { path: folder } });
+          }
+          if (name === "importGitHistory" && !payload.data) {
+            const picked = await pickBrowserFiles({ accept: ".zip,application/zip" });
+            if (!picked || picked.length === 0) return { ok: true, data: null };
+            return invoke("lof_invoke", { method: name, args: { data: picked[0].data } });
           }
           if ((name === "exportLibrary" || name === "exportProject") && !payload.path) {
             const folder = await pickAndroidFolder();

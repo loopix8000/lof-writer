@@ -1163,6 +1163,18 @@ impl Store {
         Ok(())
     }
 
+    // 현재 원고를 먼저 기록한 뒤 백업 파일의 서재·공용 메모 Git 이력을 합친다.
+    pub fn import_git_history(&mut self, archive: &Path, common_memo_root: &Path) -> Result<bool, LofError> {
+        if !self.local_git.ready {
+            return Err(fail_invalid("이력 이관이 끝난 뒤 불러와 주세요."));
+        }
+        self.git_tick(true, false)?;
+        let scratch = self.root.join(".lof").join(format!("git-import-{}", Uuid::new_v4()));
+        let imported = self.local_git.import_backup(archive, &scratch, common_memo_root)?;
+        self.last_snapshot.clear();
+        Ok(imported)
+    }
+
     pub fn new(
         root: impl AsRef<Path>,
         history_policy: HistoryPolicy,
