@@ -3422,6 +3422,10 @@ body.sidebar-resizing * {
   color: var(--muted);
 }
 .history-preview pre {
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
+  cursor: text;
   font: inherit;
   line-height: 1.9;
   white-space: pre-wrap;
