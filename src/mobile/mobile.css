@@ -1395,9 +1395,17 @@
   text-box: trim-both cap alphabetic;
 }
 
+/* 칸이 좁으면 배지 대신 이름이 줄어들게 한다. 배지가 눌리면 숫자가 배경 밖으로 넘쳐 좌우 여백이 달라진다. */
 .m-pill-tab small {
+  flex-shrink: 0;
   min-width: 18px;
   height: 18px;
+}
+
+.m-pill-tab > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .m-tree-count {
