@@ -318,6 +318,7 @@ export default function App() {
   const dragSide = useRef<Side>("left");
   const shownLibrary = useMemo(() => withDocumentDraft(lib, active), [lib, active]);
   const fileTree = useFileTree({
+    mobile: isMobile,
     library: shownLibrary, active, projectId, view, archive, menuTarget: menu?.target,
     getLibrary: () => libraryRef.current,
     currentProjectId: () => projectRef.current,
@@ -688,7 +689,7 @@ export default function App() {
       resetNavigation();
     }
     const deleting = optimistic(removeProject(id), () => call("deleteProject", { id }));
-    message(`'${target.title || "제목 없는 작품"}' 작품을 휴지통으로 옮겼습니다.`);
+    message(`'${target.title || "제목 없는 작품"}' 작품을 ${isMobile ? "삭제했습니다." : "휴지통으로 옮겼습니다."}`);
     await deleting;
   }
   function askDeleteProject(id: string) {

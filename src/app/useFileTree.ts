@@ -12,6 +12,7 @@ import { patchDocuments, removeDocuments, reorderDocuments, type LibraryChange }
 type FolderChange = (entries: FolderEntry[]) => FolderEntry[];
 
 type Options = {
+  mobile?: boolean;
   library: Library;
   active: Doc | null;
   projectId: string;
@@ -51,7 +52,7 @@ type Options = {
 export function useFileTree(options: Options) {
   const latest = useRef(options);
   latest.current = options;
-  const { library: lib, active, projectId, view, archive } = options;
+  const { library: lib, active, projectId, view, archive, mobile = false } = options;
   const renamingRef = useRef<{ id: string; value: string; widget?: boolean } | null>(null);
   const selectionAnchor = useRef("");
   const dragTreeDoc = useRef("");
@@ -503,11 +504,11 @@ export function useFileTree(options: Options) {
     const name = path.slice(path.lastIndexOf("/") + 1);
     const ok = await confirm({
       title: "폴더 삭제",
-      message: `'${name}' 폴더${inside.length ? `와 안의 문서 ${inside.length}개` : ""}를 휴지통으로 옮길까요?`,
+      message: `'${name}' 폴더${inside.length ? `와 안의 문서 ${inside.length}개` : ""}를 ${mobile ? "삭제할까요?" : "휴지통으로 옮길까요?"}`,
       detail: archive
         ? "보관하지 않은 문서는 폴더 구조와 함께 현재 문서에 유지됩니다."
         : "이미 보관한 문서는 폴더 구조와 함께 보관함에 유지됩니다.",
-      confirmLabel: "휴지통으로 옮기기",
+      confirmLabel: mobile ? "삭제" : "휴지통으로 옮기기",
       danger: true,
     });
     if (!ok || latest.current.currentProjectId() !== pid) return;
