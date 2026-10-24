@@ -4,7 +4,6 @@ import {
   ArrowLeft,
   ChevronDown,
   ChevronRight,
-  Copy,
   Edit3,
   FilePlus,
   Folder,
@@ -26,7 +25,7 @@ import HistoryDialog from "../HistoryDialog";
 import MobileDialogPage from "./MobileDialogPage";
 import MemoArchiveDialog from "../MemoArchiveDialog";
 import { useUndoState } from "../useUndoState";
-import SyncStatus from "../SyncStatus";
+import MobileSyncStatus from "./MobileSyncStatus";
 import { call, type AutoSyncStatus, type Doc } from "../types";
 import { autoSaveCondition } from "../app/auto-save";
 import { memoImageScope, useImages } from "../app/useDocumentImages";
@@ -784,48 +783,21 @@ export default function MobileMemoView({
     return (
       <div className="m-screen m-memo-editor-screen">
         <header className="m-topbar">
-          <button
-            type="button"
-            className="m-back-btn"
-            onClick={() => void closeMemoEditor()}
-          >
-            <ArrowLeft size={18} />
-            <span>메모 목록</span>
-          </button>
           <div className="m-editor-status-wrap">
-            <span className={`save-indicator ${status !== "저장됨" ? "pending" : ""}`}>
-              <span />
-              {status}
-            </span>
-            <SyncStatus
-              status={syncStatus}
-              checking={syncChecking}
-              available={syncAvailable}
-              editing={status !== "저장됨"}
-              activeOnly
+            <button
+              type="button"
+              className="m-back-btn"
+              onClick={() => void closeMemoEditor()}
+            >
+              <ArrowLeft size={18} />
+              <span>메모 목록</span>
+            </button>
+            <span
+              className={`m-save-dot ${status === "저장됨" ? "saved" : "pending"}`}
+              role="status"
+              aria-label={status}
+              title={status}
             />
-          </div>
-          <div className="m-topbar-actions">
-            <button
-              type="button"
-              className="m-icon-btn"
-              aria-label="본문 복사"
-              onClick={() => {
-                void navigator.clipboard
-                  .writeText(plainText(memo.body))
-                  .then(() => message("메모 본문을 복사했습니다."));
-              }}
-            >
-              <Copy size={18} />
-            </button>
-            <button
-              type="button"
-              className="m-icon-btn"
-              aria-label="메모 메뉴"
-              onClick={() => setEditorMenuOpen(true)}
-            >
-              <MoreVertical size={19} />
-            </button>
           </div>
         </header>
 
@@ -835,6 +807,9 @@ export default function MobileMemoView({
             retry={(discard) => adoptInChain(memo, discard)}
           />
         )}
+
+        <MobileSyncStatus status={syncStatus} checking={syncChecking} available={syncAvailable}
+          editing={status !== "저장됨"} belowHeader />
 
         <EditorScroll
           key={`${memo.space}:${memo.path}`}
@@ -918,7 +893,6 @@ export default function MobileMemoView({
           )}
           moreOpen={editorMenuOpen}
           onToggleMore={() => setEditorMenuOpen((open) => !open)}
-          onReplaceSymbols={replaceMemoSymbols}
           onHistory={() => void showMemoHistory().catch(report)}
           onSave={() => void manualSaveMemo().catch(report)}
           onCopy={() => {
@@ -944,6 +918,7 @@ export default function MobileMemoView({
               <MobileEditorMenuActions
                 tables={true}
                 manualLineBreak={!!memo.manualLineBreak}
+                onReplaceSymbols={replaceMemoSymbols}
                 onClose={() => setEditorMenuOpen(false)}
               />
 

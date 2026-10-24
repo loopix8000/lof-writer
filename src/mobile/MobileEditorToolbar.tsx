@@ -32,10 +32,10 @@ const formatTools = [
   { action: "italic", label: "기울임", icon: Italic },
   { action: "strike", label: "취소선", icon: Strikethrough },
   { action: "heading", label: "소제목", icon: Heading2 },
+  { action: "divider", label: "장면 구분선", icon: Minus },
   { action: "taskList", label: "체크리스트", icon: ListTodo },
   { action: "image", label: "이미지 삽입", icon: ImagePlus },
   { action: "comment", label: "주석 추가", icon: MessageSquareCode },
-  { action: "divider", label: "장면 구분선", icon: Minus },
 ] as const;
 
 function editorAction(action: string) {
@@ -49,7 +49,6 @@ export default function MobileEditorToolbar({
   canRedo = false,
   moreOpen,
   onToggleMore,
-  onReplaceSymbols,
   onHistory,
   onSave,
   onCopy,
@@ -62,7 +61,6 @@ export default function MobileEditorToolbar({
   canRedo?: boolean;
   moreOpen: boolean;
   onToggleMore: () => void;
-  onReplaceSymbols: () => void;
   onHistory?: () => void;
   onSave?: () => void;
   onCopy?: () => void;
@@ -129,17 +127,6 @@ export default function MobileEditorToolbar({
               <Icon size={18} strokeWidth={2} />
             </button>
           ))}
-          <button
-            type="button"
-            className="m-pill-tool-btn"
-            aria-label="기호 일괄 대치"
-            title="기호 일괄 대치"
-            disabled={disabled}
-            onPointerDown={(event) => event.preventDefault()}
-            onClick={onReplaceSymbols}
-          >
-            <ArrowRightLeft size={17} strokeWidth={2} />
-          </button>
         </div>
         <span className="m-pill-divider" aria-hidden="true" />
         <button
@@ -161,11 +148,13 @@ export function MobileEditorMenuActions({
   disabled = false,
   tables,
   manualLineBreak,
+  onReplaceSymbols,
   onClose,
 }: {
   disabled?: boolean;
   tables: boolean;
   manualLineBreak: boolean;
+  onReplaceSymbols: () => void;
   onClose: () => void;
 }) {
   return (
@@ -196,6 +185,20 @@ export function MobileEditorMenuActions({
       >
         <Replace size={16} />
         <span>바꾸기</span>
+      </button>
+      <button
+        type="button"
+        className="m-floating-popup-item"
+        role="menuitem"
+        disabled={disabled}
+        onPointerDown={(event) => event.preventDefault()}
+        onClick={() => {
+          onClose();
+          onReplaceSymbols();
+        }}
+      >
+        <ArrowRightLeft size={16} />
+        <span>기호 일괄 대치</span>
       </button>
       {tables && (
         <button

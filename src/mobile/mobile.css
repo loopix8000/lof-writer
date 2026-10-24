@@ -136,12 +136,6 @@
   white-space: nowrap;
 }
 
-.m-editor-status-wrap .save-indicator {
-  display: inline-flex;
-  align-items: center;
-  white-space: nowrap;
-}
-
 .m-back-btn {
   display: inline-flex;
   align-items: center;
@@ -1726,6 +1720,10 @@
 .m-editor-sync-status.quiet {
   opacity: 0;
   pointer-events: none;
+}
+
+.m-editor-sync-anchor.below-header .m-editor-sync-status {
+  top: 14px;
 }
 
 .m-doc-kind-label {
@@ -4096,6 +4094,7 @@
   font-size: 12px;
   color: var(--muted);
   margin-bottom: 6px;
+  padding-right: 56px;
 }
 
 /* 상세 정보 펼치기/접기: 누를 때 배경이 글자에 붙지 않도록 여백을 두고, 음수 여백으로 글자 위치는 유지한다 */

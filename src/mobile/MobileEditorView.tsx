@@ -55,7 +55,7 @@ import EditorScroll, { type EditorScrollPositions } from "../EditorScroll";
 import type { MenuItem } from "../ContextMenu";
 import EpisodeProperties from "../EpisodeProperties";
 import PlatformCount from "../PlatformCount";
-import SyncStatus from "../SyncStatus";
+import MobileSyncStatus from "./MobileSyncStatus";
 import {
   call,
   type AutoSyncStatus,
@@ -266,25 +266,6 @@ export default function MobileEditorView({
   const isProtected =
     active.kind === "episode" && normalizeStatus(active.status) === "completed";
   const kindPrefs = resolveKindPrefs(prefs, active.kind);
-
-  // 동기화 아이콘은 실시간·폴더 동기화가 진행 중일 때 보이고, 끝나면 완료 상태를 잠깐 보여 준 뒤 숨긴다
-  const realtime = autoSync.channels?.realtime;
-  const files = autoSync.channels?.files;
-  const syncBusy =
-    syncChecking ||
-    (autoSync.channels
-      ? files?.phase === "syncing" ||
-        (realtime?.phase === "syncing" && realtime.activity !== "comparing")
-      : autoSync.phase === "syncing");
-  const [syncShown, setSyncShown] = useState(syncBusy);
-  useEffect(() => {
-    if (syncBusy) {
-      setSyncShown(true);
-      return;
-    }
-    const timer = window.setTimeout(() => setSyncShown(false), 2400);
-    return () => window.clearTimeout(timer);
-  }, [syncBusy]);
 
   // 회차의 집필 상태를 고르는 플로팅 메뉴. 열려 있는 회차는 편집 중인 원고와 함께 저장한다.
   const statusMenuItems = (doc: Doc): NonNullable<typeof propPopup>["items"] => {
@@ -1030,19 +1011,7 @@ export default function MobileEditorView({
       {/* 충돌 배너 */}
       {(syncIssue || conflict) && <SyncIssueBanner issue={syncIssue || "다른 곳에서 바뀐 원고와 이 기기의 임시본을 정리합니다."} retry={retrySync} />}
 
-      <div className="m-editor-sync-anchor">
-        <div
-          className={`m-editor-sync-status ${syncShown ? "" : "quiet"}`}
-          aria-hidden={!syncShown}
-        >
-          <SyncStatus
-            status={autoSync}
-            checking={syncChecking}
-            available={syncAvailable}
-            editing={saveStatus !== "저장됨"}
-          />
-        </div>
-      </div>
+      <MobileSyncStatus status={autoSync} checking={syncChecking} available={syncAvailable} editing={saveStatus !== "저장됨"} />
 
       {/* 본문 에디터 스크롤 영역 */}
       <EditorScroll
@@ -1209,7 +1178,6 @@ export default function MobileEditorView({
         saveDisabled={saveStatus === "저장됨" || saveStatus === "저장 중"}
         moreOpen={moreMenuOpen}
         onToggleMore={() => setMoreMenuOpen((open) => !open)}
-        onReplaceSymbols={replaceActiveSymbols}
         onHistory={attempt(showHistory)}
         onSave={() => void manualSave().then(() => message("저장했습니다.", undefined, 1500)).catch(report)}
         onCopy={attempt(() =>
@@ -1252,6 +1220,7 @@ export default function MobileEditorView({
               disabled={isProtected}
               tables={active.kind === "memo" || active.kind === "plot"}
               manualLineBreak={!!active.manualLineBreak}
+              onReplaceSymbols={replaceActiveSymbols}
               onClose={() => setMoreMenuOpen(false)}
             />
 
