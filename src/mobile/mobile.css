@@ -1538,7 +1538,7 @@
   box-shadow: 0 3px 12px rgba(0, 0, 0, 0.28);
 }
 
-.m-editor-topbar + .m-conflict-banner {
+.m-editor-topbar + .sync-issue-banner {
   margin-top: 50px;
 }
 
@@ -1673,10 +1673,12 @@
   flex-shrink: 0;
 }
 
-.m-conflict-banner {
+.mobile-app .sync-issue-banner {
   display: flex;
   flex: 0 0 auto;
   flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: stretch;
   gap: 8px;
   min-width: 0;
   padding: 10px 16px;
@@ -1687,11 +1689,13 @@
   line-height: 1.5;
 }
 
-.m-conflict-banner > span {
+.mobile-app .sync-issue-banner > div {
+  min-width: 0;
+  max-width: 100%;
   overflow-wrap: anywhere;
 }
 
-.m-conflict-actions {
+.mobile-app .sync-issue-banner .conflict-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -1700,7 +1704,7 @@
   min-width: 0;
 }
 
-.m-conflict-actions button {
+.mobile-app .sync-issue-banner .conflict-actions button {
   flex: 0 1 auto;
   min-height: 36px;
   max-width: 100%;
@@ -3839,15 +3843,15 @@
   padding-top: 62px;
 }
 /* 충돌 안내가 상단바 아래 공간을 차지하면 원고에 상단바 여백을 다시 넣지 않는다. */
-.m-conflict-banner ~ .editor-scroll {
+.m-editor-screen > .sync-issue-banner ~ .editor-scroll {
   scroll-padding-top: 14px;
 }
 
-.m-conflict-banner ~ .editor-scroll .m-manuscript-sheet {
+.m-editor-screen > .sync-issue-banner ~ .editor-scroll .m-manuscript-sheet {
   padding-top: 14px;
 }
 
-.m-conflict-banner + .m-editor-sync-anchor .m-editor-sync-status {
+.m-editor-screen > .sync-issue-banner ~ .m-editor-sync-anchor .m-editor-sync-status {
   top: 14px;
 }
 
