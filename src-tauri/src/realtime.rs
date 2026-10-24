@@ -44,6 +44,7 @@ struct Session {
     root: PathBuf,
     connection: Connection,
     authenticated: bool,
+    transfer_peer: Option<String>,
 }
 
 struct ConnectionProbe {
@@ -98,8 +99,6 @@ pub struct Realtime {
     peer_requests: Mutex<HashMap<String, u64>>,
     subscription_lost: AtomicBool,
     statuses: Mutex<HashMap<String, Value>>,
-    // 그룹 동기화 도중 파일 전송이 시작되면 모든 구성원 작업이 끝날 때까지 전송 방향 표시를 유지한다.
-    transfer_activity: Mutex<Option<String>>,
     invite: Mutex<Option<Invitation>>,
     pairing: Mutex<Option<PairingJob>>,
     leases: Mutex<HashMap<String, InboundSync>>,
@@ -500,9 +499,6 @@ fn daemon_updates(app: &AppHandle, list: &[Value]) -> Vec<Value> {
 // 이 장치에서 수행하는 파일 작업을 화면에 알린다.
 fn sync_activity(app: &AppHandle, peer: &str, activity: &str) {
     let rt = app.state::<Realtime>();
-    if matches!(activity, "uploading" | "downloading") {
-        *rt.transfer_activity.lock().unwrap() = Some(activity.to_string());
-    }
     let changed = {
         let mut statuses = rt.statuses.lock().unwrap();
         let status = statuses.entry(peer.to_string()).or_insert_with(|| json!({}));
@@ -513,6 +509,26 @@ fn sync_activity(app: &AppHandle, peer: &str, activity: &str) {
             status["activity"] = json!(activity);
             status["message"] = Value::Null;
             true
+        }
+    };
+    if changed {
+        crate::auto_sync::refresh_realtime(app);
+    }
+}
+
+// 파일 요청과 응답이 끝나면 비교·마무리 중에는 전송 방향을 표시하지 않는다.
+fn finish_transfer(app: &AppHandle, peer: &str) {
+    let rt = app.state::<Realtime>();
+    let changed = {
+        let mut statuses = rt.statuses.lock().unwrap();
+        if let Some(status) = statuses.get_mut(peer).filter(|status| {
+            status["phase"] == "syncing"
+                && matches!(status["activity"].as_str(), Some("uploading" | "downloading"))
+        }) {
+            status["activity"] = json!("comparing");
+            true
+        } else {
+            false
         }
     };
     if changed {
@@ -559,17 +575,6 @@ pub fn progress(app: &AppHandle) -> Value {
         }
     }
     drop(statuses);
-    let mut last_transfer = rt.transfer_activity.lock().unwrap();
-    if syncing {
-        if matches!(activity.as_deref(), Some("uploading" | "downloading")) {
-            *last_transfer = activity.clone();
-        } else if last_transfer.is_some() {
-            activity = last_transfer.clone();
-        }
-    } else {
-        *last_transfer = None;
-    }
-    drop(last_transfer);
     // 진행 중인 작업과 대기를 우선하고, 나머지는 연결된 장치가 있으면 완료로 본다.
     let phase = if syncing {
         "syncing"
@@ -801,6 +806,7 @@ impl Host for WriterHost {
                     root,
                     connection,
                     authenticated: false,
+                    transfer_peer: None,
                 },
             );
         }
@@ -814,11 +820,21 @@ impl Host for WriterHost {
             other => other.map_err(|e| e.message),
         }
     }
+    fn response_sent(&self, session: &str) {
+        let peer = self.0.state::<Realtime>().sessions.lock().unwrap()
+            .get_mut(session).and_then(|session| session.transfer_peer.take());
+        if let Some(peer) = peer {
+            finish_transfer(&self.0, &peer);
+        }
+    }
     fn disconnected(&self, session: &str) {
         release(&self.0, session);
         let rt = self.0.state::<Realtime>();
         let removed = rt.sessions.lock().unwrap().remove(session);
         if let Some(session) = removed {
+            if let Some(peer) = &session.transfer_peer {
+                finish_transfer(&self.0, peer);
+            }
             session.connection.close(0u8.into(), b"disconnected");
             let mut live = rt.live.lock().unwrap();
             live.retain(|_, connection| connection.stable_id() != session.connection.stable_id());
@@ -1079,6 +1095,11 @@ impl WriterHost {
         if path == ID_FILE || !file_remote::path_ok(path) || !file_remote::included(path) {
             return Err(fail_invalid("공유할 수 없는 파일 경로입니다."));
         }
+        if matches!(op, "read" | "write" | "remove") {
+            if let Some(session) = rt.sessions.lock().unwrap().get_mut(session) {
+                session.transfer_peer = peer_config["id"].as_str().map(str::to_string);
+            }
+        }
         match op {
             "read" => {
                 sync_activity(app, peer_config["id"].as_str().unwrap_or(""), "uploading");
@@ -1142,17 +1163,20 @@ impl PeerRemote {
             .block_on(lof_realtime::request(
                 &self.connection,
                 Message { meta, data },
-            ))
-            .map_err(|error| {
-                // 이전 앱도 오류 문구만 전송하므로 수신 시 대기 사유를 복원한다.
-                if matches!(error.as_str(), SYNC_BUSY_MESSAGE | "다른 기기가 동기화 중입니다.") {
-                    fail(error, "SYNC_BUSY")
-                } else if error == crate::store::SYNC_HOLD_MESSAGE || error.contains("다시 비교합니다") {
-                    fail(error, "SYNC_RETRY")
-                } else {
-                    net(error)
-                }
-            })?;
+            ));
+        if matches!(activity, Some("uploading" | "downloading")) {
+            finish_transfer(&self.app, &self.peer);
+        }
+        let response = response.map_err(|error| {
+            // 이전 앱도 오류 문구만 전송하므로 수신 시 대기 사유를 복원한다.
+            if matches!(error.as_str(), SYNC_BUSY_MESSAGE | "다른 기기가 동기화 중입니다.") {
+                fail(error, "SYNC_BUSY")
+            } else if error == crate::store::SYNC_HOLD_MESSAGE || error.contains("다시 비교합니다") {
+                fail(error, "SYNC_RETRY")
+            } else {
+                net(error)
+            }
+        })?;
         if let Some(error) = response.meta.get("fileError") {
             return Err(fail(error["message"].as_str().unwrap_or("파일을 처리하지 못했습니다."),
                 error["code"].as_str().unwrap_or("SYNC_RETRY")));
@@ -1409,7 +1433,6 @@ pub fn start(app: &AppHandle) {
                     connected.clear();
                     retry.clear();
                     offline.clear();
-                    *rt.transfer_activity.lock().unwrap() = None;
                     subscription_retry = None;
                     previous_root = current.clone();
                     // 다른 서재에 있을 때 바꾼 장치 이름은 연결 확인 요청으로 전한다.

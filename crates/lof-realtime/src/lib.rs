@@ -33,6 +33,8 @@ impl Message {
 pub trait Host: Send + Sync + 'static {
     /// peer는 QUIC에서 검증한 공개키이며 요청 본문의 값으로 대체하지 않는다.
     fn handle(&self, peer: &str, session: &str, message: Message) -> Result<Message>;
+    /// 응답 바이트를 전송한 뒤 화면의 진행 상태를 갱신한다.
+    fn response_sent(&self, _session: &str) {}
     fn disconnected(&self, _session: &str) {}
     fn connected(&self, _peer: &str, _session: &str, _connection: Connection) {}
 }
@@ -132,6 +134,7 @@ impl Node {
             if !matches!(result, Ok(Ok(()))) {
                 break;
             }
+            self.host.response_sent(&session);
         }
         self.host.disconnected(&session);
         connection.close(0u8.into(), b"closed");

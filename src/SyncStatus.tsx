@@ -22,8 +22,9 @@ const realtimeActivities = {
   downloading: { icon: CloudDownload, label: "파일 받는 중" },
 };
 
-// 그룹 내 여러 구성원과 연속으로 동기화할 때 아이콘이 깜빡이지 않도록 완료 전환을 잠깐 늦춘다.
-const SETTLE_MS = 650;
+// 짧은 연속 전송 사이의 깜빡임만 줄이고 전송이 끝나면 빠르게 표시를 해제한다.
+const REALTIME_SETTLE_MS = 150;
+const FILE_SETTLE_MS = 650;
 
 export default function SyncStatus({
   status,
@@ -40,10 +41,12 @@ export default function SyncStatus({
 }) {
   const realtime = status.channels?.realtime;
   const files = status.channels ? status.channels.files : available ? status : undefined;
-  const comparing = realtime?.phase === "syncing" && realtime.activity === "comparing";
   const realtimeTransferring = Boolean(
-    realtime?.hasConnections && realtime.phase === "syncing" && !comparing,
+    realtime?.hasConnections && realtime.phase === "syncing" &&
+      (realtime.activity === "uploading" || realtime.activity === "downloading"),
   );
+  const realtimeUnavailable = !realtime?.hasConnections ||
+    realtime.phase === "pending" || realtime.phase === "error";
   const currentTransferActivity =
     realtimeTransferring &&
     (realtime?.activity === "uploading" || realtime?.activity === "downloading")
@@ -56,7 +59,7 @@ export default function SyncStatus({
   const [holdingRealtime, setHoldingRealtime] = useState(realtimeTransferring);
 
   useEffect(() => {
-    if (!realtime?.hasConnections || realtime.phase === "pending" || realtime.phase === "error") {
+    if (realtimeUnavailable) {
       setHoldingRealtime(false);
       setHeldRealtimeActivity(null);
       return;
@@ -72,11 +75,10 @@ export default function SyncStatus({
     const timer = window.setTimeout(() => {
       setHoldingRealtime(false);
       setHeldRealtimeActivity(null);
-    }, SETTLE_MS);
+    }, REALTIME_SETTLE_MS);
     return () => window.clearTimeout(timer);
   }, [
-    realtime?.hasConnections,
-    realtime?.phase,
+    realtimeUnavailable,
     realtimeTransferring,
     currentTransferActivity,
     holdingRealtime,
@@ -100,7 +102,7 @@ export default function SyncStatus({
       return;
     }
     if (!holdingFiles) return;
-    const timer = window.setTimeout(() => setHoldingFiles(false), SETTLE_MS);
+    const timer = window.setTimeout(() => setHoldingFiles(false), FILE_SETTLE_MS);
     return () => window.clearTimeout(timer);
   }, [files?.hasConnections, files?.phase, filesSyncing, holdingFiles]);
 
@@ -108,7 +110,7 @@ export default function SyncStatus({
   const effectiveRealtimePhase: AutoSyncStatus["phase"] | undefined = realtime
     ? effectiveRealtimeSyncing
       ? "syncing"
-      : comparing
+      : realtime.phase === "syncing"
         ? "idle"
         : realtime.phase
     : undefined;
