@@ -380,10 +380,11 @@ pub fn move_library(state: &AppState, app: &AppHandle, args: &Value) -> Result<V
     }
     *guard = Some(next_store);
     // 이전 DB 연결을 닫은 뒤 원본을 정리한다. 새 서재는 정리가 실패해도 계속 사용할 수 있다.
-    let source_retained = remove_original(&source, &files);
+    // 내부 저장소로 옮길 때는 앱을 지우면 함께 사라지므로 공유 저장소의 원본 폴더를 그대로 남긴다.
+    let source_retained = !to_internal && remove_original(&source, &files);
     drop(guard);
     schedule_notify(app, &state.notify_seq);
     Ok(
-        json!({ "root": target.to_string_lossy(), "sourceRetained": source_retained, "source": source.to_string_lossy() }),
+        json!({ "root": target.to_string_lossy(), "sourceRetained": source_retained, "sourceKept": to_internal, "source": source.to_string_lossy() }),
     )
 }

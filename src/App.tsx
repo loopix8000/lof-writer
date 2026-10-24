@@ -1096,7 +1096,7 @@ export default function App() {
       if (!await confirm(toInternal ? {
         title: "내부 저장소로 전환",
         message: <>
-          지금 서재를 앱 내부 저장소로 옮깁니다. 작품·메모·변경 이력·동기화 연결은 그대로 유지되고, 옮긴 뒤 공유 저장소의 원래 폴더는 정리됩니다.
+          지금 서재를 앱 내부 저장소로 옮깁니다. 작품·메모·변경 이력·동기화 연결은 그대로 유지됩니다. 공유 저장소의 원래 폴더는 지우지 않고 남겨 두지만, 이후로는 갱신되지 않으니 필요 없으면 직접 지워도 됩니다.
           <br /><br />
           내부 저장소는 파일 관리자나 다른 앱에서 보이지 않고, 앱을 삭제하면 서재도 함께 삭제됩니다. 동기화 연결이나 내보내기로 백업해 두세요.
         </>,
@@ -1108,7 +1108,7 @@ export default function App() {
         detail: `옮길 위치: ${destination}`,
         confirmLabel: "옮기기",
       })) return;
-      let result: { root: string; source: string; sourceRetained: boolean };
+      let result: { root: string; source: string; sourceRetained: boolean; sourceKept?: boolean };
       try {
         result = await call("moveVault", toInternal ? {
           internal: true,
@@ -1138,10 +1138,10 @@ export default function App() {
         }
       }
       await loadSettingsData();
-      message(result.sourceRetained
-        ? `서재를 옮겼습니다. 정리하지 못한 원본 파일은 '${result.source}'에 남겨 두었습니다.`
-        : toInternal
-          ? "서재를 내부 저장소로 옮겼습니다."
+      message(result.sourceKept
+        ? `서재를 내부 저장소로 옮겼습니다. 원래 폴더 '${result.source}'는 그대로 남겨 두었습니다.`
+        : result.sourceRetained
+          ? `서재를 옮겼습니다. 정리하지 못한 원본 파일은 '${result.source}'에 남겨 두었습니다.`
           : "서재를 옮겼습니다.");
     } finally {
       setBusy(false);

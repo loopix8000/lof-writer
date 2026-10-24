@@ -338,7 +338,7 @@ export default function SettingsContent({
                           {movingVault === "internal" ? "옮기는 중…" : lib.isInternal ? "내부 저장소 사용 중" : "내부 저장소로 전환"}
                         </button>
                       )}
-                      <button disabled={busy} onClick={attempt(async () => {
+                      <button disabled={busy || (isMobile && Boolean(lib.isInternal))} onClick={attempt(async () => {
                         setMovingVault("folder");
                         try { await moveVault(); } finally { setMovingVault(false); }
                       })}>
@@ -354,13 +354,11 @@ export default function SettingsContent({
                     <p>파일을 옮기지 않고 다른 폴더에 있는 서재로 바꿔 엽니다. 지금 서재는 원래 위치에 그대로 남습니다.</p>
                   </div>
                   <div className="vault-action-buttons">
-                    <button disabled={busy} onClick={attempt(async () => {
+                    <button disabled={busy || (isMobile && Boolean(lib.isInternal))} onClick={attempt(async () => {
                       if (!await confirm({
                         title: "다른 서재 열기",
                         message: "파일은 옮기지 않고, 다음 화면에서 고른 폴더의 서재로 바꿔 엽니다. 지금 서재는 지워지지 않고 원래 위치에 그대로 남습니다.",
-                        detail: isMobile && lib.isInternal
-                          ? "지금 서재는 내부 저장소에 남으며, 나중에 '내부 저장소로 전환'을 누르면 다시 열 수 있습니다."
-                          : `지금 서재: ${lib.root}`,
+                        detail: `지금 서재: ${lib.root}`,
                         confirmLabel: "폴더 고르기",
                       })) return;
                       await chooseVault();

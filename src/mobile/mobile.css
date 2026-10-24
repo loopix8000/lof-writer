@@ -2191,6 +2191,38 @@
   transform: translateX(calc(-1 * var(--m-drawer-right-width)));
 }
 
+/* 서랍에서 문서를 고르면 새 문서를 읽는 동안 서랍과 본문이 조금 더 천천히 제자리로 돌아온다. */
+.m-editor-screen.m-drawer-closing > :is(.m-editor-topbar, .sync-issue-banner, .m-editor-sync-anchor, .editor-scroll, .m-floating-pill-wrap, .m-empty-state) {
+  transition-duration: 0.3s;
+}
+
+@keyframes mSlideOutLeft {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-100%);
+  }
+}
+
+@keyframes mDrawerBackdropOut {
+  from {
+    background-color: rgba(0, 0, 0, 0.2);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+
+.m-drawer-backdrop.closing {
+  pointer-events: none;
+  animation: mDrawerBackdropOut 0.3s var(--drawer-ease) both;
+}
+
+.m-slide-drawer.left.closing {
+  animation: mSlideOutLeft 0.3s var(--drawer-ease) both;
+}
+
 .m-drawer-backdrop {
   --drawer-duration: 0.2s;
   --drawer-ease: cubic-bezier(0.22, 0.61, 0.36, 1);
@@ -2228,7 +2260,9 @@
 
 @media (prefers-reduced-motion: reduce) {
   .m-drawer-backdrop,
+  .m-drawer-backdrop.closing,
   .m-slide-drawer.left,
+  .m-slide-drawer.left.closing,
   .m-slide-drawer.right {
     animation: none;
   }
@@ -3781,7 +3815,6 @@
 .m-editor-screen .m-manuscript-sheet {
   padding-top: 62px;
 }
-
 /* 충돌 안내가 상단바 아래 공간을 차지하면 원고에 상단바 여백을 다시 넣지 않는다. */
 .m-conflict-banner ~ .editor-scroll {
   scroll-padding-top: 14px;

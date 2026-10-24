@@ -397,6 +397,24 @@ export default function MobileEditorView({
       longPressRef.current = null;
     };
   }, [leftDrawerOpen]);
+  // 문서를 고르면 읽기와 서랍 닫기를 함께 시작한다. 서랍은 조금 천천히 닫혀 그사이 새 본문으로 바뀐다.
+  const [leftDrawerClosing, setLeftDrawerClosing] = useState(false);
+  const drawerCloseTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(drawerCloseTimer.current), []);
+  const openLeftDrawer = () => {
+    window.clearTimeout(drawerCloseTimer.current);
+    setLeftDrawerClosing(false);
+    setLeftDrawerOpen(true);
+  };
+  const openFromDrawer = (id: string) => {
+    if (id !== active.id) void attempt(() => openDoc(id, false))();
+    window.clearTimeout(drawerCloseTimer.current);
+    setLeftDrawerClosing(true);
+    drawerCloseTimer.current = window.setTimeout(() => {
+      setLeftDrawerOpen(false);
+      setLeftDrawerClosing(false);
+    }, 300);
+  };
   const drawerLongPress = (doc: Doc) => ({
     onPointerDown: (e: React.PointerEvent) => {
       cancelLongPress();
@@ -549,9 +567,9 @@ export default function MobileEditorView({
       if (!swipe) return;
       if (dx > 0) {
         if (rightDrawerOpen) setRightDrawerOpen(false);
-        else if (!leftDrawerOpen) {
+        else if (!leftDrawerOpen || leftDrawerClosing) {
           setTreeTab(active.kind === "episode" ? "episode" : "document");
-          setLeftDrawerOpen(true);
+          openLeftDrawer();
         }
       } else {
         if (leftDrawerOpen) setLeftDrawerOpen(false);
@@ -838,8 +856,7 @@ export default function MobileEditorView({
                 {...drawerLongPress(d)}
                 onClick={() => {
                   if (consumeLongPress()) return;
-                  setLeftDrawerOpen(false);
-                  if (!isCur) attempt(() => openDoc(d.id, false))();
+                  openFromDrawer(d.id);
                 }}
               >
                 <span className={`m-tree-icon ${isPlot ? "plot" : "memo"}`}>
@@ -869,8 +886,7 @@ export default function MobileEditorView({
           {...drawerLongPress(ep)}
           onClick={() => {
             if (consumeLongPress()) return;
-            setLeftDrawerOpen(false);
-            if (!isCur) attempt(() => openDoc(ep.id, false))();
+            openFromDrawer(ep.id);
           }}
         >
           <span className={`m-ep-pill ${/^\d/.test(String(n)) ? "" : "named"}`}>{n}</span>
@@ -895,7 +911,7 @@ export default function MobileEditorView({
 
   return (
     <div
-      className={`m-screen m-editor-screen${leftDrawerOpen ? " m-drawer-push-left" : rightDrawerOpen ? " m-drawer-push-right" : ""}`}
+      className={`m-screen m-editor-screen${leftDrawerClosing ? " m-drawer-closing" : leftDrawerOpen ? " m-drawer-push-left" : rightDrawerOpen ? " m-drawer-push-right" : ""}`}
       ref={screenRef}
     >
       {/* 심플하고 깔끔한 상단 헤더 */}
@@ -908,7 +924,7 @@ export default function MobileEditorView({
             title="파일 트리"
             onClick={() => {
               setTreeTab(active.kind === "episode" ? "episode" : "document");
-              setLeftDrawerOpen(true);
+              openLeftDrawer();
             }}
           >
             <PanelLeft size={19} />
@@ -1291,12 +1307,12 @@ export default function MobileEditorView({
       {/* 1. 왼쪽 슬라이드 드로어: 파일트리 (에피소드 / 문서 2탭 + Obsidian/Notion 트리) */}
       {leftDrawerOpen && (
         <div
-          className="m-drawer-backdrop"
+          className={`m-drawer-backdrop${leftDrawerClosing ? " closing" : ""}`}
           onClick={() => setLeftDrawerOpen(false)}
           role="presentation"
         >
           <aside
-            className="m-slide-drawer left"
+            className={`m-slide-drawer left${leftDrawerClosing ? " closing" : ""}`}
             role="dialog"
             aria-modal="true"
             aria-label="파일 트리"
@@ -1451,9 +1467,7 @@ export default function MobileEditorView({
                                 {...drawerLongPress(d)}
                                 onClick={() => {
                                   if (consumeLongPress()) return;
-                                  setLeftDrawerOpen(false);
-                                  if (!isCur)
-                                    attempt(() => openDoc(d.id, false))();
+                                  openFromDrawer(d.id);
                                 }}
                               >
                                 <span
