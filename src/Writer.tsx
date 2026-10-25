@@ -713,7 +713,9 @@ export default function Writer({
         if (!editableRef.current) return;
         const rules = countingRulesRef.current;
         const delta = rules ? paragraphCountDelta(transaction.before, editor.state.doc, rules) : null;
-        notifyChange(markdown.serialize(editor), delta, docNeedsMarkdownCopy(editor.state.doc));
+        const nextBody = markdown.serialize(editor);
+        loadedBody.current = nextBody;
+        notifyChange(nextBody, delta, docNeedsMarkdownCopy(editor.state.doc));
       },
       // 북마크를 넣고 빼거나, 본문이 바뀌어 북마크 문단의 순서·글이 달라지면 알린다.
       onTransaction: ({ editor, transaction: tr }) => {
@@ -790,11 +792,12 @@ export default function Writer({
       });
     }
   }, [editor, manualLineBreak, copyWithBlankLines]);
-  // 로컬 입력을 되비추지 않고 저장 버전·편집 모드 변경만 반영한다.
+  // 로컬 입력은 다시 읽지 않고, 일괄 교정 등 밖에서 바뀐 본문은 저장 전에도 반영한다.
   useEffect(() => {
     if (!editor || editor.isDestroyed || source || protectedSource) return;
-    if (body === loadedBody.current || markdown.serialize(editor) === body) return;
+    if (body === loadedBody.current) return;
     loadedBody.current = body;
+    if (markdown.serialize(editor) === body) return;
     editor.commands.setContent(splitSoftBreaks(body, !manualLineBreak), {
       contentType: "markdown",
       emitUpdate: false,
@@ -802,7 +805,7 @@ export default function Writer({
     // 본문을 통째로 바꾸면 붙어 있던 북마크가 사라지므로 저장된 목록으로 다시 깐다.
     bookmarkKey.current = { editor, key: JSON.stringify(bookmarksRef.current || []) };
     loadBookmarks(editor, bookmarksRef.current);
-  }, [revision, source, protectedSource, editor, id]);
+  }, [body, revision, source, protectedSource, editor, id]);
   useEffect(() => {
     if (!session || !editor || editor.isDestroyed || source || protectedSource) return;
     const saved = readEditorSelection(session, "rich", editor.state.doc.content.size);

@@ -72,6 +72,20 @@ const quotePairs = {
 
 const brackets = { "(": ")", "[": "]", "{": "}" };
 
+function hasOddQuotesOnLine(before, input) {
+  const marks = input === '"' || input === "“" ? '"“”'
+    : input === "'" || input === "‘" ? "'‘’"
+    : input + quotePairs[input];
+  const line = before.split(/[\r\n\u2028\u2029]/).at(-1) || "";
+  let count = 0, escaped = false;
+  for (const char of line) {
+    if (char === "\\") { escaped = !escaped; continue; }
+    if (!escaped && marks.includes(char)) count++;
+    escaped = false;
+  }
+  return count % 2 === 1;
+}
+
 const bracketUpgrades = {
   "(": { "(": ["《", "》"] },
   "[": { "[": ["「", "」"], "「": ["『", "』"] },
@@ -156,14 +170,19 @@ export function typingPlan(before, selected, after, input, options = {}) {
     return { skip: 1 };
 
   if (pairs[input] && !escaped) {
-    if (input === "'" && !selected && /[\p{L}\p{N}]$/u.test(before))
-      return null;
     let open = input,
       close = pairs[input];
     if (opts.quoteStyle === "curly" && (input === '"' || input === "'")) {
       open = input === '"' ? "“" : "‘";
       close = input === '"' ? "”" : "’";
     }
+    // 현재 줄에서 같은 종류의 따옴표가 홀수이면 입력한 한 글자만 넣는다.
+    if (!selected && quotePairs[input] && hasOddQuotesOnLine(before, input)) {
+      const insert = opts.quoteStyle === "curly" && (input === '"' || input === "'") ? close : input;
+      return { deleteBefore: 0, deleteAfter: 0, insert, caret: insert.length };
+    }
+    if (input === "'" && !selected && /[\p{L}\p{N}]$/u.test(before))
+      return null;
     if (!selected && after.startsWith(close) && input === close)
       return { skip: close.length };
     return {

@@ -230,6 +230,7 @@ export const TypingAssist = Extension.create<{
                 0,
                 resolved.parentOffset,
                 "\n",
+                (node) => isHardBreak(node) ? "\n" : "",
               ),
               after = view.state.doc
                 .resolve(to)

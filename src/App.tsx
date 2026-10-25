@@ -784,22 +784,24 @@ export default function App() {
   }
   function replaceActiveSymbols() {
     if (!active || isProtected) return;
+    const current = session.currentDocument();
+    if (!current || current.id !== active.id) return;
     const ellipsisRule = prefs.autoSymbolReplacement !== false
       ? normalizeTextReplacements(prefs.textReplacements).find(
           (rule) => rule.enabled && rule.from === "..." && rule.from !== rule.to,
         )
       : undefined;
-    const { body: nextBody, count } = replaceManuscriptSymbols(active.body, {
+    const { body: nextBody, count } = replaceManuscriptSymbols(current.body, {
       doubleQuotes: prefs.quoteStyle === "curly",
       singleQuotes: prefs.quoteStyle === "curly",
       ellipsis: !!ellipsisRule,
       ellipsisChar: ellipsisRule?.to,
     });
-    if (!count || nextBody === active.body) {
+    if (!count || nextBody === current.body) {
       message("교정할 직선 따옴표나 마침표 말줄임표가 없습니다.");
       return;
     }
-    const prevBody = active.body;
+    const prevBody = current.body;
     edit({ body: nextBody });
     message(`기호 일괄 교정 완료 (${count}건 변환)`, {
       label: "실행 취소",
