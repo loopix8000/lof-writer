@@ -1017,6 +1017,7 @@ impl Memos {
         space_id: &str,
         query: &str,
         case_sensitive: bool,
+        include_archived: bool,
     ) -> Result<Value, LofError> {
         let raw = query.trim();
         if raw.is_empty() || raw.starts_with('#') {
@@ -1034,8 +1035,16 @@ impl Memos {
         }
         let mut changed = false;
 
-        for e in Self::walk_space(&space, "") {
-            if e.get("type").and_then(|v| v.as_str()) != Some("file") {
+        let entries = if include_archived {
+            Self::walk_space(&space, "")
+        } else {
+            Self::tree(store, common_root, space_id)?["entries"]
+                .as_array().cloned().unwrap_or_default()
+        };
+        for e in entries {
+            if e.get("type").and_then(|v| v.as_str()) != Some("file")
+                || (!include_archived && e["archived"].as_bool() == Some(true))
+            {
                 continue;
             }
             let epath = e.get("path").and_then(|v| v.as_str()).unwrap_or("");

@@ -12,7 +12,7 @@ use std::time::Duration;
 const MCP_INSTRUCTIONS: &str = r#"Lof Writer의 작품, 회차, 플롯, 메모를 조회하고 편집하는 서버입니다. Lof Writer 앱이 실행 중이어야 합니다.
 
 - library_list로 작품과 문서를 확인하고, 조회 결과의 작품 id를 projectId로, 문서 id를 id로 사용하세요. ID를 추측하지 마세요.
-- 제목·태그·본문 일부로 문서를 찾을 때는 먼저 document_search를 사용하세요. 검색어는 별도 옵션 없이 rg와 같은 문법의 정규식으로 해석됩니다. 앱의 검색과 같은 결과(projects, files, results, common)를 반환하며, results의 matches는 일치한 줄과 위치입니다. #로 시작하는 검색어는 태그만 찾습니다. total이 많아 truncated가 true이면 projectId나 더 구체적인 검색어로 좁히세요.
+- 제목·태그·본문 일부로 문서를 찾을 때는 먼저 document_search를 사용하세요. 검색어는 별도 옵션 없이 rg와 같은 문법의 정규식으로 해석됩니다. 앱 검색과 같은 결과 구조(projects, files, results, common)를 반환하며, results의 matches는 일치한 줄과 위치입니다. 보관 문서와 보관 공용 메모는 기본 제외하며 includeArchived: true로 함께 검색할 수 있습니다. #로 시작하는 검색어는 태그만 찾습니다. total이 많아 truncated가 true이면 projectId나 더 구체적인 검색어로 좁히세요.
 - 문서를 수정하거나 이력을 복원하기 전에 document_read로 현재 내용과 revision을 조회하세요. document_update, document_patch, document_apply_patch, history_restore의 expectedRevision에는 조회한 revision을 그대로 전달하세요. 저장 후에는 새로 반환된 revision을 사용하세요.
 - CONFLICT 오류가 나면 최신 문서를 다시 읽고 변경 내용을 비교한 뒤 사용자가 요청한 수정만 다시 적용하세요. revision만 최신 값으로 바꿔 이전 본문을 덮어쓰지 마세요.
 - 일부 문장을 수정할 때는 document_patch를 사용하세요. find는 현재 본문에서 정확히 한 번 일치해야 하므로 필요한 앞뒤 문맥을 포함하세요. 전체 본문 교체는 document_update의 body를 사용하세요.
@@ -53,13 +53,14 @@ pub fn tool_definitions() -> Value {
         },
         {
             "name": "document_search",
-            "description": "앱 검색과 같은 통합 검색. 작품(제목·소개·태그), 문서(제목·경로·태그), 본문의 일치한 줄, 공용 메모를 반환",
+            "description": "통합 검색. 작품(제목·소개·태그), 문서(제목·경로·태그), 본문의 일치한 줄, 공용 메모를 반환. 보관 문서는 기본 제외",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "query": { "type": "string", "description": "검색어. rg처럼 정규식으로 해석하며 줄마다 적용(예: 주인공|조연, ^#{2,}\\s). 리터럴 괄호 등은 \\(처럼 이스케이프하고, 올바르지 않은 정규식은 입력한 글자 그대로 검색. #로 시작하면 태그만 검색" },
                     "projectId": { "type": "string", "description": "지정하면 해당 작품의 문서로 범위를 좁힘. 작품 검색은 항상 전체 대상" },
-                    "caseSensitive": { "type": "boolean", "description": "대소문자 구분 여부. 기본값 false" }
+                    "caseSensitive": { "type": "boolean", "description": "대소문자 구분 여부. 기본값 false" },
+                    "includeArchived": { "type": "boolean", "default": false, "description": "true이면 보관 문서와 보관 공용 메모도 포함. 기본값 false" }
                 },
                 "required": ["query"],
                 "additionalProperties": false

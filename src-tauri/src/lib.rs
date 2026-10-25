@@ -475,8 +475,8 @@ fn api_sync_status(app: &AppHandle) -> Value {
     status
 }
 
-// 앱 검색 화면과 MCP 검색이 같은 결과를 내도록 통합 검색(작품·파일 이름·태그·본문)과 공용 메모 검색을 함께 실행한다.
-fn search_library(state: &AppState, args: &Value) -> Result<Value, LofError> {
+// 통합 검색(작품·파일 이름·태그·본문)과 공용 메모 검색을 함께 실행한다.
+fn search_library(state: &AppState, args: &Value, include_archived: bool) -> Result<Value, LofError> {
     let query = args.get("query").and_then(Value::as_str).unwrap_or("");
     let project_id = args
         .get("projectId")
@@ -499,8 +499,8 @@ fn search_library(state: &AppState, args: &Value) -> Result<Value, LofError> {
     let st = guard
         .as_mut()
         .ok_or_else(|| fail_invalid("Store not initialized"))?;
-    let all = st.search_all(query, project_id, case_sensitive)?;
-    let common = Memos::search_text(st, &common_root, "common", query, case_sensitive)?;
+    let all = st.search_all(query, project_id, case_sensitive, include_archived)?;
+    let common = Memos::search_text(st, &common_root, "common", query, case_sensitive, include_archived)?;
     let mut out = all.as_object().cloned().unwrap_or_default();
     out.insert("common".to_string(), common);
     Ok(Value::Object(out))
@@ -509,7 +509,8 @@ fn search_library(state: &AppState, args: &Value) -> Result<Value, LofError> {
 // MCP 앱 작업은 기능별 처리기로 전달한다. 동기화는 화면과 같은 대기열을 사용한다.
 fn api_app_tool(app: &AppHandle, name: &str, args: &Value) -> Result<Value, LofError> {
     if name == "document_search" {
-        return search_library(&app.state::<AppState>(), args);
+        let include_archived = args.get("includeArchived").and_then(Value::as_bool).unwrap_or(false);
+        return search_library(&app.state::<AppState>(), args, include_archived);
     }
     if name.starts_with("skill_") {
         if name == "skill_install" && app.state::<AppState>().closing.load(Ordering::SeqCst) {
@@ -1286,7 +1287,7 @@ fn dispatch_method(
             let st = guard.as_mut().ok_or_else(|| fail_invalid("Store not initialized"))?;
             st.search_document_ids(query, project_id)
         }
-        "searchText" => search_library(state, &args),
+        "searchText" => search_library(state, &args, true),
         "history" => {
             let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
             let mut guard = state.store.lock().unwrap();

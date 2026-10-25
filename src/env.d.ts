@@ -61,6 +61,8 @@ declare module "*.mjs" {
   export function countForRule(stats: any, rule: string, unit?: string): number;
   export function countForWriting(stats: any, rules: import("./types").WritingRules): number;
   export function novelpiaCount(text: string): number;
+  export function manuscriptPaperLines(text: string): number;
+  export function manuscriptPaperPages(lines: number): number;
   export function writingName(rules: import("./types").WritingRules): string;
   export const platforms: any[];
   export function normalizeWriting(value?: any): import("./types").WritingRules;

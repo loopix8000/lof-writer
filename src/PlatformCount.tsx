@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Settings2 } from "lucide-react";
-import { countForRule } from "../core/text.mjs";
+import { countForRule, manuscriptPaperPages } from "../core/text.mjs";
 import type { ManuscriptCounts } from "./manuscript-counts";
 import { platforms } from "../core/platforms.mjs";
 import PlatformPicker from "./PlatformPicker";
@@ -79,6 +79,10 @@ export default function PlatformCount({
         <div>
           <dt>줄바꿈까지 포함</dt>
           <dd>{count('all')}</dd>
+        </div>
+        <div>
+          <dt>200자 원고지</dt>
+          <dd>{stats ? `${manuscriptPaperPages(stats.manuscriptLines ?? 0).toLocaleString()}매` : "…"}</dd>
         </div>
         <div>
           <dt>문단 / 줄</dt>

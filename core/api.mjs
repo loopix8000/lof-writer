@@ -15,11 +15,12 @@ export const toolDefinitions = [
   ],
   [
     "document_search",
-    "앱 검색과 같은 통합 검색. 작품(제목·소개·태그), 문서(제목·경로·태그), 본문의 일치한 줄을 반환",
+    "통합 검색. 작품(제목·소개·태그), 문서(제목·경로·태그), 본문의 일치한 줄을 반환. 보관 문서는 기본 제외",
     {
       query: { type: "string", description: "검색어. 정규식으로 해석하며 줄마다 적용(예: 주인공|조연). 올바르지 않은 정규식은 입력한 글자 그대로 검색. #로 시작하면 태그만 검색" },
       projectId: { type: "string", description: "지정하면 해당 작품의 문서로 범위를 좁힘. 작품 검색은 항상 전체 대상" },
       caseSensitive: { type: "boolean", description: "대소문자 구분 여부. 기본값 false" },
+      includeArchived: { type: "boolean", default: false, description: "true이면 보관 문서도 포함. 기본값 false" },
     },
     ["query"],
   ],
@@ -138,7 +139,7 @@ export async function dispatch(store, name, args = {}) {
       };
     }
     case "document_search":
-      return store.searchAll(args.query, args.projectId, args);
+      return store.searchAll(args.query, args.projectId, { ...args, includeArchived: args.includeArchived === true });
     case "project_create":
       return store.createProject(args);
     case "document_create":

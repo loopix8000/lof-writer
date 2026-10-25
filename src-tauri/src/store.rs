@@ -4867,6 +4867,7 @@ impl Store {
         query: &str,
         project_id: Option<&str>,
         case_sensitive: bool,
+        include_archived: bool,
     ) -> Result<Value, LofError> {
         if query.trim().is_empty() {
             return Ok(json!({ "results": [], "total": 0, "truncated": false }));
@@ -4884,6 +4885,9 @@ impl Store {
         let mut truncated = false;
 
         for m in docs {
+            if !include_archived && m.get("archived").and_then(Value::as_bool) == Some(true) {
+                continue;
+            }
             let m_pid = m
                 .get("projectId")
                 .and_then(|v| v.as_str())
@@ -4943,6 +4947,7 @@ impl Store {
         query: &str,
         project_id: Option<&str>,
         case_sensitive: bool,
+        include_archived: bool,
     ) -> Result<Value, LofError> {
         let raw = query.trim();
         let empty = json!({
@@ -5023,6 +5028,9 @@ impl Store {
         let mut files = Vec::new();
         if let Some(docs) = list.get("documents").and_then(|v| v.as_array()) {
             for d in docs {
+                if !include_archived && d.get("archived").and_then(Value::as_bool) == Some(true) {
+                    continue;
+                }
                 let d_pid = d.get("projectId").and_then(|v| v.as_str()).unwrap_or("");
                 if let Some(pf) = pid_filter {
                     if d_pid != pf {
@@ -5077,7 +5085,7 @@ impl Store {
             }));
         }
 
-        let st = self.search_text(raw, project_id, case_sensitive)?;
+        let st = self.search_text(raw, project_id, case_sensitive, include_archived)?;
         Ok(json!({
             "projects": projects,
             "files": files,

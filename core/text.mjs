@@ -226,3 +226,35 @@ export function countForWriting(stats, rules) {
   if (rules.excludeSpecial) text = text.replace(/[^\p{L}\p{N}\s]/gu, "");
   return text.length + (rules.ellipsisWeight === 3 ? (text.match(/…/g) || []).length * 2 : 0);
 }
+
+// 200자 원고지(한 줄 20칸 × 10줄)에 옮겨 적을 때 차지하는 줄 수를 원고지 작성법에 따라 센다.
+// - 문단은 새 줄에서 시작하고 첫 칸을 비운다. 빈 줄은 원고지에 옮기지 않는다.
+// - 로마자 소문자와 아라비아 숫자는 두 자를 한 칸에 쓴다.
+// - 줄 끝에 걸린 띄어쓰기는 다음 줄 첫 칸으로 넘기지 않는다.
+// - 줄이 꽉 찬 뒤에 오는 닫는 문장부호는 마지막 칸에 함께 쓴다.
+// 문단마다 따로 세므로 문단별 증감을 더해도 전체 값과 같다. src-tauri/src/text.rs와 같은 규칙이다.
+export const PAPER_COLUMNS = 20;
+export const PAPER_ROWS = 10;
+const paperClosingMarks = new Set([...".,?!:;)]}」』”’〉》、。"]);
+const paperHalfWidth = /^[a-z0-9]$/;
+export function manuscriptPaperLines(text) {
+  let total = 0;
+  for (const raw of text.split("\n")) {
+    const chars = [...raw.trim()];
+    if (!chars.length) continue;
+    let rows = 1, column = 1;
+    for (let i = 0; i < chars.length; i++) {
+      const c = chars[i];
+      if (/\s/.test(c)) {
+        if (column < PAPER_COLUMNS) column++;
+        continue;
+      }
+      if (paperHalfWidth.test(c) && paperHalfWidth.test(chars[i + 1] ?? "")) i++;
+      if (column < PAPER_COLUMNS) column++;
+      else if (!paperClosingMarks.has(c)) { rows++; column = 1; }
+    }
+    total += rows;
+  }
+  return total;
+}
+export const manuscriptPaperPages = (lines) => Math.ceil(lines / PAPER_ROWS);

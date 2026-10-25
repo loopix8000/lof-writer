@@ -1548,14 +1548,14 @@ export class Store extends EventEmitter {
   }
   // VS Code식 본문 검색: 문서마다 일치한 줄과 위치를 돌려준다.
   // index는 그 문서 안에서 몇 번째 일치인지(편집기에서 그 위치를 고를 때 쓴다).
-  async searchText(query, projectId, { caseSensitive = false } = {}) {
+  async searchText(query, projectId, { caseSensitive = false, includeArchived = true } = {}) {
     const q = String(query ?? "");
     if (!q.trim()) return { results: [], total: 0, truncated: false };
     const results = [];
     let total = 0,
       truncated = false;
     for (const m of (await this.list()).documents.filter(
-      (d) => !projectId || d.projectId === projectId,
+      (d) => (!projectId || d.projectId === projectId) && (includeArchived || !d.archived),
     )) {
       const d = this.indexEnabled ? { ...m, body: await this._cachedBody(m.projectId, m.id).catch(() => "") }
         : await this.read(m.id).catch(() => null);
@@ -1582,7 +1582,7 @@ export class Store extends EventEmitter {
   }
   // 통합 검색: 작품(제목·소개·태그), 파일 이름(제목·경로·태그), 본문을 한 번에 찾는다.
   // '#'으로 시작하면 태그만 찾는다. 작품은 범위와 상관없이 모든 작품에서 찾는다.
-  async searchAll(query, projectId, { caseSensitive = false } = {}) {
+  async searchAll(query, projectId, { caseSensitive = false, includeArchived = true } = {}) {
     const raw = String(query ?? "").trim();
     const empty = { projects: [], files: [], results: [], total: 0, truncated: false };
     if (!raw) return empty;
@@ -1607,6 +1607,7 @@ export class Store extends EventEmitter {
     const innerPath = (p) => String(p ?? "").replace(/^(?:assets|doc|episodes|plot|memo)\//i, "");
     const files = [];
     for (const d of list.documents) {
+      if (!includeArchived && d.archived) continue;
       if (projectId && d.projectId !== projectId) continue;
       const tags = (d.tags || []).filter((t) => searchHit(re, t));
       if (
@@ -1627,7 +1628,7 @@ export class Store extends EventEmitter {
       if (files.length >= 200) break;
     }
     if (tagOnly) return { ...empty, projects, files };
-    return { projects, files, ...(await this.searchText(raw, projectId, { caseSensitive })) };
+    return { projects, files, ...(await this.searchText(raw, projectId, { caseSensitive, includeArchived })) };
   }
   async draft(input) {
     if (!validId(input.id)) throw fail("잘못된 문서 ID");

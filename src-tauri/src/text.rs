@@ -625,8 +625,46 @@ pub fn display_counts(raw: &str, rules: &Value) -> Value {
         "withoutSpaces": without_spaces, "withSpaces": with_spaces, "withLineBreaks": with_line_breaks,
         "utf16WithoutSpaces": utf16_without_spaces, "utf16WithSpaces": utf16_with_spaces,
         "utf16WithLineBreaks": utf16_with_line_breaks, "utf8Bytes": text.len(),
-        "lines": lines, "paragraphs": paragraphs, "platformCharacters": platform_characters
+        "lines": lines, "paragraphs": paragraphs, "platformCharacters": platform_characters,
+        "manuscriptLines": manuscript_paper_lines(&text)
     })
+}
+
+// 200자 원고지(한 줄 20칸)에 옮겨 적을 때 차지하는 줄 수. core/text.mjs의 manuscriptPaperLines와 같은 규칙이다.
+// 문단은 새 줄 첫 칸을 비우고 시작하며, 빈 줄은 옮기지 않는다. 로마자 소문자·숫자는 두 자를 한 칸에 쓰고,
+// 줄 끝에 걸린 띄어쓰기는 다음 줄로 넘기지 않으며, 줄이 꽉 찬 뒤의 닫는 문장부호는 마지막 칸에 함께 쓴다.
+const PAPER_COLUMNS: usize = 20;
+
+fn paper_closing_mark(c: char) -> bool {
+    matches!(c, '.' | ',' | '?' | '!' | ':' | ';' | ')' | ']' | '}' | '」' | '』' | '”' | '’' | '〉' | '》' | '、' | '。')
+}
+
+pub fn manuscript_paper_lines(text: &str) -> usize {
+    let half_width = |c: char| c.is_ascii_lowercase() || c.is_ascii_digit();
+    let mut total = 0;
+    for raw in text.split('\n') {
+        let chars: Vec<char> = raw.trim_matches(display_whitespace).chars().collect();
+        if chars.is_empty() { continue; }
+        let (mut rows, mut column) = (1usize, 1usize);
+        let mut i = 0;
+        while i < chars.len() {
+            let c = chars[i];
+            if display_whitespace(c) {
+                if column < PAPER_COLUMNS { column += 1; }
+            } else {
+                if half_width(c) && chars.get(i + 1).is_some_and(|&next| half_width(next)) { i += 1; }
+                if column < PAPER_COLUMNS {
+                    column += 1;
+                } else if !paper_closing_mark(c) {
+                    rows += 1;
+                    column = 1;
+                }
+            }
+            i += 1;
+        }
+        total += rows;
+    }
+    total
 }
 
 pub fn novelpia_count(text: &str) -> usize {

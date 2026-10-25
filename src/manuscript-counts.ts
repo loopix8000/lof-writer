@@ -1,5 +1,5 @@
 import type { Node as PMNode } from "@tiptap/pm/model";
-import { countForWriting, stripJsdocComments } from "../core/text.mjs";
+import { countForWriting, manuscriptPaperLines, stripJsdocComments } from "../core/text.mjs";
 import type { WritingRules } from "./types";
 import { commentStateAt } from "./doc-index";
 
@@ -7,11 +7,13 @@ export type ManuscriptCounts = {
   withoutSpaces: number; withSpaces: number; withLineBreaks: number;
   utf16WithoutSpaces: number; utf16WithSpaces: number; utf16WithLineBreaks: number;
   utf8Bytes: number; lines: number; paragraphs: number; platformCharacters: number;
+  // 200자 원고지에 옮겨 적을 때 차지하는 줄 수
+  manuscriptLines: number;
 };
 export const emptyCounts = (): ManuscriptCounts => ({
   withoutSpaces: 0, withSpaces: 0, withLineBreaks: 0,
   utf16WithoutSpaces: 0, utf16WithSpaces: 0, utf16WithLineBreaks: 0,
-  utf8Bytes: 0, lines: 0, paragraphs: 0, platformCharacters: 0,
+  utf8Bytes: 0, lines: 0, paragraphs: 0, platformCharacters: 0, manuscriptLines: 0,
 });
 export function addCounts(base: ManuscriptCounts, delta: ManuscriptCounts): ManuscriptCounts {
   const result = { ...base };
@@ -28,6 +30,7 @@ export function textCounts(raw: string, rules: WritingRules): ManuscriptCounts {
     utf8Bytes: new TextEncoder().encode(text).length, lines: text ? text.split("\n").length : 0,
     paragraphs: text ? text.split(/\n+/).filter(line => line.trim()).length : 0,
     platformCharacters: countForWriting({ text }, rules),
+    manuscriptLines: manuscriptPaperLines(text),
   };
 }
 function hasUnclosedComment(text: string): boolean {
