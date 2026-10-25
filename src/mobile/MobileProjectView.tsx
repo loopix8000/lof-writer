@@ -1287,12 +1287,12 @@ export default function MobileProjectView({
           </div>
 
           <div className="m-project-tools">
-            {/* 작품 화면 3탭 구조: 에피소드 / 플롯 / 메모. 이름이 긴 에피소드 탭을 넓혀 글자가 잘리지 않게 한다. */}
+            {/* 작품 화면 3탭 구조: 에피소드 / 플롯 / 메모. 탭 좌우 여백을 줄여 균등한 너비에서도 글자가 잘리지 않게 한다. */}
             <MobilePillTabs<Kind>
               value={activeTab}
               label="작품 문서 분류"
               items={[
-                { value: "episode", label: "에피소드", icon: <BookOpen size={15} />, count: episodes.length, weight: 1.3 },
+                { value: "episode", label: "에피소드", icon: <BookOpen size={15} />, count: episodes.length },
                 { value: "plot", label: "플롯", icon: <FileText size={15} />, count: plots.length },
                 { value: "memo", label: "메모", icon: <StickyNote size={15} />, count: memos.length },
               ]}

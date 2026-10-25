@@ -710,6 +710,17 @@
   background: var(--surface);
 }
 
+/* 작품 화면 3탭은 균등하게 나누므로, 가장 긴 '에피소드' 탭이 잘리지 않도록 좌우 여백과 내부 간격을 줄인다. */
+.m-project-tools > .m-pill-tabs .m-pill-tab {
+  padding: 0 2px;
+  gap: 4px;
+}
+
+.m-project-tools > .m-pill-tabs .m-pill-tab small {
+  padding-left: 4px;
+  padding-right: 4px;
+}
+
 /* 작품 화면 목록은 기본 스크롤바를 숨기고 탭·검색줄 아래의 실제 목록 구간에만 막대를 덧씌운다.
    위로 밀려 올라간 머리 레이어는 이 영역 밖으로 잘라 상단 막대를 가리지 않게 한다. */
 .m-project-list-wrap {
