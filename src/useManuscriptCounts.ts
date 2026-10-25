@@ -68,7 +68,7 @@ export function useManuscriptCounts({ scope, id, body, rules, onBaseline, onErro
           const later = pending.model.changes.filter(change => change.sequence > pending.sequence);
           // 계산 중 입력한 문단 증감을 더하면 연속 입력 중에도 최신 카운트를 유지할 수 있다.
           if (later.every(change => change.delta !== null)) {
-            const next = later.reduce((sum, change) => addCounts(sum, change.delta!), stats);
+            const next = later.reduce((sum, change) => addCounts(sum, change.delta!, pending.model.rules), stats);
             const previous = pending.model.stats;
             pending.model.stats = next;
             // 즉시 반영한 증감과 같은 결과이면 큰 편집 화면을 다시 커밋하지 않는다.
@@ -97,7 +97,7 @@ export function useManuscriptCounts({ scope, id, body, rules, onBaseline, onErro
     if (!target || target.body === nextBody) return;
     target.body = nextBody; target.sequence++;
     target.changes.push({ sequence: target.sequence, delta: delta ?? null });
-    if (target.stats && delta) target.stats = addCounts(target.stats, delta);
+    if (target.stats && delta) target.stats = addCounts(target.stats, delta, target.rules);
     // 화면은 따로 그리지 않는다. 같은 입력으로 바뀐 본문이 화면에 반영될 때 새 카운트도 함께 보인다.
   }, []);
   return { stats: current.current?.stats ?? null, update };

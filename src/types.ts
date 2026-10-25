@@ -16,7 +16,7 @@ export type SyncConnection = {
 export type WritingRules = {
   version?: number;
   platform: string;
-  rule: "noSpace" | "spaces" | "all" | "collapsed" | "novelpia";
+  rule: "noSpace" | "spaces" | "all" | "collapsed" | "novelpia" | "manuscript";
   unit: "codepoint" | "utf16";
   punctuation?: "include" | "ascii" | "unicode";
   excludeSpecial?: boolean;

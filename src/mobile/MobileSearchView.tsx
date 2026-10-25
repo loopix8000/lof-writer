@@ -8,6 +8,7 @@ import {
   X,
 } from "lucide-react";
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { normalizeWriting, writingUnit } from "../../core/platforms.mjs";
 import { labels } from "../app/document-ui";
 import type { SearchMatch, SearchResult } from "../SearchViews";
 import { call, type Library, type Project } from "../types";
@@ -286,7 +287,7 @@ export default function MobileSearchView({
                         <span>{getProjectTitle(d.projectId)}</span>
                         <i>·</i>
                         <span>
-                          {(d.platformCharacters ?? d.characters ?? 0).toLocaleString()}자
+                          {(d.platformCharacters ?? d.characters ?? 0).toLocaleString()}{writingUnit(normalizeWriting(lib.projects.find(p => p.id === d.projectId)?.writing || lib.preferences.defaultWriting))}
                         </span>
                         <i>·</i>
                         <time>{new Date(d.updatedAt).toLocaleDateString("ko-KR")}</time>

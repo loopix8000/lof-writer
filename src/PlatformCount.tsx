@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Settings2 } from "lucide-react";
 import { countForRule, manuscriptPaperPages } from "../core/text.mjs";
 import type { ManuscriptCounts } from "./manuscript-counts";
-import { platforms } from "../core/platforms.mjs";
+import { platforms, writingUnit } from "../core/platforms.mjs";
 import PlatformPicker from "./PlatformPicker";
 import type { WritingRules } from "./types";
 export default function PlatformCount({
@@ -19,6 +19,7 @@ export default function PlatformCount({
   const [editing, setEditing] = useState(false);
   const unit = documentOnly ? "utf16" : rules.unit,
     goal = rules.goal;
+  const displayUnit = documentOnly ? "자" : writingUnit(rules);
   const value = stats ? documentOnly ? countForRule(stats, "spaces", unit) : stats.platformCharacters : 0;
   const count = (rule: string) => stats ? countForRule(stats, rule, unit).toLocaleString() : "…";
   const name =
@@ -41,7 +42,7 @@ export default function PlatformCount({
       <button className="count-profile" onClick={() => setEditing((e) => !e)}>
         {name}
         <small>
-          {rules.rule === "novelpia" ? "공백 제외" : rules.rule === "collapsed" ? "연속 공백 1자" : rules.rule === "noSpace"
+          {rules.rule === "manuscript" ? "200자 원고지" : rules.rule === "novelpia" ? "공백 제외" : rules.rule === "collapsed" ? "연속 공백 1자" : rules.rule === "noSpace"
             ? "공백 제외"
             : rules.rule === "spaces"
               ? "공백 포함"
@@ -52,7 +53,7 @@ export default function PlatformCount({
       </>}
       <div className="word-count" data-testid={documentOnly ? "document-count" : "platform-count"}>
         {stats ? value.toLocaleString() : "…"}
-        <small>{documentOnly ? "자" : ` / ${goal.toLocaleString()}자`}</small>
+        <small>{documentOnly ? "자" : ` / ${goal.toLocaleString()}${displayUnit}`}</small>
       </div>
       {!documentOnly && <>
       <div className="progress">
@@ -61,8 +62,8 @@ export default function PlatformCount({
       <div className="goal-row">
         <span>
           {!stats ? "계산 중…" : value >= goal
-            ? "목표 달성 · " + (value - goal).toLocaleString() + "자 초과"
-            : (goal - value).toLocaleString() + "자 남음"}
+            ? "목표 달성 · " + (value - goal).toLocaleString() + `${displayUnit} 초과`
+            : (goal - value).toLocaleString() + `${displayUnit} 남음`}
         </span>
         <b>{stats ? `${Math.round((value / goal) * 100)}%` : "…"}</b>
       </div>

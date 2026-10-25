@@ -34,6 +34,7 @@ import {
   X,
 } from "lucide-react";
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { writingUnit } from "../../core/platforms.mjs";
 import {
   lineBreakDefault,
   normalizeStatus,
@@ -899,7 +900,7 @@ export default function MobileEditorView({
             </span>
           )}
           <span className="m-tree-meta">
-            {(ep.platformCharacters ?? ep.characters ?? 0).toLocaleString()}자
+            {(ep.platformCharacters ?? ep.characters ?? 0).toLocaleString()}{writingUnit(writingRules)}
           </span>
         </button>
       </div>
@@ -908,7 +909,7 @@ export default function MobileEditorView({
 
   const charCountLabel =
     active.kind === "episode"
-      ? `${stats ? platformChars.toLocaleString() : "…"}자`
+      ? `${stats ? platformChars.toLocaleString() : "…"}${writingUnit(writingRules)}`
       : `${stats ? charsWithoutSpaces.toLocaleString() : "…"}자`;
 
   return (

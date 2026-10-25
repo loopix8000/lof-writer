@@ -216,6 +216,7 @@ export function novelpiaCount(text) {
     .replace(/\u200e/gi, "").length;
 }
 export function countForWriting(stats, rules) {
+  if (rules.rule === "manuscript") return manuscriptPaperPages(manuscriptPaperLines(stats.text));
   if (rules.rule === "novelpia") return novelpiaCount(stats.text);
   let text = stats.text;
   if (rules.rule === "noSpace") text = text.replace(/\s/g, "");

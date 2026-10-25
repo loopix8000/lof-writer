@@ -6,6 +6,7 @@ import {
   Plus,
 } from "lucide-react";
 import React from "react";
+import { normalizeWriting, writingUnit } from "../../core/platforms.mjs";
 import { type Dialog } from "../app/model";
 import CoverImage from "../CoverImage";
 import { type Library } from "../types";
@@ -131,7 +132,7 @@ export default function MobileLibraryView({
                       {totalChars > 0 && (
                         <div className="m-project-chars">
                           <File size={13.5} />
-                          <span>총 {totalChars.toLocaleString()}자</span>
+                          <span>총 {totalChars.toLocaleString()}{writingUnit(normalizeWriting(p.writing || prefs.defaultWriting))}</span>
                         </div>
                       )}
                       {p.tags && p.tags.length > 0 && (

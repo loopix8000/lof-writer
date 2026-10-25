@@ -64,6 +64,7 @@ declare module "*.mjs" {
   export function manuscriptPaperLines(text: string): number;
   export function manuscriptPaperPages(lines: number): number;
   export function writingName(rules: import("./types").WritingRules): string;
+  export function writingUnit(rules: import("./types").WritingRules): string;
   export const platforms: any[];
   export function normalizeWriting(value?: any): import("./types").WritingRules;
   // core/episode.mjs: 회차 상태·유형·속성.

@@ -17,7 +17,7 @@ import {
   STATUS_SHORT,
   normalizeStatus
 } from "../../core/episode.mjs";
-import { normalizeWriting } from "../../core/platforms.mjs";
+import { normalizeWriting, writingUnit } from "../../core/platforms.mjs";
 import CoverImage from "../CoverImage";
 import PillTabs from "../PillTabs";
 import TagAddPopup from "../TagAddPopup";
@@ -255,7 +255,7 @@ export default function ProjectPage({
                 </span>
               )}
               <span className="episode-meta">
-                {(d.platformCharacters ?? d.characters ?? 0).toLocaleString()}자
+                {(d.platformCharacters ?? d.characters ?? 0).toLocaleString()}{writingUnit(normalizeWriting(project.writing || prefs.defaultWriting))}
               </span>
               <time>
                 {new Date(d.updatedAt).toLocaleDateString("ko-KR")}

@@ -577,7 +577,10 @@ pub fn display_counts(raw: &str, rules: &Value) -> Value {
     }
     if has_text { paragraphs += 1; }
     let rule = rules.get("rule").and_then(Value::as_str).unwrap_or("noSpace");
-    let platform_characters = if rule == "novelpia" {
+    let manuscript_lines = manuscript_paper_lines(&text);
+    let platform_characters = if rule == "manuscript" {
+        manuscript_lines.div_ceil(10)
+    } else if rule == "novelpia" {
         let escaped = text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
         let filtered: String = escaped.chars().filter(|&c|
             !matches!(c, ' ' | '.' | ',' | '\n' | '\t' | '\r' | '!' | '?' | '\'' | '"' | '\u{00a0}')).collect();
@@ -626,7 +629,7 @@ pub fn display_counts(raw: &str, rules: &Value) -> Value {
         "utf16WithoutSpaces": utf16_without_spaces, "utf16WithSpaces": utf16_with_spaces,
         "utf16WithLineBreaks": utf16_with_line_breaks, "utf8Bytes": text.len(),
         "lines": lines, "paragraphs": paragraphs, "platformCharacters": platform_characters,
-        "manuscriptLines": manuscript_paper_lines(&text)
+        "manuscriptLines": manuscript_lines
     })
 }
 
@@ -694,6 +697,9 @@ pub fn count_for_writing(stats: &ManuscriptStats, rules: &Value) -> usize {
         .get("rule")
         .and_then(|v| v.as_str())
         .unwrap_or("noSpace");
+    if rule == "manuscript" {
+        return manuscript_paper_lines(&stats.text).div_ceil(10);
+    }
     if rule == "novelpia" {
         return novelpia_count(&stats.text);
     }

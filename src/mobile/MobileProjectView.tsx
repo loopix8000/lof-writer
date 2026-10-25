@@ -38,7 +38,7 @@ import {
 } from "lucide-react";
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { STATUS_SHORT, normalizeStatus } from "../../core/episode.mjs";
-import { normalizeWriting } from "../../core/platforms.mjs";
+import { normalizeWriting, writingUnit } from "../../core/platforms.mjs";
 import CoverImage from "../CoverImage";
 import { labels } from "../app/document-ui";
 import { episodeGroupSize, parentOfRel, type FolderEntry } from "../app/file-tree-model";
@@ -758,7 +758,7 @@ export default function MobileProjectView({
           <span className={`m-status-dot-badge ${d.archived ? "archived" : status}`}>
             {d.archived ? "보관됨" : STATUS_SHORT[status]}
           </span>
-          <span className="m-tree-meta">{chars.toLocaleString()}자</span>
+          <span className="m-tree-meta">{chars.toLocaleString()}{writingUnit(rules)}</span>
         </button>
         <button
           type="button"
@@ -1235,7 +1235,7 @@ export default function MobileProjectView({
               <div className="m-project-hero-info">
                 <div className="m-project-hero-meta">
                   {archive ? "보관함 · " : ""}
-                  {episodes.length}편 · 총 {totalProjectChars.toLocaleString()}자
+                  {episodes.length}편 · 총 {totalProjectChars.toLocaleString()}{writingUnit(rules)}
                 </div>
 
                 <h1 className="m-project-hero-title">

@@ -1,5 +1,5 @@
 import type { Node as PMNode } from "@tiptap/pm/model";
-import { countForWriting, manuscriptPaperLines, stripJsdocComments } from "../core/text.mjs";
+import { countForWriting, manuscriptPaperLines, manuscriptPaperPages, stripJsdocComments } from "../core/text.mjs";
 import type { WritingRules } from "./types";
 import { commentStateAt } from "./doc-index";
 
@@ -15,9 +15,11 @@ export const emptyCounts = (): ManuscriptCounts => ({
   utf16WithoutSpaces: 0, utf16WithSpaces: 0, utf16WithLineBreaks: 0,
   utf8Bytes: 0, lines: 0, paragraphs: 0, platformCharacters: 0, manuscriptLines: 0,
 });
-export function addCounts(base: ManuscriptCounts, delta: ManuscriptCounts): ManuscriptCounts {
+export function addCounts(base: ManuscriptCounts, delta: ManuscriptCounts, rules?: WritingRules): ManuscriptCounts {
   const result = { ...base };
   for (const key of Object.keys(result) as (keyof ManuscriptCounts)[]) result[key] = Math.max(0, base[key] + delta[key]);
+  // 매수는 문단별 올림값을 더하지 않고 원고 전체의 줄 수에서 다시 구한다.
+  if (rules?.rule === "manuscript") result.platformCharacters = manuscriptPaperPages(result.manuscriptLines);
   return result;
 }
 export function textCounts(raw: string, rules: WritingRules): ManuscriptCounts {

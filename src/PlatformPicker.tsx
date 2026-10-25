@@ -11,6 +11,8 @@ export default function PlatformPicker({
 }) {
   const preset =
     platforms.find((p: any) => p.id === value.platform) || platforms[0];
+  const manuscript = value.rule === "manuscript";
+  const fixedRule = value.rule === "novelpia" || manuscript;
   return (
     <div className={`platform-picker ${compact ? "compact" : ""}`}>
       <label>
@@ -60,13 +62,14 @@ export default function PlatformPicker({
             <option value="all">공백·줄바꿈 포함 (LF 1자)</option>
             <option value="collapsed">연속 공백·줄바꿈을 1자로</option>
             <option value="novelpia">노벨피아 (공백 제외)</option>
+            <option value="manuscript">원고지 규격 (200자 원고지)</option>
           </select>
         </label>
         <label>
           문장부호
           <select
             aria-label="문장부호 계산"
-            disabled={value.rule === "novelpia"}
+            disabled={fixedRule}
             value={value.punctuation || "include"}
             onChange={(e) =>
               onChange({
@@ -82,21 +85,21 @@ export default function PlatformPicker({
         </label>
         <label>
           말줄임표 …
-          <select aria-label="말줄임표 계산" value={value.ellipsisWeight || 1} disabled={value.rule === "novelpia"}
+          <select aria-label="말줄임표 계산" value={value.ellipsisWeight || 1} disabled={fixedRule}
             onChange={e => onChange({...value, ellipsisWeight: Number(e.target.value)})}>
             <option value="1">1자로 계산</option><option value="3">3자로 계산</option>
           </select>
         </label>
         <label className="check-row">
-          <input type="checkbox" aria-label="특수문자 제외" checked={!!value.excludeSpecial} disabled={value.rule === "novelpia"}
+          <input type="checkbox" aria-label="특수문자 제외" checked={!!value.excludeSpecial} disabled={fixedRule}
             onChange={e => onChange({...value, excludeSpecial: e.target.checked})} />
           문자·숫자·공백 외 특수문자 제외
         </label>
         </>}
         <label>
-          개인 목표 글자 수
+          {manuscript ? "개인 목표 원고지 매수" : "개인 목표 글자 수"}
           <input
-            aria-label="목표 글자 수"
+            aria-label={manuscript ? "목표 원고지 매수" : "목표 글자 수"}
             type="number"
             min="1"
             max="1000000"
@@ -108,6 +111,7 @@ export default function PlatformPicker({
           />
         </label>
       </div>
+      {manuscript && <p className="settings-description">200자 원고지 (20칸 × 10줄) 기준으로 문단 들여쓰기와 줄 끝 빈칸을 반영하며, 남은 줄은 한 매로 올림합니다.</p>}
       {value.platform !== "custom" && <button type="button" onClick={() => onChange(normalizeWriting({...value, platform: "custom", customName: `${preset.name} 개인 규칙`}))}>사용자 규칙으로 조정</button>}
     </div>
   );

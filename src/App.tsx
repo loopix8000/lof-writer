@@ -63,7 +63,7 @@ import {
   lineBreakDefault,
   normalizeStatus
 } from "../core/episode.mjs";
-import { normalizeWriting, writingName } from "../core/platforms.mjs";
+import { normalizeWriting, writingName, writingUnit } from "../core/platforms.mjs";
 import {
   countForRule,
   plainText,
@@ -1498,7 +1498,7 @@ export default function App() {
               }}
             >
               {active.kind === "episode"
-                ? `${stats ? platformChars.toLocaleString() : "…"}자`
+                ? `${stats ? platformChars.toLocaleString() : "…"}${writingUnit(writingRules)}`
                 : `${stats ? charsWithoutSpaces.toLocaleString() : "…"}자`}
             </button>
           )}
@@ -2481,7 +2481,7 @@ export default function App() {
               <footer className="editor-footer" hidden={!isWorkspace}>
                 <span>
                   {active.kind === "episode"
-                    ? <>{writingName(writingRules)} {stats ? platformChars.toLocaleString() : "…"}자</>
+                    ? <>{writingName(writingRules)} {stats ? platformChars.toLocaleString() : "…"}{writingUnit(writingRules)}</>
                     : <>공백 제외 {stats ? charsWithoutSpaces.toLocaleString() : "…"}자</>}
                   <i /> 공백 포함 {stats ? charsWithSpaces.toLocaleString() : "…"}자
                   {cursorLine !== null && <><i /> {cursorLine.toLocaleString()}번째 줄</>}

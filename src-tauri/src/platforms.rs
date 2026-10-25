@@ -35,6 +35,18 @@ const PLATFORMS: &[PlatformPreset] = &[
         goal: 5000,
     },
     PlatformPreset {
+        id: "spaces",
+        name: "공백 포함",
+        rule: "spaces",
+        goal: 5000,
+    },
+    PlatformPreset {
+        id: "manuscript",
+        name: "원고지 규격",
+        rule: "manuscript",
+        goal: 25,
+    },
+    PlatformPreset {
         id: "custom",
         name: "사용자 규칙",
         rule: "noSpace",
@@ -56,6 +68,8 @@ pub fn normalize_writing(input: Option<&Value>) -> Value {
         && platform_in.is_some_and(|p| !p.is_empty() && p != "custom");
     let old_rule = if platform_in == Some("novelpia") {
         "noSpace"
+    } else if platform_in == Some("manuscript") {
+        "manuscript"
     } else {
         "spaces"
     };
@@ -77,7 +91,7 @@ pub fn normalize_writing(input: Option<&Value>) -> Value {
     };
 
     if is_override {
-        preset = PLATFORMS[4]; // custom
+        preset = *PLATFORMS.iter().find(|p| p.id == "custom").unwrap();
     }
     let custom = preset.id == "custom";
 
@@ -103,7 +117,7 @@ pub fn normalize_writing(input: Option<&Value>) -> Value {
 
     let rule = if custom
         && rule_in.is_some_and(|r| {
-            ["noSpace", "spaces", "all", "collapsed", "novelpia"].contains(&r)
+            ["noSpace", "spaces", "all", "collapsed", "novelpia", "manuscript"].contains(&r)
         }) {
         rule_in.unwrap()
     } else {
