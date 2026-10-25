@@ -804,6 +804,17 @@ fn doc_entry(
 }
 
 fn prune_empty(dir: &Path) {
+    let Ok(metadata) = fs::symlink_metadata(dir) else { return };
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if metadata.file_attributes() & 0x400 != 0 {
+            return;
+        }
+    }
     if let Ok(rd) = fs::read_dir(dir) {
         for e in rd.flatten() {
             if e.file_type().is_ok_and(|t| t.is_dir()) {
@@ -811,7 +822,9 @@ fn prune_empty(dir: &Path) {
             }
         }
     }
-    let _ = fs::remove_dir(dir);
+    if fs::remove_dir(dir).is_ok() {
+        record_change(dir);
+    }
 }
 
 // 관리 DB가 없던 예전 보관함의 이력 폴더를 지우고, 지운 이력 파일 수를 돌려준다.
@@ -5338,6 +5351,28 @@ impl Store {
         self.remove_project_inner(id, &now_iso())
     }
 
+    pub(crate) fn prune_empty_project_folders(&self, deleted_dir: &Path) {
+        let Ok(entries) = fs::read_dir(&self.root) else { return };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            let dir = entry.path();
+            // 삭제한 작품과 기존 번호형 작품 폴더만 정리한다.
+            let numbered = name.split_once(' ').is_some_and(|(index, _)| {
+                !index.is_empty() && index.bytes().all(|byte| byte.is_ascii_digit())
+            });
+            if dir != deleted_dir && !numbered {
+                continue;
+            }
+            if ["project.json", "project.backup.json"].iter()
+                .any(|name| dir.join(name).try_exists().unwrap_or(true))
+            {
+                continue;
+            }
+            prune_empty(&dir);
+        }
+    }
+
     pub fn remove_project_inner(&mut self, id: &str, deleted_at: &str) -> Result<bool, LofError> {
         self.require_database()?;
         let previous=self.list()?;
@@ -5385,6 +5420,7 @@ impl Store {
             }),
         );
         self.save_deleted(&deleted)?;
+        self.prune_empty_project_folders(&p.dir);
         Ok(true)
     }
 

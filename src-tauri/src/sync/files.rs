@@ -359,6 +359,11 @@ pub(crate) fn apply_local(
                 }
                 st.trash_path(&target)?;
                 record_change(&target);
+                if project {
+                    if let Some(dir) = target.parent() {
+                        st.prune_empty_project_folders(dir);
+                    }
+                }
             }
         }
         if let Some(id) = preserved_draft { st.clear_draft(&id)?; }
