@@ -38,6 +38,7 @@ import type { useAppUpdater } from "../Updater";
 import { UpdateSettings, updateChannel } from "../Updater";
 import { ReleaseHistory } from "../ReleaseNotes";
 import AutocompleteSettings from "./AutocompleteSettings";
+import { EPISODE_GROUP_OPTIONS, episodeGroupSize } from "./file-tree-model";
 import { settingPages, type SettingsPage } from "./settings-pages";
 
 import SettingsToggle from "./SettingsToggle";
@@ -284,6 +285,24 @@ export default function SettingsContent({
             {prefs.libraryProjectOpenTarget !== "project" && (
               <p className="settings-note">집필 기록이 없는 작품은 작품 정보 화면으로 이동합니다.</p>
             )}
+            <h3>회차 목록</h3>
+            <div className="settings-grid">
+              <label>
+                회차 묶음 단위
+                <select
+                  aria-label="회차 묶음 단위"
+                  value={Number.isFinite(episodeGroupSize(prefs.episodeGroupSize)) ? episodeGroupSize(prefs.episodeGroupSize) : 0}
+                  onChange={(e) => savePrefs({ episodeGroupSize: Number(e.target.value) }).catch(report)}
+                >
+                  {EPISODE_GROUP_OPTIONS.map((n) => (
+                    <option key={n} value={n}>
+                      {n === 0 ? "묶지 않음" : `${n}화씩`}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <p className="settings-note">회차가 묶음 단위보다 많으면 회차 목록을 이 단위로 나눠 접고 펼칠 수 있습니다.</p>
             {lib.platform === "windows" && <>
               <h3>앱 시작</h3>
               <div className="settings-toggles" aria-busy={startupSaving}>

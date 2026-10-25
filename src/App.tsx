@@ -2,6 +2,7 @@ import RecoveryCopies from "./RecoveryCopies";
 import BookmarkList from "./app/BookmarkList";
 import BookmarksPage from "./app/BookmarksPage";
 import BrokenFiles from "./app/BrokenFiles";
+import { episodeGroupSize } from "./app/file-tree-model";
 import { icons, labels } from "./app/document-ui";
 import DocumentLinksWidget from "./app/DocumentLinksWidget";
 import ExportDialog from "./app/ExportDialog";
@@ -319,6 +320,7 @@ export default function App() {
   const shownLibrary = useMemo(() => withDocumentDraft(lib, active), [lib, active]);
   const fileTree = useFileTree({
     mobile: isMobile,
+    episodeGroup: episodeGroupSize(prefs.episodeGroupSize),
     library: shownLibrary, active, projectId, view, archive, menuTarget: menu?.target,
     getLibrary: () => libraryRef.current,
     currentProjectId: () => projectRef.current,

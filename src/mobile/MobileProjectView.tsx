@@ -41,7 +41,7 @@ import { STATUS_SHORT, normalizeStatus } from "../../core/episode.mjs";
 import { normalizeWriting } from "../../core/platforms.mjs";
 import CoverImage from "../CoverImage";
 import { labels } from "../app/document-ui";
-import { EPISODE_GROUP, parentOfRel, type FolderEntry } from "../app/file-tree-model";
+import { episodeGroupSize, parentOfRel, type FolderEntry } from "../app/file-tree-model";
 import { patchDocuments, patchProject, reorderDocuments, type LibraryChange } from "../app/library-changes";
 import { type Dialog } from "../app/model";
 import type { FileTreeController } from "../app/useFileTree";
@@ -55,6 +55,7 @@ import {
   type MobileActionItem,
 } from "./MobileActionSheet";
 import { compareNames, useDocumentSort, useEpisodeSort } from "./useEpisodeSort";
+import { useEpisodeGroupMenu } from "./useEpisodeGroupMenu";
 import { useEpisodeGroups } from "./useEpisodeGroups";
 import { useOverlayScrollbar } from "./useOverlayScrollbar";
 import MobilePillTabs from "./MobilePillTabs";
@@ -131,14 +132,10 @@ export default function MobileProjectView({
   const [closedFolders, setClosedFolders] = useState<Set<string>>(() => new Set());
   const { sort: episodeSort, toggleSort: toggleEpisodeSort } = useEpisodeSort();
   const { sort: documentSort, toggleSort: toggleDocumentSort } = useDocumentSort();
-  // 내림차순이면 최신 회차 묶음을 먼저 펼친다.
-  const lastEpGroupStart = (count: number) =>
-    Math.max(0, Math.ceil(count / EPISODE_GROUP) - 1) * EPISODE_GROUP;
-  const { isGroupOpen, toggleGroup: toggleEpGroup } = useEpisodeGroups(
-    lib.root,
-    project.id,
-    episodeSort === "desc" ? lastEpGroupStart(docs.filter((d) => d.kind === "episode").length) : 0,
-    archive,
+  const { isGroupOpen, toggleGroup: toggleEpGroup, setGroups: setEpGroups } = useEpisodeGroups(lib.root, project.id, archive);
+  const episodeGroup = episodeGroupSize(prefs.episodeGroupSize);
+  const episodeGroupMenu = useEpisodeGroupMenu((open) =>
+    setEpGroups(Array.from({ length: Math.ceil(filteredEpisodes.length / episodeGroup) }, (_, i) => i * episodeGroup), open),
   );
   const [activeDocSheet, setActiveDocSheet] = useState<Doc | null>(null);
   const [activeFolderSheet, setActiveFolderSheet] = useState<FolderEntry | null>(null);
@@ -1050,14 +1047,14 @@ export default function MobileProjectView({
               {archive && <RecoveryCopies projectId={project.id} openDoc={openDoc} />}
               {activeTab === "episode" ? (
                 <>
-                  {!filterQuery.trim() && filteredEpisodes.length > EPISODE_GROUP
+                  {!filterQuery.trim() && filteredEpisodes.length > episodeGroup
                     ? Array.from(
-                        { length: Math.ceil(filteredEpisodes.length / EPISODE_GROUP) },
-                        (_, g) => g * EPISODE_GROUP,
+                        { length: Math.ceil(filteredEpisodes.length / episodeGroup) },
+                        (_, g) => g * episodeGroup,
                       )
                         .sort((a, b) => (episodeSort === "desc" ? b - a : a - b))
                         .map((start) => {
-                          const group = filteredEpisodes.slice(start, start + EPISODE_GROUP);
+                          const group = filteredEpisodes.slice(start, start + episodeGroup);
                           const items = episodeSort === "desc" ? [...group].reverse() : group;
                           const isOpen = isGroupOpen(start);
                           return (
@@ -1067,7 +1064,7 @@ export default function MobileProjectView({
                                   type="button"
                                   className="m-tree-row-main"
                                   aria-expanded={isOpen}
-                                  onClick={() => toggleEpGroup(start)}
+                                  {...episodeGroupMenu.bind(() => toggleEpGroup(start))}
                                 >
                                   <span className="m-tree-chevron">
                                     {isOpen ? (
@@ -1420,6 +1417,8 @@ export default function MobileProjectView({
         items={addMenuFolder !== null ? getAddMenuItems(addMenuFolder) : []}
         onClose={() => setAddMenuFolder(null)}
       />
+
+      {episodeGroupMenu.sheet}
 
       {/* 문서 더보기 액션 시트 */}
       <MobileActionSheet

@@ -1,15 +1,18 @@
 import { ArrowLeft, ArrowDown01, ArrowDown10, BookOpen, ChevronDown, ChevronRight, FileText, Folder, FolderOpen, PanelLeft, Search, X } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { icons, labels } from "../app/document-ui";
-import { EPISODE_GROUP, parentOfRel } from "../app/file-tree-model";
+import { parentOfRel } from "../app/file-tree-model";
 import type { FileTreeController } from "../app/useFileTree";
 import type { Doc, Project } from "../types";
 import MobilePillTabs from "./MobilePillTabs";
+import { useEpisodeGroupMenu } from "./useEpisodeGroupMenu";
 import { useEpisodeGroups } from "./useEpisodeGroups";
 import { compareNames, useDocumentSort, useEpisodeSort } from "./useEpisodeSort";
 
-export default function MobileEmptyEditorView({ root, project, tree, openDoc, goProject, report }: {
+export default function MobileEmptyEditorView({ root, episodeGroup, project, tree, openDoc, goProject, report }: {
   root: string;
+  // 설정에서 고른 회차 묶음 크기
+  episodeGroup: number;
   project?: Project;
   tree: FileTreeController;
   openDoc: (id: string, pinned?: boolean) => Promise<void>;
@@ -25,8 +28,8 @@ export default function MobileEmptyEditorView({ root, project, tree, openDoc, go
   const episodes = tree.docs.filter(doc => doc.kind === "episode");
   const documents = tree.docs.filter(doc => doc.kind !== "episode")
     .sort((a, b) => compareNames(a.title, b.title, documentSort));
-  const defaultStart = episodeSort === "desc" ? Math.max(0, Math.ceil(episodes.length / EPISODE_GROUP) - 1) * EPISODE_GROUP : 0;
-  const { isGroupOpen, toggleGroup } = useEpisodeGroups(root, project?.id ?? "", defaultStart, tree.archive);
+  const { isGroupOpen, toggleGroup, setGroups } = useEpisodeGroups(root, project?.id ?? "", tree.archive);
+  const episodeGroupMenu = useEpisodeGroupMenu((open) => setGroups(Array.from({ length: Math.ceil(episodes.length / episodeGroup) }, (_, i) => i * episodeGroup), open));
   const search = query.trim().toLowerCase();
   const matches = (doc: Doc) => !search || `${doc.title} ${doc.relPath ?? ""}`.toLowerCase().includes(search);
 
@@ -121,13 +124,13 @@ export default function MobileEmptyEditorView({ root, project, tree, openDoc, go
         </div>
         <div className="m-drawer-body m-tree-scroll"><div className="m-tree-container">
           {tab === "document" ? (search ? documents.filter(matches).map(row) : folderTree(""))
-            : !search && episodes.length > EPISODE_GROUP
-              ? Array.from({ length: Math.ceil(episodes.length / EPISODE_GROUP) }, (_, index) => index * EPISODE_GROUP)
+            : !search && episodes.length > episodeGroup
+              ? Array.from({ length: Math.ceil(episodes.length / episodeGroup) }, (_, index) => index * episodeGroup)
                 .sort((a, b) => episodeSort === "desc" ? b - a : a - b).map(start => {
-                  const group = episodes.slice(start, start + EPISODE_GROUP);
+                  const group = episodes.slice(start, start + episodeGroup);
                   const open = isGroupOpen(start);
                   return <div className="m-tree-node" key={start}>
-                    <div className="m-tree-row m-tree-folder"><button type="button" className="m-tree-row-main" aria-expanded={open} onClick={() => toggleGroup(start)}>
+                    <div className="m-tree-row m-tree-folder"><button type="button" className="m-tree-row-main" aria-expanded={open} {...episodeGroupMenu.bind(() => toggleGroup(start))}>
                       <span className="m-tree-chevron">{open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</span>
                       <span className="m-tree-label">{episodeSort === "desc" ? `${start + group.length} – ${start + 1}화` : `${start + 1} – ${start + group.length}화`}</span>
                       <span className="m-tree-count">{group.length}</span>
@@ -139,5 +142,6 @@ export default function MobileEmptyEditorView({ root, project, tree, openDoc, go
         </div></div>
       </aside>
     </div>}
+    {episodeGroupMenu.sheet}
   </div>;
 }

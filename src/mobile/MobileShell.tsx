@@ -20,6 +20,7 @@ import React, { useCallback, useEffect, useId, useRef, useState } from "react";
 import { normalizeWriting } from "../../core/platforms.mjs";
 import BookmarksPage from "../app/BookmarksPage";
 import ExportDialog from "../app/ExportDialog";
+import { episodeGroupSize } from "../app/file-tree-model";
 import type { LibraryChange } from "../app/library-changes";
 import { type Destination, type Dialog } from "../app/model";
 import ProjectForm from "../app/ProjectForm";
@@ -618,6 +619,7 @@ export default function MobileShell({
             ) : isWritingEditor ? (
               <MobileEmptyEditorView
                 root={lib.root}
+                episodeGroup={episodeGroupSize(prefs.episodeGroupSize)}
                 project={project}
                 tree={tree}
                 openDoc={openDoc}

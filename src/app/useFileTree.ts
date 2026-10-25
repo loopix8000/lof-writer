@@ -13,6 +13,8 @@ type FolderChange = (entries: FolderEntry[]) => FolderEntry[];
 
 type Options = {
   mobile?: boolean;
+  // 설정에서 고른 회차 묶음 크기
+  episodeGroup?: number;
   library: Library;
   active: Doc | null;
   projectId: string;
@@ -96,7 +98,8 @@ export function useFileTree(options: Options) {
   const [docScope, setDocScope] = useState<"all" | "episode">("all");
   const [treeEpisodeId, setTreeEpisodeId] = useState("");
   const [closedDocGroups, setClosedDocGroups] = useState<Set<Kind>>(new Set());
-  const [openEpisodeGroups, setOpenEpisodeGroups] = useState<Set<number>>(new Set());
+  // 회차 묶음은 기본으로 펼치고, 사용자가 접은 묶음만 기억한다.
+  const [closedEpisodeGroups, setClosedEpisodeGroups] = useState<Set<number>>(new Set());
   const [renaming, setRenaming] = useState<{ id: string; value: string; widget?: boolean } | null>(null);
   const docs = lib.documents.filter(
     (d) => d.projectId === projectId && d.archived === archive,
@@ -533,8 +536,9 @@ export function useFileTree(options: Options) {
     // 연 회차가 접힌 묶음 안에 있으면 그 묶음을 펼친다.
     const at = docs.filter((d) => d.kind === "episode").findIndex((d) => d.id === active.id);
     if (at >= 0) {
-      const start = at - (at % EPISODE_GROUP);
-      setOpenEpisodeGroups((old) => (old.has(start) ? old : new Set([...old, start])));
+      const group = latest.current.episodeGroup ?? EPISODE_GROUP;
+      const start = Number.isFinite(group) ? at - (at % group) : 0;
+      setClosedEpisodeGroups((old) => (old.has(start) ? new Set([...old].filter((s) => s !== start)) : old));
     }
   }, [active?.id, active?.kind, active?.episodeId]);
 
@@ -619,11 +623,15 @@ export function useFileTree(options: Options) {
     });
   }
   function setEpisodeGroup(start: number, open: boolean) {
-    setOpenEpisodeGroups(old => { const next = new Set(old); if (open) next.add(start); else next.delete(start); return next; });
+    setClosedEpisodeGroups(old => { const next = new Set(old); if (open) next.delete(start); else next.add(start); return next; });
+  }
+  // 묶음 제목의 우클릭 메뉴에서 모든 묶음을 한 번에 펼치거나 접는다.
+  function setEpisodeGroups(starts: number[], open: boolean) {
+    setClosedEpisodeGroups(open ? new Set() : new Set(starts));
   }
   function enterTab(tab: "episode" | "memo") { if (tab === "episode" && dragFileDocs.current.length) setTreeTab("episode"); }
   function enterEpisodeGroup(start: number) {
-    if ((dragFileDocs.current.length || dragEpisodes.current.length) && !openEpisodeGroups.has(start)) setEpisodeGroup(start, true);
+    if ((dragFileDocs.current.length || dragEpisodes.current.length) && closedEpisodeGroups.has(start)) setEpisodeGroup(start, true);
   }
   function rowProps(doc: Doc, dropFolder?: string) {
     return {
@@ -672,10 +680,10 @@ export function useFileTree(options: Options) {
   return {
     docs, documents: lib.documents, archive, count, numberOf, currentId: active?.id, menuTarget: options.menuTarget,
     treeTab, treeQuery, treeSearch, docScope, treeEpisodeId, treeEpisodes, treeDocs,
-    memoEntries, folderEntries, boundEpisode, boundDocuments, memoOpenFolders, folderRenaming, closedDocGroups, openEpisodeGroups,
+    memoEntries, folderEntries, boundEpisode, boundDocuments, memoOpenFolders, folderRenaming, closedDocGroups, closedEpisodeGroups,
     treeDrop, episodeDrop, treeSelection, renaming,
     setTab, setScope, updateQuery, searchKey, clearSelection,
-    enterTab, enterEpisodeGroup, setEpisodeGroup, toggleDocGroup, toggleFolder,
+    enterTab, enterEpisodeGroup, setEpisodeGroup, setEpisodeGroups, toggleDocGroup, toggleFolder,
     startRename, changeRename, cancelRename, commitRename,
     startFolderRename, cancelFolderRename, folderMenu, folderDragProps,
     docCreateMenu, memoCreateMenu, plotItems, addDocFile, loadMemoFolders, addMemoFolder, renameMemoFolder, archiveMemoFolder, removeMemoFolder, moveDocPaths,

@@ -47,7 +47,7 @@ import {
 } from "../../core/typesetting.mjs";
 import BookmarkList from "../app/BookmarkList";
 import { icons, labels } from "../app/document-ui";
-import { EPISODE_GROUP, parentOfRel } from "../app/file-tree-model";
+import { episodeGroupSize, parentOfRel } from "../app/file-tree-model";
 import { type Dialog } from "../app/model";
 import type { LargeDocumentMode } from "../app/useLargeDocumentMode";
 import TypesettingSettings from "../app/TypesettingSettings";
@@ -79,6 +79,7 @@ import {
   type MobileActionItem,
 } from "./MobileActionSheet";
 import { compareNames, useDocumentSort, useEpisodeSort } from "./useEpisodeSort";
+import { useEpisodeGroupMenu } from "./useEpisodeGroupMenu";
 import { useEpisodeGroups } from "./useEpisodeGroups";
 import MobilePillTabs from "./MobilePillTabs";
 
@@ -630,13 +631,9 @@ export default function MobileEditorView({
       .sort((a, b) => compareNames(a.title || "제목 없음", b.title || "제목 없음", documentSort)),
     [projectDocs, documentSort],
   );
-  const currentEpisodeIndex = episodes.findIndex((ep) =>
-    ep.id === (active.kind === "episode" ? active.id : active.episodeId),
-  );
-  const defaultGroupStart = currentEpisodeIndex >= 0
-    ? Math.floor(currentEpisodeIndex / EPISODE_GROUP) * EPISODE_GROUP
-    : episodeSort === "desc" ? Math.max(0, Math.ceil(episodes.length / EPISODE_GROUP) - 1) * EPISODE_GROUP : 0;
-  const { isGroupOpen, toggleGroup } = useEpisodeGroups(lib.root, active.projectId, defaultGroupStart);
+  const { isGroupOpen, toggleGroup, setGroups } = useEpisodeGroups(lib.root, active.projectId);
+  const episodeGroup = episodeGroupSize(prefs.episodeGroupSize);
+  const episodeGroupMenu = useEpisodeGroupMenu((open) => setGroups(Array.from({ length: Math.ceil(episodes.length / episodeGroup) }, (_, i) => i * episodeGroup), open));
   const filteredEpisodes = (episodeSort === "desc" ? [...episodes].reverse() : episodes)
     .filter(ep => documentSearch.matches(ep.id === active.id ? active : ep, numberOf(ep)));
 
@@ -1420,11 +1417,11 @@ export default function MobileEditorView({
               )}
               {treeTab === "episode" ? (
                 <div className="m-tree-container">
-                  {!treeFilter.trim() && episodes.length > EPISODE_GROUP
-                    ? Array.from({ length: Math.ceil(episodes.length / EPISODE_GROUP) }, (_, group) => group * EPISODE_GROUP)
+                  {!treeFilter.trim() && episodes.length > episodeGroup
+                    ? Array.from({ length: Math.ceil(episodes.length / episodeGroup) }, (_, group) => group * episodeGroup)
                       .sort((a, b) => episodeSort === "desc" ? b - a : a - b)
                       .map((start) => {
-                        const group = episodes.slice(start, start + EPISODE_GROUP);
+                        const group = episodes.slice(start, start + episodeGroup);
                         const items = episodeSort === "desc" ? [...group].reverse() : group;
                         const isOpen = isGroupOpen(start);
                         return (
@@ -1434,7 +1431,7 @@ export default function MobileEditorView({
                                 type="button"
                                 className="m-tree-row-main"
                                 aria-expanded={isOpen}
-                                onClick={() => toggleGroup(start)}
+                                {...episodeGroupMenu.bind(() => toggleGroup(start))}
                               >
                                 <span className="m-tree-chevron">
                                   {isOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
@@ -1818,6 +1815,8 @@ export default function MobileEditorView({
         items={createMenuItems}
         onClose={() => setCreateMenuFolder(null)}
       />
+
+      {episodeGroupMenu.sheet}
 
       <MobileFolderPickerSheet
         open={moveFolderDoc !== null}

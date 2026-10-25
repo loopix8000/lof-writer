@@ -12,6 +12,7 @@ export function usePreferences() {
     copyWithBlankLines: false,
     hideCovers: false,
     libraryProjectOpenTarget: "workspace",
+    episodeGroupSize: 20,
     autoCloseQuotes: true,
     autoCloseBrackets: true,
     smartBrackets: true,

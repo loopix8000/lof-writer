@@ -4,6 +4,8 @@ import {
   Archive,
   ChevronDown,
   ChevronRight,
+  ChevronsDownUp,
+  ChevronsUpDown,
   Feather,
   FilePlus,
   FolderOpen,
@@ -25,7 +27,7 @@ import {
 } from "../types";
 
 import EpisodeDocList from "./EpisodeDocList";
-import { EPISODE_GROUP, type RenderTreeRow } from "./file-tree-model";
+import { episodeGroupSize, type RenderTreeRow } from "./file-tree-model";
 import FileTreeRow from "./FileTreeRow";
 import MemoFolderTree from "./MemoFolderTree";
 import type { FileTreeController } from "./useFileTree";
@@ -53,9 +55,10 @@ export default function FileTree({
 }: Props) {
   const {
     treeTab, docScope, treeQuery, treeDocs, treeEpisodes, count, attempt,
-    openMenu, docCreateMenu, addMemoFolder, openEpisodeGroups, numberOf,
+    openMenu, docCreateMenu, addMemoFolder, closedEpisodeGroups, numberOf,
     treeDrop, memoCreateMenu, folderDropProps, memoEntries,
   } = tree;
+  const episodeGroup = episodeGroupSize(prefs.episodeGroupSize);
   const treeRow: RenderTreeRow = (doc, marker, options) => <FileTreeRow key={doc.id} doc={doc} marker={marker} options={options} tree={tree} />;
   const folderTree = <MemoFolderTree tree={tree} treeRow={treeRow} />;
   const episodeDocuments = <EpisodeDocList tree={tree} treeRow={treeRow} />;
@@ -210,11 +213,11 @@ export default function FileTree({
             openMenu(e, [{ label: "새 에피소드", disabled: archive, action: attempt(() => createDoc("episode")) }])
           }
         >
-          {!treeQuery.episode.trim() && treeEpisodes.length > EPISODE_GROUP
-            ? Array.from({ length: Math.ceil(treeEpisodes.length / EPISODE_GROUP) }, (_, g) => {
-              const start = g * EPISODE_GROUP,
-                items = treeEpisodes.slice(start, start + EPISODE_GROUP),
-                open = openEpisodeGroups.has(start);
+          {!treeQuery.episode.trim() && treeEpisodes.length > episodeGroup
+            ? Array.from({ length: Math.ceil(treeEpisodes.length / episodeGroup) }, (_, g) => {
+              const start = g * episodeGroup,
+                items = treeEpisodes.slice(start, start + episodeGroup),
+                open = !closedEpisodeGroups.has(start);
               const toggle = (next: boolean) => tree.setEpisodeGroup(start, next);
               return (
                 <Fragment key={start}>
@@ -222,6 +225,13 @@ export default function FileTree({
                     className="tree-item episode-group"
                     aria-expanded={open}
                     onClick={() => toggle(!open)}
+                    onContextMenu={(e) => {
+                      const starts = Array.from({ length: Math.ceil(treeEpisodes.length / episodeGroup) }, (_, i) => i * episodeGroup);
+                      openMenu(e, [
+                        { label: "모두 펼치기", icon: <ChevronsUpDown size={14} />, action: () => tree.setEpisodeGroups(starts, true) },
+                        { label: "모두 접기", icon: <ChevronsDownUp size={14} />, action: () => tree.setEpisodeGroups(starts, false) },
+                      ]);
+                    }}
                     // 문서나 회차를 끌어 접힌 묶음에 올리면 펼쳐서 회차 위에 놓을 수 있게 한다.
                     onDragEnter={() => tree.enterEpisodeGroup(start)}
                   >
