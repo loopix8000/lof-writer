@@ -31,6 +31,25 @@
 
 `includeArchived`를 생략하거나 `false`로 전달하면 보관 문서를 제외한다. `projectId`는 작품 문서의 범위를 좁히며, 작품 검색과 공용 메모 검색은 전체 대상이다.
 
+## 문서 부분 조회
+
+아래 줄 범위 조회는 연결된 앱의 `document_read` 스키마에 `startLine`·`endLine`이 있을 때 사용한다. 지원하지 않는 앱에서는 기존 `offset`·`limit`으로 읽는다. 스킬 갱신만으로 앱에 새 인자가 추가되지는 않는다.
+
+`document_read`의 `startLine`·`endLine`으로 필요한 줄만 읽는다. 줄 번호는 **1부터 시작하며 양 끝을 포함**한다. YAML 헤더를 제외한 Markdown 본문을 기준으로 하며 `document_search`의 `results[].matches[].line`과 같다.
+
+```json
+{"name":"document_read","arguments":{"id":"문서 ID","startLine":40,"endLine":80}}
+```
+
+- `startLine`의 기본값은 1이다. `endLine`을 생략하면 시작 줄부터 최대 200줄을 읽으며 문서 끝을 넘는 끝 줄은 문서 끝으로 제한한다. 시작 줄이 전체 줄 수를 넘거나, 끝 줄이 시작 줄보다 작으면 `INVALID` 오류다. 줄 번호에는 1 이상의 정수만 사용한다.
+- `body`는 선택 구간의 원문이며 CRLF/LF, 빈 줄, Markdown 서식을 유지하고 줄 번호를 붙이지 않는다. `revision`과 기존 메타데이터도 반환한다. 빈 본문은 1줄이며 마지막 개행 뒤의 빈 줄도 센다.
+- 응답의 `startLine`·`endLine`은 반환한 구간, `totalLines`는 전체 본문의 줄 수다. `truncated`는 전체 본문 중 일부만 반환했는지를 뜻하므로 문서 중간이나 끝 구간을 읽어도 `true`다. 요청한 구간을 모두 반환했는지는 `rangeTruncated`로 구분한다.
+- `limit`은 줄 범위 조회에서도 최대 본문 길이이며 기본·최댓값은 100000 UTF-16 코드 단위다. 길이 제한으로 요청 구간이 잘리면 `rangeTruncated: true`다. 이모지는 문자 경계에서 자르며, `limit: 1`로 첫 이모지도 담을 수 없으면 `INVALID` 오류다. 마지막 반환 줄이 잘렸다면 `endLine`은 그 줄 번호다.
+- `nextLine`은 이어 읽을 줄 번호이며 문서 끝이나 긴 줄 중간에서 잘린 경우 `null`이다. 긴 줄 중간에서는 `nextOffset`을 `offset`으로 전달해 문자 단위로 이어 읽는다. `offset`은 반환 구간의 절대 UTF-16 시작 위치, `nextOffset`은 반환 본문 직후의 절대 위치(본문 끝이면 `null`), `totalLength`는 전체 본문의 UTF-16 길이다. `nextLine`이 있으면 빈 마지막 줄까지 포함해 줄 단위로 이어 읽을 수 있다.
+- `startLine`·`endLine`과 `offset`을 함께 지정하면 `INVALID` 오류다. 줄 범위를 생략하면 기존 `offset`·`limit` 문자 조회를 사용한다. 문자 조회의 `truncated`는 반환 위치 뒤에 본문이 남았는지를 뜻한다.
+
+여러 구간을 읽는 동안 `revision`이 바뀌면 최신 문서를 다시 읽는다. 일부 구간만 읽은 `body`로 전체 본문을 덮어쓰지 않는다. 구간 수정에는 해당 문맥과 `revision`으로 `document_apply_patch`를 사용한다.
+
 ## 스킬 설치·업데이트
 
 이 앱이 제공하는 Lof Writer 스킬만 다룬다. 스킬 패키지는 실행 중인 앱에 포함된 안내문과 현재 도구 스키마로 구성되며 인증 키나 원고를 담지 않는다. 앱을 업데이트한 뒤 새 스킬이 포함됐는지 확인할 수 있다.

@@ -1,4 +1,4 @@
-use crate::error::{fail, fail_invalid, slice_utf16_range, utf16_len, LofError};
+use crate::error::{fail, fail_invalid, slice_utf16, slice_utf16_range, utf16_len, LofError};
 use crate::store::Store;
 use rand::RngCore;
 use serde_json::{json, Value};
@@ -17,7 +17,8 @@ const MCP_INSTRUCTIONS: &str = r#"Lof Writer의 작품, 회차, 플롯, 메모�
 - CONFLICT 오류가 나면 최신 문서를 다시 읽고 변경 내용을 비교한 뒤 사용자가 요청한 수정만 다시 적용하세요. revision만 최신 값으로 바꿔 이전 본문을 덮어쓰지 마세요.
 - 일부 문장을 수정할 때는 document_patch를 사용하세요. find는 현재 본문에서 정확히 한 번 일치해야 하므로 필요한 앞뒤 문맥을 포함하세요. 전체 본문 교체는 document_update의 body를 사용하세요.
 - 여러 구간을 줄 단위로 수정할 때는 document_apply_patch를 사용하세요. patch는 @@로 구간을 시작하고 공백 접두사의 문맥 줄, - 삭제 줄, + 추가 줄로 작성하세요. 각 구간은 원본 본문에서 유일하게 일치해야 하며 겹치는 구간은 합치세요. 파일 경로·파일 작업·메타데이터 변경은 지원하지 않고, 구간 하나라도 실패하면 저장하지 않습니다. 마지막 구간 끝의 *** End of File로 본문 끝에 일치하도록 제한할 수 있습니다.
-- document_read의 truncated가 true이면 본문이 일부만 반환된 것입니다. 전체 본문을 교체하기 전에 offset과 limit으로 나머지를 읽으세요. offset, limit, totalLength는 UTF-16 코드 단위입니다. 여러 번 읽는 동안 revision이 바뀌면 처음부터 다시 조회하세요.
+- 필요한 구간만 읽을 때는 document_read의 startLine·endLine으로 본문 줄 범위를 지정하세요(1부터 시작, 양 끝 포함). 검색 결과 matches의 line과 같은 번호이며 YAML 헤더는 세지 않습니다. endLine 생략 시 최대 200줄을 반환합니다. body는 줄 번호를 붙이지 않은 원문이며 startLine, endLine, totalLines를 함께 반환합니다. offset과 줄 범위는 함께 지정할 수 없습니다.
+- document_read의 truncated가 true이면 본문이 일부만 반환된 것입니다. 줄 범위 조회의 nextLine으로 다음 구간을 읽으세요. limit은 줄 범위 조회에서도 최대 본문 길이이며, rangeTruncated가 true이면 길이 제한으로 요청 구간이 잘린 것입니다. rangeTruncated가 true이고 nextLine이 null이면 긴 줄 중간에서 잘렸으므로 nextOffset을 offset으로 전달해 이어 읽으세요. offset, limit, totalLength, nextOffset은 UTF-16 코드 단위입니다. 전체 본문 교체 전에는 처음부터 끝까지 읽고, 여러 번 읽는 동안 revision이 바뀌면 다시 조회하세요.
 - 문서 생성 시 kind를 episode(회차), plot(플롯), memo(메모) 중에서 지정하세요. 플롯과 메모의 folder는 doc/ 아래의 상대 경로이므로 doc/ 접두사 없이 전달하세요. 회차에 연결할 때는 해당 작품에 존재하는 회차의 id를 episodeId로 전달하세요.
 - 사용자가 요청한 본문과 메타데이터만 변경하고, 나머지 문장, Markdown 서식, 태그, 속성, 줄바꿈 설정은 보존하세요. 순서 변경과 이력 복원은 사용자의 요청 범위에 포함된 경우에 수행하세요.
 - 문서를 생성·수정·복원하거나 순서를 바꾸면 마지막 변경 2초 뒤에 자동으로 동기화하므로 sync_now를 따로 호출하지 않아도 됩니다. 동기화 상태는 sync_status로 확인하세요. 다른 장치에서 바뀐 내용을 먼저 받아야 할 때는 sync_now를 호출한 뒤, sync_status의 phase가 syncing 또는 pending이 아니게 될 때까지 확인하세요. 동기화 후에는 library_list와 document_read로 최신 revision을 다시 조회하세요. 연결 추가·삭제와 장치 페어링은 앱에서 진행하도록 안내하세요.
@@ -39,13 +40,15 @@ pub fn tool_definitions() -> Value {
         },
         {
             "name": "document_read",
-            "description": "문서의 Markdown 본문과 revision 조회",
+            "description": "문서의 Markdown 본문과 revision 조회. startLine·endLine으로 필요한 줄만 읽거나 offset·limit으로 문자 구간을 읽는다. 줄 범위는 1부터 시작하며 양 끝을 포함한다",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "id": { "type": "string" },
-                    "offset": { "type": "integer", "minimum": 0 },
-                    "limit": { "type": "integer", "minimum": 1, "maximum": 100000 }
+                    "offset": { "type": "integer", "minimum": 0, "description": "본문의 UTF-16 시작 위치. 기본값 0. startLine·endLine과 함께 지정할 수 없음" },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 100000, "description": "반환할 본문의 최대 UTF-16 길이. 기본값 100000. 줄 범위 조회에도 적용" },
+                    "startLine": { "type": "integer", "minimum": 1, "description": "읽기 시작할 본문 줄 번호. 기본값 1. document_search의 matches.line과 같으며 YAML 헤더 제외" },
+                    "endLine": { "type": "integer", "minimum": 1, "description": "읽을 마지막 본문 줄 번호(포함). 생략하면 startLine부터 최대 200줄. 문서 끝을 넘으면 끝까지만 반환" }
                 },
                 "required": ["id"],
                 "additionalProperties": false
@@ -247,6 +250,91 @@ pub fn tool_definitions() -> Value {
 // 서재와 별도로 처리하는 앱 도구의 실행기를 전달받는다.
 pub type AppToolHandler = Arc<dyn Fn(&str, &Value) -> Result<Value, LofError> + Send + Sync>;
 
+fn read_line_range(mut document: Value, args: &Value) -> Result<Value, LofError> {
+    if args.get("offset").is_some() {
+        return Err(fail_invalid("offset과 startLine·endLine은 함께 지정할 수 없습니다."));
+    }
+    let positive = |key: &str, default: usize| -> Result<usize, LofError> {
+        match args.get(key) {
+            None => Ok(default),
+            Some(value) => value
+                .as_u64()
+                .and_then(|value| usize::try_from(value).ok())
+                .filter(|value| *value > 0)
+                .ok_or_else(|| fail_invalid(format!("{key}은 1 이상의 정수여야 합니다."))),
+        }
+    };
+    let start_line = positive("startLine", 1)?;
+    let end_line = positive("endLine", start_line.saturating_add(199))?;
+    let limit = positive("limit", 100_000)?;
+    if end_line < start_line {
+        return Err(fail_invalid("endLine은 startLine 이상이어야 합니다."));
+    }
+    if limit > 100_000 {
+        return Err(fail_invalid("limit은 100000 이하여야 합니다."));
+    }
+
+    let body = document.get("body").and_then(Value::as_str).unwrap_or("");
+    let mut start_byte = None;
+    let mut end_byte = body.len();
+    let mut total_lines = 0;
+    // 검색과 동일하게 마지막 개행 뒤의 빈 줄과 빈 본문도 한 줄로 센다.
+    for (index, byte) in std::iter::once(0)
+        .chain(body.match_indices('\n').map(|(index, _)| index + 1))
+        .enumerate()
+    {
+        let line = index + 1;
+        total_lines = line;
+        if line == start_line {
+            start_byte = Some(byte);
+        }
+        if line.checked_sub(1) == Some(end_line) {
+            end_byte = byte;
+        }
+    }
+    let start_byte = start_byte.ok_or_else(|| {
+        fail_invalid(format!("startLine이 문서의 전체 줄 수({total_lines})를 넘었습니다."))
+    })?;
+    let selected = &body[start_byte..end_byte];
+    // 문자 경계에서 잘라 이모지 등 서로게이트 쌍을 보존한다.
+    let sliced = slice_utf16(selected, limit);
+    if sliced.is_empty() && !selected.is_empty() {
+        return Err(fail_invalid("첫 문자를 반환할 수 있도록 limit을 2 이상으로 지정하세요."));
+    }
+    let range_truncated = sliced.len() < selected.len();
+    let newline_count = sliced.bytes().filter(|byte| *byte == b'\n').count();
+    let actual_end_line = if range_truncated {
+        start_line + newline_count - usize::from(sliced.ends_with('\n'))
+    } else {
+        end_line.min(total_lines)
+    };
+    let next_line = if range_truncated {
+        sliced.ends_with('\n').then_some(start_line + newline_count)
+    } else {
+        (actual_end_line < total_lines).then(|| actual_end_line + 1)
+    };
+    let offset = utf16_len(&body[..start_byte]);
+    let next_offset = offset + utf16_len(&sliced);
+    let total_length = utf16_len(body);
+    let truncated = start_line > 1 || range_truncated || actual_end_line < total_lines;
+    if let Some(object) = document.as_object_mut() {
+        object.insert("body".into(), json!(sliced));
+        object.insert("offset".into(), json!(offset));
+        object.insert("totalLength".into(), json!(total_length));
+        object.insert("startLine".into(), json!(start_line));
+        object.insert("endLine".into(), json!(actual_end_line));
+        object.insert("totalLines".into(), json!(total_lines));
+        object.insert("truncated".into(), json!(truncated));
+        object.insert("rangeTruncated".into(), json!(range_truncated));
+        object.insert("nextLine".into(), json!(next_line));
+        object.insert(
+            "nextOffset".into(),
+            json!((next_offset < total_length).then_some(next_offset)),
+        );
+    }
+    Ok(document)
+}
+
 fn call_tool(
     store: &Arc<Mutex<Option<Store>>>,
     name: &str,
@@ -284,6 +372,9 @@ pub fn dispatch(
         "document_read" => {
             let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
             let mut d = store.read(id)?;
+            if args.get("startLine").is_some() || args.get("endLine").is_some() {
+                return read_line_range(d, args);
+            }
             let body = d
                 .get("body")
                 .and_then(|v| v.as_str())
