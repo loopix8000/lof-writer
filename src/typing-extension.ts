@@ -238,6 +238,7 @@ export const TypingAssist = Extension.create<{
                   view.state.doc.resolve(to).parentOffset,
                   view.state.doc.resolve(to).parent.content.size,
                   "\n",
+                  (node) => isHardBreak(node) ? "\n" : "",
                 );
             // 주석 안에서 줄 시작에 '* '를 입력할 때 글머리 목록으로 바뀌지 않게 한다.
             if (inComment && text === " " && from === to && /^\s*\*+$/.test(before)) {

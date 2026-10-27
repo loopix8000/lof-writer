@@ -66,7 +66,7 @@ export default function AutocompleteSettings({
       <div className="settings-toggles" style={{ marginTop: 14 }}>
         <SettingsToggle
           label="따옴표 자동 닫기"
-          description="여는 따옴표를 입력하면 닫는 따옴표를 함께 넣습니다. 현재 줄의 커서 앞에 같은 종류의 따옴표가 홀수 개이면 자동 닫기를 생략합니다. 줄 끝 닫는 따옴표 앞에서 Enter를 누르면 다음 문단으로 빠져나갑니다."
+          description="여는 따옴표를 입력하면 닫는 따옴표를 함께 넣습니다. 현재 줄의 커서 앞이나 뒤에 같은 종류의 따옴표가 홀수 개이면 자동 닫기를 생략합니다. 줄 끝 닫는 따옴표 앞에서 Enter를 누르면 다음 문단으로 빠져나갑니다."
           checked={prefs.autoCloseQuotes !== false}
           onChange={(checked) =>
             savePrefs({ autoCloseQuotes: checked }).catch(report)

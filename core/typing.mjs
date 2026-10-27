@@ -72,11 +72,12 @@ const quotePairs = {
 
 const brackets = { "(": ")", "[": "]", "{": "}" };
 
-function hasOddQuotesOnLine(before, input) {
+function hasOddQuotesOnLine(text, input, side = "before") {
   const marks = input === '"' || input === "“" ? '"“”'
     : input === "'" || input === "‘" ? "'‘’"
     : input + quotePairs[input];
-  const line = before.split(/[\r\n\u2028\u2029]/).at(-1) || "";
+  const lines = text.split(/[\r\n\u2028\u2029]/);
+  const line = (side === "before" ? lines.at(-1) : lines[0]) || "";
   let count = 0, escaped = false;
   for (const char of line) {
     if (char === "\\") { escaped = !escaped; continue; }
@@ -183,6 +184,9 @@ export function typingPlan(before, selected, after, input, options = {}) {
     }
     if (input === "'" && !selected && /[\p{L}\p{N}]$/u.test(before))
       return null;
+    // 커서 뒤에 짝이 없는 따옴표가 있으면 여는 따옴표만 넣는다.
+    if (!selected && quotePairs[input] && hasOddQuotesOnLine(after, input, "after"))
+      return { deleteBefore: 0, deleteAfter: 0, insert: open, caret: open.length };
     if (!selected && after.startsWith(close) && input === close)
       return { skip: close.length };
     return {
