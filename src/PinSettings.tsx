@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Fingerprint, LockKeyhole } from "lucide-react";
-import { useConfirm } from "./ConfirmDialog";
 import { isAndroidApp } from "./tauri-bridge";
 import { call } from "./types";
 
@@ -26,7 +25,6 @@ export default function PinSettings() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [biometric, setBiometric] = useState<BiometricStatus | null>(null);
-  const [askBiometric, biometricDialog] = useConfirm();
   const mounted = useRef(false);
   const saving = useRef(false);
   const android = isAndroidApp();
@@ -70,7 +68,6 @@ export default function PinSettings() {
     }
     saving.current = true; setBusy(true);
     try {
-      const firstPin = !status?.enabled && !disable;
       const saved = await call<PinStatus>("pinSave", {
         currentPin: current, newPin: disable ? null : next, confirmPin: disable ? null : confirm,
       });
@@ -78,17 +75,6 @@ export default function PinSettings() {
       setStatus(saved);
       setCurrent(""); setNext(""); setConfirm("");
       setNotice(disable ? "PIN 잠금을 해제했습니다." : android ? "PIN을 저장했습니다." : "PIN을 저장했습니다. 다음 앱 시작과 트레이 복원부터 적용됩니다.");
-      if (firstPin && android && !saved.locked && document.visibilityState === "visible") {
-        (document.activeElement as HTMLElement | null)?.blur();
-        const capability = await invoke<BiometricStatus>("android_biometric_status").catch(() => null);
-        if (!mounted.current || document.visibilityState !== "visible") return;
-        if (capability) setBiometric(capability);
-        if (capability?.available && await askBiometric({
-          title: "지문도 사용할까요?",
-          message: "지문으로 더 간편하게 잠금을 해제할 수 있습니다. PIN도 계속 사용할 수 있습니다.",
-          confirmLabel: "지문 사용", cancelLabel: "나중에", icon: <Fingerprint size={18} />,
-        }) && mounted.current && document.visibilityState === "visible") await saveBiometric(true);
-      }
     } catch (e: any) {
       if (mounted.current) setError(e.message || String(e));
     } finally {
@@ -131,6 +117,5 @@ export default function PinSettings() {
       </label>
       <p className="settings-description">{!status?.enabled ? "PIN을 설정한 뒤 사용할 수 있습니다." : biometric?.reason || "기기에 등록된 지문 등 생체 인증을 사용합니다. PIN으로도 잠금을 해제할 수 있습니다."}</p>
     </div>}
-    {biometricDialog}
   </>;
 }
