@@ -1,4 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { motion, useReducedMotion } from "motion/react";
+import { GoalCheck, useGoalCelebration } from "./GoalCelebration";
 import { Settings2 } from "lucide-react";
 import { countForRule, manuscriptPaperPages } from "../core/text.mjs";
 import type { ManuscriptCounts } from "./manuscript-counts";
@@ -17,10 +19,16 @@ export default function PlatformCount({
   documentOnly?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
+  const { celebration, registerWidget } = useGoalCelebration();
+  const reducedMotion = useReducedMotion();
+  useEffect(() => {
+    if (!documentOnly) return registerWidget();
+  }, [documentOnly, registerWidget]);
   const unit = documentOnly ? "utf16" : rules.unit,
     goal = rules.goal;
   const displayUnit = documentOnly ? "자" : writingUnit(rules);
   const value = stats ? documentOnly ? countForRule(stats, "spaces", unit) : stats.platformCharacters : 0;
+  const reached = !!stats && goal > 0 && value >= goal;
   const count = (rule: string) => stats ? countForRule(stats, rule, unit).toLocaleString() : "…";
   const name =
     rules.platform === "custom"
@@ -57,16 +65,21 @@ export default function PlatformCount({
       </div>
       {!documentOnly && <>
       <div className="progress">
-        <div style={{ width: `${Math.min(100, (value / goal) * 100)}%` }} />
+        <div style={{ width: `${goal > 0 ? Math.min(100, (value / goal) * 100) : 0}%` }}>
+          {!!celebration && !reducedMotion && <motion.span key={celebration} className="goal-progress-light" aria-hidden="true"
+            initial={{ x: "-100%" }} animate={{ x: "100%" }} transition={{ duration: 1.2, ease: "easeInOut" }} />}
+        </div>
       </div>
       <div className="goal-row">
-        <span>
+        <span className={reached ? "goal-reached" : undefined}>
+          {reached && <GoalCheck key={celebration} animate={!!celebration} />}
           {!stats ? "계산 중…" : value >= goal
             ? "목표 달성 · " + (value - goal).toLocaleString() + `${displayUnit} 초과`
             : (goal - value).toLocaleString() + `${displayUnit} 남음`}
         </span>
         <b>{stats ? `${Math.round((value / goal) * 100)}%` : "…"}</b>
       </div>
+      {!!celebration && <span className="goal-announcement" role="status">목표 분량을 달성했습니다.</span>}
       </>}
       <dl className="count-breakdown">
         <div>

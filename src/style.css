@@ -2244,6 +2244,8 @@ body.sidebar-resizing * {
   margin: 15px 0 10px;
 }
 .progress > div {
+  position: relative;
+  overflow: hidden;
   height: 100%;
   background: var(--accent);
   border-radius: 3px;
@@ -2254,6 +2256,52 @@ body.sidebar-resizing * {
   justify-content: space-between;
   font-size: 13px;
   color: var(--muted);
+}
+.goal-progress-light {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, transparent 20%, #ffffff88 50%, transparent 80%);
+}
+.goal-check {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  color: var(--accent);
+}
+.goal-reached {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.goal-announcement {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.goal-notice-position {
+  position: fixed;
+  top: calc(64px + env(safe-area-inset-top, 0px));
+  left: 50%;
+  translate: -50% 0;
+  z-index: 45;
+  pointer-events: none;
+}
+.goal-notice {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 13px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 3px 16px #0000000a;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
 }
 .goal-row b {
   color: var(--text);

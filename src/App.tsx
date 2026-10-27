@@ -96,6 +96,7 @@ import MobilePreview from "./MobilePreview";
 import type { NoteMark } from "./note-links";
 import { resolveDocumentLink, type DocumentLinkSource } from "./document-links";
 import PlatformCount from "./PlatformCount";
+import GoalCelebration, { GoalCelebrationNotice } from "./GoalCelebration";
 import PlatformPicker from "./PlatformPicker";
 import QuickNote, { quickNoteMarkdown, quickNoteTitle, type QuickNoteSource } from "./QuickNote";
 import RealtimeSync from "./RealtimeSync";
@@ -1359,6 +1360,12 @@ export default function App() {
   const charsWithSpaces = stats ? countForRule(stats, "spaces", countUnit) : 0;
   const goal = Number(writingRules.goal) || 0;
   const isWorkspace = view === "workspace" && !!active && !memoOpen;
+  const goalCelebrationProps = {
+    identity: isWorkspace && active?.kind === "episode" && !(isMobile && mobileClosing)
+      ? JSON.stringify([lib.root, active.id, writingRules]) : null,
+    value: stats?.platformCharacters ?? null,
+    goal,
+  };
   // 모든 탭을 닫은 집필 화면. 파일 트리는 그대로 두고 편집 영역만 비운다.
   const emptyWorkspace = view === "workspace" && !active && !memoOpen;
   // 빈 화면 위에서 끌기를 취소하거나 다른 곳에 놓아도 놓기 표시를 지운다.
@@ -1923,6 +1930,7 @@ export default function App() {
   }
   if (isMobile) {
     return (
+      <GoalCelebration {...goalCelebrationProps}>
       <MobileShell
         lib={shownLibrary}
         loaded={loaded}
@@ -2052,10 +2060,11 @@ export default function App() {
         message={message}
         report={report}
       />
+      </GoalCelebration>
     );
   }
   return (
-    <>
+    <GoalCelebration {...goalCelebrationProps}>
     <div
       className={`app ${prefs.theme === "dark" ? "dark" : ""} ${prefs.colorTheme === "bakery" ? "bakery" : ""} ${focus ? "focus-mode" : ""}`}
       inert={updater.locked}
@@ -2985,8 +2994,9 @@ export default function App() {
       {releaseNotice.visible && <ReleaseNotice version={lib.version}
         onOpen={() => setReleaseNotesOpen(true)} onClose={releaseNotice.dismiss} />}
       {releaseNotesOpen && <ReleaseNotesDialog version={lib.version} onClose={() => setReleaseNotesOpen(false)} />}
+      <GoalCelebrationNotice />
     </div>
     <UpdateLock phase={updater.phase} />
-    </>
+    </GoalCelebration>
   );
 }

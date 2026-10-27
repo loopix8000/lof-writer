@@ -52,6 +52,7 @@ import {
 import { isAndroidApp } from "../tauri-bridge";
 import type { useProjectReorder } from "../useProjectReorder";
 import { UpdateLock, UpdateNotice } from "../Updater";
+import { GoalCelebrationNotice } from "../GoalCelebration";
 import MobileEditorView from "./MobileEditorView";
 import MobileEmptyEditorView from "./MobileEmptyEditorView";
 import MobileLibraryView from "./MobileLibraryView";
@@ -780,7 +781,7 @@ export default function MobileShell({
               <div className="m-topbar-title">
                 <h1>
                   {settingsDetailOpen
-                    ? settingPages.find((item) => item.id === settingsPage)?.label ||
+                    ? settingPages.find((item) => item.id === settingsPage && item.id !== "api")?.label ||
                       "설정"
                     : "설정"}
                 </h1>
@@ -1247,6 +1248,7 @@ export default function MobileShell({
         />
       )}
       <UpdateLock phase={updater.phase} />
+      <GoalCelebrationNotice />
     </div>
   );
 }

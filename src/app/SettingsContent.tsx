@@ -126,7 +126,9 @@ export default function SettingsContent({
   mobileDetailOpen: controlledDetailOpen,
   onMobileDetailChange,
 }: Props) {
-  const visibleSettingPages = settingPages.filter((item) => isMobile || item.id !== "realtime");
+  const visibleSettingPages = settingPages.filter((item) =>
+    isMobile ? item.id !== "api" : item.id !== "realtime",
+  );
   const settingsPage = visibleSettingPages.some((item) => item.id === requestedSettingsPage)
     ? requestedSettingsPage
     : "editor";
@@ -665,7 +667,7 @@ export default function SettingsContent({
             <h3><FolderSync size={18} />파일 동기화</h3>
             {settingsPage === "connections" && renderSyncConnections()}
           </section>
-          <section id="settings-api" className="settings-section" hidden={settingsPage !== "api"}>
+          {!isMobile && <section id="settings-api" className="settings-section" hidden={settingsPage !== "api"}>
             <h3>
               <Code2 size={18} />
               MCP / API
@@ -715,7 +717,7 @@ export default function SettingsContent({
                 MCP 연결은 위의 설정으로 별도로 등록해 주세요.
               </p>
             </div>
-          </section>
+          </section>}
         </div>
       </div>
       <footer className="settings-footer">
