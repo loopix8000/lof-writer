@@ -184,10 +184,9 @@ export type SourceEditorHandle = {
 type Props = {
   session?: EditorSession;
   id: string; body: string; editable: boolean; inactive: boolean; visible: boolean;
-  fontSize: number; lineHeight: number; manualLineBreak: boolean;
+  fontFamily: string; fontWeight: number; fontSize: number; lineHeight: number;
   typingOptions: Record<string, any>; countingRules?: WritingRules;
   reveal?: { query: string; index: number; caseSensitive?: boolean; seq?: number } | null;
-  normalizePaste: (text: string, manual: boolean) => string;
   onChange: (body: string, delta?: ManuscriptCounts | null) => void;
   onCursorLine?: (line: number) => void;
   onUndoStateChange?: (state: UndoState) => void;
@@ -234,8 +233,7 @@ const SourceEditor = forwardRef<SourceEditorHandle, Props>(function SourceEditor
       const view = viewRef.current;
       if (!view) return;
       const { from, to } = view.state.selection.main;
-      const insert = latest.current.manualLineBreak || inCode(view.state) ? text : latest.current.normalizePaste(text, false);
-      handle.current.replace(from, to, insert);
+      handle.current.replace(from, to, text);
     },
     insertImage(image) {
       const view = viewRef.current;
@@ -286,8 +284,6 @@ const SourceEditor = forwardRef<SourceEditorHandle, Props>(function SourceEditor
         findHighlights,
         jsdocHighlights,
         editableConfig.of(editable()), contentConfig.of(attributes()),
-        EditorView.clipboardInputFilter.of((text, state) => latest.current.manualLineBreak || inCode(state)
-          ? text : latest.current.normalizePaste(text, false)),
         EditorView.updateListener.of(update => {
           reportUndoState(update.state);
           if (update.docChanged || update.selectionSet) {
@@ -367,10 +363,10 @@ const SourceEditor = forwardRef<SourceEditorHandle, Props>(function SourceEditor
       if (view && !props.inactive) props.onCursorLine?.(view.state.doc.lineAt(view.state.selection.main.head).number);
     }
   }, [props.visible, props.inactive]);
-  useLayoutEffect(() => { viewRef.current?.requestMeasure(); }, [props.fontSize, props.lineHeight]);
+  useLayoutEffect(() => { viewRef.current?.requestMeasure(); }, [props.fontFamily, props.fontWeight, props.fontSize, props.lineHeight]);
   useLayoutEffect(() => {
     if (props.reveal?.query) handle.current.reveal(props.reveal.query, props.reveal.index, props.reveal.caseSensitive);
   }, [props.reveal?.seq, props.id]);
-  return <div ref={host} className="source-codemirror" style={{ fontSize: props.fontSize, lineHeight: props.lineHeight }} />;
+  return <div ref={host} className="source-codemirror" style={{ fontFamily: props.fontFamily, fontWeight: props.fontWeight, fontSize: props.fontSize, lineHeight: props.lineHeight }} />;
 });
 export default SourceEditor;

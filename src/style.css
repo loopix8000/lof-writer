@@ -2147,7 +2147,7 @@ body.sidebar-resizing * {
 }
 .source-editor .cm-editor.cm-focused { outline: none; }
 .source-editor .cm-scroller {
-  font-family: "Consolas", "Malgun Gothic", monospace;
+  font-family: inherit;
   line-height: inherit;
   overflow: visible;
 }

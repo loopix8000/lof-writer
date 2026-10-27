@@ -58,28 +58,14 @@ import type { UndoState } from "./useUndoState";
 
 const SourceEditor = lazy(() => import("./SourceEditor"));
 
-function compactBlankLines<T>(lines: readonly T[], isBlank: (line: T) => boolean): T[] {
-  let blankCount = 0;
-  return lines.filter((line) => {
-    if (!isBlank(line)) {
-      blankCount = 0;
-      return true;
-    }
-    return ++blankCount % 2 === 0;
-  });
-}
-
-function normalizePastedText(text: string, manual: boolean): string {
-  const lines = text.split(/\r\n?|\n/);
-  return (manual ? lines : compactBlankLines(lines, (line) => line.trim() === "")).join("\n");
-}
-
 function clipboardTextParser(manual: boolean): NonNullable<EditorProps["clipboardTextParser"]> {
   return (text, $context, _plainText, view) => {
     const { schema } = view.state;
     const marks = $context.marks();
-    const keptLines = normalizePastedText(text, manual).split("\n");
-    const paragraphs = keptLines.map((line) =>
+    const lines = text.split(/\r\n?|\n/);
+    const kept = manual ? lines : lines.filter((line, index) =>
+      line.trim() !== "" || index === 0 || index === lines.length - 1);
+    const paragraphs = kept.map((line) =>
       schema.nodes.paragraph.create(null, line ? schema.text(line, marks) : undefined),
     );
     return new Slice(Fragment.fromArray(paragraphs), 1, 1);
@@ -88,6 +74,54 @@ function clipboardTextParser(manual: boolean): NonNullable<EditorProps["clipboar
 
 const parseManualClipboardText = clipboardTextParser(true);
 const parseAutomaticClipboardText = clipboardTextParser(false);
+
+// 키보드 클립보드의 여러 줄 입력도 일반 붙여넣기와 같은 문단으로 넣는다.
+function insertAutomaticText(view: EditorView, text: string, from = view.state.selection.from, to = view.state.selection.to) {
+  if (!view.editable || !/[\r\n]/.test(text)) return false;
+  const $from = view.state.doc.resolve(from);
+  if ($from.parent.type.spec.code) return false;
+  const slice = parseAutomaticClipboardText(text, $from, true, view);
+  if (!slice) return false;
+  const tr = view.state.tr.replaceRange(from, to, slice);
+  tr.setSelection(TextSelection.near(tr.doc.resolve(tr.mapping.map(to, 1))));
+  view.dispatch(tr.scrollIntoView().setMeta("paste", true).setMeta("uiEvent", "paste"));
+  return true;
+}
+
+// HTML로 붙여 넣은 줄도 자동 관리의 문단 간격 하나로 표시한다.
+const normalizeAutomaticHtmlPaste: NonNullable<EditorProps["transformPasted"]> = (slice, _view, plain) => {
+  if (plain) return slice;
+  const normalize = (content: Fragment): Fragment => {
+    const nodes: PMNode[] = [];
+    content.forEach((node) => {
+      if (node.type.name === "paragraph" && node.content.content.some((child) =>
+        child.type.name === "hardBreak" || (child.isText && /[\r\n]/.test(child.text!)))) {
+        const lines: PMNode[][] = [[]];
+        node.content.forEach((child) => {
+          if (child.type.name === "hardBreak") lines.push([]);
+          else if (child.isText && /[\r\n]/.test(child.text!)) {
+            child.text!.split(/\r\n?|\n/).forEach((text, index) => {
+              if (index) lines.push([]);
+              if (text) lines[lines.length - 1].push(child.type.schema.text(text, child.marks));
+            });
+          }
+          else lines[lines.length - 1].push(child);
+        });
+        if (lines.every((line) => line.every((child) => child.isText && !child.text!.trim()))) {
+          nodes.push(node.copy(Fragment.empty));
+        } else {
+          nodes.push(...lines.map((line) => node.copy(Fragment.fromArray(line))));
+        }
+      } else {
+        nodes.push(!node.isLeaf && !node.type.spec.code ? node.copy(normalize(node.content)) : node);
+      }
+    });
+    const kept = nodes.filter((node, index) => index === 0 || index === nodes.length - 1 ||
+      node.type.name !== "paragraph" || !node.content.content.every((child) => child.isText && !child.text!.trim()));
+    return Fragment.fromArray(kept);
+  };
+  return new Slice(normalize(slice.content), slice.openStart, slice.openEnd);
+};
 
 // 복사 단축키와 우클릭 메뉴가 같은 문단 간격을 쓰도록 한다. 표 선택은 선택한 셀만 복사한다.
 function automaticClipboardTextSerializer(blankLines: boolean): NonNullable<EditorProps["clipboardTextSerializer"]> {
@@ -104,33 +138,6 @@ function automaticClipboardTextSerializer(blankLines: boolean): NonNullable<Edit
       .join(blockSeparator);
   };
 }
-
-// 텍스트는 위 파서에서 한 번 처리한다. HTML의 빈 문단·줄바꿈도 같은 규칙을 적용한다.
-const normalizeAutomaticPaste: NonNullable<EditorProps["transformPasted"]> = (slice, _view, plain) => {
-  if (plain) return slice;
-  const normalize = (content: Fragment): Fragment => {
-    const nodes: PMNode[] = [];
-    content.forEach((node) => {
-      nodes.push(!node.isLeaf && !node.type.spec.code ? node.copy(normalize(node.content)) : node);
-    });
-    const hardBreak = nodes.find((node) => node.type.name === "hardBreak");
-    if (hardBreak) {
-      const lines: PMNode[][] = [[]];
-      for (const node of nodes) {
-        if (node.type.name === "hardBreak") lines.push([]);
-        else lines[lines.length - 1].push(node);
-      }
-      const kept = compactBlankLines(lines, (line) =>
-        line.every((node) => node.isText && node.text!.trim() === ""));
-      return Fragment.fromArray(kept.flatMap((line, index) => index ? [hardBreak, ...line] : line));
-    }
-    const kept = compactBlankLines(nodes, (node) => node.type.name === "paragraph" &&
-      node.content.content.every((child) => child.isText && child.text!.trim() === ""));
-    // 문단이 필수인 인용·목록 항목 안에서는 최소 한 문단을 남긴다.
-    return Fragment.fromArray(kept.length || !nodes.length ? kept : [nodes[0]]);
-  };
-  return new Slice(normalize(slice.content), slice.openStart, slice.openEnd);
-};
 
 // 문단(textblock) 안의 글자 위치를 편집기 위치로 바꾼다. 글자가 아닌 요소는 건너뛴다.
 function offsetToPos(node: PMNode, pos: number, offset: number) {
@@ -580,6 +587,8 @@ export default function Writer({
   const editable = !readOnly && !inactive;
   const editableRef = useRef(editable);
   editableRef.current = editable;
+  const manualLineBreakRef = useRef(manualLineBreak);
+  manualLineBreakRef.current = manualLineBreak;
   const annotationsEnabled = !inactive && visible && (!readOnly || allowReadOnlyAnnotations);
   const annotationsEnabledRef = useRef(annotationsEnabled);
   annotationsEnabledRef.current = annotationsEnabled;
@@ -634,16 +643,21 @@ export default function Writer({
       editorProps: {
         clipboardTextParser: manualLineBreak ? parseManualClipboardText : parseAutomaticClipboardText,
         clipboardTextSerializer: manualLineBreak ? undefined : automaticClipboardTextSerializer(copyWithBlankLines),
-        transformPasted: manualLineBreak ? undefined : normalizeAutomaticPaste,
+        transformPasted: manualLineBreak ? undefined : normalizeAutomaticHtmlPaste,
         // 그림 파일을 붙여 넣거나 끌어 놓으면 작품의 assets/에 저장하고 이미지로 넣는다.
         handlePaste: (view, event) => {
           const files = imageFiles(event.clipboardData),
             save = imagesRef.current?.save;
-          if (!files.length || !save || !view.editable) return false;
-          event.preventDefault();
-          void saveImageFiles(files, save, (img) => placeImage(view, img));
-          return true;
+          if (files.length && save && view.editable) {
+            event.preventDefault();
+            void saveImageFiles(files, save, (img) => placeImage(view, img));
+            return true;
+          }
+          const text = event.clipboardData?.getData("text/plain");
+          return !manualLineBreakRef.current && !!text && insertAutomaticText(view, text);
         },
+        handleTextInput: (view, from, to, text) =>
+          !manualLineBreakRef.current && insertAutomaticText(view, text, from, to),
         handleDrop: (view, event, _slice, moved) => {
           const files = moved ? [] : imageFiles(event.dataTransfer),
             save = imagesRef.current?.save;
@@ -668,6 +682,18 @@ export default function Writer({
           spellcheck: "false",
         },
         handleDOMEvents: {
+          beforeinput: (view, event) => {
+            if (manualLineBreakRef.current || !event.cancelable ||
+              !["insertFromPaste", "insertText", "insertReplacementText"].includes(event.inputType)) return false;
+            const text = event.dataTransfer?.getData("text/plain") || event.data;
+            if (!text || !/[\r\n]/.test(text)) return false;
+            const range = event.getTargetRanges?.()[0];
+            const from = range ? view.posAtDOM(range.startContainer, range.startOffset) : view.state.selection.from;
+            const to = range ? view.posAtDOM(range.endContainer, range.endOffset) : view.state.selection.to;
+            if (!insertAutomaticText(view, text, from, to)) return false;
+            event.preventDefault();
+            return true;
+          },
           // 링크를 앱 안에서 열어 WebView가 다른 페이지로 이동하지 않도록 한다.
           click: (view, event) => {
             const anchor = (event.target as HTMLElement).closest?.("a[href]");
@@ -787,7 +813,7 @@ export default function Writer({
           ...editor.options.editorProps,
           clipboardTextParser: manualLineBreak ? parseManualClipboardText : parseAutomaticClipboardText,
           clipboardTextSerializer: manualLineBreak ? undefined : automaticClipboardTextSerializer(copyWithBlankLines),
-          transformPasted: manualLineBreak ? undefined : normalizeAutomaticPaste,
+          transformPasted: manualLineBreak ? undefined : normalizeAutomaticHtmlPaste,
         },
       });
     }
@@ -1344,8 +1370,9 @@ export default function Writer({
           <SourceEditor
             ref={sourceRef} id={id} body={body} editable={editable} inactive={inactive} visible={visible}
             session={session}
-            manualLineBreak={manualLineBreak} typingOptions={typingOptions} countingRules={countingRules}
-            fontSize={style.fontSize} lineHeight={style.lineHeight} normalizePaste={normalizePastedText}
+            typingOptions={typingOptions} countingRules={countingRules}
+            fontFamily={resolvedFontFamily} fontWeight={style.fontWeight}
+            fontSize={style.fontSize} lineHeight={style.lineHeight}
             reveal={reveal}
             onChange={notifyChange}
             onCursorLine={reportsCursor ? line => cursorLineRef.current?.(line) : undefined}
