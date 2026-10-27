@@ -2037,6 +2037,8 @@ async fn lof_invoke(
                         return Err(fail_invalid("새 PIN과 확인 번호가 일치하지 않습니다."));
                     }
                     pin.save(current, next)?;
+                    // Android는 창 표시 여부를 항상 false로 돌려주고, 백그라운드 잠금은 앱 상태 변경에서 따로 처리한다.
+                    #[cfg(not(target_os = "android"))]
                     if !window.is_visible().unwrap_or(false) {
                         pin.lock_for_tray();
                     }
