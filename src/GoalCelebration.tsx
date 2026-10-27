@@ -15,7 +15,7 @@ export default function GoalCelebration({ identity, value, goal, children }: {
   goal: number;
   children: ReactNode;
 }) {
-  const previous = useRef<{ identity: string; value: number; celebrated: boolean } | null>(null);
+  const previous = useRef<{ identity: string; reached: boolean } | null>(null);
   const sequence = useRef(0);
   const [event, setEvent] = useState<{ identity: string; sequence: number } | null>(null);
   const [widgetCount, setWidgetCount] = useState(0);
@@ -31,16 +31,15 @@ export default function GoalCelebration({ identity, value, goal, children }: {
       return;
     }
     if (previous.current?.identity !== identity) {
-      previous.current = value === null ? null : { identity, value, celebrated: value >= goal };
+      previous.current = value === null ? null : { identity, reached: value >= goal };
       setEvent(null);
       return;
     }
     if (value === null) return;
-    if (!previous.current.celebrated && previous.current.value < goal && value >= goal) {
-      previous.current.celebrated = true;
-      setEvent({ identity, sequence: ++sequence.current });
-    }
-    previous.current.value = value;
+    // 목표 아래에서 목표 이상으로 넘어설 때마다 축하한다(입력·붙여넣기·목표 변경 모두).
+    const reached = value >= goal;
+    if (!previous.current.reached && reached) setEvent({ identity, sequence: ++sequence.current });
+    previous.current.reached = reached;
   }, [identity, value, goal]);
 
   useEffect(() => {

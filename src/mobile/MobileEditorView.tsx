@@ -34,6 +34,8 @@ import {
   X,
 } from "lucide-react";
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { GoalCheck, useGoalCelebration } from "../GoalCelebration";
 import { writingUnit } from "../../core/platforms.mjs";
 import {
   lineBreakDefault,
@@ -215,6 +217,8 @@ export default function MobileEditorView({
 }) {
   // 왼쪽 파일트리 드로어 / 오른쪽 위젯 드로어 상태
   const [leftDrawerOpen, setLeftDrawerOpen] = useState(false);
+  const { celebration } = useGoalCelebration();
+  const reducedMotion = useReducedMotion();
   const [rightDrawerOpen, setRightDrawerOpen] = useState(false);
   const [rightTab, setRightTab] = useState<RightWidgetTab>("widgets");
   const [treeTab, setTreeTab] = useState<TreeTab>(
@@ -907,6 +911,7 @@ export default function MobileEditorView({
     );
   };
 
+  const goalReached = active.kind === "episode" && !!stats && writingRules.goal > 0 && platformChars >= writingRules.goal;
   const charCountLabel =
     active.kind === "episode"
       ? `${stats ? platformChars.toLocaleString() : "…"}${writingUnit(writingRules)}`
@@ -996,16 +1001,27 @@ export default function MobileEditorView({
           <button
             type="button"
             className="m-char-badge-btn"
-            aria-label="글자 수 및 위젯 보드 열기 (오른쪽에서 슬라이드)"
-            title="위젯 보드"
+            aria-label={`${goalReached ? "목표 분량 달성 · " : ""}${charCountLabel} · 글자 수 및 위젯 보드 열기 (오른쪽에서 슬라이드)`}
+            title={goalReached ? "목표 분량 달성 · 위젯 보드" : "위젯 보드"}
             onClick={() => {
               setRightTab("widgets");
               setRightDrawerOpen(true);
             }}
           >
             <span className="m-char-badge-label">{charCountLabel}</span>
-            <LayoutGrid size={17} />
+            <span className="m-char-badge-icon">
+              <AnimatePresence initial={false}>
+                <motion.span key={celebration ? "check" : "grid"} className="m-char-badge-icon-item"
+                  initial={reducedMotion ? { opacity: 0 } : { opacity: 0, scale: 0.5, rotate: celebration ? -30 : 30 }}
+                  animate={{ opacity: 1, scale: 1, rotate: 0 }}
+                  exit={reducedMotion ? { opacity: 0 } : { opacity: 0, scale: 0.5 }}
+                  transition={{ duration: reducedMotion ? 0.15 : 0.35, ease: "easeOut" }}>
+                  {celebration ? <GoalCheck animate /> : <LayoutGrid size={17} />}
+                </motion.span>
+              </AnimatePresence>
+            </span>
           </button>
+          {!!celebration && <span className="goal-announcement" role="status">목표 분량을 달성했습니다.</span>}
         </div>
       </header>
 

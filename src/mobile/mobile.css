@@ -1655,6 +1655,22 @@
   flex-shrink: 0;
 }
 
+.m-char-badge-icon {
+  position: relative;
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
+.m-char-badge-icon-item {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .mobile-app .sync-issue-banner {
   display: flex;
   flex: 0 0 auto;

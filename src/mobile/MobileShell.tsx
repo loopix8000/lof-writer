@@ -52,7 +52,6 @@ import {
 import { isAndroidApp } from "../tauri-bridge";
 import type { useProjectReorder } from "../useProjectReorder";
 import { UpdateLock, UpdateNotice } from "../Updater";
-import { GoalCelebrationNotice } from "../GoalCelebration";
 import MobileEditorView from "./MobileEditorView";
 import MobileEmptyEditorView from "./MobileEmptyEditorView";
 import MobileLibraryView from "./MobileLibraryView";
@@ -1248,7 +1247,6 @@ export default function MobileShell({
         />
       )}
       <UpdateLock phase={updater.phase} />
-      <GoalCelebrationNotice />
     </div>
   );
 }

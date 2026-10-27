@@ -1362,7 +1362,7 @@ export default function App() {
   const isWorkspace = view === "workspace" && !!active && !memoOpen;
   const goalCelebrationProps = {
     identity: isWorkspace && active?.kind === "episode" && !(isMobile && mobileClosing)
-      ? JSON.stringify([lib.root, active.id, writingRules]) : null,
+      ? JSON.stringify([lib.root, active.id, { ...writingRules, goal: undefined }]) : null,
     value: stats?.platformCharacters ?? null,
     goal,
   };

@@ -64,7 +64,7 @@ export default function PlatformCount({
         <small>{documentOnly ? "자" : ` / ${goal.toLocaleString()}${displayUnit}`}</small>
       </div>
       {!documentOnly && <>
-      <div className="progress">
+      <div className={`progress${reached ? " is-reached" : ""}`}>
         <div style={{ width: `${goal > 0 ? Math.min(100, (value / goal) * 100) : 0}%` }}>
           {!!celebration && !reducedMotion && <motion.span key={celebration} className="goal-progress-light" aria-hidden="true"
             initial={{ x: "-100%" }} animate={{ x: "100%" }} transition={{ duration: 1.2, ease: "easeInOut" }} />}
