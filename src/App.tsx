@@ -116,7 +116,6 @@ import {
   type SearchResult,
 } from "./SearchViews";
 import SyncConnections from "./SyncConnections";
-import { externalScreenOpen, isAndroidApp } from "./tauri-bridge";
 import SyncStatus from "./SyncStatus";
 import {
   call,
@@ -474,12 +473,8 @@ export default function App() {
     };
     window.addEventListener("resize", onResize);
 
-    // Android에서 앱을 벗어나면 바로 잠가, 다시 열 때 PIN을 묻고 최근 앱 화면에도 원고가 보이지 않게 한다.
-    const lockOnLeave = () => isAndroidApp() && !externalScreenOpen();
     const handleVisibility = () => {
       if (document.visibilityState === "hidden") {
-        const lock = lockOnLeave();
-        if (lock) void call("appLifecycle", { foreground: false, lock }).catch(() => {});
         void flush()
           .catch(() => {})
           .finally(() => {
@@ -494,7 +489,7 @@ export default function App() {
     const handlePageHide = () => {
       void flush().catch(() => {});
       void flushWorkspaceState().catch(() => {});
-      void call("appLifecycle", { foreground: false, lock: lockOnLeave() }).catch(() => {});
+      void call("appLifecycle", { foreground: false }).catch(() => {});
     };
     const handleNetworkOnline = () => {
       void call("realtimeSync").catch(() => {});

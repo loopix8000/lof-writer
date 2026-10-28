@@ -418,6 +418,9 @@ export default function MobileShell({
   // 안드로이드 시스템 뒤로가기 버튼/제스처 연결
   useEffect(() => {
     (window as any).__lofMobileBack = () => {
+      if (document.documentElement.dataset.pinLocked === "true") {
+        return false;
+      }
       // 설정 화면 위에 띄운 전체 화면 보기(QR 확대 등)를 먼저 닫는다.
       if ((window as any).__lofOverlayBack?.()) {
         return true;
@@ -517,11 +520,11 @@ export default function MobileShell({
   const shellRef = useRef<HTMLDivElement>(null);
   const dark = prefs.theme === "dark";
   useEffect(() => {
-    if (!isAndroidApp() || !shellRef.current) return;
+    if (!isAndroidApp() || !loaded || !shellRef.current) return;
     const color = getComputedStyle(shellRef.current).getPropertyValue("--surface").trim();
     if (!/^#[0-9a-f]{6}$/i.test(color)) return;
     void invoke("android_set_system_bars", { color, dark }).catch(() => {});
-  }, [dark, prefs.colorTheme]);
+  }, [loaded, dark, prefs.colorTheme]);
 
   // 키보드를 내리면 본문 편집 영역의 포커스를 풀어 커서와 삽입 핸들이 남지 않게 한다.
   useEffect(() => {

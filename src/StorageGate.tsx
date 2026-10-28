@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { FolderOpen } from "lucide-react";
 import type { PinStatus } from "./PinSettings";
-import { isAndroidApp } from "./tauri-bridge";
+import { isAndroidApp, withExternalScreen } from "./tauri-bridge";
 import { call } from "./types";
 
 type Phase = "checking" | "access" | "preparing" | "notice" | "ready";
@@ -31,7 +31,9 @@ export default function StorageGate({ children }: { children: ReactNode }) {
           return;
         }
       }
-      const access = await invoke<{ granted?: boolean }>("android_storage_access", { request });
+      const access = request
+        ? await withExternalScreen(() => invoke<{ granted?: boolean }>("android_storage_access", { request }))
+        : await invoke<{ granted?: boolean }>("android_storage_access", { request });
       if (!access?.granted) {
         setPhase("access");
         if (request) setError("모든 파일 접근을 허용해야 기기 폴더의 서재를 열 수 있습니다.");

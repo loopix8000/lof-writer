@@ -651,7 +651,7 @@ fn dispatch_method(
             background_sync::set_background(app, !foreground);
             realtime::set_background(app, !foreground);
             auto_sync::set_background(app, !foreground);
-            Ok(json!(true))
+            Ok(pin_status(app))
         }
         "backgroundNotifications" => {
             background_sync::request_notifications(app);
@@ -676,7 +676,12 @@ fn dispatch_method(
             schedule_notify(app, &state.notify_seq);
             Ok(status)
         }
-        "pinStatus" => Ok(pin_status(app)),
+        "pinStatus" => {
+            if args.get("lock").and_then(Value::as_bool) == Some(true) {
+                app.state::<pin::PinState>().lock_for_tray();
+            }
+            Ok(pin_status(app))
+        }
         "pinReady" => {
             let generation = args.get("generation").and_then(Value::as_u64).unwrap_or(0);
             if app.state::<pin::PinState>().ready_to_show(generation) {

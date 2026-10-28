@@ -1,5 +1,6 @@
 package local.lof.writer
 
+import android.graphics.Color
 import android.graphics.Rect
 import android.os.Bundle
 import android.view.ActionMode
@@ -11,15 +12,20 @@ import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import android.widget.FrameLayout
 import androidx.activity.OnBackPressedCallback
+import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import org.json.JSONObject
+import java.io.File
 
 class MainActivity : TauriActivity() {
   override val handleBackNavigation: Boolean = false
   private var webView: WebView? = null
+  private var pinCoverView: View? = null
   private var imeVisible = false
   private var activeActionMode: ActionMode? = null
+  @Volatile private var externalScreenOpen = false
   @Volatile private var canBookmark = false
   @Volatile private var bookmarked = false
   @Volatile private var canQuickNote = false
@@ -27,6 +33,34 @@ class MainActivity : TauriActivity() {
   companion object {
     private const val MENU_ID_BOOKMARK = 0x70f10001
     private const val MENU_ID_QUICK_NOTE = 0x70f10002
+  }
+
+  private fun isPinEnabled(): Boolean = File(filesDir, "pin.json").isFile
+
+  private fun resolveThemeStyle(): Pair<Int, Boolean> {
+    return try {
+      val raw = File(filesDir, "settings.json").readText()
+      val prefs = JSONObject(raw).optJSONObject("preferences")
+      val dark = prefs?.optString("theme") == "dark"
+      val bakery = prefs?.optString("colorTheme") == "bakery"
+      val color = when {
+        bakery && dark -> 0xFF151515.toInt()
+        bakery -> 0xFFFCFCFB.toInt()
+        dark -> 0xFF1F1F1F.toInt()
+        else -> 0xFFFFFFFF.toInt()
+      }
+      color to dark
+    } catch (_: Exception) {
+      0xFFFFFFFF.toInt() to false
+    }
+  }
+
+  private fun showPinCover() {
+    val (color, _) = resolveThemeStyle()
+    pinCoverView?.let { cover ->
+      cover.setBackgroundColor(color)
+      cover.visibility = View.VISIBLE
+    }
   }
 
   inner class EditorContextMenuBridge {
@@ -45,12 +79,36 @@ class MainActivity : TauriActivity() {
         }
       }
     }
+
+    @JavascriptInterface
+    fun setExternalScreenOpen(open: Boolean) {
+      this@MainActivity.externalScreenOpen = open
+    }
+
+    @JavascriptInterface
+    fun setPinCoverVisible(visible: Boolean) {
+      runOnUiThread {
+        if (visible) {
+          showPinCover()
+        } else {
+          pinCoverView?.visibility = View.GONE
+        }
+      }
+    }
   }
 
   override fun onCreate(savedInstanceState: Bundle?) {
-    enableEdgeToEdge()
+    val (bgColor, isDark) = resolveThemeStyle()
+    val barStyle = if (isDark) {
+      SystemBarStyle.dark(Color.TRANSPARENT)
+    } else {
+      SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT)
+    }
+    enableEdgeToEdge(barStyle, barStyle)
     super.onCreate(savedInstanceState)
+    window.decorView.setBackgroundColor(bgColor)
     val contentView = findViewById<android.view.View>(android.R.id.content)
+    contentView.setBackgroundColor(bgColor)
     ViewCompat.setOnApplyWindowInsetsListener(contentView) { view, windowInsets ->
       val insets = windowInsets.getInsets(
         WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout() or WindowInsetsCompat.Type.ime()
@@ -72,6 +130,8 @@ class MainActivity : TauriActivity() {
   override fun setContentView(view: View?) {
     if (view is WebView) {
       (view.parent as? ViewGroup)?.removeView(view)
+      val (bgColor, _) = resolveThemeStyle()
+      view.setBackgroundColor(bgColor)
       val container = object : FrameLayout(this) {
         override fun startActionModeForChild(
           originalView: View?,
@@ -95,8 +155,22 @@ class MainActivity : TauriActivity() {
           )
         }
       }
+      val cover = View(this).apply {
+        setBackgroundColor(bgColor)
+        isClickable = true
+        isFocusable = true
+        visibility = if (isPinEnabled()) View.VISIBLE else View.GONE
+      }
+      pinCoverView = cover
       container.addView(
         view,
+        FrameLayout.LayoutParams(
+          ViewGroup.LayoutParams.MATCH_PARENT,
+          ViewGroup.LayoutParams.MATCH_PARENT
+        )
+      )
+      container.addView(
+        cover,
         FrameLayout.LayoutParams(
           ViewGroup.LayoutParams.MATCH_PARENT,
           ViewGroup.LayoutParams.MATCH_PARENT
@@ -206,8 +280,13 @@ class MainActivity : TauriActivity() {
 
   override fun onStop() {
     super.onStop()
-    // 백그라운드로 내려가는 즉시 시작해야 Android가 알림 서비스를 허용한다.
-    if (!isChangingConfigurations) BackgroundSync.appHidden(this)
+    // 백그라운드로 내려가는 즉시 잠금 가림막을 올리고 알림 서비스를 시작한다.
+    if (!isChangingConfigurations) {
+      if (!externalScreenOpen && isPinEnabled()) {
+        showPinCover()
+      }
+      BackgroundSync.appHidden(this)
+    }
   }
 
   override fun onWebViewCreate(webView: WebView) {

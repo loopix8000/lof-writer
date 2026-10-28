@@ -4,7 +4,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { Fingerprint, LockKeyhole, Minus, X } from "lucide-react";
 import App from "./App";
 import { pinDigits, type PinStatus } from "./PinSettings";
-import { isAndroidApp } from "./tauri-bridge";
+import StorageGate from "./StorageGate";
+import { externalScreenOpen, isAndroidApp, setAndroidPinCoverVisible } from "./tauri-bridge";
 import { call } from "./types";
 
 export default function PinGate() {
@@ -17,9 +18,16 @@ export default function PinGate() {
   const latestStatus = useRef(status);
   latestStatus.current = status;
   const biometricAttempt = useRef<number | null>(null);
+  const pendingLockGeneration = useRef<number | null>(null);
+  const backgroundLocked = useRef(false);
+  const lockTask = useRef<Promise<void> | null>(null);
   const [visible, setVisible] = useState(document.visibilityState === "visible");
   const locked = status?.locked ?? true;
   const updateStatus = useCallback((next: PinStatus) => {
+    if (pendingLockGeneration.current !== null) {
+      if (next.generation <= pendingLockGeneration.current) return;
+      pendingLockGeneration.current = null;
+    }
     setStatus((previous) => {
       if (previous && (next.generation < previous.generation ||
         (next.generation === previous.generation && !previous.locked && next.locked))) return previous;
@@ -30,32 +38,87 @@ export default function PinGate() {
     let alive = true;
     let off: (() => void) | undefined;
     void (async () => {
-      const unlisten = await listen<PinStatus>("lof:pin-state", (event) => {
-        if (alive) updateStatus(event.payload);
-      });
+      const [unlisten, initial] = await Promise.all([
+        listen<PinStatus>("lof:pin-state", (event) => {
+          if (alive) updateStatus(event.payload);
+        }),
+        call<PinStatus>("pinStatus", isAndroidApp() ? { lock: true } : undefined),
+      ]);
       if (!alive) { unlisten(); return; }
       off = unlisten;
-      const initial = await call<PinStatus>("pinStatus");
-      if (alive) updateStatus(initial);
-    })().catch((e) => { if (alive) setError(e.message || String(e)); });
+      updateStatus(initial);
+    })().catch((e) => {
+      if (alive) {
+        setError(e.message || String(e));
+        setAndroidPinCoverVisible(false);
+      }
+    });
     return () => { alive = false; off?.(); };
   }, [updateStatus]);
   useLayoutEffect(() => {
     document.documentElement.dataset.pinLocked = String(locked);
     if (locked) {
       if (!(isAndroidApp() && status?.biometricEnabled)) input.current?.focus();
+    } else {
+      setAndroidPinCoverVisible(false);
+      window.dispatchEvent(new Event("resize"));
     }
-    else window.dispatchEvent(new Event("resize"));
   }, [locked, status?.generation]);
   useEffect(() => {
+    if (!isAndroidApp() || !status?.locked) return;
+    const dark = status.theme === "dark";
+    const bakery = status.colorTheme === "bakery";
+    const color = bakery ? (dark ? "#151515" : "#fcfcfb") : (dark ? "#1f1f1f" : "#ffffff");
+    void invoke("android_set_system_bars", { color, dark }).catch(() => {});
+  }, [status?.locked, status?.theme, status?.colorTheme]);
+  useEffect(() => {
+    const lockForBackground = () => {
+      if (!isAndroidApp() || externalScreenOpen() || backgroundLocked.current) return;
+      backgroundLocked.current = true;
+      if (latestStatus.current?.enabled) {
+        setAndroidPinCoverVisible(true);
+        pendingLockGeneration.current = latestStatus.current.generation;
+        setStatus((previous) => (previous?.enabled ? { ...previous, locked: true } : previous));
+      }
+      const task = call<PinStatus>("appLifecycle", { foreground: false, lock: true })
+        .then((next) => {
+          if (next && typeof next.generation === "number") updateStatus(next);
+        })
+        .catch(() => {
+          pendingLockGeneration.current = null;
+        });
+      lockTask.current = task;
+    };
     const update = () => {
-      const visible = document.visibilityState === "visible";
-      if (!visible) { biometricAttempt.current = null; setPin(""); }
-      setVisible(visible);
+      const nextVisible = document.visibilityState === "visible";
+      if (!nextVisible) {
+        biometricAttempt.current = null;
+        setPin("");
+        lockForBackground();
+      } else {
+        backgroundLocked.current = false;
+        if (isAndroidApp()) {
+          const wait = lockTask.current ?? Promise.resolve();
+          void wait
+            .then(() => call<PinStatus>("pinStatus"))
+            .then((next) => {
+              pendingLockGeneration.current = null;
+              updateStatus(next);
+            })
+            .catch(() => {
+              pendingLockGeneration.current = null;
+            });
+        }
+      }
+      setVisible(nextVisible);
     };
     document.addEventListener("visibilitychange", update);
-    return () => document.removeEventListener("visibilitychange", update);
-  }, []);
+    window.addEventListener("pagehide", lockForBackground);
+    return () => {
+      document.removeEventListener("visibilitychange", update);
+      window.removeEventListener("pagehide", lockForBackground);
+    };
+  }, [updateStatus]);
   const unlockBiometric = useCallback(async () => {
     if (authBusy.current || !latestStatus.current?.locked) return;
     authBusy.current = true;
@@ -80,18 +143,37 @@ export default function PinGate() {
     }
   }, [updateStatus]);
   useEffect(() => {
-    if (!isAndroidApp() || !status?.locked || !status.biometricEnabled || !visible || busy ||
-        biometricAttempt.current === status.generation) return;
-    biometricAttempt.current = status.generation;
-    void unlockBiometric();
-  }, [status, visible, busy, unlockBiometric]);
-  useEffect(() => {
     setPin(""); setError("");
   }, [locked, status?.generation]);
   useEffect(() => {
-    // 잠금 화면이 DOM에 반영된 다음 숨겨진 창을 다시 표시한다.
-    if (status?.locked) void call("pinReady", { generation: status.generation }).catch((e) => setError(e.message));
-  }, [status]);
+    if (!status?.locked) return;
+    if (!isAndroidApp()) {
+      // 잠금 화면이 DOM에 반영된 다음 숨겨진 창을 다시 표시한다.
+      void call("pinReady", { generation: status.generation }).catch((e) => setError(e.message));
+      return;
+    }
+    if (!visible || pendingLockGeneration.current === status.generation) return;
+    let cancelled = false;
+    let frame2 = 0;
+    const generation = status.generation;
+    // 잠금 화면이 그려진 뒤에 가림막을 내리고 지문 인증 창을 띄워 이전 앱 화면이 비치지 않게 한다.
+    const frame1 = requestAnimationFrame(() => {
+      frame2 = requestAnimationFrame(() => {
+        if (cancelled) return;
+        setAndroidPinCoverVisible(false);
+        void call("pinReady", { generation }).catch((e) => setError(e.message));
+        if (status.biometricEnabled && !busy && !authBusy.current && biometricAttempt.current !== generation) {
+          biometricAttempt.current = generation;
+          void unlockBiometric();
+        }
+      });
+    });
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(frame1);
+      if (frame2) cancelAnimationFrame(frame2);
+    };
+  }, [status, visible, busy, unlockBiometric]);
   async function unlock() {
     if (!status || authBusy.current) return;
     authBusy.current = true;
@@ -111,7 +193,7 @@ export default function PinGate() {
     }
   }
   return <>
-    <div hidden={locked} inert={locked} aria-hidden={locked}><App /></div>
+    {status && <div hidden={locked} inert={locked} aria-hidden={locked}><StorageGate><App /></StorageGate></div>}
     {(status?.locked || (!status && error)) && <div className={`app pin-screen ${status?.theme === "dark" ? "dark" : ""} ${status?.colorTheme === "bakery" ? "bakery" : ""}`}
       onKeyDown={(e) => e.stopPropagation()}>
       {/* Android는 시스템이 창을 관리하므로 PC 창 제목 막대를 두지 않는다. */}

@@ -107,19 +107,34 @@ export function isAndroidApp(): boolean {
 // 파일 선택기처럼 앱이 연 외부 화면이 떠 있는 동안에는 백그라운드로 가도 잠그지 않는다.
 // 선택기의 취소가 전달되지 않는 경우에 대비해 앱 화면으로 돌아오면 표시를 지운다.
 let externalScreens = 0;
+function syncAndroidExternalScreen() {
+  if (typeof window !== "undefined") {
+    (window as any).lofAndroidEditor?.setExternalScreenOpen?.(externalScreens > 0);
+  }
+}
+export function setAndroidPinCoverVisible(visible: boolean) {
+  if (typeof window !== "undefined") {
+    (window as any).lofAndroidEditor?.setPinCoverVisible?.(visible);
+  }
+}
 export function externalScreenOpen(): boolean {
   return externalScreens > 0;
 }
 if (typeof document !== "undefined")
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") externalScreens = 0;
+    if (document.visibilityState === "visible") {
+      externalScreens = 0;
+      syncAndroidExternalScreen();
+    }
   });
-async function withExternalScreen<T>(open: () => Promise<T>): Promise<T> {
+export async function withExternalScreen<T>(open: () => Promise<T>): Promise<T> {
   externalScreens++;
+  syncAndroidExternalScreen();
   try {
     return await open();
   } finally {
     externalScreens = Math.max(0, externalScreens - 1);
+    syncAndroidExternalScreen();
   }
 }
 

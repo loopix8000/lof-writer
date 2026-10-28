@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { AlertCircle, ArrowLeft, ArrowRight, Check, CheckCircle2, ChevronDown, ChevronRight, Clock3, Cloud, Copy, Link, Loader2, LogOut, Maximize2, Monitor, Pencil, QrCode, RefreshCw, ScanLine, Server, Smartphone, Users, X } from "lucide-react";
 import BackgroundSyncSettings from "./BackgroundSyncSettings";
 import { useConfirm } from "./ConfirmDialog";
-import { isAndroidApp } from "./tauri-bridge";
+import { isAndroidApp, withExternalScreen } from "./tauri-bridge";
 import { call } from "./types";
 
 
@@ -218,7 +218,7 @@ export default function RealtimeSync({
   const scanCode = async () => {
     setActionProblem(null);
     try {
-      const result = await invoke<{ text?: string | null }>("android_scan_qr");
+      const result = await withExternalScreen(() => invoke<{ text?: string | null }>("android_scan_qr"));
       const text = result?.text?.trim();
       if (!text || !alive.current) return;
       updateCode(text); setCodeVisible(false);
