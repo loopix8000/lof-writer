@@ -2,12 +2,14 @@ package local.lof.writer
 
 import android.graphics.Color
 import android.graphics.Rect
+import android.os.Build
 import android.os.Bundle
 import android.view.ActionMode
 import android.view.Menu
 import android.view.MenuItem
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import android.widget.FrameLayout
@@ -36,6 +38,17 @@ class MainActivity : TauriActivity() {
   }
 
   private fun isPinEnabled(): Boolean = File(filesDir, "pin.json").isFile
+
+  private fun updateRecentsPrivacy() {
+    val enabled = isPinEnabled()
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+      setRecentsScreenshotEnabled(!enabled)
+    } else if (enabled) {
+      window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+    } else {
+      window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+    }
+  }
 
   private fun resolveThemeStyle(): Pair<Int, Boolean> {
     return try {
@@ -86,6 +99,11 @@ class MainActivity : TauriActivity() {
     }
 
     @JavascriptInterface
+    fun refreshPinPrivacy() {
+      runOnUiThread { updateRecentsPrivacy() }
+    }
+
+    @JavascriptInterface
     fun setPinCoverVisible(visible: Boolean) {
       runOnUiThread {
         if (visible) {
@@ -106,6 +124,7 @@ class MainActivity : TauriActivity() {
     }
     enableEdgeToEdge(barStyle, barStyle)
     super.onCreate(savedInstanceState)
+    updateRecentsPrivacy()
     window.decorView.setBackgroundColor(bgColor)
     val contentView = findViewById<android.view.View>(android.R.id.content)
     contentView.setBackgroundColor(bgColor)
@@ -275,7 +294,13 @@ class MainActivity : TauriActivity() {
 
   override fun onStart() {
     super.onStart()
+    updateRecentsPrivacy()
     BackgroundSync.appVisible(this)
+  }
+
+  override fun onPause() {
+    updateRecentsPrivacy()
+    super.onPause()
   }
 
   override fun onStop() {

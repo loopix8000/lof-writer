@@ -5,7 +5,7 @@ import { Fingerprint, LockKeyhole, Minus, X } from "lucide-react";
 import App from "./App";
 import { pinDigits, type PinStatus } from "./PinSettings";
 import StorageGate from "./StorageGate";
-import { externalScreenOpen, isAndroidApp, setAndroidPinCoverVisible } from "./tauri-bridge";
+import { externalScreenOpen, isAndroidApp, refreshAndroidPinPrivacy, setAndroidPinCoverVisible } from "./tauri-bridge";
 import { call } from "./types";
 
 export default function PinGate() {
@@ -55,6 +55,9 @@ export default function PinGate() {
     });
     return () => { alive = false; off?.(); };
   }, [updateStatus]);
+  useLayoutEffect(() => {
+    if (status) refreshAndroidPinPrivacy();
+  }, [status?.enabled]);
   useLayoutEffect(() => {
     document.documentElement.dataset.pinLocked = String(locked);
     if (locked) {

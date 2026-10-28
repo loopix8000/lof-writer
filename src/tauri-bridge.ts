@@ -117,6 +117,11 @@ export function setAndroidPinCoverVisible(visible: boolean) {
     (window as any).lofAndroidEditor?.setPinCoverVisible?.(visible);
   }
 }
+export function refreshAndroidPinPrivacy() {
+  if (typeof window !== "undefined") {
+    (window as any).lofAndroidEditor?.refreshPinPrivacy?.();
+  }
+}
 export function externalScreenOpen(): boolean {
   return externalScreens > 0;
 }
