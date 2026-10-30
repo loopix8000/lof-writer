@@ -19,25 +19,25 @@ const PLATFORMS: &[PlatformPreset] = &[
     PlatformPreset {
         id: "munpia",
         name: "문피아",
-        rule: "spaces",
+        rule: "all",
         goal: 5000,
     },
     PlatformPreset {
         id: "naver",
         name: "네이버 시리즈",
-        rule: "spaces",
+        rule: "all",
         goal: 5000,
     },
     PlatformPreset {
         id: "kakao",
         name: "카카오페이지",
-        rule: "spaces",
+        rule: "all",
         goal: 5000,
     },
     PlatformPreset {
         id: "spaces",
-        name: "공백 포함",
-        rule: "spaces",
+        name: "공백·줄바꿈 포함",
+        rule: "all",
         goal: 5000,
     },
     PlatformPreset {
@@ -73,8 +73,10 @@ pub fn normalize_writing(input: Option<&Value>) -> Value {
     } else {
         "spaces"
     };
-    let rule_in = obj.and_then(|o| o.get("rule")).and_then(|v| v.as_str());
-    let is_override = legacy && rule_in.is_some_and(|r| !r.is_empty() && r != old_rule);
+    let raw_rule = obj.and_then(|o| o.get("rule")).and_then(|v| v.as_str());
+    let is_override = legacy && raw_rule.is_some_and(|r| !r.is_empty() && r != old_rule);
+    // 없앤 "공백 포함 · 줄바꿈 제외" 규칙은 "공백·줄바꿈 포함"으로 바꾼다.
+    let rule_in = raw_rule.map(|r| if r == "spaces" { "all" } else { r });
 
     let custom_name_in = obj
         .and_then(|o| o.get("customName"))
@@ -117,7 +119,7 @@ pub fn normalize_writing(input: Option<&Value>) -> Value {
 
     let rule = if custom
         && rule_in.is_some_and(|r| {
-            ["noSpace", "spaces", "all", "collapsed", "novelpia", "manuscript"].contains(&r)
+            ["noSpace", "all", "collapsed", "novelpia", "manuscript"].contains(&r)
         }) {
         rule_in.unwrap()
     } else {

@@ -27,7 +27,7 @@ export default function PlatformCount({
   const unit = documentOnly ? "utf16" : rules.unit,
     goal = rules.goal;
   const displayUnit = documentOnly ? "자" : writingUnit(rules);
-  const value = stats ? documentOnly ? countForRule(stats, "spaces", unit) : stats.platformCharacters : 0;
+  const value = stats ? documentOnly ? countForRule(stats, "all", unit) : stats.platformCharacters : 0;
   const reached = !!stats && goal > 0 && value >= goal;
   const count = (rule: string) => stats ? countForRule(stats, rule, unit).toLocaleString() : "…";
   const name =
@@ -52,9 +52,7 @@ export default function PlatformCount({
         <small>
           {rules.rule === "manuscript" ? "200자 원고지" : rules.rule === "novelpia" ? "공백 제외" : rules.rule === "collapsed" ? "연속 공백 1자" : rules.rule === "noSpace"
             ? "공백 제외"
-            : rules.rule === "spaces"
-              ? "공백 포함"
-              : "줄바꿈 포함"}
+            : "공백·줄바꿈 포함"}
         </small>
       </button>
       {editing && <PlatformPicker value={rules} onChange={onChange} compact />}
@@ -87,11 +85,7 @@ export default function PlatformCount({
           <dd>{count('noSpace')}</dd>
         </div>
         <div>
-          <dt>공백 포함 · 줄바꿈 제외</dt>
-          <dd>{count('spaces')}</dd>
-        </div>
-        <div>
-          <dt>줄바꿈까지 포함</dt>
+          <dt>공백·줄바꿈 포함</dt>
           <dd>{count('all')}</dd>
         </div>
         <div>

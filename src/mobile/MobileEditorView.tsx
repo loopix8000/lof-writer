@@ -1558,7 +1558,7 @@ export default function MobileEditorView({
               <div className="m-drawer-title-group">
                 <strong>위젯 보드</strong>
                 <small>
-                  공백 포함 {charsWithSpaces.toLocaleString()}자 · 공백 제외{" "}
+                  공백·줄바꿈 포함 {charsWithSpaces.toLocaleString()}자 · 공백 제외{" "}
                   {charsWithoutSpaces.toLocaleString()}자
                 </small>
               </div>

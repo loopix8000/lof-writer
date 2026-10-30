@@ -1351,8 +1351,8 @@ export default function App() {
   const platformChars = stats?.platformCharacters ?? 0;
   const countUnit = active?.kind === "episode" ? writingRules.unit : "utf16";
   const charsWithoutSpaces = stats ? countForRule(stats, "noSpace", countUnit) : 0;
-  // 상태줄의 두 번째 값: 공백 포함·줄바꿈 제외(위젯 보드의 같은 항목과 동일한 계산).
-  const charsWithSpaces = stats ? countForRule(stats, "spaces", countUnit) : 0;
+  // 상태줄의 두 번째 값: 공백·줄바꿈 포함(위젯 보드의 같은 항목과 동일한 계산).
+  const charsWithSpaces = stats ? countForRule(stats, "all", countUnit) : 0;
   const goal = Number(writingRules.goal) || 0;
   const isWorkspace = view === "workspace" && !!active && !memoOpen;
   const goalCelebrationProps = {
@@ -2489,7 +2489,7 @@ export default function App() {
                   {active.kind === "episode"
                     ? <>{writingName(writingRules)} {stats ? platformChars.toLocaleString() : "…"}{writingUnit(writingRules)}</>
                     : <>공백 제외 {stats ? charsWithoutSpaces.toLocaleString() : "…"}자</>}
-                  <i /> 공백 포함 {stats ? charsWithSpaces.toLocaleString() : "…"}자
+                  <i /> 공백·줄바꿈 포함 {stats ? charsWithSpaces.toLocaleString() : "…"}자
                   {cursorLine !== null && <><i /> {cursorLine.toLocaleString()}번째 줄</>}
                 </span>
                 {focus && (

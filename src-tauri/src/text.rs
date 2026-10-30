@@ -589,7 +589,6 @@ pub fn display_counts(raw: &str, rules: &Value) -> Value {
     } else {
         let mut value = match rule {
             "noSpace" => text.chars().filter(|&c| !display_whitespace(c)).collect::<String>(),
-            "spaces" => text.chars().filter(|&c| c != '\n').collect::<String>(),
             "collapsed" => {
                 let mut result = String::new();
                 let mut whitespace = false;
@@ -705,7 +704,6 @@ pub fn count_for_writing(stats: &ManuscriptStats, rules: &Value) -> usize {
     }
     let mut text = match rule {
         "noSpace" => stats.text.chars().filter(|c| !c.is_whitespace()).collect(),
-        "spaces" => stats.text.chars().filter(|&c| c != '\n').collect(),
         "collapsed" => {
             let mut out = String::new();
             let mut prev_ws = false;

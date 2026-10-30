@@ -58,7 +58,6 @@ export default function PlatformPicker({
             }
           >
             <option value="noSpace">공백 모두 제외</option>
-            <option value="spaces">공백 포함 · 줄바꿈 제외</option>
             <option value="all">공백·줄바꿈 포함 (LF 1자)</option>
             <option value="collapsed">연속 공백·줄바꿈을 1자로</option>
             <option value="novelpia">노벨피아 (공백 제외)</option>

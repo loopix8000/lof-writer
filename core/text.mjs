@@ -198,7 +198,7 @@ export function manuscriptStats(markdown) {
 }
 export function countForRule(stats, rule = "noSpace", unit = "utf16") {
   const key =
-    { noSpace: "WithoutSpaces", spaces: "WithSpaces", all: "WithLineBreaks" }[
+    { noSpace: "WithoutSpaces", all: "WithLineBreaks" }[
       rule
     ] || "WithoutSpaces";
   return unit === "utf16"
@@ -220,7 +220,6 @@ export function countForWriting(stats, rules) {
   if (rules.rule === "novelpia") return novelpiaCount(stats.text);
   let text = stats.text;
   if (rules.rule === "noSpace") text = text.replace(/\s/g, "");
-  else if (rules.rule === "spaces") text = text.replace(/\n/g, "");
   else if (rules.rule === "collapsed") text = text.trim().replace(/\s+/g, " ");
   if (rules.punctuation === "ascii") text = text.replace(/[.,!?'"\u002c]/g, "");
   else if (rules.punctuation === "unicode") text = text.replace(/\p{P}/gu, "");
