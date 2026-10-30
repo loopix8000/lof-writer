@@ -209,6 +209,15 @@ class MainActivity : TauriActivity() {
 
   private fun applyEditorActionMenu(menu: Menu): Boolean {
     var changed = false
+    for (index in menu.size() - 1 downTo 0) {
+      val item = menu.getItem(index)
+      val resourceName = try { webView?.resources?.getResourceName(item.itemId) } catch (_: Exception) { null }
+      if (item.intent?.action == "com.samsung.android.intent.action.WritingToolkit" ||
+        resourceName == "android:id/writing_toolkit") {
+        menu.removeItem(item.itemId)
+        changed = true
+      }
+    }
     val existingBookmark = menu.findItem(MENU_ID_BOOKMARK)
     val bookmarkTitle = if (bookmarked) "북마크 해제" else "북마크"
     if (canBookmark) {
