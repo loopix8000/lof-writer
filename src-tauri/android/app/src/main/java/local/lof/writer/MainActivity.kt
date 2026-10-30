@@ -414,6 +414,8 @@ class MainActivity : TauriActivity() {
   override fun onWebViewCreate(webView: WebView) {
     super.onWebViewCreate(webView)
     this.webView = webView
+    // 선택 확대경이 이동할 때도 웹 화면을 독립된 GPU 레이어에서 합성한다.
+    webView.setLayerType(View.LAYER_TYPE_HARDWARE, null)
     webView.addJavascriptInterface(EditorContextMenuBridge(), "lofAndroidEditor")
     val callback = object : OnBackPressedCallback(true) {
       override fun handleOnBackPressed() {
