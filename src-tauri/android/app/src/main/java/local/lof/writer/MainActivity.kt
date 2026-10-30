@@ -286,13 +286,19 @@ class MainActivity : TauriActivity() {
     // 하위 메뉴를 가진 항목은 구조를 유지한다.
     if (items.any { it.hasSubMenu() }) return false
     val sources = items.map { originals[it] ?: it }
+    val hasSelection = items.any {
+      it.isVisible && it.isEnabled && clipboardActionOrder(it) in 0..1
+    }
     originals.clear()
     menu.clear()
     items.forEachIndexed { index, item ->
       val priority = clipboardActionOrder(item)
-      val order = priority ?: when (item.itemId) {
-        MENU_ID_BOOKMARK -> 10
-        MENU_ID_QUICK_NOTE -> 11
+      val order = when {
+        priority == 0 || priority == 1 -> priority
+        item.itemId == MENU_ID_BOOKMARK -> 2
+        item.itemId == MENU_ID_QUICK_NOTE -> 3
+        priority == 2 -> if (hasSelection) 4 else 0
+        priority != null -> priority + 2
         else -> 100 + index
       }
       val replacement = menu.add(item.groupId, item.itemId, order, item.title)
@@ -303,7 +309,7 @@ class MainActivity : TauriActivity() {
       replacement.isVisible = item.isVisible
       replacement.isEnabled = item.isEnabled
       replacement.titleCondensed = item.titleCondensed
-      replacement.setShowAsAction(if (priority != null) MenuItem.SHOW_AS_ACTION_ALWAYS else MenuItem.SHOW_AS_ACTION_IF_ROOM)
+      replacement.setShowAsAction(if (order < 4) MenuItem.SHOW_AS_ACTION_ALWAYS else MenuItem.SHOW_AS_ACTION_IF_ROOM)
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
         replacement.contentDescription = item.contentDescription
         replacement.tooltipText = item.tooltipText
