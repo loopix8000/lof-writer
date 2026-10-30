@@ -1033,12 +1033,12 @@ export default function Writer({
       window.removeEventListener("lof:editor-action", onAction);
     };
   }, [editor, visible, inactive, editable, source, protectedSource, tables, lineBreak, manualLineBreak]);
-  // 모바일(Android) 커서 핸들·길게 누르기 컨텍스트 메뉴에 북마크·퀵노트 상태와 동작을 연결한다.
+  // 모바일(Android) 커서 핸들·길게 누르기 메뉴에 편집 상태와 동작을 연결한다.
   useEffect(() => {
     if (!visible || inactive) return;
     const bridge = () =>
       (window as any).lofAndroidEditor as
-        | { setContextState?: (canBookmark: boolean, bookmarked: boolean, canQuickNote: boolean) => void }
+        | { setContextState?: (canBookmark: boolean, bookmarked: boolean, canQuickNote: boolean, canPaste: boolean) => void }
         | undefined;
 
     const isSelectionInsideEditor = () => {
@@ -1100,11 +1100,21 @@ export default function Writer({
 
     const syncState = () => {
       const next = computeState();
-      bridge()?.setContextState?.(next.canBookmark, next.bookmarked, next.canQuickNote);
+      const canPaste = editable && !protectedSource && isSelectionInsideEditor();
+      bridge()?.setContextState?.(next.canBookmark, next.bookmarked, next.canQuickNote, canPaste);
       return next;
     };
 
     (window as any).__lofSyncEditorContextState = syncState;
+    (window as any).__lofPasteEditorText = (text: string) => {
+      if (!editable || protectedSource || !isSelectionInsideEditor()) return;
+      if (source) {
+        sourceRef.current?.paste(text);
+      } else if (editor && !editor.isDestroyed && editor.isEditable) {
+        editor.view.pasteText(text);
+        editor.commands.focus();
+      }
+    };
     (window as any).__lofEditorContextAction = (action: string) => {
       if (!annotationsEnabledRef.current) return;
       if (action === "bookmark") {
@@ -1201,13 +1211,14 @@ export default function Writer({
       document.removeEventListener("touchstart", onTouchStart);
       editor?.off("selectionUpdate", onSelectionChange);
       editor?.off("transaction", onSelectionChange);
-      bridge()?.setContextState?.(false, false, false);
+      bridge()?.setContextState?.(false, false, false, false);
       if ((window as any).__lofSyncEditorContextState === syncState) {
         delete (window as any).__lofSyncEditorContextState;
         delete (window as any).__lofEditorContextAction;
+        delete (window as any).__lofPasteEditorText;
       }
     };
-  }, [editor, visible, inactive, source, protectedSource, manualLineBreak]);
+  }, [editor, visible, inactive, editable, source, protectedSource, manualLineBreak]);
   useEffect(() => {
     if (!reveal?.query) return;
     const pattern = searchPattern(reveal.query, reveal.caseSensitive);

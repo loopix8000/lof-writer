@@ -1,5 +1,6 @@
 package local.lof.writer
 
+import android.content.ClipboardManager
 import android.graphics.Color
 import android.graphics.Rect
 import android.os.Build
@@ -20,6 +21,7 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import org.json.JSONObject
 import java.io.File
+import java.util.IdentityHashMap
 
 class MainActivity : TauriActivity() {
   override val handleBackNavigation: Boolean = false
@@ -31,10 +33,12 @@ class MainActivity : TauriActivity() {
   @Volatile private var canBookmark = false
   @Volatile private var bookmarked = false
   @Volatile private var canQuickNote = false
+  @Volatile private var canPaste = false
 
   companion object {
     private const val MENU_ID_BOOKMARK = 0x70f10001
     private const val MENU_ID_QUICK_NOTE = 0x70f10002
+    private const val MENU_ID_PASTE = 0x70f10003
   }
 
   private fun isPinEnabled(): Boolean = File(filesDir, "pin.json").isFile
@@ -78,14 +82,16 @@ class MainActivity : TauriActivity() {
 
   inner class EditorContextMenuBridge {
     @JavascriptInterface
-    fun setContextState(canBookmark: Boolean, bookmarked: Boolean, canQuickNote: Boolean) {
+    fun setContextState(canBookmark: Boolean, bookmarked: Boolean, canQuickNote: Boolean, canPaste: Boolean) {
       val changed =
         this@MainActivity.canBookmark != canBookmark ||
           this@MainActivity.bookmarked != bookmarked ||
-          this@MainActivity.canQuickNote != canQuickNote
+          this@MainActivity.canQuickNote != canQuickNote ||
+          this@MainActivity.canPaste != canPaste
       this@MainActivity.canBookmark = canBookmark
       this@MainActivity.bookmarked = bookmarked
       this@MainActivity.canQuickNote = canQuickNote
+      this@MainActivity.canPaste = canPaste
       if (changed) {
         runOnUiThread {
           activeActionMode?.invalidate()
@@ -207,8 +213,8 @@ class MainActivity : TauriActivity() {
     val bookmarkTitle = if (bookmarked) "북마크 해제" else "북마크"
     if (canBookmark) {
       if (existingBookmark == null) {
-        menu.add(Menu.NONE, MENU_ID_BOOKMARK, 3, bookmarkTitle)
-          .setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS)
+        menu.add(Menu.NONE, MENU_ID_BOOKMARK, 10, bookmarkTitle)
+          .setShowAsAction(MenuItem.SHOW_AS_ACTION_IF_ROOM)
         changed = true
       } else if (existingBookmark.title != bookmarkTitle) {
         existingBookmark.title = bookmarkTitle
@@ -222,23 +228,100 @@ class MainActivity : TauriActivity() {
     val existingQuickNote = menu.findItem(MENU_ID_QUICK_NOTE)
     if (canQuickNote) {
       if (existingQuickNote == null) {
-        menu.add(Menu.NONE, MENU_ID_QUICK_NOTE, 3, "퀵노트")
-          .setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS)
+        menu.add(Menu.NONE, MENU_ID_QUICK_NOTE, 11, "퀵노트")
+          .setShowAsAction(MenuItem.SHOW_AS_ACTION_IF_ROOM)
         changed = true
       }
     } else if (existingQuickNote != null) {
       menu.removeItem(MENU_ID_QUICK_NOTE)
       changed = true
     }
+    val nativePaste = (0 until menu.size()).any { index ->
+      val item = menu.getItem(index)
+      item.itemId != MENU_ID_PASTE && item.isVisible && item.isEnabled && clipboardActionOrder(item) == 2
+    }
+    val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+    val showPaste = canPaste && !nativePaste && clipboard.hasPrimaryClip() &&
+      clipboard.primaryClipDescription?.hasMimeType("text/*") == true
+    if (showPaste && menu.findItem(MENU_ID_PASTE) == null) {
+      menu.add(Menu.NONE, MENU_ID_PASTE, 2, getString(android.R.string.paste))
+        .setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS)
+      changed = true
+    } else if (!showPaste && menu.findItem(MENU_ID_PASTE) != null) {
+      menu.removeItem(MENU_ID_PASTE)
+      changed = true
+    }
     return changed
+  }
+
+  private fun clipboardActionOrder(item: MenuItem): Int? {
+    when (item.itemId) {
+      android.R.id.copy -> return 0
+      android.R.id.cut -> return 1
+      android.R.id.paste, MENU_ID_PASTE -> return 2
+      android.R.id.pasteAsPlainText -> return 3
+      android.R.id.selectAll -> return 4
+    }
+    // WebView 버전에 따라 기본 편집 항목이 자체 리소스 ID를 사용한다.
+    val name = try { webView?.resources?.getResourceEntryName(item.itemId) } catch (_: Exception) { null }
+    return when (name) {
+      "select_action_menu_copy" -> 0
+      "select_action_menu_cut" -> 1
+      "select_action_menu_paste" -> 2
+      "select_action_menu_paste_as_plain_text" -> 3
+      "select_action_menu_select_all" -> 4
+      else -> when (item.title?.toString()) {
+        getString(android.R.string.copy) -> 0
+        getString(android.R.string.cut) -> 1
+        getString(android.R.string.paste) -> 2
+        getString(android.R.string.selectAll) -> 4
+        else -> null
+      }
+    }
+  }
+
+  private fun prioritizeEditorActions(menu: Menu, originals: IdentityHashMap<MenuItem, MenuItem>): Boolean {
+    // 원래 항목을 보관해 WebView 콜백에는 기존 ID·그룹·순서와 Intent를 전달한다.
+    val items = (0 until menu.size()).map { menu.getItem(it) }
+    // 하위 메뉴를 가진 항목은 구조를 유지한다.
+    if (items.any { it.hasSubMenu() }) return false
+    val sources = items.map { originals[it] ?: it }
+    originals.clear()
+    menu.clear()
+    items.forEachIndexed { index, item ->
+      val priority = clipboardActionOrder(item)
+      val order = priority ?: when (item.itemId) {
+        MENU_ID_BOOKMARK -> 10
+        MENU_ID_QUICK_NOTE -> 11
+        else -> 100 + index
+      }
+      val replacement = menu.add(item.groupId, item.itemId, order, item.title)
+      replacement.icon = item.icon
+      replacement.intent = item.intent
+      replacement.isCheckable = item.isCheckable
+      replacement.isChecked = item.isChecked
+      replacement.isVisible = item.isVisible
+      replacement.isEnabled = item.isEnabled
+      replacement.titleCondensed = item.titleCondensed
+      replacement.setShowAsAction(if (priority != null) MenuItem.SHOW_AS_ACTION_ALWAYS else MenuItem.SHOW_AS_ACTION_IF_ROOM)
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        replacement.contentDescription = item.contentDescription
+        replacement.tooltipText = item.tooltipText
+      }
+      originals[replacement] = sources[index]
+    }
+    return true
   }
 
   private fun wrapActionModeCallback(callback: ActionMode.Callback): ActionMode.Callback2 {
     return object : ActionMode.Callback2() {
+      private val originals = IdentityHashMap<MenuItem, MenuItem>()
+
       override fun onCreateActionMode(mode: ActionMode, menu: Menu): Boolean {
         activeActionMode = mode
         val created = callback.onCreateActionMode(mode, menu)
         val added = applyEditorActionMenu(menu)
+        prioritizeEditorActions(menu, originals)
         webView?.evaluateJavascript(
           "(function(){ try { if (typeof window.__lofSyncEditorContextState === 'function') window.__lofSyncEditorContextState(); } catch(e) {} })()",
           null
@@ -250,11 +333,24 @@ class MainActivity : TauriActivity() {
         activeActionMode = mode
         val prepared = callback.onPrepareActionMode(mode, menu)
         val changed = applyEditorActionMenu(menu)
-        return prepared || changed
+        val reordered = prioritizeEditorActions(menu, originals)
+        return prepared || changed || reordered
       }
 
       override fun onActionItemClicked(mode: ActionMode, item: MenuItem): Boolean {
         when (item.itemId) {
+          MENU_ID_PASTE -> {
+            if (canPaste) {
+              val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+              val text = clipboard.primaryClip?.getItemAt(0)?.coerceToText(this@MainActivity)?.toString()
+              if (!text.isNullOrEmpty()) {
+                webView?.evaluateJavascript(
+                  "(function(){ if (typeof window.__lofPasteEditorText === 'function') window.__lofPasteEditorText(${JSONObject.quote(text)}); })()"
+                ) { mode.finish() }
+              }
+            }
+            return true
+          }
           MENU_ID_BOOKMARK -> {
             webView?.evaluateJavascript(
               "(function(){ try { if (typeof window.__lofEditorContextAction === 'function') window.__lofEditorContextAction('bookmark'); } catch(e) {} })()"
@@ -272,10 +368,11 @@ class MainActivity : TauriActivity() {
             return true
           }
         }
-        return callback.onActionItemClicked(mode, item)
+        return callback.onActionItemClicked(mode, originals[item] ?: item)
       }
 
       override fun onDestroyActionMode(mode: ActionMode) {
+        originals.clear()
         if (activeActionMode === mode) {
           activeActionMode = null
         }
