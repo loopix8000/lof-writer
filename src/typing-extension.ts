@@ -98,43 +98,30 @@ function hasUnclosedCommentBefore(doc: PMNode, pos: number): boolean {
   return commentStateAt(doc, pos).open;
 }
 
-function findEnclosingBlockComment(state: EditorState): { from: number; to: number; raw: string; cursorOffset: number } | null {
-  const { from, to, $from } = state.selection;
-  if (from !== to || !$from.parent.isTextblock) return null;
-  let charOffset = 0;
-  const charToPos: number[] = [];
-  let text = "";
-  const blockPos = $from.before();
-  $from.parent.forEach((child: any, offset: number) => {
-    const childPos = blockPos + 1 + offset;
-    if (child.isText && child.text) {
-      for (let i = 0; i < child.text.length; i++) {
-        if (childPos + i === from) charOffset = text.length + i;
-        charToPos.push(childPos + i);
-      }
-      text += child.text;
-    } else {
-      if (childPos === from) charOffset = text.length;
-      charToPos.push(childPos);
-      text += child.type.name === "hardBreak" ? "\n" : "\uFFFC";
-    }
-  });
-  if (from === blockPos + $from.parent.nodeSize - 1) charOffset = text.length;
-  charToPos.push(blockPos + $from.parent.nodeSize - 1);
-  if (!text.includes(COMMENT_OPEN)) return null;
-  for (const match of text.matchAll(/<!--[\s\S]*?-->/g)) {
-    const mStart = match.index ?? 0;
-    const mEnd = mStart + match[0].length;
-    if (mStart <= charOffset && charOffset <= mEnd) {
-      return {
-        from: charToPos[mStart],
-        to: charToPos[mEnd],
-        raw: match[0],
-        cursorOffset: charOffset - mStart,
-      };
-    }
+type CommentRange = { from: number; to: number };
+const commentRanges = new WeakMap<PMNode, CommentRange[]>();
+function findEnclosingComment(state: EditorState): CommentRange | undefined {
+  const { doc, selection: { from, to } } = state;
+  let ranges = commentRanges.get(doc);
+  if (!ranges) {
+    const found: CommentRange[] = [];
+    let start: number | undefined;
+    const scanState = { open: false, stray: false };
+    if (docIndex(doc).tokens) doc.forEach((block, offset) => {
+      if (!scanState.open && !blockInfo(block).tokens) return;
+      eachTextblock(block, offset, (node, pos) => {
+        scanComments(textblockText(node), scanState, (from, to, closed) => {
+          start ??= textPos(node, pos, from);
+          if (closed) {
+            found.push({ from: start, to: textPos(node, pos, to) });
+            start = undefined;
+          }
+        });
+      });
+    });
+    commentRanges.set(doc, ranges = found);
   }
-  return null;
+  return ranges.find(range => range.from <= from && to <= range.to);
 }
 
 export function isInsideJsdocComment(state: EditorState): boolean {
@@ -143,7 +130,7 @@ export function isInsideJsdocComment(state: EditorState): boolean {
     const selected = state.doc.textBetween(from, to, "\n");
     if (/^\s*<!--[\s\S]*-->\s*$/.test(selected)) return true;
   }
-  return !!findEnclosingBlockComment(state) || hasUnclosedCommentBefore(state.doc, from);
+  return !!findEnclosingComment(state) || (from === to && hasUnclosedCommentBefore(state.doc, from));
 }
 
 export function toggleJsdocComment(view: EditorView): boolean {
@@ -152,19 +139,21 @@ export function toggleJsdocComment(view: EditorView): boolean {
   const { from, to } = state.selection;
   let tr = closeHistory(state.tr);
 
+  // 주석 안의 일부를 선택했거나 여러 문단에 걸친 주석도 기호만 지워 해제한다.
+  const enclosing = findEnclosingComment(state);
+  if (enclosing) {
+    const range = enclosing;
+    const raw = state.doc.textBetween(range.from, range.to, "\n");
+    const openLen = raw.match(/^<!--[ \t]?/)?.[0].length ?? COMMENT_OPEN.length;
+    const closeLen = raw.match(/[ \t]?-->$/)?.[0].length ?? COMMENT_CLOSE.length;
+    tr = tr.delete(range.to - closeLen, range.to).delete(range.from, range.from + openLen);
+    tr = tr.setSelection(TextSelection.create(tr.doc, tr.mapping.map(from), tr.mapping.map(to)));
+    view.dispatch(tr.scrollIntoView());
+    view.focus();
+    return true;
+  }
+
   if (from === to) {
-    const enclosing = findEnclosingBlockComment(state);
-    if (enclosing) {
-      const openLen = enclosing.raw.match(/^<!--\s?/)?.[0].length ?? COMMENT_OPEN.length;
-      const closeLen = enclosing.raw.match(/\s?-->$/)?.[0].length ?? COMMENT_CLOSE.length;
-      const inner = enclosing.raw.slice(openLen, Math.max(openLen, enclosing.raw.length - closeLen));
-      tr = tr.insertText(inner, enclosing.from, enclosing.to);
-      const nextCursor = enclosing.from + Math.max(0, Math.min(inner.length, enclosing.cursorOffset - openLen));
-      tr = tr.setSelection(TextSelection.create(tr.doc, nextCursor));
-      view.dispatch(tr.scrollIntoView());
-      view.focus();
-      return true;
-    }
     tr = tr.insertText(`${COMMENT_OPEN}  ${COMMENT_CLOSE}`, from, to);
     tr = tr.setSelection(TextSelection.create(tr.doc, from + COMMENT_OPEN.length + 1));
     view.dispatch(tr.scrollIntoView());

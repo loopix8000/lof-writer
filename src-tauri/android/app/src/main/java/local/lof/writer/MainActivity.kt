@@ -34,11 +34,14 @@ class MainActivity : TauriActivity() {
   @Volatile private var bookmarked = false
   @Volatile private var canQuickNote = false
   @Volatile private var canPaste = false
+  @Volatile private var canComment = false
+  @Volatile private var commented = false
 
   companion object {
     private const val MENU_ID_BOOKMARK = 0x70f10001
     private const val MENU_ID_QUICK_NOTE = 0x70f10002
     private const val MENU_ID_PASTE = 0x70f10003
+    private const val MENU_ID_COMMENT = 0x70f10004
   }
 
   private fun isPinEnabled(): Boolean = File(filesDir, "pin.json").isFile
@@ -82,16 +85,20 @@ class MainActivity : TauriActivity() {
 
   inner class EditorContextMenuBridge {
     @JavascriptInterface
-    fun setContextState(canBookmark: Boolean, bookmarked: Boolean, canQuickNote: Boolean, canPaste: Boolean) {
+    fun setContextState(canBookmark: Boolean, bookmarked: Boolean, canQuickNote: Boolean, canPaste: Boolean, canComment: Boolean, commented: Boolean) {
       val changed =
         this@MainActivity.canBookmark != canBookmark ||
           this@MainActivity.bookmarked != bookmarked ||
           this@MainActivity.canQuickNote != canQuickNote ||
-          this@MainActivity.canPaste != canPaste
+          this@MainActivity.canPaste != canPaste ||
+          this@MainActivity.canComment != canComment ||
+          this@MainActivity.commented != commented
       this@MainActivity.canBookmark = canBookmark
       this@MainActivity.bookmarked = bookmarked
       this@MainActivity.canQuickNote = canQuickNote
       this@MainActivity.canPaste = canPaste
+      this@MainActivity.canComment = canComment
+      this@MainActivity.commented = commented
       if (changed) {
         runOnUiThread {
           activeActionMode?.invalidate()
@@ -245,6 +252,21 @@ class MainActivity : TauriActivity() {
       menu.removeItem(MENU_ID_QUICK_NOTE)
       changed = true
     }
+    val existingComment = menu.findItem(MENU_ID_COMMENT)
+    val commentTitle = if (commented) "주석 해제" else "주석 처리"
+    if (canComment) {
+      if (existingComment == null) {
+        menu.add(Menu.NONE, MENU_ID_COMMENT, 4, commentTitle)
+          .setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS)
+        changed = true
+      } else if (existingComment.title != commentTitle) {
+        existingComment.title = commentTitle
+        changed = true
+      }
+    } else if (existingComment != null) {
+      menu.removeItem(MENU_ID_COMMENT)
+      changed = true
+    }
     val nativePaste = (0 until menu.size()).any { index ->
       val item = menu.getItem(index)
       item.itemId != MENU_ID_PASTE && item.isVisible && item.isEnabled && clipboardActionOrder(item) == 2
@@ -306,8 +328,9 @@ class MainActivity : TauriActivity() {
         priority == 0 || priority == 1 -> priority
         item.itemId == MENU_ID_BOOKMARK -> 2
         item.itemId == MENU_ID_QUICK_NOTE -> 3
-        priority == 2 -> if (hasSelection) 4 else 0
-        priority != null -> priority + 2
+        item.itemId == MENU_ID_COMMENT -> 4
+        priority == 2 -> if (hasSelection) 5 else 0
+        priority != null -> priority + 3
         else -> 100 + index
       }
       val replacement = menu.add(item.groupId, item.itemId, order, item.title)
@@ -318,7 +341,7 @@ class MainActivity : TauriActivity() {
       replacement.isVisible = item.isVisible
       replacement.isEnabled = item.isEnabled
       replacement.titleCondensed = item.titleCondensed
-      replacement.setShowAsAction(if (order < 4) MenuItem.SHOW_AS_ACTION_ALWAYS else MenuItem.SHOW_AS_ACTION_IF_ROOM)
+      replacement.setShowAsAction(if (order <= 4) MenuItem.SHOW_AS_ACTION_ALWAYS else MenuItem.SHOW_AS_ACTION_IF_ROOM)
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
         replacement.contentDescription = item.contentDescription
         replacement.tooltipText = item.tooltipText
@@ -354,6 +377,12 @@ class MainActivity : TauriActivity() {
 
       override fun onActionItemClicked(mode: ActionMode, item: MenuItem): Boolean {
         when (item.itemId) {
+          MENU_ID_COMMENT -> {
+            webView?.evaluateJavascript(
+              "(function(){ try { if (typeof window.__lofEditorContextAction === 'function') window.__lofEditorContextAction('comment'); } catch(e) {} })()"
+            ) { mode.finish() }
+            return true
+          }
           MENU_ID_PASTE -> {
             if (canPaste) {
               val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager

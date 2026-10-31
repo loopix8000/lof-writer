@@ -1038,7 +1038,7 @@ export default function Writer({
     if (!visible || inactive) return;
     const bridge = () =>
       (window as any).lofAndroidEditor as
-        | { setContextState?: (canBookmark: boolean, bookmarked: boolean, canQuickNote: boolean, canPaste: boolean) => void }
+        | { setContextState?: (canBookmark: boolean, bookmarked: boolean, canQuickNote: boolean, canPaste: boolean, canComment: boolean, commented: boolean) => void }
         | undefined;
 
     const isSelectionInsideEditor = () => {
@@ -1099,9 +1099,13 @@ export default function Writer({
     };
 
     const syncState = () => {
+      const native = bridge();
+      if (!native?.setContextState) return;
       const next = computeState();
       const canPaste = editable && !protectedSource && isSelectionInsideEditor();
-      bridge()?.setContextState?.(next.canBookmark, next.bookmarked, next.canQuickNote, canPaste);
+      const canComment = canPaste && (source ? !!sourceRef.current?.view : !!editor && !editor.isDestroyed && editor.isEditable);
+      const commented = canComment && (source ? sourceRef.current?.isCommented() === true : isInsideJsdocComment(editor!.state));
+      native.setContextState(next.canBookmark, next.bookmarked, next.canQuickNote, canPaste, canComment, commented);
       return next;
     };
 
@@ -1116,6 +1120,13 @@ export default function Writer({
       }
     };
     (window as any).__lofEditorContextAction = (action: string) => {
+      if (action === "comment") {
+        if (!editable || protectedSource || !isSelectionInsideEditor()) return;
+        if (source) sourceRef.current?.toggleComment();
+        else if (editor && !editor.isDestroyed) toggleJsdocComment(editor.view);
+        syncState();
+        return;
+      }
       if (!annotationsEnabledRef.current) return;
       if (action === "bookmark") {
         if (source || protectedSource || !editor || editor.isDestroyed || !onBookmarksRef.current) return;
@@ -1211,7 +1222,7 @@ export default function Writer({
       document.removeEventListener("touchstart", onTouchStart);
       editor?.off("selectionUpdate", onSelectionChange);
       editor?.off("transaction", onSelectionChange);
-      bridge()?.setContextState?.(false, false, false, false);
+      bridge()?.setContextState?.(false, false, false, false, false, false);
       if ((window as any).__lofSyncEditorContextState === syncState) {
         delete (window as any).__lofSyncEditorContextState;
         delete (window as any).__lofEditorContextAction;

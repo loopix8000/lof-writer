@@ -83,31 +83,36 @@ const jsdocHighlights = StateField.define<{ marks: DecorationSet; open: boolean 
   provide: (field) => EditorView.decorations.from(field, (value) => value.marks),
 });
 
+function enclosingSourceComment(view: EditorView) {
+  const { from, to } = view.state.selection.main;
+  const text = view.state.doc.toString();
+  for (const match of text.matchAll(/<!--[\s\S]*?-->/g)) {
+    const start = match.index ?? 0;
+    if (start <= from && to <= start + match[0].length) return { start, raw: match[0] };
+    if (start > from) break;
+  }
+  return null;
+}
+
 function toggleSourceJsdocComment(view: EditorView): boolean {
   if (view.state.readOnly) return false;
   const { from, to } = view.state.selection.main;
-  const text = view.state.doc.toString();
+  const enclosing = enclosingSourceComment(view);
+  if (enclosing) {
+    const { start, raw } = enclosing;
+    const openLen = raw.match(/^<!--\s?/)?.[0].length ?? COMMENT_OPEN.length;
+    const closeLen = raw.match(/\s?-->$/)?.[0].length ?? COMMENT_CLOSE.length;
+    const inner = raw.slice(openLen, raw.length - closeLen);
+    const mapPosition = (pos: number) => start + Math.max(0, Math.min(inner.length, pos - start - openLen));
+    view.dispatch({
+      changes: { from: start, to: start + raw.length, insert: inner },
+      selection: { anchor: mapPosition(from), head: mapPosition(to) },
+      scrollIntoView: true,
+      annotations: Transaction.userEvent.of("input"),
+    });
+    return true;
+  }
   if (from === to) {
-    if (text.includes(COMMENT_OPEN)) {
-      for (const match of text.matchAll(/<!--[\s\S]*?-->/g)) {
-        const mStart = match.index ?? 0;
-        const mEnd = mStart + match[0].length;
-        if (mStart <= from && from <= mEnd) {
-          const raw = match[0];
-          const openLen = raw.match(/^<!--\s?/)?.[0].length ?? COMMENT_OPEN.length;
-          const closeLen = raw.match(/\s?-->$/)?.[0].length ?? COMMENT_CLOSE.length;
-          const inner = raw.slice(openLen, Math.max(openLen, raw.length - closeLen));
-          const nextCursor = mStart + Math.max(0, Math.min(inner.length, from - mStart - openLen));
-          view.dispatch({
-            changes: { from: mStart, to: mEnd, insert: inner },
-            selection: { anchor: nextCursor },
-            scrollIntoView: true,
-            annotations: Transaction.userEvent.of("input"),
-          });
-          return true;
-        }
-      }
-    }
     view.dispatch({
       changes: { from, to, insert: `${COMMENT_OPEN}  ${COMMENT_CLOSE}` },
       selection: { anchor: from + COMMENT_OPEN.length + 1 },
@@ -175,6 +180,8 @@ export type SourceEditorHandle = {
   replaceRanges: (ranges: FindRange[], text: string) => void;
   replace: (from: number, to: number, text: string, caret?: number) => void;
   paste: (text: string) => void;
+  toggleComment: () => void;
+  isCommented: () => boolean;
   insertImage: (image: Image) => void;
   reveal: (query: string, index: number, caseSensitive?: boolean) => void;
   highlight: (hits: FindRange[], active: number) => void;
@@ -234,6 +241,18 @@ const SourceEditor = forwardRef<SourceEditorHandle, Props>(function SourceEditor
       if (!view) return;
       const { from, to } = view.state.selection.main;
       handle.current.replace(from, to, text);
+    },
+    toggleComment() {
+      const view = viewRef.current;
+      if (view && toggleSourceJsdocComment(view)) view.focus();
+    },
+    isCommented() {
+      const view = viewRef.current;
+      if (!view) return false;
+      const { from, to } = view.state.selection.main;
+      const selected = view.state.sliceDoc(from, to);
+      if (/^\s*<!--[\s\S]*-->\s*$/.test(selected)) return true;
+      return !!enclosingSourceComment(view);
     },
     insertImage(image) {
       const view = viewRef.current;
