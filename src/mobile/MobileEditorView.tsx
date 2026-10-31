@@ -114,6 +114,7 @@ export default function MobileEditorView({
   reveal,
   scrollPositions,
   tree,
+  setArchive,
   docImages,
   attempt,
   edit,
@@ -171,6 +172,7 @@ export default function MobileEditorView({
   reveal: any;
   scrollPositions: EditorScrollPositions;
   tree: FileTreeController;
+  setArchive: React.Dispatch<React.SetStateAction<boolean>>;
   docImages: (
     doc: Doc,
     editable: boolean,
@@ -215,6 +217,7 @@ export default function MobileEditorView({
   >;
   onQuickNote?: (source: QuickNoteSource) => void;
 }) {
+  const archive = tree.archive;
   // 왼쪽 파일트리 드로어 / 오른쪽 위젯 드로어 상태
   const [leftDrawerOpen, setLeftDrawerOpen] = useState(false);
   const { celebration } = useGoalCelebration();
@@ -348,12 +351,12 @@ export default function MobileEditorView({
           ? [{
               label: "폴더 이동",
               icon: <FolderOpen size={16} />,
-              disabled: !target.relPath?.startsWith("doc/"),
+              disabled: archive || !target.relPath?.startsWith("doc/"),
               action: () => setMoveFolderDoc(target),
             }]
           : []),
         {
-          label: "보관함으로 이동",
+          label: target.archived ? "보관함에서 꺼내기" : "보관함으로 이동",
           icon: <Archive size={16} />,
           action: attempt(() => archiveDoc(target)),
         },
@@ -622,9 +625,9 @@ export default function MobileEditorView({
   const projectDocs = useMemo(
     () =>
       lib.documents.filter(
-        (d) => d.projectId === active.projectId && !d.archived,
+        (d) => d.projectId === active.projectId && !!d.archived === archive,
       ),
-    [lib.documents, active.projectId],
+    [lib.documents, active.projectId, archive],
   );
 
   const episodes = useMemo(
@@ -636,7 +639,7 @@ export default function MobileEditorView({
       .sort((a, b) => compareNames(a.title || "제목 없음", b.title || "제목 없음", documentSort)),
     [projectDocs, documentSort],
   );
-  const { isGroupOpen, toggleGroup, setGroups } = useEpisodeGroups(lib.root, active.projectId);
+  const { isGroupOpen, toggleGroup, setGroups } = useEpisodeGroups(lib.root, active.projectId, archive);
   const episodeGroup = episodeGroupSize(prefs.episodeGroupSize);
   const episodeGroupMenu = useEpisodeGroupMenu((open) => setGroups(Array.from({ length: Math.ceil(episodes.length / episodeGroup) }, (_, i) => i * episodeGroup), open));
   const filteredEpisodes = (episodeSort === "desc" ? [...episodes].reverse() : episodes)
@@ -675,7 +678,7 @@ export default function MobileEditorView({
   const allFolders = useMemo(() => {
     const set = new Set<string>(
       tree.memoEntries
-        .filter((e) => e.type === "folder" && !e.archived)
+        .filter((e) => e.type === "folder" && !!e.archived === archive)
         .map((e) => e.path),
     );
     for (const d of docItems) {
@@ -690,7 +693,7 @@ export default function MobileEditorView({
       }
     }
     return Array.from(set).sort((a, b) => compareNames(a, b, documentSort));
-  }, [tree.memoEntries, docItems, documentSort]);
+  }, [tree.memoEntries, docItems, documentSort, archive]);
 
   const moveDrawerDocument = async (doc: Doc, folder: string) => {
     if (!doc.relPath?.startsWith("doc/") || docFolderOf(doc) === folder) return;
@@ -830,14 +833,14 @@ export default function MobileEditorView({
                     <span className="m-tree-count">{countInFolder}</span>
                   )}
                 </button>
-                <button
+                {!archive && <button
                   type="button"
                   className="m-tree-action-btn"
                   aria-label={`${name} 폴더에 추가`}
                   onClick={() => setCreateMenuFolder(folderPath)}
                 >
                   <Plus size={15} />
-                </button>
+                </button>}
               </div>
               {!isCollapsed && (
                 <div className="m-tree-children">
@@ -1337,7 +1340,7 @@ export default function MobileEditorView({
             className={`m-slide-drawer left${leftDrawerClosing ? " closing" : ""}`}
             role="dialog"
             aria-modal="true"
-            aria-label="파일 트리"
+            aria-label={archive ? "보관함 파일 트리" : "파일 트리"}
             onClick={(e) => e.stopPropagation()}
           >
             <div className="m-drawer-header">
@@ -1367,6 +1370,7 @@ export default function MobileEditorView({
                   <ChevronDown size={18} aria-hidden="true" style={{ flexShrink: 0 }} />
                   <strong>{project?.title || "제목 없는 작품"}</strong>
                 </button>
+                {archive && <small>보관함</small>}
               </div>
               <button
                 type="button"
@@ -1410,6 +1414,16 @@ export default function MobileEditorView({
                     </button>
                   )}
                 </div>
+                <button
+                  type="button"
+                  className="m-sort-btn"
+                  aria-label="보관함 보기"
+                  aria-pressed={archive}
+                  title={archive ? "일반 목록 보기" : "보관함 보기"}
+                  onClick={() => setArchive((previous) => !previous)}
+                >
+                  <Archive size={16} />
+                </button>
                 <button
                     type="button"
                     className="m-sort-btn"
@@ -1512,7 +1526,7 @@ export default function MobileEditorView({
               )}
             </div>
 
-            <div className="m-drawer-footer">
+            {!archive && <div className="m-drawer-footer">
               {treeTab === "episode" ? (
                 <button
                   type="button"
@@ -1535,7 +1549,7 @@ export default function MobileEditorView({
                   <span>추가</span>
                 </button>
               )}
-            </div>
+            </div>}
           </aside>
         </div>
       )}

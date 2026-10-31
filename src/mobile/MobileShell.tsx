@@ -588,6 +588,7 @@ export default function MobileShell({
                 reveal={reveal}
                 scrollPositions={scrollPositions}
                 tree={tree}
+                setArchive={setArchive}
                 docImages={docImages}
                 attempt={attempt}
                 edit={edit}

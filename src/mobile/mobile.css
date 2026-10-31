@@ -1095,7 +1095,8 @@
   padding: 0;
 }
 
-.m-sort-btn:active {
+.m-sort-btn:active,
+.m-sort-btn[aria-pressed="true"] {
   background: var(--accent-soft);
   color: var(--accent);
 }
