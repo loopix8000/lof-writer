@@ -61,7 +61,8 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   lineBreakDefault,
-  normalizeStatus
+  normalizeStatus,
+  normalizeType
 } from "../core/episode.mjs";
 import { normalizeWriting, writingName, writingUnit } from "../core/platforms.mjs";
 import {
@@ -998,7 +999,8 @@ export default function App() {
     await flush();
     const n =
       libraryRef.current.documents.filter(
-        (d) => d.projectId === projectRef.current && d.kind === kind && !d.archived,
+        (d) => d.projectId === projectRef.current && d.kind === "episode" &&
+          !d.archived && normalizeType(d.episodeType) === 0,
       ).length + 1;
     const doc = await call<Doc>("createDocument", {
       projectId: projectRef.current,
