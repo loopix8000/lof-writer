@@ -115,7 +115,8 @@ export const MarkdownTasks = Extension.create({
     let inputTimer: ReturnType<typeof setTimeout> | undefined;
     const afterNativeInput = (view: EditorView, event: Event) => {
       clearTimeout(inputTimer);
-      if (event instanceof InputEvent && /^history(?:Undo|Redo)$/.test(event.inputType)) return false;
+      // 삭제·되돌리기는 새 체크 목록 입력이 아니다. 연속 삭제 때 문서 검사와 자동 변환을 예약하지 않는다.
+      if (event instanceof InputEvent && /^(?:delete|history)/.test(event.inputType)) return false;
       inputTimer = setTimeout(() => {
         if (view.isDestroyed || view.composing || !editor.isEditable || isInsideJsdocComment(view.state)) return;
         const tr = convertTaskMarker(closeHistory(view.state.tr));

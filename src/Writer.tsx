@@ -49,6 +49,7 @@ import { isRelativeDocumentLink } from "./document-links";
 import LineBreakControl from "./LineBreakControl";
 import { Fragment, Slice, type Node as PMNode } from "@tiptap/pm/model";
 import { NodeSelection, TextSelection } from "@tiptap/pm/state";
+import { redoDepth, undoDepth } from "@tiptap/pm/history";
 import type { EditorProps, EditorView } from "@tiptap/pm/view";
 import { createCachedMarkdown } from "./cached-markdown";
 import EditorFind, { FindHighlights } from "./EditorFind";
@@ -886,8 +887,8 @@ export default function Writer({
     const report = () => {
       const enabled = !!editor && !editor.isDestroyed && editor.isEditable && visible && !inactive;
       undoStateCallback.current?.({
-        canUndo: enabled && editor!.can().undo(),
-        canRedo: enabled && editor!.can().redo(),
+        canUndo: enabled && undoDepth(editor!.state) > 0,
+        canRedo: enabled && redoDepth(editor!.state) > 0,
       });
     };
     report();
@@ -1098,15 +1099,31 @@ export default function Writer({
       return { canBookmark, bookmarked, canQuickNote };
     };
 
+    let contextTimer: ReturnType<typeof setTimeout> | undefined;
+    let lastContextState = "";
     const syncState = () => {
+      clearTimeout(contextTimer);
+      contextTimer = undefined;
       const native = bridge();
       if (!native?.setContextState) return;
       const next = computeState();
       const canPaste = editable && !protectedSource && isSelectionInsideEditor();
       const canComment = canPaste && (source ? !!sourceRef.current?.view : !!editor && !editor.isDestroyed && editor.isEditable);
       const commented = canComment && (source ? sourceRef.current?.isCommented() === true : isInsideJsdocComment(editor!.state));
-      native.setContextState(next.canBookmark, next.bookmarked, next.canQuickNote, canPaste, canComment, commented);
+      const state = [next.canBookmark, next.bookmarked, next.canQuickNote, canPaste, canComment, commented] as const;
+      const key = state.join(",");
+      // JavascriptInterface 호출은 동기식이다. 커서가 움직여도 메뉴 상태가 같으면 다시 호출하지 않는다.
+      if (key !== lastContextState) {
+        native.setContextState(...state);
+        lastContextState = key;
+      }
       return next;
+    };
+    // 연속 삭제는 transaction·selectionUpdate·selectionchange를 함께 발생시킨다.
+    // 입력 처리 안에서 네이티브를 호출하지 않고 최신 상태를 한 번만 계산한다.
+    const scheduleContextState = () => {
+      if (!bridge()?.setContextState || contextTimer !== undefined) return;
+      contextTimer = setTimeout(syncState, 80);
     };
 
     (window as any).__lofSyncEditorContextState = syncState;
@@ -1196,7 +1213,7 @@ export default function Writer({
     };
 
     syncState();
-    const onSelectionChange = () => syncState();
+    const onSelectionChange = () => scheduleContextState();
     const onTouchStart = (e: TouchEvent) => {
       const target = e.target as Node | null;
       const touch = e.touches[0];
@@ -1207,7 +1224,7 @@ export default function Writer({
       } else {
         lastTouchCoordsRef.current = null;
       }
-      syncState();
+      scheduleContextState();
     };
     document.addEventListener("selectionchange", onSelectionChange);
     document.addEventListener("focusin", onSelectionChange);
@@ -1216,6 +1233,7 @@ export default function Writer({
     editor?.on("selectionUpdate", onSelectionChange);
     editor?.on("transaction", onSelectionChange);
     return () => {
+      clearTimeout(contextTimer);
       document.removeEventListener("selectionchange", onSelectionChange);
       document.removeEventListener("focusin", onSelectionChange);
       document.removeEventListener("focusout", onSelectionChange);
