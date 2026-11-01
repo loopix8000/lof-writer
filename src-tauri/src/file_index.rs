@@ -109,7 +109,7 @@ impl FileIndex {
 
             for (rel, f) in files_obj {
                 let low = rel.to_ascii_lowercase();
-                if !(low.starts_with("episodes/") || low.starts_with("doc/"))
+                if !(crate::store::is_episode_path(&low) || low.starts_with("doc/"))
                     || !low.ends_with(".md")
                 {
                     return None;

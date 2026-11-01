@@ -32,6 +32,16 @@ use uuid::Uuid;
 
 pub const FORMAT: i64 = 2;
 pub const FOLDERS: &[&str] = &["assets", "doc", "episodes"];
+const EPISODE_FOLDERS: &[&str] = &["episodes", "archive/episodes"];
+
+pub(crate) fn is_episode_path(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    lower.starts_with("episodes/") || lower.starts_with("archive/episodes/")
+}
+
+fn episode_files(dir: &Path) -> Vec<String> {
+    EPISODE_FOLDERS.iter().flat_map(|folder| walk_rel(dir, folder)).collect()
+}
 pub const KINDS: &[&str] = &["episode", "plot", "memo"];
 pub(crate) const SYNC_HOLD_MESSAGE: &str = "원고 충돌 정리가 끝날 때까지 전송을 보류합니다.";
 
@@ -903,6 +913,10 @@ impl Store {
             for project in &catalog.projects {
                 let Some(folder) = project.dir.file_name().and_then(|name| name.to_str()) else { continue };
                 for relative in project.errors.keys() {
+                    if relative == "archive" {
+                        paths.push(folder.to_string());
+                        continue;
+                    }
                     let relative = if relative == "project" { "project.json" } else { relative };
                     paths.push(if valid_rel(relative) {
                         format!("{folder}/{relative}")
@@ -1341,7 +1355,7 @@ impl Store {
 
     fn refresh_indexed_file(&mut self, p: &mut CatalogProject, rel: &str) {
         let low = rel.to_ascii_lowercase();
-        if !(low.starts_with("episodes/") || low.starts_with("doc/")) || !low.ends_with(".md") {
+        if !(is_episode_path(&low) || low.starts_with("doc/")) || !low.ends_with(".md") {
             return;
         }
         let file = abs(&p.dir, rel);
@@ -1363,11 +1377,11 @@ impl Store {
                 .to_string();
 
             static EP_NUM_RE: OnceLock<Regex> = OnceLock::new();
-            let ep_re = EP_NUM_RE.get_or_init(|| Regex::new(r"^episodes/(\d+)").unwrap());
+            let ep_re = EP_NUM_RE.get_or_init(|| Regex::new(r"^(?:archive/)?episodes/(\d+)").unwrap());
             static NUM_PREFIX_RE: OnceLock<Regex> = OnceLock::new();
             let num_re = NUM_PREFIX_RE.get_or_init(|| Regex::new(r"^\d+\s+").unwrap());
 
-            let fallback = if rel.starts_with("episodes/") {
+            let fallback = if is_episode_path(rel) {
                 let order_num = ep_re
                     .captures(rel)
                     .and_then(|c| c.get(1))
@@ -1458,7 +1472,7 @@ impl Store {
 
     fn refresh_project_files(&mut self, p: &mut CatalogProject, inventory: bool) {
         let mut present = HashSet::new();
-        for folder in ["episodes", "doc"] {
+        for folder in ["episodes", "archive/episodes", "doc"] {
             match fs::read_dir(p.dir.join(folder)){
                 Ok(_)=>{p.errors.remove(folder);}
                 Err(e) if e.kind()==std::io::ErrorKind::NotFound=>{p.errors.remove(folder);},
@@ -1479,7 +1493,7 @@ impl Store {
         p.files.retain(|rel, _| present.contains(rel));
         // 사라진 원고의 이전 읽기 오류도 파일 목록과 함께 정리한다.
         p.errors.retain(|rel, _| {
-            rel == "project" || rel == "episodes" || rel == "doc" || present.contains(rel)
+            rel == "project" || rel == "episodes" || rel == "archive" || rel == "archive/episodes" || rel == "doc" || present.contains(rel)
         });
         Self::reconcile_index_project(p);
     }
@@ -1752,7 +1766,7 @@ impl Store {
                 let p = &mut cat.projects[idx];
                 for rel in paths {
                     let low = rel.to_ascii_lowercase();
-                    if (low.starts_with("episodes/") || low.starts_with("doc/"))
+                    if (is_episode_path(&low) || low.starts_with("doc/"))
                         && low.ends_with(".md")
                     {
                         self.refresh_indexed_file(p, &rel);
@@ -1767,6 +1781,7 @@ impl Store {
                     }
                 }
                 Self::reconcile_index_project(p);
+                self.normalize_episode_archive(p);
             }
 
             self.reconcile_missing(&mut cat,&before_projects)?;
@@ -1878,7 +1893,7 @@ impl Store {
         let mut seen = HashSet::new();
 
         static EP_NUM_RE: OnceLock<Regex> = OnceLock::new();
-        let ep_re = EP_NUM_RE.get_or_init(|| Regex::new(r"^episodes/(\d+)").unwrap());
+        let ep_re = EP_NUM_RE.get_or_init(|| Regex::new(r"^(?:archive/)?episodes/(\d+)").unwrap());
         static NUM_PREFIX_RE: OnceLock<Regex> = OnceLock::new();
         let num_re = NUM_PREFIX_RE.get_or_init(|| Regex::new(r"^\d+\s+").unwrap());
 
@@ -1924,7 +1939,7 @@ impl Store {
                 let mut files: HashMap<String, IndexedFileRecord> = HashMap::new();
                 let mut errors: HashMap<String, String> = HashMap::new();
 
-                for rel in walk_rel(&dir, "episodes") {
+                for rel in episode_files(&dir) {
                     if !rel.to_ascii_lowercase().ends_with(".md") {
                         continue;
                     }
@@ -2051,14 +2066,16 @@ impl Store {
                 }
 
                 let project_stamp = self.stamp(&dir.join("project.json"))?;
-                projects.push(CatalogProject {
+                let mut project = CatalogProject {
                     dir,
                     project: proj,
                     from_backup,
                     files,
                     errors,
                     project_stamp,
-                });
+                };
+                self.normalize_episode_archive(&mut project);
+                projects.push(project);
                 Ok(())
             })();
             if let Err(err) = res {
@@ -2448,7 +2465,7 @@ impl Store {
                 .filter_map(|d| d.get("path").and_then(|v| v.as_str()))
                 .map(|s| s.to_lowercase())
                 .collect();
-            for rel in walk_rel(&p.dir, "episodes") {
+            for rel in episode_files(&p.dir) {
                 if rel.to_ascii_lowercase().ends_with(".md") && !tracked.contains(&rel.to_lowercase())
                 {
                     unlinked.push(json!({
@@ -2596,6 +2613,66 @@ impl Store {
         Ok(())
     }
 
+    // 시작 시와 동기화 뒤 모두 확인한다. 이미 정리한 파일은 다시 쓰거나 옮기지 않는다.
+    fn normalize_episode_archive(&mut self, p: &mut CatalogProject) {
+        if p.from_backup { return; }
+        match self.migrate_episode_archive(p) {
+            Ok(()) => { p.errors.remove("archive"); }
+            Err(error) => {
+                p.errors.insert("archive".to_string(), format!("보관 원고 폴더를 정리하지 못했습니다: {}", error.message));
+                if let Some(folder) = p.dir.file_name().and_then(|name| name.to_str()) {
+                    self.invalidate_path(folder);
+                }
+            }
+        }
+    }
+
+    fn migrate_episode_archive(&mut self, p: &mut CatalogProject) -> Result<(), LofError> {
+        let mut misplaced: Vec<_> = p.files.iter().filter(|(path, file)| {
+            file.entry["kind"] == "episode" && is_episode_path(path)
+                && path.to_ascii_lowercase().starts_with("archive/episodes/") != (file.entry["archived"].as_bool() == Some(true))
+        }).map(|(path, file)| (path.clone(), file.clone())).collect();
+        if misplaced.is_empty() { return Ok(()); }
+        misplaced.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut taken: HashSet<String> = episode_files(&p.dir).into_iter().map(|path| path.to_lowercase()).collect();
+        let mut moves = Vec::new();
+        let mut backup = None;
+        for (path, file) in &misplaced {
+            let (raw, _) = read_document_file(&abs(&p.dir, path))?;
+            if file.doc["revision"].as_str() != Some(hash_str(&raw).as_str()) {
+                return Err(fail("원고가 변경되었습니다. 다음 확인에서 다시 정리합니다.", "CONFLICT"));
+            }
+            let parsed = read_markdown(&raw)?;
+            // 작품 정보나 이전 색인에만 있던 속성도 이동 뒤 같은 ID와 값으로 유지한다.
+            let properties = document_properties(&file.entry);
+            if properties.iter().any(|(key, value)| parsed.properties.get(key) != Some(value)) {
+                if backup.is_none() {
+                    backup = Some(self.backup_project(p, &["보관 에피소드의 저장 폴더 정리".to_string()])?);
+                }
+                atomic_write_str(&abs(backup.as_ref().unwrap(), &format!("files/{path}")), &raw)?;
+                atomic_write_str(&abs(&p.dir, path), &write_markdown(&parsed.body, &file.entry, &raw)?)?;
+            }
+            let suffix = path.split_once("episodes/").map(|(_, suffix)| suffix)
+                .ok_or_else(|| fail_invalid("에피소드 경로를 확인할 수 없습니다."))?;
+            let folder = if file.entry["archived"].as_bool() == Some(true) { "archive/episodes" } else { "episodes" };
+            let target = unique_name(&format!("{folder}/{suffix}"), ".md", &mut taken);
+            moves.push((path.clone(), target));
+        }
+        // 이동 실패 시 move_files가 완료된 이동을 되돌리며, 기존 파일을 덮어쓰지 않는다.
+        self.move_files(&p.dir, &moves)?;
+        if let Some(docs) = p.project["documents"].as_array_mut() {
+            for doc in docs {
+                if let Some((_, target)) = moves.iter().find(|(source, _)| doc["path"].as_str() == Some(source.as_str())) {
+                    doc["path"] = json!(target);
+                }
+            }
+        }
+        // 옮긴 ID를 먼저 색인에 반영해 이전 경로의 부재가 삭제로 처리되지 않게 한다.
+        self.refresh_project_files(p, true);
+        self.write_project(p)?;
+        Ok(())
+    }
+
     fn layout(&self, p: &mut CatalogProject) -> Result<(), LofError> {
         let docs = p
             .project
@@ -2623,7 +2700,7 @@ impl Store {
             .map(|s| s.to_lowercase())
             .collect();
         let mut taken = HashSet::new();
-        for rel in walk_rel(&p.dir, "episodes") {
+        for rel in episode_files(&p.dir) {
             if !tracked.contains(&rel.to_lowercase()) {
                 taken.insert(rel.to_lowercase());
             }
@@ -2645,8 +2722,9 @@ impl Store {
             let id = d.get("id").and_then(|v| v.as_str()).unwrap_or("");
             let cur = d.get("path").and_then(|v| v.as_str()).unwrap_or("");
             let title = d.get("title").and_then(|v| v.as_str()).unwrap_or("");
+            let folder = if d["archived"].as_bool() == Some(true) { "archive/episodes" } else { "episodes" };
             let want = format!(
-                "episodes/{} {}.md",
+                "{folder}/{} {}.md",
                 pad(*number.get(id).unwrap_or(&1)),
                 safe_name(title, "제목 없음")
             );
@@ -2663,8 +2741,9 @@ impl Store {
             let id = d.get("id").and_then(|v| v.as_str()).unwrap_or("");
             if !targets.contains_key(id) {
                 let title = d.get("title").and_then(|v| v.as_str()).unwrap_or("");
+                let folder = if d["archived"].as_bool() == Some(true) { "archive/episodes" } else { "episodes" };
                 let want = format!(
-                    "episodes/{} {}.md",
+                    "{folder}/{} {}.md",
                     pad(*number.get(id).unwrap_or(&1)),
                     safe_name(title, "제목 없음")
                 );
@@ -3064,7 +3143,7 @@ impl Store {
             })
             .unwrap_or_default();
         let mut out = Vec::new();
-        for rel in walk_rel(&p.dir, "episodes") {
+        for rel in episode_files(&p.dir) {
             if rel.to_ascii_lowercase().ends_with(".md") && !tracked.contains(&rel.to_lowercase()) {
                 match fs::read_to_string(abs(&p.dir, &rel)) {
                     Ok(raw) => {
@@ -4257,7 +4336,7 @@ impl Store {
             }
         }
 
-        if changed.iter().any(|k| k == "title" || k == "order") {
+        if changed.iter().any(|k| k == "title" || k == "order" || k == "archived") {
             self.layout(&mut f_proj)?;
             if let Some(updated_entry) = f_proj
                 .project
@@ -5016,7 +5095,7 @@ impl Store {
             }
         }
         let inner_rel = |rel: &str| -> String {
-            for prefix in ["assets/", "doc/", "episodes/", "plot/", "memo/"] {
+            for prefix in ["assets/", "doc/", "archive/episodes/", "episodes/", "plot/", "memo/"] {
                 // 바이트 위치가 한글 글자 중간일 수 있으므로 get으로 잘라 본다.
                 if rel.get(..prefix.len()).is_some_and(|head| head.eq_ignore_ascii_case(prefix)) {
                     return rel[prefix.len()..].to_string();
