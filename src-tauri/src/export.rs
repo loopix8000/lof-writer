@@ -4,7 +4,7 @@ use crate::file_index::CatalogProject;
 use crate::markdown::read_markdown;
 use crate::store::{
     abs, base_name, by_order_cmp, pad, safe_name, skipped_name, strip_verbatim_prefix, unique_name,
-    walk_rel, Store,
+    Store,
 };
 use crate::text::{plain_text, strip_jsdoc_comments};
 use regex::Regex;
@@ -368,7 +368,7 @@ fn export_project_files(
             .collect();
         let mut taken_by_dir: HashMap<PathBuf, HashSet<String>> = HashMap::new();
 
-        for rel in walk_rel(&p.dir, "doc") {
+        for rel in crate::store::doc_file_paths(&p.dir) {
             if !rel.to_ascii_lowercase().ends_with(".md") {
                 continue;
             }
@@ -377,7 +377,7 @@ fn export_project_files(
                 continue;
             };
             let (body, props) = strip_frontmatter(&raw);
-            let sub_rel = rel.strip_prefix("doc/").unwrap_or(&rel);
+            let sub_rel = crate::store::doc_path_in_space(&rel).unwrap_or(&rel);
             let rel_folder = match sub_rel.rfind('/') {
                 Some(idx) => &sub_rel[..idx],
                 None => "",

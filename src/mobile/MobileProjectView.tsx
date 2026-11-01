@@ -1,3 +1,4 @@
+import { logicalDocumentPath, memoPathInSpace } from "../document-paths";
 import RecoveryCopies from "../RecoveryCopies";
 import {
   Archive,
@@ -351,7 +352,7 @@ export default function MobileProjectView({
 
   const visibleFolderEntries = useMemo(
     () => allFolderEntries.filter((folder) =>
-      currentKindDocs.some((doc) => doc.relPath?.startsWith(`doc/${folder.path}/`)),
+      currentKindDocs.some((doc) => logicalDocumentPath(doc.relPath).startsWith(`doc/${folder.path}/`)),
     ),
     [allFolderEntries, currentKindDocs],
   );
@@ -402,7 +403,7 @@ export default function MobileProjectView({
   };
 
   const moveDocumentToFolder = async (doc: Doc, targetFolder: string) => {
-    const rel = doc.relPath?.startsWith("doc/") ? doc.relPath.slice(4) : "";
+    const rel = logicalDocumentPath(doc.relPath).startsWith("doc/") ? memoPathInSpace(doc.relPath) : "";
     if (!rel || parentOfRel(rel) === targetFolder) return;
     const name = rel.slice(rel.lastIndexOf("/") + 1);
     if (targetFolder) {
@@ -410,7 +411,7 @@ export default function MobileProjectView({
     }
     // 새 폴더 자리에 먼저 보여 주고, 파일 이동으로 바뀐 문서 ID는 다시 읽은 서재에서 받는다.
     const moving = changeLibrary(
-      patchDocuments([doc.id], { relPath: `doc/${targetFolder ? `${targetFolder}/` : ""}${name}` }),
+      patchDocuments([doc.id], { relPath: `${doc.archived ? "archive/" : ""}doc/${targetFolder ? `${targetFolder}/` : ""}${name}` }),
       () => call("memoMove", { space: project.id, path: rel, to: targetFolder }),
     );
     message(targetFolder ? `'${targetFolder}' 폴더로 이동했습니다.` : "최상위 위치로 이동했습니다.");
@@ -826,7 +827,7 @@ export default function MobileProjectView({
       const prefix = "doc/" + f.path + "/";
       return (
         f.name.toLowerCase().includes(q.toLowerCase()) ||
-        filteredKindDocs.some((d) => d.relPath?.startsWith(prefix)) ||
+        filteredKindDocs.some((d) => logicalDocumentPath(d.relPath).startsWith(prefix)) ||
         visibleFolderEntries.some(
           (sub) =>
             sub.path.startsWith(f.path + "/") &&
@@ -836,7 +837,7 @@ export default function MobileProjectView({
     });
 
     const filesHere = filteredKindDocs.filter((d) => {
-      const rel = d.relPath?.startsWith("doc/") ? d.relPath.slice(4) : "";
+      const rel = logicalDocumentPath(d.relPath).startsWith("doc/") ? memoPathInSpace(d.relPath) : "";
       return parentOfRel(rel) === parentPath;
     });
 
@@ -846,7 +847,7 @@ export default function MobileProjectView({
           const isOpen = !!q || !closedFolders.has(folder.path);
           const prefix = "doc/" + folder.path + "/";
           const insideCount = currentKindDocs.filter((d) =>
-            d.relPath?.startsWith(prefix),
+            logicalDocumentPath(d.relPath).startsWith(prefix),
           ).length;
 
           return (
@@ -1446,8 +1447,8 @@ export default function MobileProjectView({
         open={!!moveFolderDoc}
         title={`'${moveFolderDoc?.title || "문서"}' 폴더 이동`}
         currentFolder={
-          moveFolderDoc?.relPath?.startsWith("doc/")
-            ? parentOfRel(moveFolderDoc.relPath.slice(4))
+          logicalDocumentPath(moveFolderDoc?.relPath).startsWith("doc/")
+            ? parentOfRel(memoPathInSpace(moveFolderDoc?.relPath))
             : ""
         }
         folders={allFolderPaths}

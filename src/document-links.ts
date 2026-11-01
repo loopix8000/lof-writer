@@ -1,4 +1,5 @@
 import { noteLinkTarget } from "./note-links";
+import { logicalDocumentPath } from "./document-paths";
 import type { Library } from "./types";
 
 export type DocumentLinkSource = { projectId?: string; space?: string; docPath: string };
@@ -44,14 +45,15 @@ export function resolveDocumentLink(href: string, source: DocumentLinkSource, li
   if (id) return library.documents.some(d => d.id === id) ? { kind: "document", id } : null;
   const relative = relativeLinkPath(href);
   if (!relative || !source.docPath) return null;
-  const directory = source.docPath.replace(/\\/g, "/").split("/").slice(0, -1).join("/");
-  const path = normalizeRelativePath(`${directory}/${relative}`);
+  const directory = logicalDocumentPath(source.docPath).replace(/\\/g, "/").split("/").slice(0, -1).join("/");
+  const normalized = normalizeRelativePath(`${directory}/${relative}`);
+  const path = source.space === "common" ? normalized : logicalDocumentPath(normalized ?? "");
   if (!path || !/\.md$/i.test(path)) return null;
   if (source.space === "common") return { kind: "memo", space: "common", path };
   if (!source.projectId) return null;
   const pathKey = (value: string) => library.platform === "windows" ? value.toLowerCase() : value;
   const doc = library.documents.find(d => d.projectId === source.projectId
-    && d.relPath && pathKey(normalizeRelativePath(d.relPath) || "") === pathKey(path));
+    && d.relPath && pathKey(normalizeRelativePath(logicalDocumentPath(d.relPath)) || "") === pathKey(path));
   if (doc) return { kind: "document", id: doc.id };
   // 작품의 doc/ 안에 있는 메모는 메모 화면에서도 열 수 있다.
   if (path.startsWith("doc/")) return { kind: "memo", space: source.projectId, path: path.slice(4) };

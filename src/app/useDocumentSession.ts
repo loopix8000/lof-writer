@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { logicalDocumentPath } from "../document-paths";
 import type { EditorScrollPositions } from "../EditorScroll";
 import { call, type Doc } from "../types";
 import { notifyRemoteUpdate, resolveSyncedFile, saveRecoveryCopy, type SyncMessage } from "../sync-recovery";
@@ -474,7 +475,8 @@ export function useDocumentSession(options: Options) {
   // 트리가 파일을 옮기고 서재를 다시 읽은 뒤 열린 원고의 위치 정보를 갱신한다.
   function remapDocuments(before: Doc[], from: string, to: string, documents: Doc[], projectId: string) {
     for (const d of before) {
-      const rel = to + d.relPath!.slice(from.length),
+      const storagePrefix = d.relPath?.startsWith("archive/") ? "archive/" : "";
+      const rel = storagePrefix + logicalDocumentPath(to) + logicalDocumentPath(d.relPath).slice(logicalDocumentPath(from).length),
         next = documents.find(
           (x) => x.projectId === projectId && x.relPath === rel,
         );

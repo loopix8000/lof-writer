@@ -11,6 +11,7 @@ import {
 import { Fragment } from "react";
 
 import type * as React from "react";
+import { memoPathInSpace } from "../document-paths";
 
 import { episodeNumber, type RenderTreeRow } from "./file-tree-model";
 import { documentIcon as docIcon } from "./FileTreeRow";
@@ -30,7 +31,7 @@ export default function MemoFolderTree({ tree, treeRow }: { tree: FileTreeContro
     const subFolders = folders
       .filter((f) => parentOf(f.path) === parent)
       .sort((a, b) => a.name.localeCompare(b.name, "ko", { numeric: true }));
-    const here = files.filter((d) => parentOf((d.relPath || "").slice(4)) === parent);
+    const here = files.filter((d) => parentOf(memoPathInSpace(d.relPath)) === parent);
     return (
       <>
         {subFolders.map((f) => {

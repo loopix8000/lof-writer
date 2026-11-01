@@ -10,7 +10,7 @@ export const episodeGroupSize = (value: unknown) => {
   return (EPISODE_GROUP_OPTIONS as readonly unknown[]).includes(value) ? (value as number) : EPISODE_GROUP;
 };
 export const treeMatch = (text: string, query: string) => text.toLowerCase().includes(query.trim().toLowerCase());
-export const episodeNumber = (doc: Doc) => /^episodes\/(\d+)/.exec(doc.relPath || "")?.[1] ?? "";
+export const episodeNumber = (doc: Doc) => /^(?:archive\/)?episodes\/(\d+)/.exec(doc.relPath || "")?.[1] ?? "";
 export const parentOfRel = (path: string) => path.slice(0, Math.max(0, path.lastIndexOf("/")));
 export type FolderEntry = { path: string; name: string; type: string; archived?: boolean };
 export type TreeRowOptions = { depth?: number; badge?: string; dropFolder?: string };

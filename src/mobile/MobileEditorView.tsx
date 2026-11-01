@@ -1,3 +1,4 @@
+import { logicalDocumentPath, memoPathInSpace } from "../document-paths";
 import SyncIssueBanner from "../SyncIssueBanner";
 import type { OpenDocumentLink } from "../document-links";
 import {
@@ -351,7 +352,7 @@ export default function MobileEditorView({
           ? [{
               label: "폴더 이동",
               icon: <FolderOpen size={16} />,
-              disabled: archive || !target.relPath?.startsWith("doc/"),
+              disabled: archive || !logicalDocumentPath(target.relPath).startsWith("doc/"),
               action: () => setMoveFolderDoc(target),
             }]
           : []),
@@ -673,7 +674,7 @@ export default function MobileEditorView({
 
   // 문서 폴더 경로는 doc/ 아래 기준이라 문서 경로에서도 doc/를 떼고 비교한다.
   const docFolderOf = (d: Doc) =>
-    parentOfRel((d.relPath || "").replace(/^doc\//, ""));
+    parentOfRel(memoPathInSpace(d.relPath));
 
   const allFolders = useMemo(() => {
     const set = new Set<string>(
@@ -696,8 +697,8 @@ export default function MobileEditorView({
   }, [tree.memoEntries, docItems, documentSort, archive]);
 
   const moveDrawerDocument = async (doc: Doc, folder: string) => {
-    if (!doc.relPath?.startsWith("doc/") || docFolderOf(doc) === folder) return;
-    await tree.moveDocPaths([doc.relPath.slice(4)], folder);
+    if (!logicalDocumentPath(doc.relPath).startsWith("doc/") || docFolderOf(doc) === folder) return;
+    await tree.moveDocPaths([memoPathInSpace(doc.relPath)], folder);
     if (folder) {
       setCollapsedPaths((previous) => {
         const next = { ...previous };

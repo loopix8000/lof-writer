@@ -4,7 +4,7 @@ use crate::error::{
 use crate::file_index::CommonIndexedFile;
 use crate::markdown::{markdown_entry, read_markdown, write_markdown};
 use crate::store::{
-    abs, atomic_write_str, match_lines, memo_id, rename_with_retry, safe_name, search_hit, search_regex, skipped_name,
+    abs, atomic_write_str, match_lines, memo_id, safe_name, search_hit, search_regex, skipped_name,
     strip_verbatim_prefix, valid_rel, Store,
 };
 use serde_json::{json, Value};
@@ -126,6 +126,8 @@ impl Memos {
     }
 
     pub fn spaces(store: &mut Store, common_root: &Path) -> Result<Value, LofError> {
+        let common = Self::resolve_space(store, common_root, COMMON)?;
+        Self::normalize_common_archive(store, &common)?;
         let cat = store.scan()?;
         let mut projs = cat.projects;
         projs.sort_by_key(|p| p.project.get("index").and_then(|v| v.as_i64()).unwrap_or(0));
@@ -158,12 +160,13 @@ impl Memos {
             let root = strip_verbatim_prefix(
                 &fs::canonicalize(common_root).unwrap_or_else(|_| common_root.to_path_buf()),
             );
-            return Ok(SpaceInfo {
+            let space = SpaceInfo {
                 id: COMMON.to_string(),
                 title: "공용 메모".to_string(),
                 root,
                 project_id: None,
-            });
+            };
+            return Ok(space);
         }
         let p = store.get_project(id)?;
         let root = p.dir.join("doc");
@@ -192,15 +195,107 @@ impl Memos {
         if !valid_rel(rel) {
             return Err(fail_invalid("잘못된 메모 경로"));
         }
-        Ok(abs(&space.root, rel))
+        let active = abs(&space.root, rel);
+        let archived = abs(&Self::archive_root(space), rel);
+        if active.try_exists()? {
+            if active.is_file() && archived.try_exists()? {
+                return Err(fail("같은 경로의 문서가 일반 폴더와 보관 폴더에 모두 있습니다.", "DUPLICATE"));
+            }
+            return Ok(active);
+        }
+        if archived.try_exists()? { return Ok(archived); }
+        Ok(active)
+    }
+
+    fn archive_root(space: &SpaceInfo) -> PathBuf {
+        if space.project_id.is_some() {
+            space.root.parent().unwrap_or(&space.root).join("archive/doc")
+        } else {
+            space.root.join("archive/doc")
+        }
+    }
+
+    pub(crate) fn common_file(root: &Path, rel: &str) -> Result<PathBuf, LofError> {
+        let active = crate::sync::file_remote::safe_path(root, rel)?;
+        let archived = crate::sync::file_remote::safe_path(root, &format!("archive/doc/{rel}"))?;
+        match (active.try_exists()?, archived.try_exists()?) {
+            (true, true) => Err(fail("일반 폴더와 보관 폴더에 같은 메모 경로가 있습니다.", "DUPLICATE")),
+            (false, true) => Ok(archived),
+            _ => Ok(active),
+        }
+    }
+
+    fn normalize_common_archive(store: &Store, space: &SpaceInfo) -> Result<(), LofError> {
+        let folders = Self::archived_folders(&Self::common_folders(space)?);
+        let archive = crate::sync::file_remote::safe_path(&space.root, "archive/doc")?;
+        let mut moves = Vec::new();
+        for (root, in_archive) in [(&space.root, false), (&archive, true)] {
+            for entry in Self::walk_storage(space, root, "") {
+                if entry["type"] != "file" { continue; }
+                let rel = entry["path"].as_str().unwrap_or("");
+                let source = abs(root, rel);
+                let raw = fs::read_to_string(&source)?;
+                let parsed = read_markdown(&raw)?;
+                if parsed.properties.get("archived").and_then(Value::as_bool).unwrap_or(false) == in_archive { continue; }
+                let destination_root = if in_archive { &space.root } else { &archive };
+                let mut target = abs(destination_root, rel);
+                let mut suffix = 2;
+                while target.try_exists()? || moves.iter().any(|(_, existing): &(String, String)| abs(&space.root, existing) == target) {
+                    let stem = strip_md_ext(name_of(rel));
+                    target = abs(destination_root, &join_rel(parent_of(rel), &format!("{stem} ({suffix}).md")));
+                    suffix += 1;
+                }
+                // 먼저 ID와 이력을 보존한다. 이미 ID가 있는 메모의 본문은 다시 쓰지 않는다.
+                crate::common_memo_history::prepare_move_at(&space.root, rel, &source)?;
+                let from = source.strip_prefix(&space.root).map_err(|_| fail_invalid("메모 경로 오류"))?.to_string_lossy().replace('\\', "/");
+                let to = target.strip_prefix(&space.root).map_err(|_| fail_invalid("메모 경로 오류"))?.to_string_lossy().replace('\\', "/");
+                moves.push((from, to));
+            }
+        }
+        store.move_files(&space.root, &moves)?;
+        Self::sync_archived_folders(space, &folders)
+    }
+
+    fn sync_archived_folders(space: &SpaceInfo, archived: &[String]) -> Result<(), LofError> {
+        let base = if space.project_id.is_some() { space.root.parent().unwrap_or(&space.root) } else { &space.root };
+        let archive = crate::sync::file_remote::safe_path(base, "archive/doc")?;
+        let mut folders: HashSet<String> = Self::walk_space(space, "").into_iter()
+            .filter(|entry| entry["type"] == "folder")
+            .filter_map(|entry| entry["path"].as_str().map(str::to_string)).collect();
+        folders.extend(archived.iter().cloned());
+        let mut folders: Vec<_> = folders.into_iter().collect();
+        folders.sort_by_key(|path| std::cmp::Reverse(path.len()));
+        for path in folders {
+            if !valid_rel(&path) { return Err(fail_invalid("보관 폴더 경로가 올바르지 않습니다.")); }
+            let is_archived = archived.iter().any(|folder| path == *folder || path.starts_with(&format!("{folder}/")));
+            let (from, to) = if is_archived { (abs(&space.root, &path), abs(&archive, &path)) } else { (abs(&archive, &path), abs(&space.root, &path)) };
+            if from.is_dir() || is_archived {
+                fs::create_dir_all(&to)?;
+                if from.is_dir() && fs::read_dir(&from)?.next().is_none() {
+                    fs::remove_dir(&from)?;
+                    crate::store::record_change(&from);
+                }
+            }
+        }
+        Ok(())
     }
 
     fn walk_space(space: &SpaceInfo, rel: &str) -> Vec<Value> {
+        let mut entries = Self::walk_storage(space, &space.root, rel);
+        for entry in Self::walk_storage(space, &Self::archive_root(space), rel) {
+            if entry["type"] != "folder" || !entries.iter().any(|existing| existing["type"] == "folder" && existing["path"] == entry["path"]) {
+                entries.push(entry);
+            }
+        }
+        entries
+    }
+
+    fn walk_storage(space: &SpaceInfo, root: &Path, rel: &str) -> Vec<Value> {
         let mut out = Vec::new();
         let dir = if rel.is_empty() {
-            space.root.clone()
+            root.to_path_buf()
         } else {
-            abs(&space.root, rel)
+            abs(root, rel)
         };
         let Ok(rd) = fs::read_dir(&dir) else {
             return out;
@@ -215,7 +310,7 @@ impl Memos {
             let r = join_rel(rel, &name);
             let Ok(ft) = e.file_type() else { continue };
             // 공용 메모의 이미지 폴더(assets/)는 메모 목록에 보이지 않는다.
-            if ft.is_dir() && space.id == COMMON && rel.is_empty() && name.eq_ignore_ascii_case("assets") {
+            if ft.is_dir() && space.id == COMMON && rel.is_empty() && (name.eq_ignore_ascii_case("assets") || root == space.root && name.eq_ignore_ascii_case("archive")) {
                 continue;
             }
             if ft.is_dir() {
@@ -224,9 +319,9 @@ impl Memos {
                     "name": name,
                     "type": "folder",
                 }));
-                out.extend(Self::walk_space(space, &r));
+                out.extend(Self::walk_storage(space, root, &r));
             } else if ft.is_file() && is_md(&name) {
-                if let Ok(stat) = fs::metadata(abs(&space.root, &r)) {
+                if let Ok(stat) = fs::metadata(abs(root, &r)) {
                     let updated_at = stat
                         .modified()
                         .map(sys_time_to_iso)
@@ -249,6 +344,12 @@ impl Memos {
         space_id: &str,
     ) -> Result<Value, LofError> {
         let space = Self::resolve_space(store, common_root, space_id)?;
+        if let Some(pid) = &space.project_id {
+            let project = store.get_project(pid)?;
+            if !project.from_backup { Self::sync_archived_folders(&space, &Self::archived_folders(&project.project))?; }
+        } else {
+            Self::normalize_common_archive(store, &space)?;
+        }
         let mut entries = Self::walk_space(&space, "");
         entries.sort_by(|a, b| {
             let pa = parent_of(a.get("path").and_then(|v| v.as_str()).unwrap_or(""));
@@ -286,10 +387,9 @@ impl Memos {
                 }
                 if e.get("type").and_then(|v| v.as_str()) == Some("file") {
                     let epath = e.get("path").and_then(|v| v.as_str()).unwrap_or("");
-                    let doc_rel = format!("doc/{}", epath);
                     if let Some(m) = docs
                         .iter()
-                        .find(|d| d.get("path").and_then(|v| v.as_str()) == Some(&doc_rel))
+                        .find(|d| d.get("path").and_then(|v| v.as_str()).and_then(crate::store::doc_path_in_space) == Some(epath))
                     {
                         if let Some(eobj) = e.as_object_mut() {
                             if let Some(k) = m.get("kind") {
@@ -480,13 +580,11 @@ impl Memos {
         } else {
             abs(&space.root, folder)
         };
-        let taken: HashSet<String> = fs::read_dir(&dir)
-            .map(|rd| {
-                rd.filter_map(|e| e.ok())
-                    .map(|e| e.file_name().to_string_lossy().to_lowercase())
-                    .collect()
-            })
-            .unwrap_or_default();
+        let archive = abs(&Self::archive_root(space), folder);
+        let taken: HashSet<String> = [&dir, &archive].into_iter().flat_map(|root| {
+            fs::read_dir(root).into_iter().flatten().filter_map(|entry| entry.ok())
+                .map(|entry| entry.file_name().to_string_lossy().to_lowercase())
+        }).collect();
         let mut candidate = format!("{}{}", name, ext);
         let mut n = 2;
         while taken.contains(&candidate.to_lowercase()) {
@@ -500,6 +598,9 @@ impl Memos {
         let Some(f) = folder.filter(|s| !s.is_empty()) else {
             return Ok("");
         };
+        if space.id == COMMON && f.split('/').next().is_some_and(|part| part.eq_ignore_ascii_case("archive")) {
+            return Err(fail_invalid("archive는 보관 문서 전용 폴더입니다."));
+        }
         Self::space_abs(space, f)?;
         Ok(f)
     }
@@ -588,6 +689,9 @@ impl Memos {
         let space = Self::resolve_space(store, common_root, space_id)?;
         let parent = Self::validate_folder(&space, input.get("parent").and_then(|v| v.as_str()))?;
         let name_in = input.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        if space.id == COMMON && parent.is_empty() && name_in.trim().eq_ignore_ascii_case("archive") {
+            return Err(fail_invalid("archive는 보관 문서 전용 폴더입니다."));
+        }
         let rel = Self::unique_in_space(&space, parent, &safe_name(name_in, "새 폴더"), "");
         fs::create_dir_all(abs(&space.root, &rel))?;
         Ok(json!({ "path": rel }))
@@ -626,14 +730,16 @@ impl Memos {
             }
             Self::set_archived_folders(&mut metadata, folders);
             Self::write_common_folders(&space, &metadata)?;
+            Self::sync_archived_folders(&space, &Self::archived_folders(&metadata))?;
             return Ok(true);
         };
         let p = store.get_project(pid)?;
-        let prefix = format!("doc/{}/", path);
+        let prefix = format!("{path}/");
         for doc in store.doc_files(&p) {
             if !doc
                 .get("path")
                 .and_then(Value::as_str)
+                .and_then(crate::store::doc_path_in_space)
                 .is_some_and(|p| p.starts_with(&prefix))
                 || doc
                     .get("archived")
@@ -663,6 +769,7 @@ impl Memos {
         }
         Self::set_archived_folders(&mut p.project, folders);
         store.write_project(&p)?;
+        Self::sync_archived_folders(&space, &Self::archived_folders(&p.project))?;
         Ok(true)
     }
 
@@ -690,6 +797,7 @@ impl Memos {
             doc["archived"] = json!(archived);
             doc["updatedAt"] = json!(now_iso());
             atomic_write_str(&file, &write_markdown(&parsed.body, &doc, &raw)?)?;
+            Self::normalize_common_archive(store, &space)?;
         }
         if !archived { Self::release_archived_ancestors(store, &space, rel)?; }
         Ok(true)
@@ -739,8 +847,8 @@ impl Memos {
         if parent_of(path) == to {
             return Ok(json!({ "path": path }));
         }
-        let stat = fs::metadata(abs(&space.root, path))?;
-        if !to.is_empty() && !fs::metadata(abs(&space.root, to))?.is_dir() {
+        let stat = fs::metadata(Self::space_abs(&space, path)?)?;
+        if !to.is_empty() && !fs::metadata(Self::space_abs(&space, to)?)?.is_dir() {
             return Err(fail_invalid("폴더로만 옮길 수 있습니다."));
         }
         let ext = if stat.is_dir() { "" } else { ".md" };
@@ -752,7 +860,7 @@ impl Memos {
     }
 
     fn files_under(space: &SpaceInfo, rel: &str) -> Result<Vec<String>, LofError> {
-        let stat = fs::metadata(abs(&space.root, rel))?;
+        let stat = fs::metadata(Self::space_abs(space, rel)?)?;
         if !stat.is_dir() {
             return Ok(if is_md(rel) {
                 vec![rel.to_string()]
@@ -780,18 +888,19 @@ impl Memos {
                 crate::common_memo_history::prepare_move(&space.root, path)?;
             }
         }
-        let temp = format!("{}.{}.lofmv", from, Uuid::new_v4().simple());
-        rename_with_retry(&abs(&space.root, from), &abs(&space.root, &temp))?;
-        if let Err(e) = rename_with_retry(&abs(&space.root, &temp), &abs(&space.root, to)) {
-            let _ = rename_with_retry(&abs(&space.root, &temp), &abs(&space.root, from));
-            return Err(fail(
-                format!(
-                    "이름을 바꾸지 못했습니다. 다른 프로그램에서 열려 있는지 확인해 주세요. ({})",
-                    e.message
-                ),
-                "RENAME",
-            ));
+        let base = if space.project_id.is_some() { space.root.parent().unwrap_or(&space.root) } else { &space.root };
+        let mut moves = Vec::new();
+        for root in [&space.root, &Self::archive_root(space)] {
+            let source = abs(root, from);
+            if source.try_exists()? {
+                let target = abs(root, to);
+                let relative = |path: &Path| -> Result<String, LofError> {
+                    Ok(path.strip_prefix(base).map_err(|_| fail_invalid("메모 경로 오류"))?.to_string_lossy().replace('\\', "/"))
+                };
+                moves.push((relative(&source)?, relative(&target)?));
+            }
         }
+        store.move_files(base, &moves)?;
 
         if let Some(proj_folder) = space
             .root
@@ -801,6 +910,8 @@ impl Memos {
         {
             store.invalidate_path(&format!("{}/doc/{}", proj_folder, from));
             store.invalidate_path(&format!("{}/doc/{}", proj_folder, to));
+            store.invalidate_path(&format!("{}/archive/doc/{}", proj_folder, from));
+            store.invalidate_path(&format!("{}/archive/doc/{}", proj_folder, to));
         }
 
         if let Some(ref mut metadata) = common_metadata {
@@ -818,6 +929,7 @@ impl Memos {
             let mut p = store.get_project(pid)?;
             let mut changed =
                 Store::move_doc_meta(&mut p, &format!("doc/{}", from), &format!("doc/{}", to));
+            changed |= Store::move_doc_meta(&mut p, &format!("archive/doc/{from}"), &format!("archive/doc/{to}"));
             let prefix = format!("{}/", from);
             let folders = Self::archived_folders(&p.project)
                 .into_iter()
@@ -839,7 +951,7 @@ impl Memos {
                 && before[0] == from
                 && name_of(from) != name_of(to)
             {
-                let file = abs(&space.root, to);
+                let file = Self::space_abs(space, to)?;
                 let raw = fs::read_to_string(&file)?;
                 let doc = markdown_entry(
                     &raw,
@@ -909,12 +1021,11 @@ impl Memos {
                 }
             }
             for rel in &files {
-                let raw = fs::read_to_string(abs(&space.root, rel))?;
+                let raw = fs::read_to_string(Self::space_abs(&space, rel)?)?;
                 let parsed = read_markdown(&raw)?;
-                let doc_rel = format!("doc/{}", rel);
                 let entry = docs
                     .iter()
-                    .find(|d| d.get("path").and_then(Value::as_str) == Some(&doc_rel));
+                    .find(|d| d.get("path").and_then(Value::as_str).and_then(crate::store::doc_path_in_space) == Some(rel.as_str()));
                 let is_archived = parsed
                     .properties
                     .get("archived")
@@ -958,13 +1069,16 @@ impl Memos {
                 .and_then(|n| n.to_str())
             {
                 store.invalidate_path(&format!("{}/doc/{}", proj_folder, path));
+                store.invalidate_path(&format!("{}/archive/doc/{}", proj_folder, path));
             }
             let mut p = store.get_project(pid)?;
             if protected.is_empty() {
                 Store::drop_doc_meta(&mut p, &format!("doc/{}", path));
+                Store::drop_doc_meta(&mut p, &format!("archive/doc/{}", path));
             } else {
                 for rel in ids.keys() {
                     Store::drop_doc_meta(&mut p, &format!("doc/{}", rel));
+                    Store::drop_doc_meta(&mut p, &format!("archive/doc/{}", rel));
                 }
             }
             let prefix = format!("{}/", path);
@@ -996,15 +1110,25 @@ impl Memos {
         let prefix = format!("{}/", path);
         let keep = protected.contains(path) || protected.iter().any(|p| p.starts_with(&prefix));
         if !keep {
-            return store.trash_path(&file);
+            for root in [&space.root, &Self::archive_root(space)] {
+                let target = abs(root, path);
+                if target.try_exists()? { store.trash_path(&target)?; }
+            }
+            return Ok(());
         }
         if !fs::symlink_metadata(&file)?.is_dir() {
             return Ok(());
         }
         // 목록을 먼저 읽어 삭제 범위를 확정한 뒤 보존 대상이 없는 항목만 휴지통으로 옮긴다.
-        let entries = fs::read_dir(&file)?.collect::<Result<Vec<_>, _>>()?;
-        for entry in entries {
-            let rel = join_rel(path, &entry.file_name().to_string_lossy());
+        let mut names = HashSet::new();
+        for root in [&space.root, &Self::archive_root(space)] {
+            let dir = abs(root, path);
+            if dir.is_dir() {
+                for entry in fs::read_dir(dir)? { names.insert(entry?.file_name().to_string_lossy().to_string()); }
+            }
+        }
+        for name in names {
+            let rel = join_rel(path, &name);
             Self::trash_except(store, space, &rel, protected, retained_folders)?;
         }
         retained_folders.push(path.to_string());
@@ -1025,6 +1149,7 @@ impl Memos {
         }
         let space = Self::resolve_space(store, common_root, space_id)?;
         let re = search_regex(raw, case_sensitive);
+        if space.project_id.is_none() { Self::normalize_common_archive(store, &space)?; }
         let mut files = Vec::new();
         let mut results = Vec::new();
 
@@ -1056,7 +1181,7 @@ impl Memos {
                     "name": ename,
                 }));
             }
-            let file = abs(&space.root, epath);
+            let file = Self::space_abs(&space, epath)?;
             let stamp = store.stamp(&file)?.unwrap_or_default();
             let needs_reindex = store
                 .index

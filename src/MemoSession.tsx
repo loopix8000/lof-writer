@@ -1,3 +1,4 @@
+import { logicalDocumentPath, memoPathInSpace } from "./document-paths";
 import { notifyRemoteUpdate, resolveSyncedFile, saveRecoveryCopy, type SyncMessage } from "./sync-recovery";
 import SyncIssueBanner from "./SyncIssueBanner";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -854,8 +855,8 @@ export default function MemoSession({
     let m: Pick<Memo, "path" | "title">;
     if (kind === "plot" && space !== COMMON) {
       const doc = await call<Doc>("createDocument", { projectId: space, folder, kind, title: "새 플롯" });
-      if (!doc.relPath?.startsWith("doc/")) throw Error("만든 문서의 경로를 확인할 수 없습니다.");
-      m = { path: doc.relPath.slice(4), title: doc.title };
+      if (!logicalDocumentPath(doc.relPath).startsWith("doc/")) throw Error("만든 문서의 경로를 확인할 수 없습니다.");
+      m = { path: memoPathInSpace(doc.relPath), title: doc.title };
     } else m = await call<Memo>("memoCreate", { space, folder, title: "새 메모" });
     if (space !== COMMON) setFilter(old => new Set([...old, kind]));
     showCreatedEntry({ path: m.path, name: m.title, type: "file", kind });
@@ -965,7 +966,7 @@ export default function MemoSession({
     const current = await call<Doc>("readDocument", { id: doc.id });
     await call("saveDocument", { id: doc.id, expectedRevision: current.revision, archived: true });
     const matches = (tab: MemoTab) => tab.space === doc.projectId &&
-      (tab.path === DOC + doc.id || !!doc.relPath?.startsWith("doc/") && tab.path === doc.relPath.slice(4));
+      (tab.path === DOC + doc.id || !!logicalDocumentPath(doc.relPath).startsWith("doc/") && tab.path === memoPathInSpace(doc.relPath));
     if (memoRef.current && matches(memoRef.current)) closeCurrent();
     area.mapTabs(tab => matches(tab) ? null : tab);
     message("보관함으로 옮겼습니다.");
@@ -1180,7 +1181,7 @@ export default function MemoSession({
     if (d) return d.kind;
     if (m.space !== COMMON) {
       const byRel = documents.find(
-        (doc) => doc.projectId === m.space && doc.relPath === `doc/${m.path}`,
+        (doc) => doc.projectId === m.space && logicalDocumentPath(doc.relPath) === `doc/${m.path}`,
       );
       if (byRel) return byRel.kind;
     }
@@ -1459,7 +1460,7 @@ export default function MemoSession({
     const list = documents
       .filter((d) => d.projectId === space && d.kind === kind && !d.archived)
       .sort((a, b) => (a.relPath || "").localeCompare(b.relPath || "", "ko", { numeric: true }));
-    const inner = (d: Doc) => (d.relPath || "").split("/").slice(1);
+    const inner = (d: Doc) => logicalDocumentPath(d.relPath).split("/").slice(1);
     const folders = [...new Set(list.map((d) => inner(d).slice(0, -1).join("/")).filter(Boolean))];
     const numbers = episodeNumbers(list.filter(doc => doc.kind === "episode"));
     const item = (d: Doc, depth: number) => {

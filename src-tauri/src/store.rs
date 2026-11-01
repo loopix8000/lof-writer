@@ -42,6 +42,17 @@ pub(crate) fn is_episode_path(path: &str) -> bool {
 fn episode_files(dir: &Path) -> Vec<String> {
     EPISODE_FOLDERS.iter().flat_map(|folder| walk_rel(dir, folder)).collect()
 }
+pub(crate) fn doc_path_in_space(path: &str) -> Option<&str> {
+    path.strip_prefix("archive/doc/").or_else(|| path.strip_prefix("doc/"))
+}
+
+pub(crate) fn is_doc_path(path: &str) -> bool {
+    doc_path_in_space(&path.to_ascii_lowercase()).is_some()
+}
+
+pub(crate) fn doc_file_paths(dir: &Path) -> Vec<String> {
+    ["doc", "archive/doc"].into_iter().flat_map(|folder| walk_rel(dir, folder)).collect()
+}
 pub const KINDS: &[&str] = &["episode", "plot", "memo"];
 pub(crate) const SYNC_HOLD_MESSAGE: &str = "원고 충돌 정리가 끝날 때까지 전송을 보류합니다.";
 
@@ -1355,7 +1366,7 @@ impl Store {
 
     fn refresh_indexed_file(&mut self, p: &mut CatalogProject, rel: &str) {
         let low = rel.to_ascii_lowercase();
-        if !(is_episode_path(&low) || low.starts_with("doc/")) || !low.ends_with(".md") {
+        if !(is_episode_path(&low) || is_doc_path(&low)) || !low.ends_with(".md") {
             return;
         }
         let file = abs(&p.dir, rel);
@@ -1472,7 +1483,7 @@ impl Store {
 
     fn refresh_project_files(&mut self, p: &mut CatalogProject, inventory: bool) {
         let mut present = HashSet::new();
-        for folder in ["episodes", "archive/episodes", "doc"] {
+        for folder in ["episodes", "archive/episodes", "doc", "archive/doc"] {
             match fs::read_dir(p.dir.join(folder)){
                 Ok(_)=>{p.errors.remove(folder);}
                 Err(e) if e.kind()==std::io::ErrorKind::NotFound=>{p.errors.remove(folder);},
@@ -1493,7 +1504,7 @@ impl Store {
         p.files.retain(|rel, _| present.contains(rel));
         // 사라진 원고의 이전 읽기 오류도 파일 목록과 함께 정리한다.
         p.errors.retain(|rel, _| {
-            rel == "project" || rel == "episodes" || rel == "archive" || rel == "archive/episodes" || rel == "doc" || present.contains(rel)
+            rel == "project" || rel == "episodes" || rel == "archive" || rel == "archive/episodes" || rel == "doc" || rel == "archive/doc" || present.contains(rel)
         });
         Self::reconcile_index_project(p);
     }
@@ -1766,7 +1777,7 @@ impl Store {
                 let p = &mut cat.projects[idx];
                 for rel in paths {
                     let low = rel.to_ascii_lowercase();
-                    if (is_episode_path(&low) || low.starts_with("doc/"))
+                    if (is_episode_path(&low) || is_doc_path(&low))
                         && low.ends_with(".md")
                     {
                         self.refresh_indexed_file(p, &rel);
@@ -1781,7 +1792,7 @@ impl Store {
                     }
                 }
                 Self::reconcile_index_project(p);
-                self.normalize_episode_archive(p);
+                self.normalize_document_archive(p);
             }
 
             self.reconcile_missing(&mut cat,&before_projects)?;
@@ -2074,7 +2085,7 @@ impl Store {
                     errors,
                     project_stamp,
                 };
-                self.normalize_episode_archive(&mut project);
+                self.normalize_document_archive(&mut project);
                 projects.push(project);
                 Ok(())
             })();
@@ -2094,7 +2105,7 @@ impl Store {
     ) -> Vec<Value> {
         let mut out = Vec::new();
         let title = project.get("title").and_then(|v| v.as_str()).unwrap_or("");
-        for rel in walk_rel(dir, "doc") {
+        for rel in doc_file_paths(dir) {
             if !rel.to_ascii_lowercase().ends_with(".md") {
                 continue;
             }
@@ -2121,7 +2132,7 @@ impl Store {
             return p
                 .files
                 .iter()
-                .filter(|(rel, _)| rel.starts_with("doc/"))
+                .filter(|(rel, _)| is_doc_path(rel))
                 .map(|(_, f)| f.entry.clone())
                 .collect();
         }
@@ -2163,7 +2174,7 @@ impl Store {
             let doc_entries: Vec<Value> = if self.index_enabled && !p.files.is_empty() {
                 p.files
                     .iter()
-                    .filter(|(rel, f)| rel.starts_with("doc/") && same(&f.entry))
+                    .filter(|(rel, f)| is_doc_path(rel) && same(&f.entry))
                     .map(|(_, f)| f.entry.clone())
                     .collect()
             } else {
@@ -2524,7 +2535,7 @@ impl Store {
                     let listed_count = p.project.get("documents").and_then(|v| v.as_array()).into_iter().flatten()
                         .filter(|entry| same(entry)).count();
                     let doc_count = p.files.iter()
-                        .filter(|(rel, f)| rel.starts_with("doc/") && same(&f.entry))
+                        .filter(|(rel, f)| is_doc_path(rel) && same(&f.entry))
                         .count();
                     matches += listed_count + doc_count;
                     if matches == 1 && found.is_none() {
@@ -2614,9 +2625,9 @@ impl Store {
     }
 
     // 시작 시와 동기화 뒤 모두 확인한다. 이미 정리한 파일은 다시 쓰거나 옮기지 않는다.
-    fn normalize_episode_archive(&mut self, p: &mut CatalogProject) {
+    fn normalize_document_archive(&mut self, p: &mut CatalogProject) {
         if p.from_backup { return; }
-        match self.migrate_episode_archive(p) {
+        match self.migrate_document_archive(p) {
             Ok(()) => { p.errors.remove("archive"); }
             Err(error) => {
                 p.errors.insert("archive".to_string(), format!("보관 원고 폴더를 정리하지 못했습니다: {}", error.message));
@@ -2627,14 +2638,14 @@ impl Store {
         }
     }
 
-    fn migrate_episode_archive(&mut self, p: &mut CatalogProject) -> Result<(), LofError> {
+    fn migrate_document_archive(&mut self, p: &mut CatalogProject) -> Result<(), LofError> {
         let mut misplaced: Vec<_> = p.files.iter().filter(|(path, file)| {
-            file.entry["kind"] == "episode" && is_episode_path(path)
-                && path.to_ascii_lowercase().starts_with("archive/episodes/") != (file.entry["archived"].as_bool() == Some(true))
+            (is_episode_path(path) || is_doc_path(path))
+                && path.to_ascii_lowercase().starts_with("archive/") != (file.entry["archived"].as_bool() == Some(true))
         }).map(|(path, file)| (path.clone(), file.clone())).collect();
         if misplaced.is_empty() { return Ok(()); }
         misplaced.sort_by(|a, b| a.0.cmp(&b.0));
-        let mut taken: HashSet<String> = episode_files(&p.dir).into_iter().map(|path| path.to_lowercase()).collect();
+        let mut taken: HashSet<String> = episode_files(&p.dir).into_iter().chain(doc_file_paths(&p.dir)).map(|path| path.to_lowercase()).collect();
         let mut moves = Vec::new();
         let mut backup = None;
         for (path, file) in &misplaced {
@@ -2647,19 +2658,21 @@ impl Store {
             let properties = document_properties(&file.entry);
             if properties.iter().any(|(key, value)| parsed.properties.get(key) != Some(value)) {
                 if backup.is_none() {
-                    backup = Some(self.backup_project(p, &["보관 에피소드의 저장 폴더 정리".to_string()])?);
+                    backup = Some(self.backup_project(p, &["보관 문서의 저장 폴더 정리".to_string()])?);
                 }
                 atomic_write_str(&abs(backup.as_ref().unwrap(), &format!("files/{path}")), &raw)?;
                 atomic_write_str(&abs(&p.dir, path), &write_markdown(&parsed.body, &file.entry, &raw)?)?;
             }
-            let suffix = path.split_once("episodes/").map(|(_, suffix)| suffix)
-                .ok_or_else(|| fail_invalid("에피소드 경로를 확인할 수 없습니다."))?;
-            let folder = if file.entry["archived"].as_bool() == Some(true) { "archive/episodes" } else { "episodes" };
+            let logical = path.strip_prefix("archive/").unwrap_or(path);
+            let (base, suffix) = logical.split_once('/')
+                .ok_or_else(|| fail_invalid("문서 경로를 확인할 수 없습니다."))?;
+            let folder = if file.entry["archived"].as_bool() == Some(true) { format!("archive/{base}") } else { base.to_string() };
             let target = unique_name(&format!("{folder}/{suffix}"), ".md", &mut taken);
             moves.push((path.clone(), target));
         }
         // 이동 실패 시 move_files가 완료된 이동을 되돌리며, 기존 파일을 덮어쓰지 않는다.
         self.move_files(&p.dir, &moves)?;
+        for (from, to) in &moves { Self::move_doc_meta(p, from, to); }
         if let Some(docs) = p.project["documents"].as_array_mut() {
             for doc in docs {
                 if let Some((_, target)) = moves.iter().find(|(source, _)| doc["path"].as_str() == Some(source.as_str())) {
@@ -2841,9 +2854,9 @@ impl Store {
         self.backup_project(p, &["plot/·memo/의 문서를 doc/으로 옮김".to_string()])?;
         fs::create_dir_all(abs(&p.dir, "doc"))?;
 
-        let mut taken: HashSet<String> = walk_rel(&p.dir, "doc")
+        let mut taken: HashSet<String> = doc_file_paths(&p.dir)
             .into_iter()
-            .map(|r| r.to_lowercase())
+            .map(|r| r.strip_prefix("archive/").unwrap_or(&r).to_lowercase())
             .collect();
         let mut moved: HashMap<String, String> = HashMap::new();
         let proj_id = p
@@ -4042,9 +4055,9 @@ impl Store {
         attributes: &Map<String, Value>,
     ) -> Result<Value, LofError> {
         let dir = Self::doc_folder(folder)?;
-        let mut taken: HashSet<String> = walk_rel(&p.dir, "doc")
+        let mut taken: HashSet<String> = doc_file_paths(&p.dir)
             .into_iter()
-            .map(|r| r.to_lowercase())
+            .map(|r| r.strip_prefix("archive/").unwrap_or(&r).to_lowercase())
             .collect();
         let rel = unique_name(
             &format!("{}/{}.md", dir, safe_name(title, "제목 없음")),
@@ -4394,10 +4407,10 @@ impl Store {
         }
         if let Some(title) = patch.get("title").and_then(|v| v.as_str()) {
             if safe_name(title, "제목 없음") != base_name(&rel) {
-                let mut taken: HashSet<String> = walk_rel(&f_proj.dir, "doc")
+                let mut taken: HashSet<String> = doc_file_paths(&f_proj.dir)
                     .into_iter()
                     .filter(|r| r != &rel)
-                    .map(|r| r.to_lowercase())
+                    .map(|r| format!("{}{}", if rel.starts_with("archive/") { "archive/" } else { "" }, r.strip_prefix("archive/").unwrap_or(&r)).to_lowercase())
                     .collect();
                 let next_rel = unique_name(
                     &format!("{}/{}.md", folder_of(&rel), safe_name(title, "제목 없음")),
@@ -5095,7 +5108,7 @@ impl Store {
             }
         }
         let inner_rel = |rel: &str| -> String {
-            for prefix in ["assets/", "doc/", "archive/episodes/", "episodes/", "plot/", "memo/"] {
+            for prefix in ["assets/", "archive/doc/", "doc/", "archive/episodes/", "episodes/", "plot/", "memo/"] {
                 // 바이트 위치가 한글 글자 중간일 수 있으므로 get으로 잘라 본다.
                 if rel.get(..prefix.len()).is_some_and(|head| head.eq_ignore_ascii_case(prefix)) {
                     return rel[prefix.len()..].to_string();
@@ -5877,7 +5890,7 @@ impl Store {
             if rkind != "episode" {
                 let rpath = remote.get("path").and_then(|v| v.as_str()).unwrap_or("");
                 let low = rpath.to_ascii_lowercase();
-                if !valid_rel(rpath) || !low.starts_with("doc/") || !low.ends_with(".md") {
+                if !valid_rel(rpath) || !is_doc_path(&low) || !low.ends_with(".md") {
                     return Err(fail_invalid("잘못된 원격 문서 경로"));
                 }
             }
@@ -6227,8 +6240,8 @@ impl Store {
                                 let rpath =
                                     remote.get("path").and_then(|v| v.as_str()).unwrap_or("");
                                 let folder = folder_of(rpath);
-                                if folder.len() > 4 && folder.starts_with("doc/") {
-                                    create_in.insert("folder".to_string(), json!(&folder[4..]));
+                                if let Some(inner) = doc_path_in_space(folder).filter(|path| !path.is_empty()) {
+                                    create_in.insert("folder".to_string(), json!(inner));
                                 }
                             }
                             create_in.insert(

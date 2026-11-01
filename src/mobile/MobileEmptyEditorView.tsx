@@ -2,6 +2,7 @@ import { ArrowLeft, ArrowDown01, ArrowDown10, BookOpen, ChevronDown, ChevronRigh
 import { useEffect, useState, type ReactNode } from "react";
 import { icons, labels } from "../app/document-ui";
 import { parentOfRel } from "../app/file-tree-model";
+import { memoPathInSpace } from "../document-paths";
 import type { FileTreeController } from "../app/useFileTree";
 import type { Doc, Project } from "../types";
 import MobilePillTabs from "./MobilePillTabs";
@@ -58,7 +59,7 @@ export default function MobileEmptyEditorView({ root, episodeGroup, project, tre
       </button>
     </div>;
   };
-  const folderOf = (doc: Doc) => parentOfRel((doc.relPath ?? "").replace(/^doc\//, ""));
+  const folderOf = (doc: Doc) => parentOfRel(memoPathInSpace(doc.relPath));
   const folders = new Set<string>();
   for (const doc of documents) {
     let folder = folderOf(doc);

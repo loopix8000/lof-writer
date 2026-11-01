@@ -65,8 +65,12 @@ pub(crate) fn record(
 
 // 예전 파일에 ID가 없으면 이동 전에 저장해 이름이나 폴더가 달라져도 같은 이력을 이어 쓴다.
 pub(crate) fn prepare_move(root: &Path, path: &str) -> Result<(), LofError> {
-    let file = crate::sync::file_remote::safe_path(root, path)?;
-    let raw = fs::read_to_string(&file)?;
+    let file = crate::memo::Memos::common_file(root, path)?;
+    prepare_move_at(root, path, &file)
+}
+
+pub(crate) fn prepare_move_at(root: &Path, path: &str, file: &Path) -> Result<(), LofError> {
+    let raw = fs::read_to_string(file)?;
     record(root, path, &raw, None)?;
     let parsed = read_markdown(&raw)?;
     if !parsed
@@ -76,7 +80,7 @@ pub(crate) fn prepare_move(root: &Path, path: &str) -> Result<(), LofError> {
         .is_some_and(valid_id)
     {
         let value = document(path, &raw)?;
-        atomic_write_str(&file, &write_markdown(&parsed.body, &value, &raw)?)?;
+        atomic_write_str(file, &write_markdown(&parsed.body, &value, &raw)?)?;
     }
     Ok(())
 }
@@ -91,7 +95,7 @@ pub(crate) fn request(
         .as_str()
         .filter(|path| path.to_ascii_lowercase().ends_with(".md"))
         .ok_or_else(|| fail_invalid("공용 메모 경로가 없습니다."))?;
-    let file = crate::sync::file_remote::safe_path(root, path)?;
+    let file = crate::memo::Memos::common_file(root, path)?;
     let raw = fs::read_to_string(&file)?;
     let current = document(path, &raw)?;
     let id = current["id"]

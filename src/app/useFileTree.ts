@@ -1,3 +1,4 @@
+import { logicalDocumentPath, memoPathInSpace } from "../document-paths";
 import type * as React from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { episodeNumbers, normalizeStatus } from "../../core/episode.mjs";
@@ -258,7 +259,7 @@ export function useFileTree(options: Options) {
     const paths = () => {
       if (dragFileDocs.current.length)
         return dragFileDocs.current
-          .map((id) => latest.current.getLibrary().documents.find((x) => x.id === id)?.relPath?.slice(4) ?? "")
+          .map((id) => memoPathInSpace(latest.current.getLibrary().documents.find((x) => x.id === id)?.relPath))
           .filter((p) => p && parentOfRel(p) !== folder);
       const from = dragFolder.current;
       return from && from !== folder && !folder.startsWith(from + "/") && parentOfRel(from) !== folder ? [from] : [];
@@ -301,7 +302,7 @@ export function useFileTree(options: Options) {
             inside = latest.current.getLibrary().documents.filter(
               (d) =>
                 d.projectId === latest.current.currentProjectId() &&
-                (d.relPath === from || d.relPath?.startsWith(from + "/")),
+                (logicalDocumentPath(d.relPath) === from || logicalDocumentPath(d.relPath).startsWith(from + "/")),
             );
           const r = await call<{ path: string }>("memoMove", { space: latest.current.currentProjectId(), path, to });
           moved.push({ path, next: r.path, inside });
@@ -461,7 +462,7 @@ export function useFileTree(options: Options) {
     await latest.current.moveDocuments(async () => {
       const prefix = "doc/" + path + "/",
         inside = latest.current.getLibrary().documents.filter(
-          (d) => d.projectId === latest.current.currentProjectId() && d.relPath?.startsWith(prefix),
+          (d) => d.projectId === latest.current.currentProjectId() && logicalDocumentPath(d.relPath).startsWith(prefix),
         );
       const r = await call<{ path: string }>("memoRename", {
         space: latest.current.currentProjectId(),
@@ -479,7 +480,7 @@ export function useFileTree(options: Options) {
   async function archiveMemoFolder(path: string, archived: boolean) {
     const pid = latest.current.currentProjectId();
     const inside = latest.current.getLibrary().documents.filter(
-      d => d.projectId === pid && d.relPath?.startsWith("doc/" + path + "/"),
+      d => d.projectId === pid && logicalDocumentPath(d.relPath).startsWith("doc/" + path + "/"),
     );
     const inFolder = (p: string) => p === path || p.startsWith(path + "/");
     setTreeSelection([]);
@@ -504,7 +505,7 @@ export function useFileTree(options: Options) {
     const pid = latest.current.currentProjectId();
     const prefix = "doc/" + path + "/",
       inside = latest.current.getLibrary().documents.filter(
-        (d) => d.projectId === pid && d.archived === archive && d.relPath?.startsWith(prefix),
+        (d) => d.projectId === pid && d.archived === archive && logicalDocumentPath(d.relPath).startsWith(prefix),
       );
     const name = path.slice(path.lastIndexOf("/") + 1);
     const ok = await confirm({
@@ -562,7 +563,7 @@ export function useFileTree(options: Options) {
   const matchingFolders = treeQuery.memo.trim() ? [] : allFolders.filter(entry => !!entry.archived === archive);
   const folderEntries = allFolders.filter(entry =>
     matchingFolders.some(folder => folder.path === entry.path || folder.path.startsWith(entry.path + "/")) ||
-    treeDocs.some(doc => doc.relPath?.startsWith("doc/" + entry.path + "/")));
+    treeDocs.some(doc => logicalDocumentPath(doc.relPath).startsWith("doc/" + entry.path + "/")));
   const boundEpisode = docs.find(doc => doc.id === treeEpisodeId && doc.kind === "episode");
   const boundDocuments = boundEpisode ? docs.filter(doc => doc.kind !== "episode" && doc.episodeId === boundEpisode.id) : [];
 
