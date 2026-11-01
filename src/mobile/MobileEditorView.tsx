@@ -756,8 +756,8 @@ export default function MobileEditorView({
             action: attempt(async () => {
               const target = createMenuFolder;
               setCreateMenuFolder(null);
-              setLeftDrawerOpen(false);
               await tree.addDocFile(target, "plot");
+              closeLeftDrawer();
             }),
           },
           {
@@ -766,8 +766,8 @@ export default function MobileEditorView({
             action: attempt(async () => {
               const target = createMenuFolder;
               setCreateMenuFolder(null);
-              setLeftDrawerOpen(false);
               await tree.addDocFile(target, "memo");
+              closeLeftDrawer();
             }),
           },
           "separator",

@@ -408,6 +408,8 @@ export function useFileTree(options: Options) {
     void loadMemoFolders().catch(latest.current.report);
     if (widget) return startRename(doc, true);
     if (folder) setMemoOpenFolders((old) => new Set([...old, folder]));
+    await openDoc(doc.id, true);
+    if (latest.current.mobile) return;
     latest.current.showTree();
     startRename(doc);
   }
