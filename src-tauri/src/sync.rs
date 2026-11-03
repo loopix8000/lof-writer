@@ -39,7 +39,6 @@ struct FolderAdapter {
 impl FolderAdapter {
     fn new(folder: &str) -> Result<Self, LofError> {
         let root = Path::new(folder).join(SYNC_PREFIX);
-        fs::create_dir_all(&root)?;
         Ok(Self { root })
     }
 }
@@ -47,7 +46,12 @@ impl FolderAdapter {
 impl RemoteAdapter for FolderAdapter {
     fn list(&mut self) -> Result<Vec<String>, LofError> {
         let mut out = Vec::new();
-        for e in fs::read_dir(&self.root)? {
+        let entries = match fs::read_dir(&self.root) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(out),
+            Err(error) => return Err(error.into()),
+        };
+        for e in entries {
             let e = e?;
             let name = e.file_name().to_string_lossy().to_string();
             if name_ok(&name) {
@@ -103,7 +107,7 @@ impl WebDavAdapter {
             .timeout(Duration::from_secs(30))
             .build()
             .map_err(|e| fail_invalid(e.to_string()))?;
-        let mut adapter = Self {
+        Ok(Self {
             client,
             base_url: url_str.trim_end_matches('/').to_string(),
             username: config
@@ -117,9 +121,7 @@ impl WebDavAdapter {
                 .unwrap_or("")
                 .to_string(),
             root_path,
-        };
-        adapter.ensure_dir()?;
-        Ok(adapter)
+        })
     }
 
     fn full_url(&self, rel: &str) -> String {
@@ -129,22 +131,6 @@ impl WebDavAdapter {
             p.push_str(rel.trim_start_matches('/'));
         }
         format!("{}{}", self.base_url, p)
-    }
-
-    fn ensure_dir(&mut self) -> Result<(), LofError> {
-        let mkcol = Method::from_bytes(b"MKCOL").unwrap();
-        let mut cur = String::new();
-        for seg in self.root_path.split('/').filter(|s| !s.is_empty()) {
-            cur.push('/');
-            cur.push_str(seg);
-            let url = format!("{}{}", self.base_url, cur);
-            let _ = self
-                .client
-                .request(mkcol.clone(), &url)
-                .basic_auth(&self.username, Some(&self.password))
-                .send();
-        }
-        Ok(())
     }
 }
 
@@ -158,6 +144,9 @@ impl RemoteAdapter for WebDavAdapter {
             .header("Depth", "1")
             .send()
             .map_err(|e| fail_invalid(e.to_string()))?;
+        if res.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(Vec::new());
+        }
         if !res.status().is_success() {
             return Err(fail_invalid(format!("WebDAV 목록 조회 실패: {}", res.status())));
         }
@@ -200,6 +189,7 @@ impl RemoteAdapter for WebDavAdapter {
 
 struct FtpAdapter {
     stream: RustlsFtpStream,
+    missing: bool,
 }
 
 pub fn validate_ftp_config(config: &Value) -> Result<(), LofError> {
@@ -263,20 +253,36 @@ impl FtpAdapter {
             .transfer_type(suppaftp::types::FileType::Binary)
             .map_err(|e| fail_invalid(e.to_string()))?;
 
-        let target_dir = format!("{}/{}", remote_path.trim_end_matches('/'), SYNC_PREFIX);
-        if remote_path.starts_with('/') { stream.cwd("/").map_err(|_| fail_invalid("FTP 저장 경로에 접근하지 못했습니다."))?; }
-        for seg in target_dir.split('/').filter(|s| !s.is_empty()) {
-            if stream.cwd(seg).is_err() {
-                let _ = stream.mkdir(seg);
-                stream.cwd(seg).map_err(|e| fail_invalid(e.to_string()))?;
-            }
+        if !remote_path.is_empty() {
+            stream.cwd(remote_path).map_err(|e| fail_invalid(e.to_string()))?;
         }
-        Ok(Self { stream })
+        let missing = match stream.cwd(SYNC_PREFIX) {
+            Ok(()) => false,
+            Err(error) => {
+                if !matches!(&error, suppaftp::FtpError::UnexpectedResponse(response)
+                    if response.status == suppaftp::Status::FileUnavailable)
+                {
+                    return Err(fail_invalid(error.to_string()));
+                }
+                // FTP의 550 응답은 권한 오류일 수도 있으므로 실패했을 때만 부모 목록을 확인한다.
+                let entries = stream.nlst(None).map_err(|e| fail_invalid(e.to_string()))?;
+                if entries.iter().any(|entry| {
+                    entry.trim_end_matches('/').rsplit('/').next() == Some(SYNC_PREFIX)
+                }) {
+                    return Err(fail_invalid(error.to_string()));
+                }
+                true
+            }
+        };
+        Ok(Self { stream, missing })
     }
 }
 
 impl RemoteAdapter for FtpAdapter {
     fn list(&mut self) -> Result<Vec<String>, LofError> {
+        if self.missing {
+            return Ok(Vec::new());
+        }
         let items = self
             .stream
             .nlst(None)
@@ -292,6 +298,9 @@ impl RemoteAdapter for FtpAdapter {
     }
 
     fn read(&mut self, name: &str) -> Result<String, LofError> {
+        if self.missing {
+            return Err(fail_invalid("이전 동기화 폴더가 없습니다."));
+        }
         if !name_ok(name) {
             return Err(fail_invalid("잘못된 FTP 동기화 파일 이름입니다."));
         }

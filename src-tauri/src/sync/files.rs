@@ -359,6 +359,11 @@ pub(crate) fn apply_local(
                 }
                 st.trash_path(&target)?;
                 record_change(&target);
+                if old.is_some() {
+                    for dir in lof_realtime::storage::prune_empty_parents(root, &target) {
+                        record_change(&dir);
+                    }
+                }
                 if project {
                     if let Some(dir) = target.parent() {
                         st.prune_empty_project_folders(dir);

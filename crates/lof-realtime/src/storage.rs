@@ -155,6 +155,30 @@ pub fn atomic(target: &Path, bytes: &[u8]) -> Result<()> {
     drop(file);
     fs::rename(temp, target).map_err(|e| e.to_string())
 }
+
+/// 경로 검증을 마친 파일의 삭제 후, 비게 된 상위 폴더만 서재 루트 아래에서 정리한다.
+pub fn prune_empty_parents(root: &Path, deleted_file: &Path) -> Vec<PathBuf> {
+    let mut removed = Vec::new();
+    let Ok(relative) = deleted_file.strip_prefix(root) else { return removed };
+    if relative.as_os_str().is_empty() || relative.components().any(|part| match part {
+        std::path::Component::Normal(name) => name.to_str().is_none_or(excluded),
+        _ => true,
+    }) {
+        return removed;
+    }
+    let mut parent = deleted_file.parent();
+    while let Some(dir) = parent.filter(|dir| *dir != root) {
+        // remove_dir는 파일이나 하위 폴더가 남아 있으면 실패하므로 목록을 다시 읽지 않는다.
+        match fs::remove_dir(dir) {
+            Ok(()) => removed.push(dir.to_path_buf()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
+            Err(_) => break,
+        }
+        parent = dir.parent();
+    }
+    removed
+}
+
 pub fn apply(
     root: &Path,
     relative: &str,
@@ -194,7 +218,8 @@ pub fn apply(
         Some(bytes) => atomic(&target, bytes),
         None => {
             if old.is_some() {
-                fs::remove_file(target).map_err(|e| e.to_string())?;
+                fs::remove_file(&target).map_err(|e| e.to_string())?;
+                prune_empty_parents(root, &target);
             }
             Ok(())
         }

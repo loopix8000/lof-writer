@@ -226,7 +226,8 @@ impl FileRemote for Folder {
     fn remove(&mut self, path: &str, _: &Info) -> Result<(), LofError> {
         let target = safe_path(&self.root, path)?;
         // 직전에 확인한 파일 하나만 지운다. 디렉터리를 재귀 삭제하지 않는다.
-        fs::remove_file(target)?;
+        fs::remove_file(&target)?;
+        lof_realtime::storage::prune_empty_parents(&self.root, &target);
         Ok(())
     }
     fn exists(&mut self, path: &str) -> Result<bool, LofError> {
