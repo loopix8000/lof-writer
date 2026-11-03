@@ -276,10 +276,26 @@ struct PropStat {
 struct Properties {
     #[serde(default)]
     resourcetype: ResourceType,
+    #[serde(default, deserialize_with = "deserialize_content_length")]
     getcontentlength: Option<u64>,
     getlastmodified: Option<String>,
     getetag: Option<String>,
 }
+
+fn deserialize_content_length<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    let value = value.trim();
+    // 폴더나 조회할 수 없는 속성은 크기를 빈 태그로 반환할 수 있다.
+    if value.is_empty() {
+        Ok(None)
+    } else {
+        value.parse().map(Some).map_err(serde::de::Error::custom)
+    }
+}
+
 #[derive(Default, Deserialize)]
 struct ResourceType {
     collection: Option<()>,

@@ -10,10 +10,13 @@ pub fn background_launch() -> bool {
             .any(|arg| arg == "--autostart" || arg == "--tray")
 }
 
+/// 트레이 시작 설정은 Windows 로그인으로 실행될 때만 적용하고, 사용자가 직접 실행하면 창을 띄운다.
 pub fn start_in_tray(settings: &Value) -> bool {
     cfg!(windows)
-        && (settings["preferences"]["startInTray"] == true
-            || std::env::args().skip(1).any(|arg| arg == "--tray"))
+        && std::env::args().skip(1).any(|arg| {
+            arg == "--tray"
+                || (arg == "--autostart" && settings["preferences"]["startInTray"] == true)
+        })
 }
 
 const UPDATE_RELAUNCH: &str = "update-relaunch";

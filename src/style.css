@@ -2793,6 +2793,10 @@ body.sidebar-resizing * {
   transform: translateX(14px);
   background: #fff;
 }
+.settings-toggle input:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
 .settings-content .platform-picker {
   border: 0;
   padding: 0;

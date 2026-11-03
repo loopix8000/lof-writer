@@ -313,8 +313,9 @@ export default function SettingsContent({
                   checked={prefs.launchAtStartup === true} disabled={startupSaving}
                   onChange={(checked) => saveStartup("launchAtStartup", checked)} />
                 <SettingsToggle label="트레이로 시작"
-                  description="다음에 앱을 실행할 때 창을 띄우지 않고 트레이에 표시합니다. 트레이 아이콘을 누르면 창이 열립니다."
-                  checked={prefs.startInTray === true} disabled={startupSaving}
+                  description="Windows 시작 시 실행될 때 창을 띄우지 않고 트레이에 표시합니다. 트레이 아이콘을 누르면 창이 열립니다."
+                  checked={prefs.launchAtStartup === true && prefs.startInTray === true}
+                  disabled={startupSaving || prefs.launchAtStartup !== true}
                   onChange={(checked) => saveStartup("startInTray", checked)} />
               </div>
             </>}
