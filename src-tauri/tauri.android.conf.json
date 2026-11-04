@@ -1,9 +1,9 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "bundle": {
     "android": {
-      "versionCode": 78
+      "versionCode": 79
     }
   }
 }

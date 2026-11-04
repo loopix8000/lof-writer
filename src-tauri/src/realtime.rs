@@ -796,9 +796,14 @@ pub fn set_background(app: &AppHandle, background: bool) {
 fn release(app: &AppHandle, session: &str) {
     app.state::<Realtime>().leases.lock().unwrap().remove(session);
 }
-struct WriterHost(AppHandle);
+// 종료된 통신 엔진의 요청은 새 엔진이 시작된 뒤에도 다시 허용하지 않는다.
+struct WriterHost(AppHandle, Arc<AtomicBool>);
 impl Host for WriterHost {
     fn connected(&self, _peer: &str, session: &str, connection: Connection) {
+        if !self.accepting() {
+            connection.close(0u8.into(), b"background");
+            return;
+        }
         if let Ok(root) = root(&self.0) {
             self.0.state::<Realtime>().sessions.lock().unwrap().insert(
                 session.into(),
@@ -910,6 +915,11 @@ fn join(app: &AppHandle, peer: &str, message: &Message) -> Result<Message, LofEr
         "vault":local_vault,"name":device_name(app),"storage":false})))
 }
 impl WriterHost {
+    fn accepting(&self) -> bool {
+        self.1.load(Ordering::SeqCst)
+            && crate::background_sync::phase(&self.0) != Phase::Paused
+    }
+
     fn handle_inner(
         &self,
         peer: &str,
@@ -918,6 +928,12 @@ impl WriterHost {
     ) -> Result<Message, LofError> {
         let app = &self.0;
         let rt = app.state::<Realtime>();
+        if !self.accepting() {
+            if let Some(session) = rt.sessions.lock().unwrap().get(session) {
+                session.connection.close(0u8.into(), b"background");
+            }
+            return Err(fail("백그라운드 동기화 대기 중입니다.", "SYNC_BACKGROUND"));
+        }
         let state = app.state::<AppState>();
         let request = &message.meta;
         let op = request["op"].as_str().unwrap_or("");
@@ -1385,12 +1401,14 @@ pub fn start(app: &AppHandle) {
                 }
             };
             *app.state::<Realtime>().key.lock().unwrap() = Some(secret.clone());
+            let mut accepting = Arc::new(AtomicBool::new(true));
             let node = runtime
-                .block_on(Node::bind(secret, Arc::new(WriterHost(app.clone()))))
+                .block_on(Node::bind(secret.clone(), Arc::new(WriterHost(app.clone(), accepting.clone()))))
                 .map_err(net)?;
             *app.state::<Realtime>().runtime.lock().unwrap() =
                 Some((runtime.handle().clone(), node.clone()));
             let own = node.endpoint.id().to_string();
+            let mut node = Some(node);
             let mut connected: HashMap<String, (Connection, Revision)> = HashMap::new();
             let mut retry: HashMap<String, (Instant, u64)> = HashMap::new();
             // 접속에 실패한 상대. 재접속 알림이나 앱 복귀 같은 신호가 올 때까지 다시 시도하지 않는다.
@@ -1440,6 +1458,36 @@ pub fn start(app: &AppHandle) {
                 }
                 let phase = crate::background_sync::phase(&app);
                 let live = matches!(phase, Phase::Foreground | Phase::Live);
+                if node.is_none() && phase != Phase::Paused {
+                    // 앱 복귀 또는 주기 확인 시에만 같은 장치 키로 통신 엔진을 다시 연다.
+                    let resumed = Arc::new(AtomicBool::new(true));
+                    match runtime.block_on(Node::bind(
+                        secret.clone(), Arc::new(WriterHost(app.clone(), resumed.clone())),
+                    )) {
+                        Ok(reopened) => {
+                            *rt.runtime.lock().unwrap() = Some((runtime.handle().clone(), reopened.clone()));
+                            node = Some(reopened);
+                            accepting = resumed;
+                            rt.error.lock().unwrap().clear();
+                            retry.clear();
+                            offline.clear();
+                            network_checked = None;
+                            announced = u64::MAX;
+                        }
+                        Err(error) => {
+                            *rt.error.lock().unwrap() = error;
+                            // 일시적인 소켓 생성 실패로 동기화 스레드를 종료하지 않는다.
+                            let mut urgent = rt.urgent.lock().unwrap();
+                            if !*urgent && !crate::auto_sync::stopped(&app)
+                                && crate::background_sync::phase(&app) == phase
+                            {
+                                urgent = rt.wake.wait_timeout(urgent, Duration::from_secs(30)).unwrap().0;
+                            }
+                            *urgent = false;
+                            continue;
+                        }
+                    }
+                }
                 // 주기 확인·일시 중지 중에는 gossip 연결도 내려 유지 패킷과 별도 재접속을 멈춘다.
                 // 주기 확인에 필요한 구성원 정보는 파일 연결의 hello 요청으로도 교환한다.
                 let group = with_group(&app, |group| Ok(group.clone())).unwrap_or(None);
@@ -1457,6 +1505,7 @@ pub fn start(app: &AppHandle) {
                         *rt.announcer.lock().unwrap() = None;
                     }
                     Some(group) => {
+                        let Some(node) = node.as_ref() else { continue; };
                         let lost = rt.subscription_lost.swap(false, Ordering::SeqCst);
                         if lost || subscription
                             .as_ref()
@@ -1465,7 +1514,7 @@ pub fn start(app: &AppHandle) {
                             drop(subscription.take());
                             let events = app.clone();
                             subscription = runtime
-                                .block_on(Subscription::join(&node, group, &own, move |event| {
+                                .block_on(Subscription::join(node, group, &own, move |event| {
                                     gossip_event(&events, event)
                                 }))
                                 .map_err(|error| eprintln!("그룹 알림 참여 실패: {error}"))
@@ -1584,6 +1633,7 @@ pub fn start(app: &AppHandle) {
                 let peer_requests = rt.peer_requests.lock().unwrap().clone();
                 for peer in wanted {
                     if phase == Phase::Paused { break; }
+                    let Some(node) = node.as_ref() else { break; };
                     let id = peer["id"].as_str().unwrap_or("").to_string();
                     let asked = peer["endpoint"].as_str().and_then(|endpoint| peer_requests.get(endpoint)).copied().unwrap_or(0);
                     let revision = (generation, requested, asked);
@@ -1796,6 +1846,9 @@ pub fn start(app: &AppHandle) {
                         continue;
                     }
                     for (_, job) in jobs.drain() { job.task.abort(); }
+                    // 새 요청부터 막고 공개 핸들을 거둬 네트워크 변경 알림도 연결을 되살리지 못하게 한다.
+                    accepting.store(false, Ordering::SeqCst);
+                    *rt.runtime.lock().unwrap() = None;
                     // 확인을 마치면 연결을 닫아 다음 주기까지 배터리를 아낀다.
                     for (conn, _) in connected.values() {
                         conn.close(0u8.into(), b"background");
@@ -1809,6 +1862,11 @@ pub fn start(app: &AppHandle) {
                     for session in rt.sessions.lock().unwrap().values() {
                         session.connection.close(0u8.into(), b"background");
                     }
+                    // 개별 연결만 닫으면 수신 소켓과 중계·주소 탐색 통신이 계속 남는다.
+                    // gossip과 Endpoint 자체를 종료해야 다음 확인까지 통신을 멈출 수 있다.
+                    if let Some(node) = node.take() {
+                        runtime.block_on(node.close());
+                    }
                     rt.leases.lock().unwrap().clear();
                     periodic_active = false;
                     if phase == Phase::Periodic { crate::background_sync::realtime_done(&app); }
@@ -1816,9 +1874,9 @@ pub fn start(app: &AppHandle) {
                 // 화면에 있거나 즉시 동기화를 유지하는 동안 저장·수신·접속 알림을 기다린다.
                 // 이후에는 알림을 미루고 주기 확인 시각에만 깨어난다.
                 loop {
+                    let mut urgent = rt.urgent.lock().unwrap();
                     let current_phase = crate::background_sync::phase(&app);
                     if current_phase != phase { break; }
-                    let mut urgent = rt.urgent.lock().unwrap();
                     if crate::auto_sync::stopped(&app) {
                         break;
                     }
@@ -1867,7 +1925,10 @@ pub fn start(app: &AppHandle) {
             for (_, probe) in probes { probe.task.abort(); }
             for (_, job) in jobs { job.task.abort(); }
             drop(subscription);
-            runtime.block_on(node.close());
+            accepting.store(false, Ordering::SeqCst);
+            if let Some(node) = node {
+                runtime.block_on(node.close());
+            }
             app.state::<Realtime>().leases.lock().unwrap().clear();
             Ok(())
         })();
