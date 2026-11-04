@@ -39,6 +39,7 @@ import { TypingAssist, isInsideJsdocComment, toggleJsdocComment, typesettingPlug
 import { MarkdownTables } from "./table-extension";
 import TableControls from "./TableControls";
 import { MarkdownTasks } from "./task-extension";
+import { SelectionGuard } from "./selection-guard";
 import { Bookmarks, BOOKMARK_LOAD, bookmarkPluginKey, isBookmarkedAt, markable, readBookmarks, resolveBookmarks, toggleBookmarkAt } from "./bookmark-extension";
 import { call, type Bookmark, type WritingRules } from "./types";
 import { paragraphCountDelta, type ManuscriptCounts } from "./manuscript-counts";
@@ -623,6 +624,7 @@ export default function Writer({
         markdown.document,
         markdown.extension,
         FindHighlights,
+        SelectionGuard,
         MarkdownTasks,
         ...(tables ? [MarkdownTables] : []),
         ...(hasImages
