@@ -32,6 +32,13 @@ use uuid::Uuid;
 
 const SYNC_BUSY_MESSAGE: &str = "다른 동기화가 진행 중입니다.";
 const CONTROL_TIMEOUT: Duration = Duration::from_secs(8);
+
+// 응답이 없던 장치도 다시 확인한다. 앱 복귀·네트워크 변경 알림은 이 대기를 건너뛴다.
+fn schedule_peer_retry(retry: &mut HashMap<String, (Instant, u64)>, id: &str, phase: Phase) {
+    let limit = if phase == Phase::Foreground { 30 } else { 60 };
+    let seconds = retry.get(id).map_or(2, |(_, previous)| previous.saturating_mul(2)).min(limit);
+    retry.insert(id.to_string(), (Instant::now() + Duration::from_secs(seconds), seconds));
+}
 // 파일 목록을 바뀐 항목만 주고받는 응답 형식. 이전 앱은 이 표시 없이 전체 목록을 보낸다.
 const INVENTORY_DELTA: &str = "inventory-delta-v1";
 const INVENTORY_INDEX: &str = lof_realtime::file_index::FORMAT;
@@ -788,8 +795,8 @@ pub fn set_background(app: &AppHandle, background: bool) {
     if background && !was_bg {
         // 백그라운드 전환 직전 대기 중인 변경분을 즉시 전송하도록 한 번 깨운다.
         wake(app);
-    } else if !background && was_bg {
-        // 포그라운드 복귀 시 재시도 대기를 초기화하고 즉시 연결·동기화를 재개한다.
+    } else if !background {
+        // 이전 숨김 알림을 놓쳤더라도 화면 복귀 요청은 즉시 연결·동기화를 재개한다.
         reconnect(app);
     }
 }
@@ -1411,8 +1418,6 @@ pub fn start(app: &AppHandle) {
             let mut node = Some(node);
             let mut connected: HashMap<String, (Connection, Revision)> = HashMap::new();
             let mut retry: HashMap<String, (Instant, u64)> = HashMap::new();
-            // 접속에 실패한 상대. 재접속 알림이나 앱 복귀 같은 신호가 올 때까지 다시 시도하지 않는다.
-            let mut offline: HashSet<String> = HashSet::new();
             let mut probes: HashMap<String, ConnectionProbe> = HashMap::new();
             let mut jobs: HashMap<String, PeerSyncJob> = HashMap::new();
             let mut periodic_active = false;
@@ -1450,7 +1455,6 @@ pub fn start(app: &AppHandle) {
                     }
                     connected.clear();
                     retry.clear();
-                    offline.clear();
                     subscription_retry = None;
                     previous_root = current.clone();
                     // 다른 서재에 있을 때 바꾼 장치 이름은 연결 확인 요청으로 전한다.
@@ -1470,7 +1474,6 @@ pub fn start(app: &AppHandle) {
                             accepting = resumed;
                             rt.error.lock().unwrap().clear();
                             retry.clear();
-                            offline.clear();
                             network_checked = None;
                             announced = u64::MAX;
                         }
@@ -1522,6 +1525,8 @@ pub fn start(app: &AppHandle) {
                             subscription_retry = subscription.is_none().then(|| Instant::now() + Duration::from_secs(30));
                             *rt.announcer.lock().unwrap() =
                                 subscription.as_ref().map(Subscription::sender);
+                            // 알림 연결이 복구되면 끊긴 동안의 변경을 다시 알린다.
+                            if subscription.is_some() { announced = u64::MAX; }
                             introduced = group.others(&own).map(|m| m.endpoint.clone()).collect();
                         }
                         let endpoints: Vec<String> =
@@ -1540,13 +1545,11 @@ pub fn start(app: &AppHandle) {
                 if phase == Phase::Periodic && !periodic_active {
                     // 주기 확인에서는 재시도 대기와 관계없이 모든 구성원을 확인한다.
                     retry.clear();
-                    offline.clear();
                     periodic_active = true;
                     periodic_attempted.clear();
                 }
                 if phase != Phase::Periodic { periodic_active = false; }
                 retry.retain(|id, _| wanted.iter().any(|peer| peer["id"].as_str() == Some(id.as_str())));
-                offline.retain(|id| wanted.iter().any(|peer| peer["id"].as_str() == Some(id.as_str())));
                 probes.retain(|id, probe| {
                     let keep = wanted.iter().any(|peer| peer["id"].as_str() == Some(id.as_str()));
                     if !keep { probe.task.abort(); }
@@ -1588,7 +1591,6 @@ pub fn start(app: &AppHandle) {
                         Ok(outcome) => {
                             *seen = job.revision;
                             retry.remove(&id);
-                            offline.remove(&id);
                             let mut statuses = rt.statuses.lock().unwrap();
                             let status = statuses.entry(id).or_insert_with(|| json!({}));
                             if !outcome.is_null() {
@@ -1611,13 +1613,12 @@ pub fn start(app: &AppHandle) {
                             connected.remove(&id);
                             rt.live.lock().unwrap().retain(|key, conn|
                                 key != &id || conn.close_reason().is_none());
-                            offline.insert(id);
+                            schedule_peer_retry(&mut retry, &id, phase);
                         }
                     }
                 }
                 if rt.clear_retries.swap(false, Ordering::SeqCst) {
                     retry.clear();
-                    offline.clear();
                     probes.retain(|_, probe| {
                         if probe.connection.is_some() { return true; }
                         probe.task.abort();
@@ -1626,7 +1627,6 @@ pub fn start(app: &AppHandle) {
                 }
                 for endpoint in rt.reconnect.lock().unwrap().drain() {
                     retry.retain(|id, _| id.split(':').next() != Some(endpoint.as_str()));
-                    offline.retain(|id| id.split(':').next() != Some(endpoint.as_str()));
                 }
                 let generation = rt.dirty.load(Ordering::SeqCst);
                 let requested = rt.requested.load(Ordering::SeqCst);
@@ -1643,7 +1643,6 @@ pub fn start(app: &AppHandle) {
                             watch_close(&runtime, &app, &conn);
                             connected.insert(id.clone(), (conn, (u64::MAX, u64::MAX, u64::MAX)));
                             retry.remove(&id);
-                            offline.remove(&id);
                             let mut statuses = rt.statuses.lock().unwrap();
                             let status = statuses.entry(id.clone()).or_insert_with(|| json!({}));
                             if !matches!(status["phase"].as_str(), Some("syncing" | "pending")) {
@@ -1694,7 +1693,6 @@ pub fn start(app: &AppHandle) {
                             match result {
                                 Ok(()) => {
                                     retry.remove(&id);
-                                    offline.remove(&id);
                                     let mut statuses = rt.statuses.lock().unwrap();
                                     let status = statuses.entry(id.clone()).or_insert_with(|| json!({}));
                                     if !matches!(status["phase"].as_str(), Some("syncing" | "pending")) {
@@ -1705,9 +1703,8 @@ pub fn start(app: &AppHandle) {
                                 Err(_) if probe.connection.is_none() && connected.contains_key(&id) => {
                                     // 역방향 연결이 먼저 성공했으면 별도 발신 실패는 무시한다.
                                     retry.remove(&id);
-                                    offline.remove(&id);
                                 }
-                                Err(_) => {
+                                Err(error) => {
                                     if let Some((conn, _)) = connected.remove(&id) {
                                         conn.close(1u8.into(), b"connection check failed");
                                     }
@@ -1716,7 +1713,7 @@ pub fn start(app: &AppHandle) {
                                     let mut statuses = rt.statuses.lock().unwrap();
                                     let status = statuses.entry(id.clone()).or_insert_with(|| json!({}));
                                     status["phase"] = json!("offline");
-                                    status["message"] = Value::Null;
+                                    status["message"] = json!(error);
                                     drop(statuses);
                                     // 감지하지 못한 네트워크 변경으로 접속이 계속 실패할 수 있어 주소를 다시 확인한다.
                                     let network_interval = if phase == Phase::Live { 300 } else { 60 };
@@ -1727,7 +1724,7 @@ pub fn start(app: &AppHandle) {
                                         let node = node.clone();
                                         runtime.spawn(async move { node.endpoint.network_change().await });
                                     }
-                                    offline.insert(id.clone());
+                                    schedule_peer_retry(&mut retry, &id, phase);
                                 }
                             }
                         }
@@ -1736,9 +1733,6 @@ pub fn start(app: &AppHandle) {
                         .get(&id)
                         .is_some_and(|(when, _)| Instant::now() < *when)
                     {
-                        continue;
-                    }
-                    if offline.contains(&id) {
                         continue;
                     }
                     // 연결된 뒤에는 라이브러리의 연결 유지 신호가 끊김을 감지하므로 별도 확인 요청을 보내지 않는다.
@@ -1891,8 +1885,11 @@ pub fn start(app: &AppHandle) {
                                 .flatten();
                             let pending = (!probes.is_empty()).then(|| Instant::now() + Duration::from_millis(250));
                             let lease = rt.leases.lock().unwrap().values().map(|lease| lease.until).min();
-                            retry.iter().filter(|(id, (when, _))|
-                                *when > Instant::now() && !probes.contains_key(*id) && !jobs.contains_key(*id)).map(|(_, (when, _))| *when)
+                            // 순회 중 만료된 재시도도 남겨 둔다. 작업 슬롯을 기다릴 때는 바쁜 루프를 피한다.
+                            let retry_floor = Instant::now() + Duration::from_millis(250);
+                            retry.iter().filter(|(id, _)|
+                                !probes.contains_key(*id) && !jobs.contains_key(*id))
+                                .map(|(_, (when, _))| (*when).max(retry_floor))
                                 .chain(subscription_retry).chain(live).chain(pending).chain(lease).min()
                         }
                         Phase::Periodic => {

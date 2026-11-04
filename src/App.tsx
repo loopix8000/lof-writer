@@ -480,7 +480,10 @@ export default function App() {
           .catch(() => {})
           .finally(() => {
             void flushWorkspaceState().catch(() => {});
-            void call("appLifecycle", { foreground: false }).catch(() => {});
+            // 저장을 기다리는 동안 복귀했다면 오래된 숨김 알림을 보내지 않는다.
+            if (document.visibilityState === "hidden") {
+              void call("appLifecycle", { foreground: false }).catch(() => {});
+            }
           });
       } else if (document.visibilityState === "visible") {
         void call("appLifecycle", { foreground: true }).catch(() => {});
@@ -497,6 +500,7 @@ export default function App() {
     };
     document.addEventListener("visibilitychange", handleVisibility);
     window.addEventListener("pagehide", handlePageHide);
+    window.addEventListener("pageshow", handleVisibility);
     window.addEventListener("online", handleNetworkOnline);
 
     return () => {
@@ -506,6 +510,7 @@ export default function App() {
       window.removeEventListener("resize", onResize);
       document.removeEventListener("visibilitychange", handleVisibility);
       window.removeEventListener("pagehide", handlePageHide);
+      window.removeEventListener("pageshow", handleVisibility);
       window.removeEventListener("online", handleNetworkOnline);
     };
   }, [refresh, flush, flushForClose, waitForSave, report]);
