@@ -69,7 +69,8 @@ export function useSyncFileUpdates<T extends SyncedFile>(options: Options<T>) {
     if (checking.current) { recheck.current = true; return; }
     checking.current = true;
     const key = start.fileKey;
-    const valid = () => alive.current && latest.current.enabled && latest.current.fileKey === key && latest.current.canCheck();
+    const valid = () => alive.current && latest.current.enabled && latest.current.fileKey === key && latest.current.canCheck() &&
+      document.documentElement.dataset.pinLocked !== "true";
     try {
       await start.beforeRead?.();
       if (!valid()) return;
@@ -100,17 +101,50 @@ export function useSyncFileUpdates<T extends SyncedFile>(options: Options<T>) {
       }
     }
   }, []);
+  const available = options.enabled && options.canCheck();
   useEffect(() => {
-    if (!options.enabled || !options.fileKey) return;
+    if (!available || !options.fileKey) return;
     let canceled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    let retries = 0;
     const report = (error: any) => {
       if (!canceled && !["ENOENT", "NOT_FOUND", "VAULT_CHANGED", "SYNC_BUSY", "FILE_BUSY"].includes(error.code)) latest.current.report(error);
     };
-    const tick = () => { if (!canceled) void checkLocal().catch(report); };
+    const run = () => {
+      if (canceled) return;
+      void checkLocal().catch((error) => {
+        if (!canceled && ["SYNC_BUSY", "FILE_BUSY"].includes(error.code) && retries < 3) {
+          retryTimer = setTimeout(run, 250 * ++retries);
+        } else report(error);
+      });
+    };
+    const tick = () => {
+      clearTimeout(retryTimer);
+      retries = 0;
+      run();
+    };
     // 네트워크 동기화는 공통 스케줄러가 맡고, 여기서는 열린 편집기의 내용만 비교한다.
     tick();
-    const off = window.lof.onChange(() => { if (!canceled) void checkLocal().catch(report); });
-    return () => { canceled = true; off(); };
-  }, [options.enabled, options.fileKey, checkLocal]);
+    const off = window.lof.onChange(tick);
+    // 파일 알림이 저장 중에 도착했더라도 동기화 완료 시 최신 원고를 다시 읽는다.
+    let syncing = false;
+    const offSync = window.lof.onAutoSync?.((status) => {
+      const next = status.phase === "syncing" || Object.values(status.channels ?? {}).some(channel => channel?.phase === "syncing");
+      const completed = syncing && !next;
+      syncing = next;
+      if (completed) tick();
+    });
+    const onVisible = () => { if (document.visibilityState === "visible") tick(); };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("lof:unlocked", tick);
+    return () => {
+      canceled = true;
+      clearTimeout(retryTimer);
+      off();
+      offSync?.();
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("lof:unlocked", tick);
+    };
+  }, [available, options.fileKey, checkLocal]);
   return checkLocal;
 }

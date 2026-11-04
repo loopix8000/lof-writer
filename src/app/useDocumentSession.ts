@@ -18,7 +18,7 @@ type Options = {
   waitForWriting: () => Promise<void>;
   pendingDocumentMove: () => Promise<void> | null;
   saveMemoManually: () => Promise<void> | undefined;
-  retainDocument: (doc: Doc) => void;
+  retainDocument: (doc: Doc, dirty: boolean) => void;
   clearRetainedDocuments: () => void;
   pinTab: (id: string) => void;
   onDocumentIdChanged: (oldId: string, newId: string, location?: Doc) => void;
@@ -57,7 +57,6 @@ export function useDocumentSession(options: Options) {
   const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const conflictRef = useRef(false);
   const activeId = useRef("");
-  const freshReadId = useRef("");
   // 앱에서 문서를 처음 열었을 때의 글자 수를 문서별로 유지한다.
   const sessionStarts = useRef(new Map<string, number>());
   const scrollPositions = useRef<EditorScrollPositions>(new Map());
@@ -72,12 +71,12 @@ export function useDocumentSession(options: Options) {
     if (renderTimer.current) clearTimeout(renderTimer.current);
     renderTimer.current = null;
     pendingActive.current = null;
-    if (doc) latest.current.retainDocument(doc);
+    if (doc) latest.current.retainDocument(doc, draft.current?.doc.id === doc.id && draft.current.seq !== draft.current.saved);
     setActiveState(doc);
   }, []);
   const setActiveSoon = useCallback((doc: Doc) => {
     pendingActive.current = doc;
-    latest.current.retainDocument(doc);
+    latest.current.retainDocument(doc, draft.current?.doc.id === doc.id && draft.current.seq !== draft.current.saved);
     renderTimer.current ??= setTimeout(() => {
       renderTimer.current = null;
       if (pendingActive.current) setActive(pendingActive.current);
@@ -353,14 +352,7 @@ export function useDocumentSession(options: Options) {
       return d ? { doc: d.doc, version: `${d.seq}:${d.doc.revision}` } : null;
     },
     beforeRead: () => saveChain.current,
-    read: (doc: Doc) => {
-      // 문서를 열면서 방금 읽은 원고는 첫 자동 확인에서 다시 읽지 않는다.
-      if (freshReadId.current === doc.id) {
-        freshReadId.current = "";
-        return Promise.resolve(doc);
-      }
-      return call<Doc>("readDocument", { id: doc.id });
-    },
+    read: (doc: Doc) => call<Doc>("readDocument", { id: doc.id }),
     reconcile: (doc) => {
       const d = draft.current;
       // 마지막 저장 원고와 비교해 위치만 갱신하고, 저장하지 않은 입력은 그대로 남긴다.
@@ -414,6 +406,7 @@ export function useDocumentSession(options: Options) {
       d.saved = d.seq;
       d.draftSaved = d.seq;
       d.edited = false;
+      latest.current.retainDocument(d.doc, false);
       if (draftTimer.current) {
         clearTimeout(draftTimer.current);
         draftTimer.current = null;
@@ -432,7 +425,6 @@ export function useDocumentSession(options: Options) {
       const meta = documents.find((x) => x.id === d.doc.id);
       if (meta && (meta.revision !== d.doc.revision ||
           (meta.fingerprint !== d.doc.fingerprint && d.seq === d.saved))) {
-        freshReadId.current = "";
         void checkOpenDocument().catch(report);
       } else if (meta && d.seq === d.saved &&
           (meta.title !== d.doc.title || meta.path !== d.doc.path || meta.relPath !== d.doc.relPath)) {
@@ -490,25 +482,25 @@ export function useDocumentSession(options: Options) {
     }
   }
 
-  function commitDocument(doc: Doc, keepOlder: boolean) {
+  function commitDocument(doc: Doc, keepDraft: boolean, base = doc) {
     if (timer.current) clearTimeout(timer.current);
     if (draftTimer.current) clearTimeout(draftTimer.current);
+    const changedExternally = keepDraft && doc.revision !== base.revision;
     draft.current = {
       doc,
-      base: doc,
-      seq: keepOlder ? 1 : 0,
+      base: changedExternally ? doc : base,
+      seq: keepDraft ? 1 : 0,
       saved: 0,
       draftSaved: 0,
       lastSavedAt: Date.now(),
-      edited: keepOlder,
+      edited: keepDraft,
     };
-    if (keepOlder) void call("saveDraft", { ...doc, expectedRevision: doc.revision }).catch(report);
-    freshReadId.current = keepOlder ? "" : doc.id;
+    if (keepDraft) void call("saveDraft", { ...doc, expectedRevision: doc.revision }).catch(report);
     activeId.current = doc.id;
     setActive(doc);
-    setSaveStatus(keepOlder ? "외부 변경 있음" : "저장됨");
-    setConflict(keepOlder);
-    conflictRef.current = keepOlder;
+    setSaveStatus(changedExternally ? "외부 변경 있음" : keepDraft ? "편집 중" : "저장됨");
+    setConflict(changedExternally);
+    conflictRef.current = changedExternally;
   }
 
   function discardDraft(id?: string) {
@@ -535,7 +527,6 @@ export function useDocumentSession(options: Options) {
   function closeDocument() {
     detachDocument();
     activeId.current = "";
-    freshReadId.current = "";
   }
 
   function resetVault() {

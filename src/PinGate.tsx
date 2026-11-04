@@ -65,6 +65,7 @@ export default function PinGate() {
     } else {
       setAndroidPinCoverVisible(false);
       window.dispatchEvent(new Event("resize"));
+      window.dispatchEvent(new Event("lof:unlocked"));
     }
   }, [locked, status?.generation]);
   useEffect(() => {

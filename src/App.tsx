@@ -286,7 +286,7 @@ export default function App() {
     waitForWriting: () => writingQueue.current,
     pendingDocumentMove: () => documentMove.current,
     saveMemoManually: () => memoManualSave.current?.(),
-    retainDocument: (doc) => retainDocument(doc),
+    retainDocument: (doc, dirty) => retainDocument(doc, dirty),
     clearRetainedDocuments: () => clearRetainedDocuments(),
     pinTab: (id) => pinTab(id),
     onDocumentIdChanged: handleDocumentIdChange,
@@ -296,7 +296,7 @@ export default function App() {
     manualSave, edit, writeMeta } = session;
   const {
     area, tabs: editorTabs, split, groups, sides, focusedSide,
-    retainDocument, getRetainedDocument, clearRetainedDocuments,
+    retainDocument, getRetainedDocument, hasRetainedDraft, clearRetainedDocuments,
     pruneDocuments, resetGroups, commitOpenDocument, replaceDocumentId: replaceGroupDocumentId, getProjectDocument,
     openDoc, openLinked, pinTab, pinSideTab, closeTab, closeTabs, cycleTab, shiftTab, moveTab,
     focusOther, focusSide, focusGroupAt, focusDirection, openInGroup, splitTo, canSplit, closeGroup, closeOtherGroup, moveToOther, moveToDirection, closeSideTab, closeSideTabs,
@@ -529,9 +529,9 @@ export default function App() {
       ? await (early ?? call<Doc>("readDocument", { id: destination.documentId })) : null;
     if (seq !== navigationSeq.current) return;
     const retained = fresh ? getRetainedDocument(fresh.id) : undefined;
-    // 이미 열어 둔 탭의 본문은 유지하고, 안내줄에서 새 내용을 불러온다.
-    const keepOlder = !!(fresh && retained && retained.revision !== fresh.revision && !sameDocumentContent(retained, fresh));
-    const doc = keepOlder ? retained! : fresh;
+    // 미저장 입력만 보존한다. 단순히 이전 탭에 남은 원고는 최신 저장본으로 연다.
+    const keepDraft = !!(fresh && retained && hasRetainedDraft(fresh.id) && !sameDocumentContent(retained, fresh));
+    const doc = keepDraft ? retained! : fresh;
     const next: Destination = doc
       ? { view: "workspace", projectId: doc.projectId, documentId: doc.id, tab: doc.kind, archive: doc.archived,
           linkedDocument: destination.linkedDocument }
@@ -571,7 +571,7 @@ export default function App() {
         pinned: destination.pinned === true,
         after: session.currentId(),
       });
-      session.commitDocument(doc, keepOlder);
+      session.commitDocument(doc, keepDraft, fresh ?? doc);
     }
     const id = globalView(next.view) ? projectRef.current : next.projectId;
     setProjectId(id);

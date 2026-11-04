@@ -33,14 +33,23 @@ export function useEditorGroups(options: Options) {
   const latest = useRef(options); latest.current = options;
   const [, renderDocuments] = useState(0);
   const retainedDocuments = useRef(new Map<string, Doc>());
+  const retainedDrafts = useRef(new Set<string>());
   const projectKey = useRef("");
   const linkedOpenSeq = useRef(0);
-  const retainDocument = useCallback((doc: Doc) => { retainedDocuments.current.set(doc.id, doc); }, []);
-  const getRetainedDocument = useCallback((id: string) => retainedDocuments.current.get(id), []);
-  const clearRetainedDocuments = useCallback(() => retainedDocuments.current.clear(), []);
-  const setSideDoc = useCallback((doc: Doc) => {
-    retainedDocuments.current.set(doc.id, doc); renderDocuments(value => value + 1);
+  const retainDocument = useCallback((doc: Doc, dirty?: boolean) => {
+    retainedDocuments.current.set(doc.id, doc);
+    if (dirty === true) retainedDrafts.current.add(doc.id);
+    else if (dirty === false) retainedDrafts.current.delete(doc.id);
   }, []);
+  const getRetainedDocument = useCallback((id: string) => retainedDocuments.current.get(id), []);
+  const hasRetainedDraft = useCallback((id: string) => retainedDrafts.current.has(id), []);
+  const clearRetainedDocuments = useCallback(() => {
+    retainedDocuments.current.clear();
+    retainedDrafts.current.clear();
+  }, []);
+  const setSideDoc = useCallback((doc: Doc, dirty = false) => {
+    retainDocument(doc, dirty); renderDocuments(value => value + 1);
+  }, [retainDocument]);
   const split = useSplitGroups<EditorTab>({
     key: tab => tab.id,
     currentKey: () => latest.current.currentId(),
@@ -87,7 +96,10 @@ export function useEditorGroups(options: Options) {
   useEffect(rememberLayout, [split.groups, split.focused, split.layout, options.active?.id]);
   useEffect(() => {
     const open = new Set(Object.values(split.groups).flatMap(group => group?.tabs ?? []).map(tab => tab.id));
-    for (const id of retainedDocuments.current.keys()) if (!open.has(id)) retainedDocuments.current.delete(id);
+    for (const id of retainedDocuments.current.keys()) if (!open.has(id)) {
+      retainedDocuments.current.delete(id);
+      retainedDrafts.current.delete(id);
+    }
   }, [split.groups]);
   const pruneDocuments = useCallback((ids: Set<string>) => mapTabs(tab => ids.has(tab.id) ? tab : null), [mapTabs]);
   const resetGroups = useCallback(() => { projectKey.current = ""; reset({}, groupIds[0]); }, [reset]);
@@ -127,6 +139,7 @@ export function useEditorGroups(options: Options) {
       saveWorkspaceState(projectKey.current, { scroll });
     }
     const retained = retainedDocuments.current.get(oldId);
+    if (retainedDrafts.current.delete(oldId)) retainedDrafts.current.add(newId);
     if (retained) {
       retainedDocuments.current.delete(oldId);
       retainedDocuments.current.set(newId, relocateDocument(retained, location ?? { ...retained, id: newId }));
@@ -141,7 +154,8 @@ export function useEditorGroups(options: Options) {
     const fresh = await call<Doc>("readDocument", { id });
     if (seq !== linkedOpenSeq.current || key !== projectKey.current || state().focused !== focused || latest.current.currentId() !== current) return;
     const retained = getRetainedDocument(id);
-    setSideDoc(retained && !sameDocumentContent(retained, fresh) ? retained : fresh);
+    const keepDraft = !!retained && hasRetainedDraft(id) && !sameDocumentContent(retained, fresh);
+    setSideDoc(keepDraft ? retained! : fresh, keepDraft);
     split.openBeside({ id, pinned }, pinned);
   }
   useEffect(() => {
@@ -156,7 +170,7 @@ export function useEditorGroups(options: Options) {
     const check = useSyncFileUpdates({
       fileKey: id, enabled: !!id && !!doc && id !== options.active?.id,
       automatic: true,
-      canCheck: () => latest.current.visible && !latest.current.pendingDocumentMove(),
+      canCheck: () => latest.current.visible && !latest.current.pendingDocumentMove() && !hasRetainedDraft(id),
       current: () => { const doc = getRetainedDocument(id); return doc ? { doc, version: doc.revision } : null; },
       read: (doc: Doc) => call<Doc>("readDocument", { id: doc.id }),
       reconcile: fresh => {
@@ -184,7 +198,7 @@ export function useEditorGroups(options: Options) {
   return {
     area: split, tabs: split.tabs, groups: split.groups, sides: split.order, split: split.split, focusedSide: split.focused,
     groupStyle: split.groupStyle,
-    retainDocument, getRetainedDocument, clearRetainedDocuments,
+    retainDocument, getRetainedDocument, hasRetainedDraft, clearRetainedDocuments,
     pruneDocuments, resetGroups, commitOpenDocument, replaceDocumentId, getProjectDocument,
     openDoc, openLinked, pinTab, pinSideTab: split.pinOtherTab, cycleTab: split.cycleTab, shiftTab: split.shiftTab, canSplit: split.canSplit,
     closeTab: split.closeTab, closeTabs: split.closeTabs, moveTab: split.moveTab,
