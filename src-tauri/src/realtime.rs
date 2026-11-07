@@ -68,6 +68,17 @@ struct PeerSyncJob {
     revision: Revision,
 }
 
+// async 작업 취소만으로는 spawn_blocking 안의 RPC가 멈추지 않는다.
+// 교체된 연결도 닫아 이전 작업이 동기화 실행 권한을 즉시 반환하게 한다.
+struct CancelPeerConnection(Option<Connection>);
+impl Drop for CancelPeerConnection {
+    fn drop(&mut self) {
+        if let Some(connection) = self.0.take() {
+            connection.close(0u8.into(), b"sync cancelled");
+        }
+    }
+}
+
 struct InboundSync {
     root: PathBuf,
     until: Instant,
@@ -810,6 +821,13 @@ fn release(app: &AppHandle, session: &str) {
 // 종료된 통신 엔진의 요청은 새 엔진이 시작된 뒤에도 다시 허용하지 않는다.
 struct WriterHost(AppHandle, Arc<AtomicBool>);
 impl Host for WriterHost {
+    fn request_progress(&self, peer: &str, session: &str, progress: lof_realtime::RequestProgress<'_>) {
+        let connection = (progress.operation == "inventory").then(|| {
+            self.0.state::<Realtime>().sessions.lock().unwrap().get(session)
+                .map(|session| session.connection.clone())
+        }).flatten();
+        crate::sync_trace::transport(peer, session, progress, connection.as_ref());
+    }
     fn connected(&self, _peer: &str, session: &str, connection: Connection) {
         if !self.accepting() {
             connection.close(0u8.into(), b"background");
@@ -1191,11 +1209,22 @@ impl PeerRemote {
         meta["vault"] = json!(self.local_vault);
         meta["target"] = json!(self.remote_vault);
         meta["errorCodes"] = json!(true);
-        let response = self.handle
-            .block_on(lof_realtime::request(
+        let watch_inventory = meta["op"] == "inventory";
+        let response = self.handle.block_on(async {
+            let request = lof_realtime::request(
                 &self.connection,
                 Message { meta, data },
-            ));
+            );
+            tokio::pin!(request);
+            if !watch_inventory { return request.await; }
+            trace.stage("request_wait", crate::sync_trace::network(&self.connection));
+            loop {
+                match tokio::time::timeout(Duration::from_secs(2), &mut request).await {
+                    Ok(result) => break result,
+                    Err(_) => trace.stage("response_wait", crate::sync_trace::network(&self.connection)),
+                }
+            }
+        });
         trace.finish(json!({"ok":response.as_ref().is_ok_and(|reply| reply.meta.get("fileError").is_none()),
             "receivedBytes":response.as_ref().map(|reply| reply.data.len()).ok()}));
         if matches!(activity, Some("uploading" | "downloading")) {
@@ -1224,7 +1253,8 @@ impl FileRemote for PeerRemote {
         let app = self.app.clone();
         let rt = app.state::<Realtime>();
         // 지난번에 받은 목록의 요약값을 보내 바뀐 항목만 받는다.
-        let mut cached = rt.received_inventories.lock().unwrap().remove(&key);
+        // 연결이 끊겨도 마지막으로 검증한 목록은 남겨 재접속 때 델타를 이어 받는다.
+        let mut cached = rt.received_inventories.lock().unwrap().get(&key).cloned();
         for _ in 0..2 {
             let known = cached.as_ref().map(|(digest, _)| digest.clone());
             let mut reply = self
@@ -1814,6 +1844,7 @@ pub fn start(app: &AppHandle) {
                     let handle = runtime.handle().clone();
                     let (sender, result) = mpsc::channel();
                     let task = runtime.spawn(async move {
+                        let mut cancellation = CancelPeerConnection(Some(conn.clone()));
                         let worker_app = events.clone();
                         let outcome = tokio::task::spawn_blocking(move || {
                             if leader {
@@ -1829,6 +1860,7 @@ pub fn start(app: &AppHandle) {
                                 Ok(Value::Null)
                             }
                         }).await.unwrap_or_else(|error| Err(net(error)));
+                        cancellation.0 = None;
                         // 결과를 넣은 뒤 깨워 완료 알림과 대기 진입 사이의 누락을 막는다.
                         let _ = sender.send(outcome);
                         wake(&events);

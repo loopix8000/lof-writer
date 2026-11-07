@@ -3,7 +3,7 @@ use iroh::{endpoint::presets, Endpoint, SecretKey};
 pub use iroh::{endpoint::Connection, EndpointAddr, EndpointId};
 use iroh_gossip::{net::GOSSIP_ALPN, Gossip};
 use serde_json::{json, Value};
-use std::{sync::Arc, time::Duration};
+use std::{sync::Arc, time::{Duration, Instant}};
 use tokio::sync::Semaphore;
 pub mod group;
 pub mod document_version;
@@ -15,6 +15,7 @@ pub mod storage;
 pub const ALPN: &[u8] = b"lof/realtime-files/1";
 pub const MAX_FILE: usize = 50_000_000;
 const MAX_HEADER: usize = 8_000_000;
+const INVENTORY_IDLE_TIMEOUT: Duration = Duration::from_secs(8);
 pub type Result<T> = std::result::Result<T, String>;
 
 #[derive(Default)]
@@ -37,6 +38,15 @@ pub trait Host: Send + Sync + 'static {
     fn response_sent(&self, _session: &str) {}
     fn disconnected(&self, _session: &str) {}
     fn connected(&self, _peer: &str, _session: &str, _connection: Connection) {}
+    /// 요청 수신, 처리, 응답 전송의 대기를 구분한다. 본문은 전달하지 않는다.
+    fn request_progress(&self, _peer: &str, _session: &str, _progress: RequestProgress<'_>) {}
+}
+
+pub struct RequestProgress<'a> {
+    pub operation: &'a str,
+    pub stage: &'static str,
+    pub elapsed: Duration,
+    pub bytes: usize,
 }
 
 #[derive(Clone)]
@@ -49,7 +59,12 @@ pub struct Node {
 }
 impl Node {
     pub async fn bind(secret: SecretKey, host: Arc<dyn Host>) -> Result<Self> {
-        let endpoint = Endpoint::builder(presets::N0)
+        let builder = Endpoint::builder(presets::N0);
+        // 일부 Android 네트워크 드라이버는 묶음 UDP 송신을 누락시켜 큰 응답만 멈춘다.
+        #[cfg(target_os = "android")]
+        let builder = builder.transport_config(iroh::endpoint::QuicTransportConfig::builder()
+            .enable_segmentation_offload(false).build());
+        let endpoint = builder
             .secret_key(secret)
             .alpns(vec![ALPN.to_vec(), GOSSIP_ALPN.to_vec()])
             .bind()
@@ -110,28 +125,78 @@ impl Node {
         let session = uuid::Uuid::new_v4().to_string();
         self.host.connected(&peer, &session, connection.clone());
         while let Ok((mut send, mut recv)) = connection.accept_bi().await {
-            let result = tokio::time::timeout(Duration::from_secs(90), async {
+            let started = Instant::now();
+            let mut operation = String::new();
+            let progress = |operation: &str, stage, bytes| self.host.request_progress(&peer, &session,
+                RequestProgress { operation, stage, elapsed: started.elapsed(), bytes });
+            progress("", "receiving", 0);
+            let handling = tokio::time::timeout(Duration::from_secs(90), async {
                 let request = decode(
                     recv.read_to_end(MAX_FILE + MAX_HEADER + 4)
                         .await
                         .map_err(|e| e.to_string())?,
                 )?;
+                operation = request.meta["op"].as_str().unwrap_or("").to_string();
+                progress(&operation, "handling", request.data.len());
                 let host = self.host.clone();
-                let peer = peer.clone();
-                let session = session.clone();
+                let request_peer = peer.clone();
+                let request_session = session.clone();
                 let answer =
-                    tokio::task::spawn_blocking(move || host.handle(&peer, &session, request))
+                    tokio::task::spawn_blocking(move || host.handle(&request_peer, &request_session, request))
                         .await
                         .map_err(|_| "피어 요청 처리에 실패했습니다.".to_string())?;
                 let message = answer.unwrap_or_else(|error| Message::json(json!({"error":error})));
-                send.write_all(&encode(message)?)
+                let bytes = encode(message)?;
+                progress(&operation, "sending", bytes.len());
+                send.write_all(&bytes)
                     .await
                     .map_err(|e| e.to_string())?;
                 send.finish().map_err(|e| e.to_string())?;
+                progress(&operation, "sent", bytes.len());
+                if operation == "inventory" {
+                    // finish는 송신 버퍼에 넣은 상태다. 실제 전달이 멈춰도 다음 요청 처리를 막지 않는다.
+                    let stopped = send.stopped();
+                    let connection = connection.clone();
+                    let host = self.host.clone();
+                    let peer = connection.remote_id().to_string();
+                    let session = session.clone();
+                    let response_size = bytes.len();
+                    tokio::spawn(async move {
+                        tokio::pin!(stopped);
+                        let mut acks = received_acknowledgements(&connection);
+                        loop {
+                            let result = tokio::time::timeout(INVENTORY_IDLE_TIMEOUT, &mut stopped).await;
+                            let stage = match result {
+                                Ok(Ok(None)) => "delivered",
+                                Ok(_) => "delivery_failed",
+                                Err(_) if received_acknowledgements(&connection) != acks
+                                    && started.elapsed() < Duration::from_secs(90) => "delivery_wait",
+                                Err(_) => "delivery_stalled",
+                            };
+                            host.request_progress(&peer, &session, RequestProgress {
+                                operation: "inventory", stage, elapsed: started.elapsed(), bytes: response_size,
+                            });
+                            if stage == "delivery_wait" {
+                                acks = received_acknowledgements(&connection);
+                                continue;
+                            }
+                            if stage != "delivered" {
+                                connection.close(1u8.into(), b"inventory delivery failed");
+                            }
+                            break;
+                        }
+                    });
+                }
                 Ok::<_, String>(())
-            })
-            .await;
-            if !matches!(result, Ok(Ok(()))) {
+            });
+            // 끊긴 연결의 처리 완료를 기다리며 세션을 붙잡지 않는다.
+            // 이미 시작한 파일 쓰기는 Host가 보유한 실행 권한 안에서 마무리한다.
+            let result = tokio::select! {
+                result = handling => matches!(result, Ok(Ok(()))),
+                _ = connection.closed() => false,
+            };
+            if !result {
+                progress(&operation, "failed", 0);
                 break;
             }
             self.host.response_sent(&session);
@@ -140,25 +205,55 @@ impl Node {
         connection.close(0u8.into(), b"closed");
     }
 }
+fn received_acknowledgements(connection: &Connection) -> u64 {
+    let frames = connection.stats().frame_rx;
+    // 다중 경로의 확인 응답은 일반 ACK와 별도로 집계된다.
+    frames.acks.saturating_add(frames.path_acks)
+}
+
 pub async fn request(connection: &Connection, message: Message) -> Result<Message> {
-    tokio::time::timeout(Duration::from_secs(90), async {
+    let inventory = message.meta["op"] == "inventory";
+    let result = tokio::time::timeout(Duration::from_secs(90), async {
         let (mut send, mut recv) = connection.open_bi().await.map_err(|e| e.to_string())?;
         send.write_all(&encode(message)?)
             .await
             .map_err(|e| e.to_string())?;
         send.finish().map_err(|e| e.to_string())?;
-        let answer = decode(
+        let bytes = if inventory {
+            read_inventory(&mut recv).await?
+        } else {
             recv.read_to_end(MAX_FILE + MAX_HEADER + 4)
                 .await
-                .map_err(|e| e.to_string())?,
-        )?;
-        if let Some(error) = answer.meta["error"].as_str() {
-            return Err(error.to_string());
-        }
-        Ok(answer)
+                .map_err(|e| e.to_string())?
+        };
+        decode(bytes)
     })
     .await
-    .map_err(|_| "피어 응답 시간이 초과되었습니다.".to_string())?
+    .unwrap_or_else(|_| Err("피어 응답 시간이 초과되었습니다.".to_string()));
+    // 전송 실패 뒤 같은 연결에 end를 보내 또 90초 기다리지 않도록 바로 재연결한다.
+    if result.is_err() {
+        connection.close(1u8.into(), b"request failed");
+    }
+    let answer = result?;
+    if let Some(error) = answer.meta["error"].as_str() {
+        return Err(error.to_string());
+    }
+    Ok(answer)
+}
+
+async fn read_inventory(recv: &mut iroh::endpoint::RecvStream) -> Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    loop {
+        // 목록이 조금씩이라도 도착하면 대기를 갱신한다. 응답이 멈춘 연결만 빠르게 재시도한다.
+        let chunk = tokio::time::timeout(INVENTORY_IDLE_TIMEOUT, recv.read_chunk(64 * 1024))
+            .await.map_err(|_| "피어 목록 응답이 멈춰 다시 연결합니다.".to_string())?
+            .map_err(|e| e.to_string())?;
+        let Some(chunk) = chunk else { return Ok(bytes); };
+        if bytes.len() + chunk.len() > MAX_FILE + MAX_HEADER + 4 {
+            return Err("전송 응답 크기 오류".into());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
 }
 fn encode(message: Message) -> Result<Vec<u8>> {
     if message.data.len() > MAX_FILE {

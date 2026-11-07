@@ -319,7 +319,7 @@ export default function RealtimeSync({
           <span className="realtime-dot" />{labels[peer.status?.phase ?? ""] ?? "연결 대기"}
           {peer.status?.lastSync && ` · ${new Date(peer.status.lastSync).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`}
         </span>}
-        {controls && peer.status?.message && <p className="realtime-inline-error">{peer.status.message}</p>}
+        {controls && peer.status?.phase === "error" && peer.status.message && <p className="realtime-inline-error">{peer.status.message}</p>}
         {peer.updateRequired && <p className="realtime-inline-error" role="status">Lof Library 업데이트가 필요합니다. 해당 기기에서 데몬을 최신 버전으로 업데이트해 주세요.</p>}
         {controls && !!peer.status?.conflicts && <p className="settings-note">충돌 사본 {peer.status.conflicts}개를 보관했습니다.</p>}
       </div>

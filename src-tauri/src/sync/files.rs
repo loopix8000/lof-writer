@@ -70,6 +70,7 @@ fn can_defer_file(error: &LofError) -> bool {
 pub(crate) fn inventory(
     store: &Mutex<Option<Store>>, root: &Path,
 ) -> Result<BTreeMap<String, Info>, LofError> {
+    let trace = crate::sync_trace::Span::start("local", &root.to_string_lossy(), "inventory", None);
     // 서재 전체를 훑는 동안 잠금을 계속 쥐면 저장과 문서 열기가 기다린다.
     // 목록만 잠근 채 받고, 원고 확인은 문서마다 잠금을 잡았다 놓으며, 디스크 목록과 해시는 잠금 밖에서 계산한다.
     // 이후 전송 단계가 잠금 안에서 해시를 다시 확인하므로 그 사이에 바뀐 파일은 다음 주기에 다시 맞춘다.
@@ -79,7 +80,9 @@ pub(crate) fn inventory(
     } else {
         Some(crate::store::disk_inventory(root)?)
     };
+    trace.stage("store_wait", json!({"internal":is_internal}));
     let (deferred_paths, documents) = with_store(store, root, |st| {
+        trace.stage("store_locked", json!({}));
         st.require_database()?;
         if let Some(disk) = disk {
             st.poll_disk_with(disk)?;
@@ -92,6 +95,7 @@ pub(crate) fn inventory(
             st.refresh_index(false)?;
         }
         let deferred = st.sync_deferred_paths()?;
+        trace.stage("catalog_ready", json!({"deferred":deferred.len()}));
         let list = st.list()?;
         let documents: HashMap<String, String> = list["documents"].as_array().into_iter().flatten()
             .filter_map(|document| {
@@ -102,16 +106,22 @@ pub(crate) fn inventory(
             .collect();
         Ok((deferred, documents))
     })?;
+    trace.stage("walk_start", json!({"documents":documents.len()}));
     let mut files = file_remote::local_inventory(root)?;
+    trace.stage("walk_done", json!({"files":files.len()}));
     let mut deferred = DeferredPaths::default();
     for path in deferred_paths {
         deferred.insert(&path);
         files.insert(path, Info::unavailable());
     }
     let index = lof_realtime::file_index::Index::open(root).map_err(|e| fail(e, "DATABASE"))?;
+    trace.stage("index_open", json!({}));
+    let mut inspected = 0usize;
+    let mut refreshed = 0usize;
     for (path, info) in &mut files {
         if info.unavailable || deferred.contains(path) { continue; }
         let mut changed = false;
+        let file_started = Instant::now();
         let checked = index.inspect(root, path, |bytes| {
             changed = true;
             original(path, bytes).map_err(|e| e.message)?;
@@ -146,8 +156,15 @@ pub(crate) fn inventory(
             }
             Err(error) => return Err(error),
         }
+        inspected += 1;
+        refreshed += usize::from(changed);
+        if inspected % 32 == 0 || file_started.elapsed() >= Duration::from_millis(100) {
+            trace.stage("index_progress", json!({"inspected":inspected,"refreshed":refreshed,
+                "file":hash_bytes(path.as_bytes()),"fileMs":file_started.elapsed().as_millis() as u64}));
+        }
     }
     index.retain(files.keys()).map_err(|e| fail(e, "DATABASE"))?;
+    trace.finish(json!({"ok":true,"files":files.len(),"inspected":inspected,"refreshed":refreshed}));
     Ok(files)
 }
 
