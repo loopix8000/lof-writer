@@ -25,6 +25,10 @@ impl SyncActivity {
         state.exclusive || !state.peers.is_empty()
     }
 
+    pub fn is_peer_busy(&self, peer: &str) -> bool {
+        self.state.lock().unwrap().peers.contains(peer)
+    }
+
     pub fn try_exclusive(self: &Arc<Self>) -> Option<SyncPermit> {
         let mut state = self.state.lock().unwrap();
         if state.exclusive || !state.peers.is_empty() { return None; }

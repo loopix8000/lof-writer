@@ -39,6 +39,7 @@ pub mod store;
 mod recovery;
 pub mod sync;
 mod sync_activity;
+mod sync_trace;
 pub mod text;
 
 use crate::api::{start_api, ApiServer};

@@ -79,16 +79,20 @@ async fn control(
     connection: &Connection,
     message: Message,
 ) -> lof_realtime::Result<Message> {
+    let peer = format!("{}:{}", connection.remote_id(), message.meta["target"].as_str().unwrap_or(""));
+    let trace = crate::sync_trace::Span::start("control", &peer, message.meta["op"].as_str().unwrap_or(""), None);
     let request = lof_realtime::request(connection, message);
     tokio::pin!(request);
-    loop {
+    let result = loop {
         match tokio::time::timeout(CONTROL_TIMEOUT, &mut request).await {
-            Ok(result) => return result,
-            // 파일 전송과 연결 확인이 겹치면 기존 전송 제한 시간 안에서 응답을 더 기다린다.
-            Err(_) if app.state::<AppState>().syncing.is_busy() => continue,
-            Err(_) => return Err("장치의 연결 확인 응답이 없습니다.".into()),
+            Ok(result) => break result,
+            // 같은 장치의 파일 전송만 기다린다. 다른 장치나 WebDAV 작업은 연결 확인을 늦추지 않는다.
+            Err(_) if app.state::<AppState>().syncing.is_peer_busy(&peer) => continue,
+            Err(_) => break Err("장치의 연결 확인 응답이 없습니다.".into()),
         }
-    }
+    };
+    trace.finish(json!({"ok":result.is_ok()}));
+    result
 }
 
 #[derive(Default)]
@@ -824,9 +828,12 @@ impl Host for WriterHost {
         }
     }
     fn handle(&self, peer: &str, session: &str, message: Message) -> lof_realtime::Result<Message> {
+        let trace = crate::sync_trace::Span::start("incoming", peer,
+            message.meta["op"].as_str().unwrap_or(""), message.meta["path"].as_str());
         let error_codes = message.meta["errorCodes"].as_bool().unwrap_or(false);
         let res = self.handle_inner(peer, session, message);
         crate::auto_sync::refresh_realtime(&self.0);
+        trace.finish(json!({"ok":res.is_ok(),"errorCode":res.as_ref().err().map(|error| &error.code)}));
         match res {
             Err(e) if error_codes => Ok(Message::json(json!({"fileError":{"code":e.code,"message":e.message}}))),
             other => other.map_err(|e| e.message),
@@ -1170,6 +1177,8 @@ struct PeerRemote {
 }
 impl PeerRemote {
     fn rpc(&self, mut meta: Value, data: Vec<u8>) -> Result<Message, LofError> {
+        let trace = crate::sync_trace::Span::start("outgoing", &self.peer,
+            meta["op"].as_str().unwrap_or(""), meta["path"].as_str());
         let activity = match meta["op"].as_str() {
             Some("begin" | "inventory") => Some("comparing"),
             Some("read") if meta["path"] != ID_FILE => Some("downloading"),
@@ -1187,6 +1196,8 @@ impl PeerRemote {
                 &self.connection,
                 Message { meta, data },
             ));
+        trace.finish(json!({"ok":response.as_ref().is_ok_and(|reply| reply.meta.get("fileError").is_none()),
+            "receivedBytes":response.as_ref().map(|reply| reply.data.len()).ok()}));
         if matches!(activity, Some("uploading" | "downloading")) {
             finish_transfer(&self.app, &self.peer);
         }
@@ -1321,6 +1332,7 @@ fn sync(
         last_touch: Instant::now(),
     };
     remote.rpc(json!({"op":"begin"}), vec![])?;
+    let trace = crate::sync_trace::Span::start("round", &remote.peer, "sync", None);
     let result = files::sync_peer(
         &state.store,
         &current,
@@ -1337,7 +1349,12 @@ fn sync(
         changed(app);
     }
     crate::schedule_notify(app, &state.notify_seq);
-    result.and_then(|r| ended.map(|_| r))
+    let result = result.and_then(|r| ended.map(|_| r));
+    trace.finish(match &result {
+        Ok(total) => json!({"ok":true,"files":total}),
+        Err(error) => json!({"ok":false,"errorCode":error.code}),
+    });
+    result
 }
 
 /// 그룹 방식으로 바꾸면서 이전 버전의 1:1 장치 연결은 한 번 초기화한다.
@@ -1751,6 +1768,7 @@ pub fn start(app: &AppHandle) {
                         let endpoint = peer["endpoint"].as_str().unwrap_or("").to_string();
                         let hello = json!({"op":"hello","vault":vault(&app)?,"target":peer["remoteVault"],"capabilities":[INVENTORY_DELTA, INVENTORY_INDEX],"members":members(&app)});
                         let task = runtime.spawn(async move {
+                            let trace = crate::sync_trace::Span::start("connection", &endpoint, "connect", None);
                             let result = async {
                                 let conn = match existing {
                                     Some(conn) => conn,
@@ -1766,6 +1784,7 @@ pub fn start(app: &AppHandle) {
                                     }
                                 }
                             }.await;
+                            trace.finish(json!({"ok":result.is_ok()}));
                             wake(&events);
                             result
                         });

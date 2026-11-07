@@ -11,7 +11,7 @@ use std::fs;
 use std::io::Read;
 use std::path::Path;
 use std::sync::Mutex;
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 use uuid::Uuid;
 use lof_realtime::scope::DeferredPaths;
 
@@ -522,7 +522,9 @@ fn run(
     latest: bool,
     total: &mut Value,
 ) -> Result<(), LofError> {
+    let started = Instant::now();
     let mut remote_files = remote.inventory()?;
+    total["remoteInventoryMs"] = json!(started.elapsed().as_millis() as u64);
     if remote_files.remove(ID_FILE).is_some() {
         let id = String::from_utf8(remote.read(ID_FILE)?)
             .map_err(|_| fail_invalid("저장소 식별자 형식 오류"))?;
@@ -549,7 +551,9 @@ fn run(
         state.remote_id = Some(id);
     }
     save(store, root, key, state)?;
+    let inventory_started = Instant::now();
     let mut local_files = inventory(store, root)?;
+    total["localInventoryMs"] = json!(inventory_started.elapsed().as_millis() as u64);
     local_files.remove(ID_FILE);
     let names: BTreeSet<_> = local_files
         .keys()
@@ -585,11 +589,6 @@ fn run(
     for path in &names {
         if deferred.contains(path) { continue; }
         remote.heartbeat()?;
-        match with_store(store, root, |st| st.ensure_sync_ready(path)) {
-            Ok(()) => {},
-            Err(error) if can_defer_file(&error) => { deferred.insert(path); continue; },
-            Err(error) => return Err(error),
-        }
         let local_info = local_files.get(path).cloned();
         let (local, local_id) = if let Some(info) = &local_info {
             if let Some(index) = info.index.as_ref().filter(|index| index.matches(info.etag.as_deref())) {
@@ -668,6 +667,10 @@ fn run(
             },
         );
     }
+    // 색인 비교 중 생긴 보류도 한 번에 확인한다. 같다고 확인한 파일마다 서재 잠금을 잡지 않는다.
+    for path in with_store(store, root, |st| st.sync_deferred_paths())? {
+        deferred.insert(&path);
+    }
     let renamed = rename_losers(&pairs, &state.files, &mut deferred);
     // 읽을 수 없는 파일의 이름 변경 전 경로도 보존한다.
     let identities: Vec<(&str, &str)> = state.identities.iter().map(|(path, id)| (path.as_str(), id.as_str()))
@@ -675,9 +678,36 @@ fn run(
             .into_iter().flatten().map(move |id| (path.as_str(), id)))).collect();
     deferred.protect_identities(&identities);
     let protected = protected_projects(&pairs, &state.files);
-    // 원고 삭제를 먼저, 작품 메타 정보 삭제를 마지막에 적용한다.
-    let mut paths: Vec<_> = pairs.keys().cloned().collect();
-    paths.sort_by_key(|path| (path.ends_with("/project.json"), path.clone()));
+    // 전체 색인은 이름 변경·중복 ID 확인에만 사용하고 전송 큐에는 변경된 파일만 넣는다.
+    let mut paths = Vec::new();
+    for (path, pair) in &pairs {
+        if deferred.contains(path) { continue; }
+        if pair.local == pair.remote && !renamed.contains(path) {
+            checkpoint(state, path, pair.local.as_deref(), pair.remote_info.as_ref());
+            if let Some(id) = &pair.remote_id {
+                state.identities.insert(path.clone(), id.clone());
+            } else {
+                state.identities.remove(path);
+            }
+            add(total, "unchangedFiles", 1);
+        } else {
+            paths.push(path.clone());
+        }
+    }
+    // 이름 변경의 이전 경로를 먼저 정리하고 최근 수정 원고를 우선한다. 작품 메타 정보는 마지막이다.
+    paths.sort_by_key(|path| {
+        let pair = &pairs[path];
+        let priority = if path.ends_with("/project.json") { 3 }
+            else if renamed.contains(path) { 0 }
+            else if path.to_ascii_lowercase().ends_with(".md") { 1 }
+            else { 2 };
+        let modified = pair.local_info.as_ref().and_then(|info| info.modified)
+            .max(pair.remote_info.as_ref().and_then(|info| info.modified));
+        (priority, std::cmp::Reverse(modified), path.clone())
+    });
+    total["comparedFiles"] = json!(pairs.len());
+    total["changedFiles"] = json!(paths.len());
+    total["beforeTransferMs"] = json!(started.elapsed().as_millis() as u64);
     for path in paths {
         if deferred.contains(&path) { continue; }
         let operation = (|| -> Result<(), LofError> {
@@ -717,15 +747,6 @@ fn run(
                 save(store, root, key, state)?;
                 return Ok(());
             }
-            if local == other {
-                checkpoint(state, &path, local, pair.remote_info.as_ref());
-                if let Some(id) = &pair.remote_id {
-                    state.identities.insert(path.clone(), id.clone());
-                } else {
-                    state.identities.remove(&path);
-                }
-                return Ok(());
-            }
             if path == crate::project_order::FILE {
                 if let Some(hash) = sync_project_order(store, root, remote, pair, total)? {
                     let tagged = Info { etag: Some(hash.clone()), ..Info::default() };
@@ -744,6 +765,7 @@ fn run(
             let protected = protected
                 .iter()
                 .any(|folder| path.starts_with(&format!("{folder}/")));
+            let mut checked_remote = None;
             let take_remote = if protected && (local.is_none() || other.is_none()) {
                 other.is_some()
             } else if local.is_some() && other.is_some()
@@ -756,6 +778,8 @@ fn run(
                 }
                 let ours_at = lof_realtime::document_version::modified(&ours, pair.local_info.as_ref().and_then(|info| info.modified));
                 let theirs_at = lof_realtime::document_version::modified(&theirs, pair.remote_info.as_ref().and_then(|info| info.modified));
+                // 비교할 때 받은 원고는 해시가 확인된 동일 버전이다. 내려받을 때 다시 요청하지 않는다.
+                checked_remote = Some(theirs);
                 (theirs_at, other) > (ours_at, local)
             } else if base.map(String::as_str) == local {
                 true
@@ -795,7 +819,10 @@ fn run(
             };
             if take_remote {
                 let bytes = if other.is_some() {
-                    Some(remote.read(&path)?)
+                    Some(match checked_remote {
+                        Some(bytes) => bytes,
+                        None => remote.read(&path)?,
+                    })
                 } else {
                     None
                 };
@@ -866,6 +893,7 @@ fn run(
     }
     total["deferredFiles"] = json!(names.iter().filter(|path| deferred.contains(path)).count());
     save(store, root, key, state)?;
+    total["fileSyncMs"] = json!(started.elapsed().as_millis() as u64);
     Ok(())
 }
 

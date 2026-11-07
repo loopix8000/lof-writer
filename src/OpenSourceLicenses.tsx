@@ -2,9 +2,16 @@ import appLicense from "../LICENSE?raw";
 import ridiLicense from "./fonts/RIDIBatang-OFL.txt?raw";
 import pretendardLicense from "./fonts/Pretendard-OFL.txt?raw";
 import notoLicense from "./fonts/NotoSansKR-OFL.txt?raw";
+import lucideLicense from "./licenses/Lucide-ISC.txt?raw";
+import featherLicense from "./licenses/Feather-MIT.txt?raw";
 import thirdParty from "./third-party-licenses.json";
 
 type Package = { name: string; version: string; license: string };
+
+const icons = [
+  { name: "Lucide", license: "ISC", text: lucideLicense },
+  { name: "Feather", license: "MIT", text: featherLicense },
+];
 
 const fonts = [
   { name: "리디바탕 (RIDIBatang)", text: ridiLicense },
@@ -37,7 +44,7 @@ export default function OpenSourceLicenses() {
     <details className="open-source-licenses">
       <summary>오픈소스 라이선스</summary>
       <p className="settings-description">
-        Lof Writer는 오픈소스 소프트웨어이며, 아래 글꼴과 라이브러리를 포함하고 있습니다. 항목을 펼치면 자세한
+        Lof Writer는 오픈소스 소프트웨어이며, 아래 아이콘·글꼴·라이브러리를 포함하고 있습니다. 항목을 펼치면 자세한
         내용을 볼 수 있습니다.
       </p>
       <details>
@@ -45,6 +52,22 @@ export default function OpenSourceLicenses() {
           Lof Writer <span className="license-count">MIT</span>
         </summary>
         <pre>{appLicense}</pre>
+      </details>
+      <details>
+        <summary>
+          아이콘 <span className="license-count">ISC · MIT</span>
+        </summary>
+        <p className="settings-description">
+          앱 아이콘과 화면 아이콘에 Lucide를 사용합니다. 앱 아이콘의 깃털은 Feather에서 유래했습니다.
+        </p>
+        {icons.map((icon) => (
+          <details key={icon.name}>
+            <summary>
+              {icon.name} <span className="license-count">{icon.license}</span>
+            </summary>
+            <pre>{icon.text}</pre>
+          </details>
+        ))}
       </details>
       <details>
         <summary>
