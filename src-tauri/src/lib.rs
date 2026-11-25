@@ -2560,7 +2560,7 @@ pub fn run() {
             mcp_updater::desktop_update_report,
             android_updater::android_update_check,
             android_updater::android_update_download,
-            android_updater::android_update_install,
+            android_updater::android_update_open_downloads,
             android_storage::android_pick_folder,
             android_storage::android_storage_access,
             android_storage::android_pick_image,

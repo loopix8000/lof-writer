@@ -44,6 +44,6 @@ pub async fn android_update_download(app: AppHandle, channel: String, version: S
 }
 
 #[tauri::command]
-pub async fn android_update_install(app: AppHandle, channel: String, version: String) -> Result<Value, String> {
-    run(app, "install", serde_json::json!({"channel":channel,"version":version})).await
+pub async fn android_update_open_downloads(app: AppHandle) -> Result<Value, String> {
+    run(app, "openDownloads", serde_json::json!({})).await
 }

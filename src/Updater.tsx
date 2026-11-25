@@ -3,11 +3,15 @@ import { flushSync } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Update } from "@tauri-apps/plugin-updater";
-import { Download, RefreshCw, X } from "lucide-react";
+import { Download, FolderOpen, RefreshCw, X } from "lucide-react";
 import { ReleaseNotesForVersion } from "./ReleaseNotes";
 
-type Phase = "idle" | "checking" | "current" | "available" | "downloading" | "saving" | "installing" | "error";
-type UpdateHandle = Pick<Update, "version" | "download" | "install" | "close">;
+type Phase = "idle" | "checking" | "current" | "available" | "downloading" | "saving" | "installing" | "opening" | "error";
+type AndroidUpdateHandle = Pick<Update, "version" | "download" | "close"> & {
+  downloaded: boolean;
+  openDownloads: () => Promise<void>;
+};
+type UpdateHandle = Pick<Update, "version" | "download" | "install" | "close"> | AndroidUpdateHandle;
 type UpdateSnapshot = { phase: Phase; availableVersion: string | null; error: string; progress: number | null };
 type UpdateRequest = { id: string; session: string; action: "check" | "install"; channel: UpdateChannel; expectedVersion: string | null };
 export type UpdateChannel = "stable" | "rc" | "beta";
@@ -16,12 +20,13 @@ const LIBRARY_CHECK_INTERVAL = 24 * 60 * 60 * 1000;
 const CHECK_RETRY_INTERVAL = 5 * 60 * 1000;
 
 async function checkAndroidUpdate(channel: UpdateChannel): Promise<UpdateHandle | null> {
-  const result = await invoke<{ available: boolean; version?: string }>("android_update_check", { channel });
+  const result = await invoke<{ available: boolean; version?: string; downloaded?: boolean }>("android_update_check", { channel });
   if (!result.available || !result.version) return null;
   return {
     version: result.version,
     download: async () => { await invoke("android_update_download", { channel, version: result.version }); },
-    install: async () => { await invoke("android_update_install", { channel, version: result.version }); },
+    downloaded: result.downloaded === true,
+    openDownloads: async () => { await invoke("android_update_open_downloads"); },
     close: async () => {},
   };
 }
@@ -39,6 +44,7 @@ export function useAppUpdater({ loaded, autoCheck, channel, beforeInstall }: {
   const [available, setAvailableState] = useState<{ version: string } | null>(null);
   const [error, setErrorState] = useState("");
   const [progress, setProgressState] = useState<number | null>(null);
+  const [apkDownloaded, setApkDownloaded] = useState(false);
   const snapshotRef = useRef<UpdateSnapshot>({ phase: "idle", availableVersion: null, error: "", progress: null });
   const setPhase = (value: Phase) => { snapshotRef.current.phase = value; setPhaseState(value); };
   const setAvailable = (value: { version: string } | null) => { snapshotRef.current.availableVersion = value?.version ?? null; setAvailableState(value); };
@@ -76,6 +82,7 @@ export function useAppUpdater({ loaded, autoCheck, channel, beforeInstall }: {
     running.current = null;
     autoChecked.current = false;
     setAvailable(null); setError(""); setPhase("idle"); setProgress(null);
+    setApkDownloaded(false);
     if (loaded) {
       invoke<{ configured: boolean; supported: boolean; platform?: string }>("updater_status")
         .then((status) => {
@@ -109,6 +116,7 @@ export function useAppUpdater({ loaded, autoCheck, channel, beforeInstall }: {
     setPhase("checking");
     setError("");
     setAvailable(null);
+    setApkDownloaded(false);
     setDismissed(manual);
     const previous = updateRef.current;
     updateRef.current = null;
@@ -130,6 +138,7 @@ export function useAppUpdater({ loaded, autoCheck, channel, beforeInstall }: {
       updateRef.current = update;
       candidateChannel.current = update ? channel : null;
       setAvailable(update ? { version: update.version } : null);
+      setApkDownloaded(update !== null && "openDownloads" in update && update.downloaded);
       setPhase(update ? "available" : "current");
     } catch (e) {
       if (current === generation.current) {
@@ -179,6 +188,12 @@ export function useAppUpdater({ loaded, autoCheck, channel, beforeInstall }: {
         setProgress(total > 0 ? Math.min(100, Math.round(received / total * 100)) : null);
       }, { timeout: 120000 });
       if (current !== generation.current || channel !== selectedChannel.current) return;
+      if ("openDownloads" in update) {
+        update.downloaded = true;
+        setApkDownloaded(true);
+        setPhase("available");
+        return;
+      }
       // 다운로드 중에는 집필을 허용하고, 저장부터 설치 종료까지 입력을 잠근다.
       lockRef.current = true;
       lockOwner.current = current;
@@ -189,7 +204,6 @@ export function useAppUpdater({ loaded, autoCheck, channel, beforeInstall }: {
       setPhase("installing");
       await reportUpdate();
       await update.install({ restartAfterInstall: true });
-      if (current === generation.current && platformRef.current === "android") setPhase("available");
     } catch (e) {
       if (current === generation.current) {
         setError(String(e instanceof Error ? e.message : e));
@@ -199,6 +213,33 @@ export function useAppUpdater({ loaded, autoCheck, channel, beforeInstall }: {
       if (lockOwner.current === current) { lockRef.current = false; lockOwner.current = null; }
       if (running.current === current) running.current = null;
       if (current !== generation.current) await update.close().catch(() => {});
+    }
+  }, []);
+
+  const openDownloads = useCallback(async () => {
+    const update = updateRef.current;
+    if (!update || !("openDownloads" in update) || !update.downloaded || running.current !== null
+      || candidateChannel.current !== selectedChannel.current) return;
+    const current = generation.current;
+    running.current = current;
+    setError("");
+    try {
+      lockRef.current = true;
+      lockOwner.current = current;
+      flushSync(() => setPhase("saving"));
+      await prepareRef.current();
+      if (current !== generation.current) return;
+      setPhase("opening");
+      await update.openDownloads();
+      if (current === generation.current) setPhase("available");
+    } catch (e) {
+      if (current === generation.current) {
+        setError(String(e instanceof Error ? e.message : e));
+        setPhase("error");
+      }
+    } finally {
+      if (lockOwner.current === current) { lockRef.current = false; lockOwner.current = null; }
+      if (running.current === current) running.current = null;
     }
   }, []);
 
@@ -260,10 +301,10 @@ export function useAppUpdater({ loaded, autoCheck, channel, beforeInstall }: {
   }, [channel, phase, available, error, progress, reportUpdate]);
 
   return {
-    configured, platform, phase, available, error, progress, dismissed, lockRef,
-    locked: phase === "saving" || phase === "installing",
-    busy: ["checking", "downloading", "saving", "installing"].includes(phase),
-    checkNow, checkInLibrary, install, dismiss: () => setDismissed(true),
+    configured, platform, phase, available, error, progress, dismissed, lockRef, apkDownloaded,
+    locked: phase === "saving" || phase === "installing" || phase === "opening",
+    busy: ["checking", "downloading", "saving", "installing", "opening"].includes(phase),
+    checkNow, checkInLibrary, install, openDownloads, dismiss: () => setDismissed(true),
   };
 }
 
@@ -283,7 +324,7 @@ export function UpdateSettings({ updater, version, autoCheck, onAutoCheck, chann
     <div className="settings-toggles">
       <label className="settings-toggle">
         <span>{updater.platform === "android" ? "자동으로 업데이트 확인" : "앱 시작 시 업데이트 확인"}<small>{updater.platform === "android"
-          ? "앱 시작 시 확인하고, 서재에 들어오거나 복귀하면 하루 한 번 다시 확인합니다. 다운로드와 설치는 직접 시작합니다."
+          ? "앱 시작 시 확인하고, 서재에 들어오거나 복귀하면 하루 한 번 다시 확인합니다. APK를 다운로드한 뒤 파일 앱에서 열어 설치합니다."
           : "새 버전을 알려드립니다. 다운로드와 설치는 직접 시작할 수 있습니다."}</small></span>
         <input type="checkbox" role="switch" aria-label={updater.platform === "android" ? "자동으로 업데이트 확인" : "앱 시작 시 업데이트 확인"}
           checked={autoCheck} onChange={(e) => onAutoCheck(e.target.checked)} />
@@ -301,9 +342,13 @@ export function UpdateSettings({ updater, version, autoCheck, onAutoCheck, chann
       <button type="button" disabled={!updater.configured || updater.busy} onClick={() => void updater.checkNow(true)}>
         <RefreshCw size={14} />업데이트 확인
       </button>
-      {updater.available && <button type="button" className="primary" disabled={updater.busy} onClick={() => void updater.install()}>
-        <Download size={14} />다운로드·설치
-      </button>}
+      {updater.available && (updater.platform === "android" && updater.apkDownloaded
+        ? <button type="button" className="primary" disabled={updater.busy} onClick={() => void updater.openDownloads()}>
+          <FolderOpen size={14} />다운로드 폴더 열기
+        </button>
+        : <button type="button" className="primary" disabled={updater.busy} onClick={() => void updater.install()}>
+          <Download size={14} />{updater.platform === "android" ? "APK 다운로드" : "다운로드·설치"}
+        </button>)}
     </div>
     <div className="updater-status" role="status" aria-live="polite">
       {updater.configured === null && "업데이트 설정을 확인하고 있습니다."}
@@ -311,7 +356,9 @@ export function UpdateSettings({ updater, version, autoCheck, onAutoCheck, chann
       {updater.configured && updater.phase === "idle" && "새 버전을 확인할 수 있습니다."}
       {updater.phase === "checking" && "새 버전을 확인하고 있습니다."}
       {updater.phase === "current" && "최신 버전입니다."}
-      {updater.available && !updater.busy && `새 버전 ${updater.available.version}을 설치할 수 있습니다.`}
+      {updater.available && !updater.busy && (updater.apkDownloaded
+        ? `다운로드 폴더에서 ${updater.available.version} 버전의 APK를 열어 주세요.`
+        : `새 버전 ${updater.available.version}을 ${updater.platform === "android" ? "다운로드" : "설치"}할 수 있습니다.`)}
       {updater.phase === "downloading" && <>
         업데이트 다운로드 중{updater.progress !== null ? ` · ${updater.progress}%` : ""}
         <progress max={100} value={updater.progress ?? undefined} />
@@ -320,7 +367,7 @@ export function UpdateSettings({ updater, version, autoCheck, onAutoCheck, chann
     {updater.error && <p className="updater-error" role="alert">업데이트를 완료하지 못했습니다. {updater.error}</p>}
     {updater.available && <>
       <p className="settings-note">{updater.platform === "android"
-        ? "설치 전에 원고와 메모를 저장합니다. Android 설치 화면에서 업데이트를 확인해 주세요. 처음에는 이 앱의 설치 허용이 필요할 수 있습니다."
+        ? "APK를 다운로드 폴더에 저장합니다. 다운로드 폴더 열기를 누르면 원고와 메모를 저장한 뒤 파일 앱을 엽니다. 파일 앱에서 APK를 눌러 설치해 주세요."
         : "설치 전에 열린 원고와 메모를 저장합니다. 저장에 실패하면 설치를 중단합니다. 설치가 시작되면 앱이 종료되고 완료 후 다시 실행됩니다."}</p>
       <ReleaseNotesForVersion key={updater.available.version} version={updater.available.version} />
     </>}
@@ -337,9 +384,9 @@ export function UpdateNotice({ updater, onOpen }: { updater: Updater; onOpen: ()
 }
 
 export function UpdateLock({ phase }: { phase: Phase }) {
-  if (phase !== "saving" && phase !== "installing") return null;
-  return <div className="updater-lock" role="alertdialog" aria-modal="true" aria-label="업데이트 설치 중">
-    <div><strong>{phase === "saving" ? "원고를 저장하고 있습니다." : "업데이트를 설치하고 있습니다."}</strong>
+  if (phase !== "saving" && phase !== "installing" && phase !== "opening") return null;
+  return <div className="updater-lock" role="alertdialog" aria-modal="true" aria-label={phase === "opening" ? "다운로드 폴더 열기" : "업데이트 준비 중"}>
+    <div><strong>{phase === "saving" ? "원고를 저장하고 있습니다." : phase === "opening" ? "다운로드 폴더를 열고 있습니다." : "업데이트를 설치하고 있습니다."}</strong>
       <p>잠시 기다려 주세요.</p></div>
   </div>;
 }
