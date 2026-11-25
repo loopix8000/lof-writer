@@ -34,6 +34,7 @@ import { getTextBetween, getTextSerializersFromSchema, type Editor } from "@tipt
 import { requiresSource, splitSoftBreaks } from "../core/text.mjs";
 import type { SourceEditorHandle } from "./SourceEditor";
 import { blockAt, docIndex, docNeedsMarkdownCopy, nodeLineCount } from "./doc-index";
+import { replaceExternalContent } from "./external-content";
 import { normalizeEditorStyle } from "../core/typesetting.mjs";
 import { TypingAssist, isInsideJsdocComment, toggleJsdocComment, typesettingPluginKey } from "./typing-extension";
 import { MarkdownTables } from "./table-extension";
@@ -827,11 +828,9 @@ export default function Writer({
     if (body === loadedBody.current) return;
     loadedBody.current = body;
     if (markdown.serialize(editor) === body) return;
-    editor.commands.setContent(splitSoftBreaks(body, !manualLineBreak), {
-      contentType: "markdown",
-      emitUpdate: false,
-    });
-    // 본문을 통째로 바꾸면 붙어 있던 북마크가 사라지므로 저장된 목록으로 다시 깐다.
+    // 달라진 구간만 바꿔 넣어 입력 중이던 커서가 문서 끝으로 밀려나지 않게 한다.
+    replaceExternalContent(editor, splitSoftBreaks(body, !manualLineBreak));
+    // 바뀐 블록에 붙어 있던 북마크는 사라지므로 저장된 목록으로 다시 깐다.
     bookmarkKey.current = { editor, key: JSON.stringify(bookmarksRef.current || []) };
     loadBookmarks(editor, bookmarksRef.current);
   }, [body, revision, source, protectedSource, editor, id]);
